@@ -1,0 +1,29 @@
+#FROM TODO base msg processor
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+ARG ERIEIRON_ENV
+ENV ERIEIRON_ENV $ERIEIRON_ENV
+
+ARG COMMIT_ID
+ENV COMMIT_ID $COMMIT_ID
+
+ARG COMMIT_MSG
+ENV COMMIT_MSG $COMMIT_MSG
+
+COPY . /app/
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install && npm run compile-ui
+
+COPY requirements.txt ./
+RUN uv pip install --upgrade pip setuptools wheel --system && \
+    uv pip install torch --index-url https://download.pytorch.org/whl/cu118 --system && \
+    uv pip install -r requirements.txt --system
+
+RUN python3 -m nltk.downloader punkt averaged_perceptron_tagger_eng punkt_tab wordnet omw-1.4 stopwords averaged_perceptron_tagger
+
+SHELL ["/bin/bash", "-c"]
+CMD ["bash", "/app/aws/docker-messageprocessor-cmd.sh"]

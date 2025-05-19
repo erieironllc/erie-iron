@@ -1,0 +1,66 @@
+FROM 471112823728.dkr.ecr.us-west-2.amazonaws.com/python:3.11-slim
+
+ENV PATH="/root/.local/bin:${PATH}"
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=America/Los_Angeles
+ENV TF_ENABLE_ONEDNN_OPTS=1
+ENV TF_CPP_MIN_LOG_LEVEL=2
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+ARG ERIEIRON_ENV
+ENV ERIEIRON_ENV $ERIEIRON_ENV
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    awscli \
+    build-essential \
+    vim \
+    git \
+    ffmpeg \
+    cmake \
+    ninja-build \
+    protobuf-compiler \
+    libprotobuf-dev \
+    rubberband-cli \
+    libsndfile1-dev \
+    librubberband-dev \
+    wget \
+    unzip \
+    tzdata \
+    postgresql-client \
+    python3-pip \
+    libssl-dev \
+    libffi-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    zlib1g-dev && \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
+    python3 -m pip install --upgrade pip && \
+    curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN if ! python3 --version | grep -q "3.11"; then echo "Python 3.11 is required!"; exit 1; fi
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY requirements.txt ./
+RUN uv pip install --upgrade pip setuptools wheel --system && \
+    uv pip install -r requirements.txt --system
+
+COPY . .
+COPY ./aws/docker-webservice-aliases.sh /etc/profile.d/docker-webservice-aliases.sh
+
+RUN python3 -m nltk.downloader punkt averaged_perceptron_tagger_eng punkt_tab wordnet omw-1.4 stopwords averaged_perceptron_tagger
+
+RUN echo "source /etc/profile.d/docker-webservice-aliases.sh" >> /root/.bashrc
+
+SHELL ["/bin/bash", "-c"]
+CMD ["/bin/bash"]

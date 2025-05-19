@@ -1,0 +1,15 @@
+[Unit]
+Description=Start Message Processor Docker Container
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/baremetal-startup-cmd.sh
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
