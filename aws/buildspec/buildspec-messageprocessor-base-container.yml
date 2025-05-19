@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - aws --version
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - COMMIT_ID=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+  build:
+    commands:
+      - set -e
+      - >
+        docker build -f Dockerfile.messageprocessor.base
+        --build-arg ERIELAB_ENV=$ERIELAB_ENV
+        --build-arg COMMIT_ID=$COMMIT_ID
+        -t erielab-messageprocessor-basecontainer:$COMMIT_ID
+        -t erielab-messageprocessor-basecontainer:latest
+        .
+      - docker tag erielab-messageprocessor-basecontainer:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/erielab-messageprocessor-basecontainer:latest
+  post_build:
+    commands:
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/erielab-messageprocessor-basecontainer:latest
+      - printf '[{"name":"erielab-messageprocessor-basecontainer-container","imageUri":"%s.dkr.ecr.%s.amazonaws.com/erielab-messageprocessor-basecontainer:latest"}]' $AWS_ACCOUNT_ID $AWS_REGION > imagedefinitions.json
+      - echo '------  imagedefinitions.json ---------'
+      - cat imagedefinitions.json
+      - echo '---------------------------------------'
+artifacts:
+  files: imagedefinitions.json
