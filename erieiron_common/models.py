@@ -1027,3 +1027,116 @@ class PubSubHanderInstanceProcess(models.Model):
             PubSubHanderInstanceProcess.objects.filter(id__in=process_ids).update(
                 process_status=PubSubHandlerInstanceStatus.KILL_REQUESTED
             )
+
+
+
+
+
+# Erie Iron core entities
+class Capability(models.Model):
+    class Meta:
+        db_table = "capability"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.TextField(unique=True)
+    description = models.TextField(null=True)
+    endpoint = models.URLField(null=True)
+    estimated_cost_per_execution = models.FloatField(null=True)
+    version = models.TextField(null=True)
+    used_by_businesses = models.JSONField(default=list)
+
+
+class Business(models.Model):
+    class Meta:
+        db_table = "business"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.TextField(unique=True)
+    description = models.TextField(null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class CapabilityExecution(models.Model):
+    class Meta:
+        db_table = "capability_execution"
+
+    class Executor(models.TextChoices):
+        AUTONOMOUS = 'AUTONOMOUS'
+        HUMAN = 'HUMAN'
+
+    class State(models.TextChoices):
+        NEW = 'NEW'
+        PENDING = 'PENDING'
+        RETRYING = 'RETRYING'
+        BLOCKED = 'BLOCKED'
+        EXPIRED = 'EXPIRED'
+        RESOLVED = 'RESOLVED'
+
+    class Result(models.TextChoices):
+        SUCCESS = 'SUCCESS'
+        FAIL_RETRYABLE = 'FAIL_RETRYABLE'
+        FAIL_FATAL = 'FAIL_FATAL'
+        TIMEOUT = 'TIMEOUT'
+        BLOCKED_DEPENDENCY = 'BLOCKED_DEPENDENCY'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    capability = models.ForeignKey(Capability, on_delete=models.CASCADE)
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    executor = models.TextField(choices=Executor.choices)
+    state = models.TextField(choices=State.choices)
+    result = models.TextField(choices=Result.choices)
+    retry_count = models.IntegerField(default=0)
+    start_time = models.DateTimeField(null=True)
+    end_time = models.DateTimeField(null=True)
+    cost = models.FloatField(null=True)
+
+
+class Goal(models.Model):
+    class Meta:
+        db_table = "goal"
+
+    class Type(models.TextChoices):
+        KPI = 'KPI'
+        MILESTONE = 'MILESTONE'
+
+    class Status(models.TextChoices):
+        ON_TRACK = 'ON_TRACK'
+        AT_RISK = 'AT_RISK'
+        OFF_TRACK = 'OFF_TRACK'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="goals")
+    name = models.TextField()
+    type = models.TextField(choices=Type.choices)
+    target_value = models.TextField()
+    actual_value = models.TextField()
+    status = models.TextField(choices=Status.choices)
+    evaluation_interval_days = models.IntegerField()
+
+
+class ShutdownTrigger(models.Model):
+    class Meta:
+        db_table = "shutdown_trigger"
+
+    class Severity(models.TextChoices):
+        LOW = 'LOW'
+        MEDIUM = 'MEDIUM'
+        HIGH = 'HIGH'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    condition = models.TextField()
+    severity = models.TextField(choices=Severity.choices)
+
+
+class ShutdownPlan(models.Model):
+    class Meta:
+        db_table = "shutdown_plan"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.OneToOneField(Business, on_delete=models.CASCADE, related_name="shutdown_plan")
+    triggers = models.ManyToManyField(ShutdownTrigger, related_name="plans")
+    legal_review_completed = models.BooleanField(default=False)
+    ethical_review_completed = models.BooleanField(default=False)
+    data_purge_strategy = models.TextField(null=True)
+    user_communication_plan = models.TextField(null=True)
