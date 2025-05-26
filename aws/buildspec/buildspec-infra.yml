@@ -1,0 +1,20 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.x
+  pre_build:
+    commands:
+      - echo Validating CloudFormation template...
+      - aws cloudformation validate-template --template-body file:/aws/cloudformation/, runtime_environment.yml
+  build:
+    commands:
+      - echo Deploying to environment: $ENVIRONMENT_NAME
+      - aws cloudformation deploy \
+          --template-file aws/cloudformation/, runtime_environment.yml \
+          --stack-name erieiron-infra-$ENVIRONMENT_NAME \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --parameter-overrides EnvironmentName=$ENVIRONMENT_NAME
+artifacts:
+  files: []
