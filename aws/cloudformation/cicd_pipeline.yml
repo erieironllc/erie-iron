@@ -15,7 +15,6 @@ Parameters:
     AllowedValues: [dev, stage, prod]
 
 Resources:
-
   ArtifactBucket:
     Type: AWS::S3::Bucket
 
