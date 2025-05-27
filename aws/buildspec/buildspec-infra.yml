@@ -3,7 +3,7 @@ version: 0.2
 phases:
   pre_build:
     commands:
-      - echo "Starting CloudFormation deploy for environment: $ENVIRONMENT_NAME"
+      - echo "Starting CloudFormation deploy "
   build:
     commands:
       - echo "Deploying CloudFormation stack..."
