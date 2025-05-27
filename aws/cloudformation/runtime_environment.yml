@@ -50,8 +50,6 @@ Resources:
         BudgetType: COST
         TimeUnit: MONTHLY
         CostFilters: {}
-        TimePeriod:
-          Start: !Ref "AWS::Timestamp"
       NotificationsWithSubscribers:
         - Notification:
             NotificationType: ACTUAL
