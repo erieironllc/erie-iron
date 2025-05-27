@@ -1,0 +1,20 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - pip install --quiet cfn-lint
+  pre_build:
+    commands:
+      - echo "Validating CloudFormation template syntax..."
+      - aws cloudformation validate-template --template-body file://aws/cloudformation/provision_environment.yaml
+      - echo "Running cfn-lint for semantic validation..."
+      - cfn-lint aws/cloudformation/provision_environment.yaml
+  build:
+    commands:
+      - echo "Validation complete. No deployment performed in this phase."
+
+artifacts:
+  files: []

@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ErieIron Infrastructure Deployment Pipeline
+
+Parameters:
+  GitHubOwner:
+    Type: String
+  GitHubRepo:
+    Type: String
+  GitHubBranch:
+    Type: String
+    Default: main
+  GitHubTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: github-token
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stage, prod]
+
+Resources:
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+
+  InfraBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InfraBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:GetObject
+                  - s3:PutObject
+                  - logs:*
+                Resource: "*"
+
+  InfraDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DeployPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:UpdateStack
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+
+  InfraValidateProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "ErieIronInfraValidate-${EnvironmentName}"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: aws/buildspec/buildspec-validate-infra.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:5.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ENVIRONMENT_NAME
+            Value: !Ref EnvironmentName
+      ServiceRole: !GetAtt InfraBuildRole.Arn
+
+  InfraDeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "ErieIronInfraDeploy-${EnvironmentName}"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: aws/buildspec/buildspec-infra.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:5.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ENVIRONMENT_NAME
+            Value: !Ref EnvironmentName
+      ServiceRole: !GetAtt InfraDeployRole.Arn
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: "*"
+
+  InfraPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub_Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Sub "{{resolve:secretsmanager:github-token:SecretString:token}}"
+              RunOrder: 1
+        - Name: Validate
+          Actions:
+            - Name: ValidateInfra
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: ValidateOutput
+              Configuration:
+                ProjectName: !Ref InfraValidateProject
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: DeployInfra
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: ValidateOutput
+              Configuration:
+                ProjectName: !Ref InfraDeployProject
+              RunOrder: 1
