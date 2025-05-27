@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Erie Iron Application Stack
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+  ClusterArn:
+    Type: String
+  SubnetIds:
+    Type: CommaDelimitedList
+  ECRRepoUri:
+    Type: String
+
+Resources:
+  WebServiceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/webservice-${EnvironmentName}"
+      RetentionInDays: 7
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "webservice-task-${EnvironmentName}"
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt WebServiceTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: webservice
+          Image: !Sub "${ECRRepoUri}:latest"
+          PortMappings:
+            - ContainerPort: 80
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WebServiceLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: web
+
+  WebServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Select [ 0, !Split [ ",", !Ref SubnetIds ] ]
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: 200-399
+
+  WebServiceListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebServiceTargetGroup
+      LoadBalancerArn: !ImportValue LoadBalancerArn-${EnvironmentName}
+      Port: 80
+      Protocol: HTTP
+
+  WebServiceService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterArn
+      DesiredCount: 2
+      LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref SubnetIds
+      LoadBalancers:
+        - ContainerName: webservice
+          ContainerPort: 80
+          TargetGroupArn: !Ref WebServiceTargetGroup
+
+Outputs:
+  LoadBalancerDNS:
+    Description: ALB DNS Name
+    Value: !ImportValue LoadBalancerDNS-${EnvironmentName}

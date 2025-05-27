@@ -62,24 +62,5 @@ aws iam delete-service-linked-role --role-name AWSServiceRoleForECS || echo "No 
 aws cloudformation delete-stack --stack-name "erieiron-infra-$ENVIRONMENT_NAME"
 aws cloudformation wait stack-delete-complete --stack-name "erieiron-infra-$ENVIRONMENT_NAME"
 
-#aws cloudformation deploy \
-#  --template-file aws/cloudformation/cicd_pipeline.yml \
-#  --stack-name "erieiron-infra-pipeline-$ENVIRONMENT_NAME" \
-#  --capabilities CAPABILITY_NAMED_IAM \
-#  --parameter-overrides \
-#    GitHubOwner=jjschultz \
-#    GitHubRepo=erieiron \
-#    GitHubBranch=main \
-#    EnvironmentName="$ENVIRONMENT_NAME"
-#aws cloudformation wait stack-update-complete --stack-name "erieiron-infra-pipeline-$ENVIRONMENT_NAME"
-
-
-aws cloudformation deploy \
-  --template-file aws/cloudformation/runtime_environment.yml \
-  --stack-name "erieiron-infra-$ENVIRONMENT_NAME" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides "EnvironmentName=$ENVIRONMENT_NAME"
-
-aws cloudformation wait stack-update-complete --stack-name "erieiron-infra-$ENVIRONMENT_NAME"
-
-aws cloudformation describe-stack-events --stack-name erieiron-infra-prod > ~/Desktop/describe-stack-events.output.json
+aws cloudformation delete-stack --stack-name "erieiron-infra-pipeline-$ENVIRONMENT_NAME"
+aws cloudformation wait stack-delete-complete --stack-name "erieiron-infra-pipeline-$ENVIRONMENT_NAME"
