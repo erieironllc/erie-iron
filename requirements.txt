@@ -52,3 +52,4 @@ torchvggish
 transformers
 
 cfn-lint
+cfn-nag
