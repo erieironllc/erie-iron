@@ -69,6 +69,12 @@ Resources:
                 Action:
                   - s3:GetObject
                 Resource: !Sub "arn:aws:s3:::${ArtifactBucket}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
 
   InfraValidateProject:
     Type: AWS::CodeBuild::Project
