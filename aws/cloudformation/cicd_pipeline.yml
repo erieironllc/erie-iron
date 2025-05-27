@@ -9,10 +9,6 @@ Parameters:
   GitHubBranch:
     Type: String
     Default: main
-  GitHubTokenSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: github-token
   EnvironmentName:
     Type: String
     Default: dev
@@ -80,7 +76,7 @@ Resources:
       Name: !Sub "ErieIronInfraValidate-${EnvironmentName}"
       Source:
         Type: CODEPIPELINE
-        BuildSpec: aws/buildspec/buildspec-validate-infra.yml
+        BuildSpec: aws/buildspec/buildspec-infra-validate.yml
       Artifacts:
         Type: CODEPIPELINE
       Environment:
