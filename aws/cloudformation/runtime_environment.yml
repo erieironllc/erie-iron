@@ -39,6 +39,29 @@ Parameters:
 Description: Erie Iron env
 
 Resources:
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "ErieIronMonthlyBudget-${EnvironmentName}"
+        BudgetLimit:
+          Amount: 100
+          Unit: USD
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        CostFilters: {}
+        TimePeriod:
+          Start: !Ref "AWS::Timestamp"
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: your-alert-email@example.com
+
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -606,25 +629,5 @@ Outputs:
     Description: Public DNS name of the Application Load Balancer
     Value: !GetAtt WebServiceALB.DNSName
 
-  MonthlyBudget:
-    Type: AWS::Budgets::Budget
-    Properties:
-      Budget:
-        BudgetName: !Sub "ErieIronMonthlyBudget-${EnvironmentName}"
-        BudgetLimit:
-          Amount: 100
-          Unit: USD
-        BudgetType: COST
-        TimeUnit: MONTHLY
-        CostFilters: {}
-        TimePeriod:
-          Start: !Ref "AWS::Timestamp"
-      NotificationsWithSubscribers:
-        - Notification:
-            NotificationType: ACTUAL
-            ComparisonOperator: GREATER_THAN
-            Threshold: 80
-            ThresholdType: PERCENTAGE
-          Subscribers:
-            - SubscriptionType: EMAIL
-              Address: your-alert-email@example.com
+
+
