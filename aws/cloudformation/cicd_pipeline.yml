@@ -60,6 +60,7 @@ Resources:
                 Action:
                   - cloudformation:DescribeStacks
                   - cloudformation:UpdateStack
+                  - cloudformation:CreateChangeSet
                   - cloudformation:CreateStack
                   - cloudformation:DeleteStack
                   - cloudformation:ValidateTemplate
