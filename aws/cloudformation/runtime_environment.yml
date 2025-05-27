@@ -10,22 +10,8 @@ Parameters:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
 
-  TrustedIpRange:
-    Type: String
-    Description: CIDR block allowed to access EC2 and RDS
-    Default: 69.181.107.147/32
 
-  InstanceType:
-    Type: String
-    Default: t4g.nano
 
-  DBInstanceType:
-    Type: String
-    Default: db.t4g.micro
-
-  DBInstanceName:
-    Type: String
-    Default: erieiron-db-prod
 
   DBEngineVersion:
     Type: String
@@ -395,7 +381,6 @@ Resources:
 
   MyPostgresDB:
     Type: AWS::RDS::DBInstance
-    DependsOn: MyRDSSecret
     Properties:
       DBInstanceClass: !Ref DBInstanceType
       Engine: postgres
@@ -420,6 +405,7 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
     DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
 
   MySecretRDSAttachment:
     Type: AWS::SecretsManager::SecretTargetAttachment
