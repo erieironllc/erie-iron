@@ -45,36 +45,26 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service: codebuild.amazonaws.com
+              Service:
+                - codebuild.amazonaws.com
+                - cloudformation.amazonaws.com
             Action: sts:AssumeRole
+      Path: /
       Policies:
-        - PolicyName: DeployPolicy
+        - PolicyName: InfraDeployPolicy
           PolicyDocument:
-            Version: "2012-10-17"
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - cloudformation:DescribeStacks
-                  - cloudformation:UpdateStack
-                  - cloudformation:CreateChangeSet
-                  - cloudformation:CreateStack
-                  - cloudformation:DeleteStack
-                  - cloudformation:ValidateTemplate
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:ListBucket
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
+                  - cloudformation:*
+                  - s3:*
+                  - ec2:*
+                  - iam:*
                 Resource: "*"
 
   InfraValidateProject:
