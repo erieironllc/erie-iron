@@ -6,11 +6,8 @@ phases:
       - echo "Starting CloudFormation deploy "
   build:
     commands:
-      - >
-        aws cloudformation deploy --template-file aws/cloudformation/runtime_environment.yml
-        --stack-name erieiron-infra-$ENVIRONMENT_NAME
-        --capabilities CAPABILITY_NAMED_IAM
-        --parameter-overrides EnvironmentName=$ENVIRONMENT_NAME
+      - echo "Deploying CloudFormation stack..."
+      - aws cloudformation deploy --template-file aws/cloudformation/runtime_environment.yml --stack-name erieiron-infra-$ENVIRONMENT_NAME --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName=$ENVIRONMENT_NAME
 
 artifacts:
   files: []
