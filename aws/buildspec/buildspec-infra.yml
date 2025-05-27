@@ -1,11 +1,13 @@
 version: 0.2
 
 phases:
+  pre_build:
+    commands:
+      - echo "Starting CloudFormation deploy for environment: $ENVIRONMENT_NAME"
   build:
     commands:
-      - echo "Deploying to environment: $ENVIRONMENT_NAME"
-      - |
-        aws cloudformation deploy \
+      - echo "Deploying CloudFormation stack..."
+      - aws cloudformation deploy \
           --template-file aws/cloudformation/runtime_environment.yml \
           --stack-name erieiron-infra-$ENVIRONMENT_NAME \
           --capabilities CAPABILITY_NAMED_IAM \
