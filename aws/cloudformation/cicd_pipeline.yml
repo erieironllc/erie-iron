@@ -71,9 +71,7 @@ Resources:
                 Resource: !Sub "arn:aws:s3:::${ArtifactBucket}/*"
               - Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
+                  - logs:*
                 Resource: "*"
 
   InfraValidateProject:
