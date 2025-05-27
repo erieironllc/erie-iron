@@ -184,7 +184,7 @@ Resources:
                 Provider: CodeBuild
                 Version: 1
               InputArtifacts:
-                - Name: ValidateOutput
+                - Name: SourceOutput
               Configuration:
                 ProjectName: !Ref InfraDeployProject
               RunOrder: 1
