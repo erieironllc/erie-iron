@@ -10,8 +10,9 @@ Parameters:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
 
-
-
+  DBInstanceType:
+    Type: String
+    Default: db.t4g.micro
 
   DBEngineVersion:
     Type: String
