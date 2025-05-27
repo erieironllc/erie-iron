@@ -35,9 +35,11 @@ Parameters:
     Type: Number
     Default: 20
 
-  GitHubToken:
-    Type: String
-    Description: GitHub token stored in Secrets Manager
+  GitHubTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: github-token
+      Description: GitHub Personal Access Token for CodePipeline
 
 Description: Erie Iron env
 
@@ -202,7 +204,7 @@ Resources:
                 Owner: jjschultz
                 Repo: erieiron
                 Branch: main
-                OAuthToken: !Ref GitHubToken
+                OAuthToken: !Sub "{{resolve:secretsmanager:github-token:SecretString:token}}"
               RunOrder: 1
         - Name: Build
           Actions:
