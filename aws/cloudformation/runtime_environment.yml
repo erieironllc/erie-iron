@@ -35,11 +35,6 @@ Parameters:
     Type: Number
     Default: 20
 
-  GitHubTokenSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: github-token
-      Description: GitHub Personal Access Token for CodePipeline
 
 Description: Erie Iron env
 
