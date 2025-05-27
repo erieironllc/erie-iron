@@ -23,6 +23,11 @@ Parameters:
 Description: Erie Iron env
 
 Resources:
+  ECSServiceLinkedRole:
+    Type: AWS::IAM::ServiceLinkedRole
+    Properties:
+      AWSServiceName: ecs.amazonaws.com
+
   MonthlyBudget:
     Type: AWS::Budgets::Budget
     Properties:
