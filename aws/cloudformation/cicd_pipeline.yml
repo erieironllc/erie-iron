@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: ErieIron Infrastructure Deployment Pipeline
+Description: ErieIron Infrastructure Deployment Pipeline v1
 
 Parameters:
   GitHubOwner:
