@@ -133,6 +133,50 @@ Resources:
                   - ecs:ListClusters
                   - ecs:ListTaskDefinitions
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:GetAuthorizationToken
+                  - ecr:PutImage
+                  - ecr:BatchCheckLayerAvailability
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:DescribeRule
+                  - events:DeleteRule
+                  - events:RemoveTargets
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                  - elasticloadbalancing:CreateLoadBalancer
+                  - elasticloadbalancing:DeleteLoadBalancer
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:RegisterTargets
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:CreateTargetGroup
+                  - elasticloadbalancing:DeleteTargetGroup
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:ModifyTargetGroup
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - events:ListRules
+                  - events:ListTargetsByRule
+                  - sns:Publish
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:DeleteParameter
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricData
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: "*"
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
