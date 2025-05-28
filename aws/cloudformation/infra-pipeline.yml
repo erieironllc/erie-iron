@@ -53,7 +53,6 @@ Resources:
       Name: infra-build
       Source:
         Type: CODEPIPELINE
-        BuildSpec: aws/buildspec/buildspec-infra.yml
       Environment:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/standard:5.0
@@ -61,6 +60,7 @@ Resources:
       Artifacts:
         Type: CODEPIPELINE
       ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      BuildSpec: aws/buildspec/buildspec-infra.yml
 
   InfraPipelineRole:
     Type: AWS::IAM::Role
