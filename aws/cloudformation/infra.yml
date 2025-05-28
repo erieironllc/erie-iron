@@ -6,6 +6,9 @@ Parameters:
     Type: String
     Default: dev
     Description: Deployment environment (dev, stage, prod)
+  InfraBuildArn:
+    Type: String
+    Description: ARN of the InfraBuild CodeBuild project
 
 Resources:
   VPC:
@@ -191,7 +194,7 @@ Resources:
                 Action:
                   - codebuild:StartBuild
                   - codebuild:BatchGetBuilds
-                Resource: !GetAtt InfraBuild.Arn
+                Resource: !Ref InfraBuildArn
 
 Outputs:
   VpcId:
