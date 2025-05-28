@@ -48,6 +48,10 @@ Resources:
                   - cloudformation:DescribeStacks
                   - cloudformation:DescribeChangeSet
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:GetTemplateSummary
+                Resource: "*"
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
