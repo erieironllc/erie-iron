@@ -317,13 +317,10 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:GetBucketLocation
+                  - s3:ListBucket
                 Resource:
                   - !Sub arn:aws:s3:::${PipelineArtifactBucket}
                   - !Sub arn:aws:s3:::${PipelineArtifactBucket}/*
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                Resource: !Sub arn:aws:s3:::${PipelineArtifactBucket}
               - Effect: Allow
                 Action:
                   - codepipeline:PutJobSuccessResult
