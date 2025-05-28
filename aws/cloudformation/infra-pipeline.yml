@@ -14,6 +14,18 @@ Parameters:
     Default: dev
 
 Resources:
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -354,3 +366,4 @@ Resources:
                 StackName: !Sub "erieiron-infra-${EnvironmentName}"
                 Capabilities: CAPABILITY_NAMED_IAM
                 TemplatePath: SourceOutput::aws/cloudformation/infra.yml
+                RoleArn: !GetAtt CloudFormationExecutionRole.Arn
