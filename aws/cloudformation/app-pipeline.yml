@@ -14,6 +14,39 @@ Parameters:
     Default: dev
 
 Resources:
+  PipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: "*"
+
   AppBuild:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -32,7 +65,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-09'
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -41,7 +74,7 @@ Resources:
       Policies:
         - PolicyName: AppPipelinePolicy
           PolicyDocument:
-            Version: '2012-10-09'
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
@@ -100,4 +133,4 @@ Resources:
                 ActionMode: CREATE_UPDATE
                 StackName: !Sub "erieiron-app-${EnvironmentName}"
                 Capabilities: CAPABILITY_NAMED_IAM
-                TemplatePath: BuildOutput::app.yml
+                TemplatePath: BuildOutput::aws/cloudformation/app.yml
