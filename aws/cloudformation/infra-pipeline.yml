@@ -313,6 +313,10 @@ Resources:
                   - codepipeline:PutJobSuccessResult
                   - codepipeline:PutJobFailureResult
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                Resource: "*"
 
   InfraPipeline:
     Type: AWS::CodePipeline::Pipeline
