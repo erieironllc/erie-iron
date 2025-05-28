@@ -1,13 +1,18 @@
 version: 0.2
 
+env:
+  variables:
+    ENVIRONMENT_NAME: "prod"
+
 phases:
   pre_build:
     commands:
+      - set -e
       - echo "Starting CloudFormation deploy"
   build:
     commands:
       - echo "Deploying CloudFormation stack..."
-      - aws cloudformation deploy --template-file aws/cloudformation/runtime_environment.yml --stack-name erieiron-infra-prod --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName=prod
+      - aws cloudformation deploy --template-file aws/cloudformation/infra.yml --stack-name erieiron-infra-prod --capabilities CAPABILITY_NAMED_IAM --parameter-overrides EnvironmentName=$ENVIRONMENT_NAME
 
 artifacts:
   files: []
