@@ -141,4 +141,4 @@ Resources:
                 ActionMode: CREATE_UPDATE
                 StackName: !Sub "erieiron-infra-${EnvironmentName}"
                 Capabilities: CAPABILITY_NAMED_IAM
-                TemplatePath: BuildOutput::aws/cloudformation/infra.yml
+              TemplatePath: SourceOutput::aws/cloudformation/infra.yml
