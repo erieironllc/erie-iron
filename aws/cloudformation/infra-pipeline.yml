@@ -318,9 +318,7 @@ Resources:
                   - s3:PutObject
                   - s3:GetBucketLocation
                   - s3:ListBucket
-                Resource:
-                  - !Sub arn:aws:s3:::${PipelineArtifactBucket}
-                  - !Sub arn:aws:s3:::${PipelineArtifactBucket}/*
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - codepipeline:PutJobSuccessResult
@@ -329,6 +327,26 @@ Resources:
               - Effect: Allow
                 Action:
                   - cloudformation:DescribeStacks
+                Resource: "*"
+              # Additional permissions for infrastructure lifecycle operations
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ListStackResources
+                  - cloudwatch:PutMetricData
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:DeleteRule
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                  - iam:PassRole
+                  - iam:TagRole
+                  - lambda:UpdateFunctionConfiguration
                 Resource: "*"
       Tags:
         - Key: Project
