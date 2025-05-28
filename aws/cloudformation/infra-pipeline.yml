@@ -53,6 +53,7 @@ Resources:
       Name: infra-build
       Source:
         Type: CODEPIPELINE
+        BuildSpec: aws/buildspec/buildspec-infra.yml
       Environment:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/standard:5.0
