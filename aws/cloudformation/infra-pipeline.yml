@@ -56,6 +56,72 @@ Resources:
                 Action:
                   - secretsmanager:GetRandomPassword
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:CreateVpc
+                  - ec2:CreateSubnet
+                  - ec2:CreateRouteTable
+                  - ec2:CreateRoute
+                  - ec2:AssociateRouteTable
+                  - ec2:ModifyVpcAttribute
+                  - ec2:Describe*
+                  - ec2:DeleteInternetGateway
+                  - ec2:DeleteVpc
+                  - ec2:DeleteSubnet
+                  - ec2:DeleteRouteTable
+                  - ec2:DetachInternetGateway
+                  - ec2:DisassociateRouteTable
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:AttachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRole
+                  - iam:PassRole
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:DeleteFunction
+                  - lambda:InvokeFunction
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:GetSecretValue
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:PutBucketPolicy
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:DeleteStack
+                  - cloudformation:ListStacks
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:ListRoles
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:GetFunction
+                  - lambda:UpdateFunctionConfiguration
+                Resource: "*"
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -107,6 +173,11 @@ Resources:
                 Resource:
                   - !Sub arn:aws:s3:::${PipelineArtifactBucket}
                   - !Sub arn:aws:s3:::${PipelineArtifactBucket}/*
+              - Effect: Allow
+                Action:
+                  - codepipeline:PutJobSuccessResult
+                  - codepipeline:PutJobFailureResult
+                Resource: "*"
 
   InfraPipeline:
     Type: AWS::CodePipeline::Pipeline
