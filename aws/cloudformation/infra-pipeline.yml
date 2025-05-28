@@ -122,6 +122,17 @@ Resources:
                   - lambda:GetFunction
                   - lambda:UpdateFunctionConfiguration
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecs:CreateCluster
+                  - ecs:DeleteCluster
+                  - ecs:DescribeClusters
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:ListClusters
+                  - ecs:ListTaskDefinitions
+                Resource: "*"
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
