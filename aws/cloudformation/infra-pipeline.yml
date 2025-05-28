@@ -52,6 +52,10 @@ Resources:
                 Action:
                   - cloudformation:GetTemplateSummary
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetRandomPassword
+                Resource: "*"
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
