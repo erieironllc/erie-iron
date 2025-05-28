@@ -76,6 +76,10 @@ Resources:
                 Resource: "*"
               - Effect: Allow
                 Action:
+                  - ec2:ModifySubnetAttribute
+                Resource: "*"
+              - Effect: Allow
+                Action:
                   - iam:CreateRole
                   - iam:DeleteRole
                   - iam:AttachRolePolicy
@@ -176,6 +180,18 @@ Resources:
                   - cloudwatch:GetMetricData
                   - xray:PutTraceSegments
                   - xray:PutTelemetryRecords
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - route53:ChangeResourceRecordSets
+                  - route53:ListHostedZones
+                  - logs:DeleteLogGroup
+                  - tag:GetResources
+                  - tag:TagResources
+                  - tag:UntagResources
                 Resource: "*"
   PipelineArtifactBucket:
     Type: AWS::S3::Bucket
