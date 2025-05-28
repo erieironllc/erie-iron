@@ -9,6 +9,8 @@ phases:
     commands:
       - set -e
       - echo "Starting CloudFormation deploy"
+      - ls -alh aws/cloudformation
+      - cat aws/cloudformation/infra.yml || echo "infra.yml not found"
   build:
     commands:
       - echo "Deploying CloudFormation stack..."
