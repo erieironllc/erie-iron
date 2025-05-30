@@ -3,7 +3,7 @@ from typing import Optional
 
 from django.db import transaction
 
-from erieiron_config import settings
+import settings
 from erieiron_chat_engine import prompt_parser
 from erieiron_common import models, common
 from erieiron_common.chat_utils import notify_client_of_update

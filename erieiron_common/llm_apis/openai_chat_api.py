@@ -13,7 +13,7 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 @lru_cache
 def get_api_key():
     from erieiron_common import aws_utils
-    return aws_utils.get_secret("OPENAI_API_KEY")['OPENAI_API_KEY']
+    return aws_utils.get_secret("LLM_API_KEYS")['OPENAI']
 
 
 def chat(

@@ -20,6 +20,9 @@ class ErieEnum(Enum):
         if v is None:
             return False
 
+        if self == v:
+            return True
+
         try:
             return self.__class__(v) == self
         except:

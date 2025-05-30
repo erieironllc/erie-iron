@@ -4,7 +4,7 @@ from google.analytics.data_v1beta import BetaAnalyticsDataClient, RunReportReque
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
-from erieiron_config import settings
+import settings
 from erieiron_common import common
 
 

@@ -4,29 +4,36 @@ import sys
 import threading
 import uuid
 from functools import lru_cache
-from typing import Tuple
+from pathlib import Path
+from typing import Tuple, Optional
 
 from django.contrib.postgres.search import SearchVectorField, SearchVector
 from django.db import models, connection, transaction
-from django.db.models import QuerySet
-from django.db.models.query_utils import Q
+from django.db.models import QuerySet, Sum
 from django.utils import timezone
 
-import gpu_utils
-from aws_utils import get_cloudwatch_url
-from common import get_minutes_ago, get_now
-from erieiron_config import settings
+import settings
 from erieiron_common import common
+from erieiron_common import gpu_utils
+from erieiron_common.aws_utils import get_cloudwatch_url
+from erieiron_common.common import get_minutes_ago, get_now
 from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction
+from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
-from gpu_utils import ComputeDevice
 
 
-class Person(models.Model):
+class BaseErieIronModel(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    class Meta:
+        app_label = "erieiron_common"
+        abstract = True
+
+
+class Person(BaseErieIronModel):
     class Meta:
         db_table = "person"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     cognito_sub = models.UUIDField(db_index=True, null=True, unique=True)
     name = models.TextField(null=True)
     email = models.TextField()
@@ -108,13 +115,12 @@ class Person(models.Model):
         return p
 
 
-class Project(models.Model):
+class Project(BaseErieIronModel):
     class Meta:
         db_table = "project"
 
     NEW_PROJECT_NAME = "New Project"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.TextField(null=False, default="")
     person = models.ForeignKey(Person, on_delete=models.PROTECT)
     created_timestamp = models.DateTimeField(auto_now_add=True)
@@ -175,7 +181,7 @@ class CacheData(models.Model):
     val = models.TextField()
 
 
-class ProjectInteraction(models.Model):
+class ProjectInteraction(BaseErieIronModel):
     RICHRESPONSE_PREFIX = "RICHRESPONSE:"
 
     INTERACTION_PLACEHOLDER = 'interaction_placeholder'
@@ -185,7 +191,6 @@ class ProjectInteraction(models.Model):
     class Meta:
         db_table = "project_interaction"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.PROTECT)
     person = models.ForeignKey(Person, on_delete=models.PROTECT, null=True)
     prompt = models.TextField(null=True)
@@ -266,21 +271,19 @@ class ProjectInteraction(models.Model):
         return f"Interaction {self.pk}; prompt={common.default_str(self.prompt)}; {common.default_str(self.response)}"
 
 
-class ProjectInteractionFeature(models.Model):
+class ProjectInteractionFeature(BaseErieIronModel):
     class Meta:
         db_table = "project_interaction_feature"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project_interaction = models.ForeignKey(ProjectInteraction, on_delete=models.CASCADE)
     name = models.TextField(null=False)
     value = models.TextField(null=False)
 
 
-class PubSubMessage(models.Model):
+class PubSubMessage(BaseErieIronModel):
     class Meta:
         db_table = "pubsub_message"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     env = models.TextField(null=False, db_index=True)
     namespace = models.TextField(null=False, db_index=True)
     message_type = models.TextField(null=False)
@@ -610,11 +613,10 @@ class PubSubMessage(models.Model):
                 common.log_info(f"\t\tWAITING FOR\t\t {self.env} {namespace} blocked by {m.message_type} {m.id}")
 
 
-class PubSubEnvironment(models.Model):
+class PubSubEnvironment(BaseErieIronModel):
     class Meta:
         db_table = "pubsub_environment"
 
-    id = models.TextField(primary_key=True, editable=False)
     desired_handler_instance_count = models.IntegerField(null=False, default=1)
     last_requested_increase = models.DateTimeField(null=True, auto_now_add=True)
 
@@ -639,11 +641,10 @@ class PubSubEnvironment(models.Model):
             )
 
 
-class PubSubHanderInstance(models.Model):
+class PubSubHanderInstance(BaseErieIronModel):
     class Meta:
         db_table = "pubsub_message_handler_instance"
 
-    id = models.TextField(primary_key=True, editable=False)
     environment = models.ForeignKey(PubSubEnvironment, null=False, on_delete=models.PROTECT)
     env = models.TextField(null=False, db_index=True, default=settings.MESSAGE_QUEUE_ENV)
     instance_status = models.TextField(null=False, default=PubSubHandlerInstanceStatus.NOT_AVAILABLE)
@@ -884,12 +885,11 @@ class PubSubHanderInstance(models.Model):
                 common.kill_pid(pid)
 
 
-class PubSubHanderInstanceProcess(models.Model):
+class PubSubHanderInstanceProcess(BaseErieIronModel):
     class Meta:
         db_table = "pubsub_message_handler_instance_process"
         unique_together = (('handler_instance', 'pid'),)
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     handler_instance = models.ForeignKey(PubSubHanderInstance, null=True, on_delete=models.PROTECT)
     pid = models.IntegerField(null=False)
     process_status = models.TextField(null=False, default=PubSubHandlerInstanceStatus.AVAILABLE)
@@ -1029,15 +1029,11 @@ class PubSubHanderInstanceProcess(models.Model):
             )
 
 
-
-
-
 # Erie Iron core entities
-class Capability(models.Model):
+class Capability(BaseErieIronModel):
     class Meta:
         db_table = "capability"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.TextField(unique=True)
     description = models.TextField(null=True)
     endpoint = models.URLField(null=True)
@@ -1046,18 +1042,23 @@ class Capability(models.Model):
     used_by_businesses = models.JSONField(default=list)
 
 
-class Business(models.Model):
+class Business(BaseErieIronModel):
     class Meta:
         db_table = "business"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.TextField(unique=True)
     description = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @staticmethod
+    def get_erie_iron_business() -> 'Business':
+        return Business.objects.get_or_create(
+            name="Erie Iron, LLC"
+        )[0]
 
-class CapabilityExecution(models.Model):
+
+class CapabilityExecution(BaseErieIronModel):
     class Meta:
         db_table = "capability_execution"
 
@@ -1080,7 +1081,6 @@ class CapabilityExecution(models.Model):
         TIMEOUT = 'TIMEOUT'
         BLOCKED_DEPENDENCY = 'BLOCKED_DEPENDENCY'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     capability = models.ForeignKey(Capability, on_delete=models.CASCADE)
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     executor = models.TextField(choices=Executor.choices)
@@ -1092,7 +1092,7 @@ class CapabilityExecution(models.Model):
     cost = models.FloatField(null=True)
 
 
-class Goal(models.Model):
+class Goal(BaseErieIronModel):
     class Meta:
         db_table = "goal"
 
@@ -1105,7 +1105,6 @@ class Goal(models.Model):
         AT_RISK = 'AT_RISK'
         OFF_TRACK = 'OFF_TRACK'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="goals")
     name = models.TextField()
     type = models.TextField(choices=Type.choices)
@@ -1115,7 +1114,7 @@ class Goal(models.Model):
     evaluation_interval_days = models.IntegerField()
 
 
-class ShutdownTrigger(models.Model):
+class ShutdownTrigger(BaseErieIronModel):
     class Meta:
         db_table = "shutdown_trigger"
 
@@ -1124,19 +1123,113 @@ class ShutdownTrigger(models.Model):
         MEDIUM = 'MEDIUM'
         HIGH = 'HIGH'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     condition = models.TextField()
     severity = models.TextField(choices=Severity.choices)
 
 
-class ShutdownPlan(models.Model):
+class ShutdownPlan(BaseErieIronModel):
     class Meta:
         db_table = "shutdown_plan"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business = models.OneToOneField(Business, on_delete=models.CASCADE, related_name="shutdown_plan")
     triggers = models.ManyToManyField(ShutdownTrigger, related_name="plans")
     legal_review_completed = models.BooleanField(default=False)
     ethical_review_completed = models.BooleanField(default=False)
     data_purge_strategy = models.TextField(null=True)
     user_communication_plan = models.TextField(null=True)
+
+
+class SelfDrivingTask(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    config_path = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def get_most_recent_iteration(self) -> 'SelfDrivingTaskIteration':
+        return self.selfdrivingtaskiteration_set.order_by("timestamp").last()
+
+    def get_most_recent_code_version(self) -> Optional['CodeVersion']:
+        last_iteration = self.get_most_recent_iteration()
+        if last_iteration:
+            last_code_version: CodeVersion = last_iteration.codeversion_set.first()
+            if last_code_version:
+                return last_code_version
+
+        return None
+
+    def get_most_recent_log_contents(self) -> Optional[str]:
+        last_iteration = self.get_most_recent_iteration()
+        if last_iteration:
+            return last_iteration.log_content
+        else:
+            return None
+
+    def get_cost(self) -> float:
+        result = LlmRequest.objects.filter(
+            task_iteration__task=self
+        ).aggregate(
+            total=Sum("price")
+        )
+        return result["total"] or 0.0
+
+    def iterate(self) -> 'SelfDrivingTaskIteration':
+        with transaction.atomic():
+            return SelfDrivingTaskIteration.objects.create(task=self)
+
+    @staticmethod
+    def get_or_create(config_file: Path, business_name: Optional[str]) -> 'SelfDrivingTask':
+        with transaction.atomic():
+            if business_name:
+                business = Business.objects.get_or_create(
+                    name=business_name
+                )[0]
+            else:
+                business = Business.get_erie_iron_business()
+
+            return SelfDrivingTask.objects.get_or_create(
+                config_path=str(config_file),
+                business=business
+            )[0]
+
+
+class SelfDrivingTaskIteration(BaseErieIronModel):
+    task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
+    planning_model = models.TextField()
+    coding_model = models.TextField()
+    log_content = models.TextField()
+    evaluation_json = models.JSONField(null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+
+class LlmRequest(BaseErieIronModel):
+    task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
+    token_count = models.IntegerField()
+    price = models.FloatField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+
+class CodeFile(BaseErieIronModel):
+    file_path = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @staticmethod
+    def update(
+            task: SelfDrivingTask,
+            file_path: Path,
+            code: str,
+            code_instructions=None
+    ) -> 'CodeVersion':
+        with transaction.atomic():
+            code_file = CodeFile.objects.get_or_create(file_path=file_path)[0]
+            return CodeVersion(
+                code_file=code_file,
+                code_instructions=code_instructions,
+                code=code
+            )
+
+
+class CodeVersion(BaseErieIronModel):
+    code_file = models.ForeignKey(CodeFile, on_delete=models.CASCADE)
+    task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE)
+    code_instructions = models.JSONField(null=True)
+    code = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)

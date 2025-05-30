@@ -7,7 +7,7 @@ from typing import Dict, Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from erieiron_config import settings
+import settings
 from erieiron_common import common
 
 

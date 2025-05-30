@@ -9,7 +9,7 @@ from erieiron_common.enums import LlmModel
 @lru_cache
 def get_api_key():
     from erieiron_common import aws_utils
-    return aws_utils.get_secret("GEMINI_API_KEY")['GEMINI_API_KEY']
+    return aws_utils.get_secret("LLM_API_KEYS")['GEMINI']
 
 
 def chat(
