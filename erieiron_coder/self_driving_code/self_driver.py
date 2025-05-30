@@ -1,26 +1,33 @@
 import json
 import logging
 import os
+import pprint
 import random
 import re
-import shutil
 import sys
 import zipfile
 from pathlib import Path
 from typing import Tuple, List
 
+from django.db import transaction
 from django.utils import timezone
 
+import settings
 from aws_utils import get_aws_interface
 from codegen_utils import lint_and_format, CodeCompilationError
-from enums import LlmRole, LlmModel, LlmMessageType, S3Bucket
 from erieiron_common import common
-from erieiron_config import settings
+from erieiron_common.enums import LlmRole, LlmModel, LlmMessageType, S3Bucket
+from erieiron_common.models import CodeFile, SelfDrivingTask, CodeVersion, SelfDrivingTaskIteration, LlmRequest
 from llm_apis import llm_interface
 from llm_apis.llm_interface import CODE_MODELS_IN_ORDER, LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 
-DONE = "done"
 COUNT_FULL_LOGS_IN_CONTEXT = 2
+
+
+class GoalAchieved(Exception):
+    def __init__(self, planning_data):
+        self.planning_data = planning_data
+
 
 SYSTEM_MESSAGE_INSTRUCTIONS = """
 You are an expert in generating structured instructions for code generation. 
@@ -137,9 +144,15 @@ class SelfDriverConfig:
 
         config_base_name = common.get_basename(self.config_file)
 
+        self.task = SelfDrivingTask.get_or_create(
+            config_file=str(config_file),
+            business_name=config.get("business")
+        )
+
         self.code_directory = self.config_file.parent
         self.code_file = self.code_directory / config.get("code_file", f"{config_base_name}.py")
 
+        self.is_model_trainer = common.parse_bool(config.get("is_model_trainer", "False"))
         self.code_basename = common.get_basename(self.code_file)
         self.output_directory = self.code_directory / "selfdriver_output"
         self.output_directory.mkdir(exist_ok=True)
@@ -176,7 +189,7 @@ def execute(config_file: Path):
             # if i == 0:
             #     config.model = LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE
 
-            total_spend = get_current_spend(config)
+            total_spend = config.task.get_cost()
 
             if total_spend > config.max_budget_usd:
                 stop_reason = f"Stopping - hit the max budget ${config.max_budget_usd:.2f}"
@@ -198,13 +211,15 @@ def execute(config_file: Path):
                 break
 
             try:
-                should_continue = iterate_on_code(config)
-                if not should_continue:
-                    stop_reason = "Goal Achieved"
-                    break
+                iterate_on_code(config)
+            except GoalAchieved as goal_achieved:
+                pprint.pprint(goal_achieved.planning_data)
+                stop_reason = "Goal Achieved"
+                break
             except Exception as e:
+                logging.exception(e)
                 # raise e
-                print(e)
+                # print(e)
     except SelfDriverConfigException as config_exception:
         print(f"unable to load config file {config_file}:  {config_exception}")
     finally:
@@ -213,81 +228,76 @@ def execute(config_file: Path):
             print_final_evaluation(config)
 
 
-def iterate_on_code(config) -> Tuple[bool, float]:
-    previous_python_file, previous_index = get_latest_python_file(config)
+def iterate_on_code(config):
+    iteration = config.task.iterate()
+    iteration_count = config.task.selfdrivingtaskiteration_set.count()
+
+    total_spend = config.task.get_cost()
 
     print(f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
-Self-driving {config.code_basename} v{previous_index + 1}
-previous code {os.path.abspath(previous_python_file)} {"exists" if previous_python_file.exists() else "doesn't exist"}
+Self-driving {config.code_basename} v{iteration_count}
 model: {config.model.label()}  
-total spend: ${get_current_spend(config):.2f}/${config.max_budget_usd:.2f}
+total spend: ${config.task.get_cost() :.2f}/${config.max_budget_usd:.2f}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
 --------------------------------------------------
             """)
 
-    if not previous_python_file.exists():
-        python_file_to_execute = generate_first_code_iteration(
-            config
-        )
+    if not config.code_file.exists():
+        code_version = generate_first_code_iteration(config)
     else:
-        log_file = config.output_directory / f"{config.code_basename}_{previous_index}.log"
-        if not log_file.exists():
-            # our latest python doesn't have a logfile.  run it to generate a log
-            python_file_to_execute = previous_python_file
-        else:
-            # generate a new version of the file
-            python_file_to_execute = generate_next_code_iteration(
-                config,
-                previous_index + 1,
-                previous_python_file
-            )
+        code_version = generate_next_code_iteration(config)
 
-    if python_file_to_execute is not None:
-        logfile = config.output_directory / f"{python_file_to_execute.name[:-3]}.log"
-        common.execute_management_cmd(
-            f"exec_self_driver --code_file={python_file_to_execute}",
-            logfile
+    config.code_file.write_text(code_version.code)
+
+    print(f"""wrote code to: 
+vi {os.path.abspath(config.code_file)}
+    """)
+
+    logfile = common.create_temp_file(config.code_file.name, ".execution.log")
+    common.execute_management_cmd(
+        f"exec_self_driver --code_file={config.code_file}",
+        logfile
+    )
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            log_content=logfile.read_text()
         )
-        return True
-    else:
-        return False
+    common.quietly_delete(logfile)
 
 
-def generate_first_code_iteration(config) -> Path:
-    first_python_file = config.code_directory / f"{config.code_basename}_0.py"
-
+def generate_first_code_iteration(config) -> CodeVersion:
     if config.code_file.exists():
-        shutil.copy(config.code_file, first_python_file)
-    else:
-        user_message = LlmMessage(
-            message_type=LlmMessageType.USER,
-            text=f"""
+        return CodeFile.update(
+            config.task,
+            config.config_file,
+            config.code_file.read_text()
+        )
+
+    user_message = LlmMessage(
+        message_type=LlmMessageType.USER,
+        text=f"""
 Please write the first version of the code.  
 Please take your time to think of the best initial architecture - identify an architecture that will allow for efficient code iteration and give us the best start towards achieving the goal. 
-                """
-        )
+            """
+    )
 
-        messages = build_instructions_system_messages(config) + [user_message]
+    messages = build_instructions_system_messages(config) + [user_message]
 
-        code_str, evaluation, price = generate_code(
-            config=config,
-            messages=messages
-        )
-
-        first_python_file.write_text(code_str)
-
-    return first_python_file
+    return generate_code(
+        config=config,
+        messages=messages
+    )
 
 
-def generate_next_code_iteration(config, code_version_idx, previous_python_file: Path) -> Path:
-    sys_messages = build_previous_iteration_artifacts_system_messages(config, code_version_idx)
+def generate_next_code_iteration(config) -> Path:
+    sys_messages = build_previous_iteration_artifacts_system_messages(config)
     sys_messages += build_instructions_system_messages(config)
 
-    user_msg = f"{previous_python_file.name} has just executed.  Please review the code and its output and then write detailed instructions for the next version of this code"
+    user_msg = f"{config.config_file.name} has just executed.  Please review the code and its output and then write detailed instructions for the next version of this code"
     if config.comment_requests:
         comment_requests_str = "\n\t\t*".join(config.comment_requests)
         user_msg += f"\n\n Please include the following your evaluation comments: {comment_requests_str}"
@@ -300,58 +310,43 @@ def generate_next_code_iteration(config, code_version_idx, previous_python_file:
         messages = sys_messages + [user_message]
         token_count = LlmMessage.get_total_token_count(config.model, messages)
 
-    response_text = generate_code(
+    return generate_code(
         config=config,
-        messages=messages,
-        previous_code=previous_python_file
+        messages=messages
     )
 
-    if response_text == DONE:
-        print(f"""
-DONE! last response:{response_text}
 
-https://www.youtube.com/watch?v=0VkrUG3OrPc
-""")
-        return None
-
-    new_python_file = config.code_directory / f"{config.code_basename}_{code_version_idx}.py"
-
-    print(f"""writing new code to: 
-vi {os.path.abspath(new_python_file)}
-""")
-
-    new_python_file.write_text(response_text)
-
-    return new_python_file
-
-
-def build_previous_iteration_artifacts_system_messages(config, code_version_idx) -> List[LlmMessage]:
-    previous_run_assets = []
-    for file_idx in range(code_version_idx):
-        python_file = config.code_directory / f"{config.code_basename}_{file_idx}.py"
-        log_file = config.output_directory / f"{config.code_basename}_{file_idx}.log"
-        eval_file = config.output_directory / f"{config.code_basename}_{file_idx}.eval.txt"
-
-        if python_file.exists():
-            previous_run_assets.append(
-                (file_idx, python_file, log_file, eval_file)
-            )
-
-    latest_eval = get_latest_eval(config)
-    previous_iteration_count = common.parse_int(common.get(
-        latest_eval,
-        "previous_iteration_count"
-    ), default_val=30)
-
-    print("previous_iteration_count", previous_iteration_count)
-    previous_run_assets = previous_run_assets[-(previous_iteration_count + COUNT_FULL_LOGS_IN_CONTEXT):]
-
+def build_previous_iteration_artifacts_system_messages(config) -> List[LlmMessage]:
     sys_messages = []
-    for idx, (file_idx, python_file, log_file, eval_file) in enumerate(previous_run_assets):
-        eval_json = None
-        if eval_file.exists() and idx < len(previous_run_assets) - COUNT_FULL_LOGS_IN_CONTEXT:
-            eval_json, price = ensure_parsable_json(config, eval_file.read_text())
-            common.write_json(eval_file, eval_json)
+
+    # todo this only supports single codefile tasks.  future work to support multiple
+
+    code_version = CodeVersion.objects.filter(task_iteration__task=config.task).first()
+
+    code_file_name = code_version.code_file.file_path
+    if code_file_name:
+        code_file_name = Path(code_file_name).name
+    else:
+        code_file_name = "unknown"
+
+    for idx, task_iteration in enumerate(config.task.selfdrivingtaskiteration_set.order_by("timestamp")):
+        task_iteration: SelfDrivingTaskIteration = task_iteration
+        code_version = task_iteration.codeversion_set.order_by("timestamp").first()
+        if not code_version:
+            continue
+
+        sys_messages.append(
+            LlmMessage(
+                message_type=LlmMessageType.ASSISTANT,
+                text=f"""
+        On iteration {idx}, you generated and we executed {code_file_name}.  the contents of {code_file_name} at iteration {idx} are:
+        {code_version.code}
+                """
+            )
+        )
+
+        eval_json = task_iteration.evaluation_json or {}
+        if eval_json:
             try:
                 count_evals = eval_json['evaluation']
                 count_instructions = eval_json['instructions']
@@ -362,9 +357,8 @@ def build_previous_iteration_artifacts_system_messages(config, code_version_idx)
             sys_messages.append(
                 LlmMessage(
                     message_type=LlmMessageType.USER,
-                    file=eval_file,
                     text=f"""
-            these are the results of executing {python_file.name}
+            these are the results of executing iteration {idx} of {code_file_name}
             {json.dumps(eval_json['evaluation'], indent=4)}
                     """
                 )
@@ -374,39 +368,21 @@ def build_previous_iteration_artifacts_system_messages(config, code_version_idx)
                 LlmMessage(
                     message_type=LlmMessageType.ASSISTANT,
                     text=f"""
-            I have evaluated {python_file.name}'s execution results.  Please make the following modifications to the code and name the new version {config.code_basename}_{file_idx + 1}.py
+            I have evaluated the execution results for iteration {id} of {code_file_name}.  Please make the following modifications to the code 
             {json.dumps(eval_json['instructions'], indent=4)}
                     """
                 )
             )
-        else:
+        elif task_iteration.log_content:
             sys_messages.append(
                 LlmMessage(
-                    message_type=LlmMessageType.ASSISTANT,
-                    file=python_file,
+                    message_type=LlmMessageType.USER,
                     text=f"""
-            On iteration {idx}, you generated and we executed {python_file.name}.  the contents of {python_file.name} are:
-            {common.read_file(python_file)}
+            The output of executing iteration {idx} of {code_file_name} is as follows:
+            {task_iteration.log_content}
                     """
                 )
             )
-
-            if log_file.exists():
-                log_file_contents = common.read_file(
-                    log_file,
-                    100
-                ).replace("██", "")
-
-                sys_messages.append(
-                    LlmMessage(
-                        message_type=LlmMessageType.USER,
-                        file=log_file,
-                        text=f"""
-                The output of {python_file.name}'s execution is as follows:
-                {log_file_contents}
-                        """
-                    )
-                )
 
     return sys_messages
 
@@ -487,9 +463,8 @@ def get_latest_python_file(config) -> Tuple[Path, int]:
 
 def generate_code(
         config: SelfDriverConfig,
-        messages: List[LlmMessage],
-        previous_code: Path = None
-) -> str:
+        messages: List[LlmMessage]
+) -> CodeVersion:
     price = 0
 
     llm_response_planning = get_planning_llm_response(
@@ -504,18 +479,18 @@ def generate_code(
     )
     price += post_process_price
 
+    last_iteration = config.task.get_most_recent_iteration()
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=last_iteration.id).update(
+            evaluation_json=planning_data
+        )
+
     planning_data['planning_model'] = str(config.model)
 
     print(f"\n{json.dumps(planning_data, indent=4)}\n")
 
-    if previous_code:
-        common.write_json(
-            config.output_directory / f"{previous_code.name[:-3]}.eval.txt",
-            planning_data
-        )
-
     if not config.never_done and common.parse_bool(planning_data['goal_achieved']):
-        return DONE
+        raise GoalAchieved(planning_data)
 
     previous_exception = None
     for i in range(3):
@@ -530,7 +505,13 @@ def generate_code(
             code_str = lint_and_format(llm_response_codegen.text)
 
             print(f"Iteration total cost: ${price:.4f}")
-            return code_str
+
+            return CodeFile.update(
+                config.task,
+                config.config_file,
+                code_str,
+                code_instructions=planning_data.get("instructions", [])
+            )
         except CodeCompilationError as e:
             previous_exception = e
 
@@ -579,7 +560,7 @@ resond only with parsable json.  do not include any comments, explanations, or n
                 code_response=True
             )
             price += llm_response_reformat.price_total
-            record_spend(config, llm_response_reformat.price_total)
+            record_spend(config, llm_response_reformat)
             json_text = llm_response_reformat.text
 
     raise last_e
@@ -612,7 +593,7 @@ def get_planning_llm_response(
         model,
         code_response=True
     )
-    record_spend(config, llm_response_planning.price_total)
+    record_spend(config, llm_response_planning)
 
     print(f"\t\tcost of planning: total ${llm_response_planning.price_total:.4f}; input ${llm_response_planning.price_input:.4f}; output ${llm_response_planning.price_output:.4f}")
 
@@ -725,32 +706,19 @@ Please include the "evaluation" items and then the "instructions" items in a nic
 {llm_response_codegen.text}
 
 """
-    record_spend(config, llm_response_codegen.price_total)
+    record_spend(config, llm_response_codegen)
 
     print(f"\t\tcost of code gen: total ${llm_response_codegen.price_total:.4f}; input ${llm_response_codegen.price_input:.4f}; output ${llm_response_codegen.price_output:.4f}")
 
     return llm_response_codegen
 
 
-def get_current_spend(config):
-    total_spend_file = config.code_directory / f"{config.code_basename}.cost"
-
-    if total_spend_file.exists():
-        total_spend = float(total_spend_file.read_text().strip().splitlines()[0])
-    else:
-        total_spend = 0
-
-    return total_spend
-
-
-def record_spend(config, price: float):
-    total_spend = get_current_spend(config)
-    total_spend += price
-
-    total_spend_file = config.code_directory / f"{config.code_basename}.cost"
-    total_spend_file.write_text(f"{total_spend}")
-
-    return total_spend
+def record_spend(config, llm_response: LlmResponse):
+    LlmRequest.objects.create(
+        task_iteration=config.task.get_most_recent_iteration(),
+        token_count=llm_response.token_count,
+        price=llm_response.price_total
+    )
 
 
 def print_final_evaluation(config):
@@ -781,9 +749,10 @@ def print_final_evaluation(config):
     count_evals = len(messages)
     aval_iterations = ",".join([str(i) for i in iteration_idxs])
 
-    messages.append(LlmMessage(
-        message_type=LlmMessageType.ASSISTANT,
-        text=f"""
+    if config.is_model_trainer:
+        messages.append(LlmMessage(
+            message_type=LlmMessageType.ASSISTANT,
+            text=f"""
 You are expert level at evaluating model training results and choosing the best result
 
 This is the GOAL of the code:
@@ -805,8 +774,35 @@ YOUR TASKS:
     ========= end example response format ===========
 
 RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
-    """
-    ))
+        """
+        ))
+    else:
+        messages.append(LlmMessage(
+            message_type=LlmMessageType.ASSISTANT,
+            text=f"""
+You are a principal level engineer who loves reviewing code and teaching about programming  
+
+This is the GOAL of the code:
+{config.goal}
+
+YOUR TASKS:  
+1)  Look through ALL of the attached iteration results and identify the Iteration number that BEST ACHIEVES THE ABOVE GOAL
+    -  if an iteration has one or more CRITICAL ISSUES, RuntimeError, or exceptions described in its results, it is excluded from consideration for best_iteration
+    -  if there is a metric value associated with the GOAL, use the metric value to identify the best iteration
+2)  Respond with a json dict in the following format:
+    ========= example response format ===========
+    {{
+        "best_iteration": an integer value representing the iteration number that you think best achieves the goal.  must be one of these values: {aval_iterations},
+        "summary":  a summary of why you chose that iteration for best - if there is a metric you are using to rank the iterations and pick the best, name the metric and the best_iteration's metric value,
+        "details":  markdown formatted details a) expanding on why you chose that iteration  and b) an evaluation on how the code would perform in a production environment,
+        "curriculum":  markdown formatted summarizing the significant teaching_lessons from all of the iterations that got us to the best iteration.  This can be a really long response with many subject sections.  The audience for the curriculum response is a junior engineer trying to learn all they can about writing quality performant code.  the goal here is to help the junior engineer build out their mental model, so real world examples and leaning into the 'why' is important.  NOTE:  Please do not mention the word 'curriculum' or name the audience in this response
+
+    }}
+    ========= end example response format ===========
+
+RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
+            """
+        ))
 
     print(f"reviewing the {count_evals} iterations and generating a final evaluation...")
 
@@ -815,7 +811,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         LlmModel.GEMINI_2_5_PRO,
         code_response=True
     )
-    record_spend(config, llm_response.price_total)
+    record_spend(config, llm_response)
 
     print(f"got llm response len: {len(llm_response.text)}")
     eval_data, _ = ensure_parsable_json(config, llm_response.text)
@@ -824,40 +820,45 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     if best_iteration is None:
         raise Exception(f"unable to determine the best iteration from \n{json.dumps(eval_data)}")
 
-    checkpoints_dir = common.first([
-        f for f in
-        config.code_directory.glob(f"{config.code_basename}_{best_iteration}_*checkpoints*")
-        if not f.is_file()
-    ])
-    checkpoints_dir = Path(checkpoints_dir)
-
-    if checkpoints_dir:
-        checkpoint_files = [f for f in Path(checkpoints_dir).iterdir() if f.is_file()]
-        s3_dir = f"{config.code_basename}/{config.code_basename}_{best_iteration}"
-    else:
-        checkpoint_files = []
-        s3_dir = None
-
     best_iteration_plan = config.output_directory / f"{config.code_basename}_{best_iteration}.eval.txt"
     best_python_file = config.code_directory / f"{config.code_basename}_{best_iteration}.py"
 
-    arch_llm_response = llm_interface.chat(
-        f"""
-Please respond only with markdown formatted details fully explaining {best_python_file.name}'s model architecture and training strategy:
+    if config.is_model_trainer:
+        arch_llm_response = llm_interface.chat(
+            f"""
+    Please respond only with markdown formatted details fully explaining {best_python_file.name}'s model architecture and training strategy:
 
-======== start {best_python_file.name}'s code =============
-{best_python_file.read_text()}
-======== end {best_python_file.name}'s code =============
+    ======== start {best_python_file.name}'s code =============
+    {best_python_file.read_text()}
+    ======== end {best_python_file.name}'s code =============
 
 
-Policies that must be followed:
-    - give as much detail as needed.  
-    - the audience for this is a mid-level ML research scientist.  If there are things you'd like to teach to a mid-level ML research scientist, please add this content as well
-    - DO NOT include the string "```markdown" anywhere in the response
-""",
-        LlmModel.GEMINI_2_5_PRO
-    )
-    record_spend(config, arch_llm_response.price_total)
+    Policies that must be followed:
+        - give as much detail as needed.  
+        - the audience for this is a mid-level ML research scientist.  If there are things you'd like to teach to a mid-level ML research scientist, please add this content as well
+        - DO NOT include the string "```markdown" anywhere in the response
+    """,
+            LlmModel.GEMINI_2_5_PRO
+        )
+        record_spend(config, arch_llm_response)
+    else:
+        arch_llm_response = llm_interface.chat(
+            f"""
+        Please respond only with markdown formatted details fully explaining {best_python_file.name}'s architecture and execution steps
+
+        ======== start {best_python_file.name}'s code =============
+        {best_python_file.read_text()}
+        ======== end {best_python_file.name}'s code =============
+
+
+        Policies that must be followed:
+            - give as much detail as needed.  
+            - the audience for this is a mid-level engineer.  If there are things you'd like to teach to a mid-level engineer, please add this content as well
+            - DO NOT include the string "```markdown" anywhere in the response
+        """,
+            LlmModel.GEMINI_2_5_PRO
+        )
+        record_spend(config, arch_llm_response)
 
     archive_path = config.code_directory / f"{config.code_basename}_{best_iteration}.zip"
 
@@ -880,7 +881,31 @@ Policies that must be followed:
             curriculum_lines = curriculum_lines[1:]
             curriculum = "\n".join(curriculum_lines)
 
-    txt_output = f"""
+    if config.is_model_trainer:
+        checkpoints_dir = common.first([
+            f for f in
+            config.code_directory.glob(f"{config.code_basename}_{best_iteration}_*checkpoints*")
+            if not f.is_file()
+        ])
+        checkpoints_dir = Path(checkpoints_dir)
+
+        if checkpoints_dir:
+            checkpoint_files = [f for f in Path(checkpoints_dir).iterdir() if f.is_file()]
+            s3_dir = f"{config.code_basename}/{config.code_basename}_{best_iteration}"
+        else:
+            checkpoint_files = []
+            s3_dir = None
+
+        for file in checkpoint_files:
+            get_aws_interface().upload_file(
+                file,
+                settings.BUCKETS[S3Bucket.MODELS],
+                f"{s3_dir}/{file.name}"
+            )
+
+        print(f"model checkpoints uploaded to s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")
+
+        txt_output = f"""
 # Best iteration
 Iteration #{best_iteration} {planning_model}
 Code:  {best_python_file.name}
@@ -898,7 +923,25 @@ s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}
 
 # Notes
 {curriculum}
-"""
+    """
+    else:
+        txt_output = f"""
+# Best iteration
+Iteration #{best_iteration} {planning_model}
+Code:  {best_python_file.name}
+
+# Summary
+{common.get(eval_data, 'summary')}
+
+# Details
+{common.get(eval_data, 'details')}
+
+# Architecture
+{arch_llm_response.text}
+
+# Notes
+{curriculum}
+            """
 
     eval_text_path = config.code_directory / f"{config.code_basename}.full-eval.md"
     eval_text_path.write_text(txt_output)
@@ -914,18 +957,8 @@ s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}
             arcname=os.path.relpath(eval_text_path, config.code_directory)
         )
 
-    for file in checkpoint_files:
-        get_aws_interface().upload_file(
-            file,
-            settings.BUCKETS[S3Bucket.MODELS],
-            f"{s3_dir}/{file.name}"
-        )
-
     print(txt_output)
 
     print(f"""grab artifacts from
 scpc "{os.path.abspath(archive_path)}"
     """)
-
-    if s3_dir:
-        print(f"model checkpoints uploaded to s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")

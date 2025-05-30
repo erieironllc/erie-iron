@@ -37,7 +37,7 @@ from django.utils import timezone as tz
 from numpy import ndarray
 from sklearn.metrics.pairwise import cosine_similarity
 
-from erieiron_config import settings
+import settings
 
 UUID_NULL_OBJECT = uuid.UUID('11111111-1111-1111-1111-111111111111')
 
@@ -1516,7 +1516,10 @@ def execute_management_cmd(command, output_file: Path = None) -> Optional[Path]:
                 logging.error("Failed to set death signal: %s", e)
 
     if output_file:
-        print(f'about to execute "{full_command}". sending log to: tail -f {os.path.abspath(output_file)}')
+        print(f'''about to execute "{full_command}". sending log to: 
+tail -f {os.path.abspath(output_file)}
+
+''')
         with open(output_file, "w") as outfile:
             process = subprocess.Popen(
                 full_command,

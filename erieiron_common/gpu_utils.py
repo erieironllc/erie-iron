@@ -5,7 +5,7 @@ from functools import lru_cache
 
 import torch
 
-from erieiron_config import settings
+import settings
 from erieiron_common.enums import ErieEnum
 
 

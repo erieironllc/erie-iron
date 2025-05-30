@@ -1,7 +1,7 @@
 import time
 from collections import defaultdict
 
-from erieiron_config import settings
+import settings
 from erieiron_common import common, cache
 
 

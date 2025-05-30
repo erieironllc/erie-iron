@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
-from ekko_common import common
-from ekko_common.self_driving_code import self_driver
+from erieiron_common import common
+from erieiron_coder.self_driving_code import self_driver
 
 
 class Command(BaseCommand):

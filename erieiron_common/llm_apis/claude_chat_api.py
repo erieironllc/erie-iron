@@ -10,7 +10,7 @@ from erieiron_common.enums import LlmModel
 def get_api_key():
     # Assuming erieiron_common.aws_utils.get_secret returns a dictionary
     from erieiron_common import aws_utils
-    return aws_utils.get_secret("CLAUDE_API_KEY")['CLAUDE_API_KEY']
+    return aws_utils.get_secret("LLM_API_KEYS")['ANTHROPIC']
 
 
 def chat(

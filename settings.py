@@ -3,7 +3,7 @@ from pathlib import Path
 
 from erieiron_common import settings_utils
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 DEBUG = True
 SECRET_KEY = "django-insecure-4yp%)5s=rx5ph(+zs7mhk&zj9&sko+15(bi=nx-94^m-hrd&2v"
 
@@ -35,6 +35,8 @@ ALLOWED_HOSTS = []
 
 
 INSTALLED_APPS = [
+    'erieiron_common',
+    'erieiron_ui',
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -77,7 +79,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": BASE_DIR / "erierion.sqlite3",
     }
 }
 

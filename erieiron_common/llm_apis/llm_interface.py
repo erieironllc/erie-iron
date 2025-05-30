@@ -30,8 +30,8 @@ CHAT_MODELS_IN_ORDER = [
 
 CODE_MODELS_IN_ORDER = [
     LlmModel.GEMINI_2_5_PRO,
+    # LlmModel.OPENAI_GPT_4o,
     # LlmModel.DEEPSEEK_CODER,
-    LlmModel.OPENAI_GPT_4o,
     # LlmModel.CLAUDE_3_7 # context window too small
 ]
 
@@ -189,6 +189,8 @@ def chat(prompt, model: LlmModel = None, code_response=False) -> 'LlmResponse':
         models = [model]
 
     for idx, model in enumerate(models):
+        model = LlmModel(model)
+
         try:
             impl = MODEL_TO_IMPL[LlmModel(model)]
 

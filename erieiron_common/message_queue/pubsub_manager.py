@@ -20,7 +20,7 @@ from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 
-from erieiron_config import settings
+import settings
 from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.common import get_now, get_methods_with_decorator

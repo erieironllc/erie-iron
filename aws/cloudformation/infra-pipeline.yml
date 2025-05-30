@@ -26,6 +26,33 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: FullDeploymentSupport
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                  - ec2:*
+                  - iam:*
+                  - lambda:*
+                  - cloudwatch:*
+                  - logs:*
+                  - events:*
+                  - sns:*
+                  - ssm:*
+                  - rds:*
+                  - elasticloadbalancing:*
+                  - elasticfilesystem:*
+                  - ecr:*
+                  - ecs:*
+                  - secretsmanager:*
+                  - kms:*
+                  - tag:*
+                  - xray:*
+                  - cloudformation:*
+                Resource: "*"
       Tags:
         - Key: Project
           Value: ErieIron
@@ -46,6 +73,10 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                Resource: "arn:aws:s3:::*"
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -121,8 +152,15 @@ Resources:
                   - s3:CreateBucket
                   - s3:DeleteBucket
                   - s3:PutBucketPolicy
-                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
                   - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
                 Resource: "*"
               - Effect: Allow
                 Action:
@@ -410,6 +448,10 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     DeletionPolicy: Retain
     Properties:
+      DBSubnetGroupDescription: "Subnets for ErieIron RDS instances"
+      SubnetIds:
+        - subnet-abc123
+        - subnet-def456
       Tags:
         - Key: Project
           Value: ErieIron
@@ -418,6 +460,12 @@ Resources:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: Retain
     Properties:
+      Name: !Sub "erieiron-app-secret-${EnvironmentName}"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 30
+        ExcludeCharacters: '"@/\\'
       Tags:
         - Key: Project
           Value: ErieIron
@@ -430,19 +478,19 @@ Resources:
         - Key: Project
           Value: ErieIron
 
-  HighErrorRateAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmDescription: "Trigger if error rate exceeds threshold"
-      Namespace: AWS/Lambda
-      MetricName: Errors
-      Dimensions:
-        - Name: FunctionName
-          Value: DummyFunction
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      AlarmActions: []
-      OKActions: []
+#  HighErrorRateAlarm:
+#    Type: AWS::CloudWatch::Alarm
+#    Properties:
+#      AlarmDescription: "Trigger if error rate exceeds threshold"
+#      Namespace: AWS/Lambda
+#      MetricName: Errors
+#      Dimensions:
+#        - Name: FunctionName
+#          Value: DummyFunction
+#      Statistic: Sum
+#      Period: 300
+#      EvaluationPeriods: 1
+#      Threshold: 1
+#      ComparisonOperator: GreaterThanOrEqualToThreshold
+#      AlarmActions: []
+#      OKActions: []

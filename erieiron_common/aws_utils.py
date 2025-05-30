@@ -18,7 +18,7 @@ import rsa
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-from erieiron_config import settings
+import settings
 from erieiron_common.aws_s3_local_cache import S3LocalCache
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)

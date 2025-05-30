@@ -1,0 +1,10 @@
+{
+  "is_model_trainer": false,
+  "max_budget_usd": 100,
+  "comment_requests": [
+    "Please evaluate the previous model's ability add"
+  ],
+  "goal": [
+    "write a python class that can add two numbers and return the results"
+  ]
+}
