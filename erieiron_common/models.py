@@ -1141,8 +1141,30 @@ class ShutdownPlan(BaseErieIronModel):
 
 class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
-    config_path = models.TextField()
+    config_path = models.TextField(null=False)
+    sandbox_root_dir = models.TextField(null=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def rollback_to(self, iteraton: 'SelfDrivingTaskIteration'):
+        # we don't want any files created in future iterations hanging around, so delete everything
+        # there's prob a more efficient way to do this, but this is fine for now
+        for cf in CodeFile.objects.filter(codeversion__task_iteration__task=self):
+            common.quietly_delete(
+                common.assert_in_sandbox(
+                    self.sandbox_root_dir,
+                    cf.file_path
+                )
+            )
+
+        for i in self.selfdrivingtaskiteration_set.order_by("timestamp"):
+            i.write_to_disk()
+            if i.id == iteraton.id:
+                break
+
+    def get_best_iteration(self) -> 'SelfDrivingTaskIteration':
+        best = self.selfdrivingtaskbestiteration_set.order_by("timestamp").last()
+
+        return best.iteration if best else self.get_most_recent_iteration()
 
     def get_most_recent_iteration(self) -> 'SelfDrivingTaskIteration':
         return self.selfdrivingtaskiteration_set.order_by("timestamp").last()
@@ -1172,11 +1194,24 @@ class SelfDrivingTask(BaseErieIronModel):
         return result["total"] or 0.0
 
     def iterate(self) -> 'SelfDrivingTaskIteration':
+        max_version = SelfDrivingTaskIteration.objects.filter(
+            task=self
+        ).aggregate(
+            models.Max("version_number")
+        )["version_number__max"] or 0
+
         with transaction.atomic():
-            return SelfDrivingTaskIteration.objects.create(task=self)
+            return SelfDrivingTaskIteration.objects.create(
+                task=self,
+                version_number=max_version + 1
+            )
 
     @staticmethod
-    def get_or_create(config_file: Path, business_name: Optional[str]) -> 'SelfDrivingTask':
+    def get_or_create(
+            config_file: Path,
+            sandbox_root_dir:Path,
+            business_name: Optional[str]
+    ) -> 'SelfDrivingTask':
         with transaction.atomic():
             if business_name:
                 business = Business.objects.get_or_create(
@@ -1187,16 +1222,46 @@ class SelfDrivingTask(BaseErieIronModel):
 
             return SelfDrivingTask.objects.get_or_create(
                 config_path=str(config_file),
+                sandbox_root_dir=sandbox_root_dir,
                 business=business
             )[0]
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
     task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
+    achieved_goal = models.BooleanField(null=False, default=False)
+    version_number = models.IntegerField(null=False, default=0)
     planning_model = models.TextField()
     coding_model = models.TextField()
     log_content = models.TextField()
     evaluation_json = models.JSONField(null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def write_to_disk(self):
+        sandbox_root_dir = self.task.sandbox_root_dir
+        for cv in self.codeversion_set.all():
+            cv.write_to_disk(sandbox_root_dir)
+
+    def get_code_version(self, code_file_path: Path):
+        code_file = CodeFile.get(code_file_path)
+
+        code_version_to_modify = code_file.get_version(self)
+
+        if not code_version_to_modify:
+            code_version_to_modify = code_file.get_latest_version()
+
+        if not code_version_to_modify:
+            code_version_to_modify = code_file.init_from_codefile(
+                self,
+                code_file_path
+            )
+
+        return code_version_to_modify
+
+
+class SelfDrivingTaskBestIteration(BaseErieIronModel):
+    task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
+    iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
 
 
@@ -1208,22 +1273,75 @@ class LlmRequest(BaseErieIronModel):
 
 
 class CodeFile(BaseErieIronModel):
-    file_path = models.TextField()
+    # file_path is not the primary key because code file paths change as we refactor
+    # gotta be unique tho
+    file_path = models.TextField(unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def get_latest_version(self) -> 'CodeVersion':
+        return self.codeversion_set.order_by("created_at").last()
+
+    def get_version(self, iteration: SelfDrivingTaskIteration) -> 'CodeVersion':
+        return self.codeversion_set.filter(
+            task_iteration=iteration
+        ).order_by("created_at").last()
+
     @staticmethod
+    def get(code_file_path: Path) -> 'CodeFile':
+        code_file_path = Path(code_file_path)
+        if not code_file_path.exists():
+            code_file_path.touch()
+        return CodeFile.objects.get_or_create(file_path=code_file_path)[0]
+
+    @staticmethod
+    def init_from_codefile(
+            task_iteration: SelfDrivingTaskIteration,
+            file_path: Path
+    ) -> 'CodeVersion':
+        return CodeFile.update_from_path(
+            task_iteration,
+            file_path,
+            code=file_path.read_text(),
+            code_instructions=f"initial code from existing file"
+        )
+
     def update(
-            task: SelfDrivingTask,
+            self,
+            task_iteration: SelfDrivingTaskIteration,
+            code: str,
+            code_instructions=None
+    ):
+        cv = CodeVersion.objects.create(
+            task_iteration=task_iteration,
+            code_file=self,
+            code_instructions=code_instructions,
+            code=code
+        )
+
+        file_path = common.assert_in_sandbox(
+            task_iteration.task.sandbox_root_dir,
+            self.file_path
+        )
+
+        file_path = Path(self.file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(code)
+
+        return cv
+
+    @staticmethod
+    def update_from_path(
+            task_iteration: SelfDrivingTaskIteration,
             file_path: Path,
             code: str,
             code_instructions=None
     ) -> 'CodeVersion':
         with transaction.atomic():
             code_file = CodeFile.objects.get_or_create(file_path=file_path)[0]
-            return CodeVersion(
-                code_file=code_file,
-                code_instructions=code_instructions,
-                code=code
+            return code_file.update(
+                task_iteration=task_iteration,
+                code=code,
+                code_instructions=code_instructions
             )
 
 
@@ -1233,3 +1351,17 @@ class CodeVersion(BaseErieIronModel):
     code_instructions = models.JSONField(null=True)
     code = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def write_to_disk(self, sandbox_root_dir=None) -> Path:
+        if not sandbox_root_dir:
+            sandbox_root_dir = self.task_iteration.task.sandbox_root_dir
+
+        file_path = common.assert_in_sandbox(
+            sandbox_root_dir,
+            self.code_file.file_path
+        )
+
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(self.code)
+
+        return file_path

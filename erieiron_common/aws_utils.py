@@ -24,8 +24,24 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
 
+def get_account_id():
+    sts = boto3.client('sts')
+    account_id = sts.get_caller_identity()["Account"]
+
+    org = boto3.client('organizations')
+    try:
+        resp = org.describe_account(AccountId=account_id)
+        account_name = resp["Account"]["Name"]
+        print(f"Account name: {account_name}")
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code == "AccessDeniedException":
+            print(f"Access denied when retrieving account name. Account ID: {account_id}")
+        else:
+            raise  # re-raise unexpected errors
+
+
 def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
-    from erieiron_config import settings
     response = boto3.client(
         "autoscaling",
         region_name=settings.AWS_DEFAULT_REGION_NAME
@@ -41,7 +57,6 @@ def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
 
 
 def set_asg_desired_capacity(auto_scaling_group, count: int):
-    from erieiron_config import settings
     from erieiron_common import common
     current_size, min_intances, max_instances = get_asg_size(auto_scaling_group)
     count = max(min_intances, count)
@@ -61,7 +76,6 @@ def set_asg_desired_capacity(auto_scaling_group, count: int):
 
 
 def set_ecs_service_tasks(cluster_name, service_name, desired_count):
-    from erieiron_config import settings
     boto3.client(
         'ecs',
         region_name=settings.AWS_DEFAULT_REGION_NAME
@@ -189,7 +203,6 @@ class AwsInterface:
         raise Exception("Expecting test interface, but got real one")
 
     def transcribe_audio(self, bucket, key):
-        from erieiron_config import settings
         transcribe = boto3.client(
             'transcribe',
             region_name=settings.AWS_DEFAULT_REGION_NAME
@@ -240,7 +253,6 @@ class AwsInterface:
         return transcript
 
     def get_log_events(self, log_group, start_date: datetime.date, end_date: datetime.date = None, filter_pattern=''):
-        from erieiron_config import settings
         from erieiron_common import common
 
         start_time, _ = common.date_to_epoch_ms(start_date)
@@ -277,7 +289,6 @@ class AwsInterface:
         )
 
     def send_email(self, subject, recipient, body, sender=None):
-        from erieiron_config import settings
         from erieiron_common import common
         common.log_info(f"sending email: {subject} to {recipient}")
 
@@ -388,7 +399,6 @@ BODY:
     def send_client_message(self, person, message_type, payload):
         from erieiron_common.json_encoder import ErieIronJSONEncoder
         from erieiron_common import common
-        from erieiron_config import settings
 
         if not person:
             raise ValueError("missing person")
