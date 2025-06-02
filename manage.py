@@ -24,6 +24,9 @@ def main():
 
     argv = [a for a in argv if "erieiron-env" not in a]
 
+    from erieiron_common.aws_utils import get_account_id
+    get_account_id()
+
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

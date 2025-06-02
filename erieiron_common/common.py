@@ -41,6 +41,29 @@ import settings
 
 UUID_NULL_OBJECT = uuid.UUID('11111111-1111-1111-1111-111111111111')
 
+COMMENT_CHAR_START_MAP = {
+    '.py': '#',
+    '.js': '//',
+    '.java': '//',
+    '.c': '//',
+    '.cpp': '//',
+    '.sh': '#',
+    '.rb': '#',
+    '.html': '<!-- ',
+    '.xml': '<!-- ',
+    '.sql': '--',
+    '.yaml': '#',
+    '.yml': '#',
+    '.ini': ';',
+    '.bat': 'REM',
+    '.r': '#',
+}
+
+COMMENT_CHAR_END_MAP = {
+    '.html': ' -->',
+    '.xml': ' -->'
+}
+
 
 class HashableDict(dict):
     def __hash__(self):
@@ -50,6 +73,20 @@ class HashableDict(dict):
             return hash(self['token'])
         else:
             return hash(tuple(sorted(self.items())))
+
+
+def comment_out_line(file_path_or_ext, line_str):
+    ext = file_path_or_ext if file_path_or_ext.startswith('.') else Path(file_path_or_ext).suffix
+    comment_start_char = COMMENT_CHAR_START_MAP.get(ext)
+    if not comment_start_char:
+        return line_str
+
+    line_str = line_str or ""
+
+    match = re.match(r'^(\s*)(.*)', line_str)
+    leading_whitespace, stripped_text = match.groups()
+
+    return f"{leading_whitespace}{comment_start_char} {stripped_text}{COMMENT_CHAR_END_MAP.get(ext, '')}"
 
 
 def str_list(the_list):
@@ -1543,3 +1580,11 @@ tail -f {os.path.abspath(output_file)}
         )
         process.wait()
         return None
+
+
+def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
+    file_path = Path(file_path).resolve()
+    sandbox_root_dir = Path(sandbox_root_dir).resolve()
+    if not str(file_path).startswith(str(sandbox_root_dir)):
+        raise ValueError(f"file_path {file_path} is not within sandbox_root_dir {sandbox_root_dir}")
+    return file_path

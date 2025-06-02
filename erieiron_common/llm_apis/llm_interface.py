@@ -287,14 +287,33 @@ class LlmResponse:
         return self.parsed_json
 
 
-@dataclass
 class LlmMessage:
-    message_type: LlmMessageType
-    text: str
-    file: Optional[Path] = None
+    def __init__(self, message_type: LlmMessageType, text: str, file: Path = None):
+        self.message_type: LlmMessageType = message_type
+        self.file = file
+
+        if text and file:
+            self.text = ""
+            for line in text.split("\n"):
+                self.text += f"{common.comment_out_line(file, line)}\n"
+
+            self.text += common.comment_out_line(file, f"=============== start {file} contents ================")
+            self.text += "\n"
+            self.text += Path(file).read_text()
+            self.text += "\n"
+            self.text += common.comment_out_line(file, f"=============== end {file} contents ================")
+        elif text:
+            self.text = text
+        elif file:
+            self.text = Path(file).read_text()
+        else:
+            raise Exception("inconceivable")
 
     def __str__(self):
-        return f"{self.message_type.label()}\n{self.text}"
+        return (f"""-----------------------
+{self.message_type.label()}  Message:
+{self.text.strip()}
+-----------------------""")
 
     @staticmethod
     def get_price(model: LlmModel, input_messages: List['LlmMessage'], response_text: str) -> Tuple[float, float, float]:
@@ -407,6 +426,14 @@ if responding with json, the property names must be encosed in "double quotes"
             text=txt,
             file=file
         )
+
+    @classmethod
+    def log(cls, messages: list['LlmMessage']):
+        for m in messages:
+            print(f"""
+========= Message Type: {m.message_type.label()} ==========
+{m.text}
+            """)
 
 
 def ensure_parsable_json(json_text: str) -> dict:
