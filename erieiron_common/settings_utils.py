@@ -7,8 +7,8 @@ import boto3
 from botocore.exceptions import ClientError
 
 
-def get_logging():
-    return {
+def get_logging(debug_sql_statements=False):
+    conf = {
         'version': 1,
         'disable_existing_loggers': False,
         'formatters': {
@@ -17,12 +17,22 @@ def get_logging():
                 'datefmt': '%Y-%m-%d %H:%M:%S'
             }
         },
+        'filters': {
+            'skip_disallowed_host': {
+                '()': 'django.utils.log.CallbackFilter',
+                'callback': lambda record: 'Invalid HTTP_HOST header' not in record.getMessage()
+            },
+        },
         'handlers': {
             'console': {
                 'level': 'INFO',
                 'class': 'logging.StreamHandler',
                 'formatter': 'standard',
-                'stream': 'ext://sys.stdout'
+                'stream': 'ext://sys.stdout',
+                'filters': ['skip_disallowed_host'],
+            },
+            'null': {
+                'class': 'logging.NullHandler',
             },
         },
         'loggers': {
@@ -30,9 +40,44 @@ def get_logging():
                 'handlers': ['console'],
                 'level': 'INFO',
             },
+            'django.security.DisallowedHost': {
+                'handlers': ['null'],
+                'propagate': False,
+            },
+            'django.security.csrf': {
+                'handlers': ['null'],
+                'level': 'ERROR',
+                'propagate': False,
+            },
         },
     }
 
+    if debug_sql_statements:
+        debug_conf = {
+            'formatters': {
+                'sql': {
+                    'format': '%(asctime)s %(duration).3f ms %(message)s',
+                }
+            },
+            'handlers': {
+                'console_sql': {
+                    'level': 'DEBUG',
+                    'class': 'logging.StreamHandler',
+                    'formatter': 'sql',
+                }
+            },
+            'loggers': {
+                'django.db.backends': {
+                    'handlers': ['console_sql'],
+                    'level': 'DEBUG',
+                    'propagate': False,
+                }
+            }
+        }
+        for section, settings in debug_conf.items():
+            conf[section].update(settings)
+
+    return conf
 
 def get_secret_key(config):
     try:

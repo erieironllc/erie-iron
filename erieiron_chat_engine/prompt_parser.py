@@ -117,7 +117,6 @@ the following data structure shows example phrases for each of these system comm
 ## "system_command" rules
     * evaluate the prompt and identify if you think the user is requesting a system command.  if you think they are requesting a system command set the command_type and command_value on the system_command key
     * only set a value for the system_command key if are 200% sure they are requesting one of the supported system commands.  It's ok to miss a system command, but it's bad to think it's a system command when it's not.  false positives are much worse than false negatives
-    * only reply with the 'send_help' system_command if you think the user wants help with Collaya functionality.  Do not reply with send_help if you think they want help with a music idea or song section
     * If you think prompt text represents a system command return the set the command_type key to the command type and the command_value key to the related value for XXX
 """)
     ]

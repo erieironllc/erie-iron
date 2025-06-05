@@ -613,7 +613,7 @@ class PubSubManager:
                 subscriber_method_signatures = str(e)
 
             millis_to_pickup = (get_now() - message.updated_at).microseconds // 1000
-            common.log_info(f"PUB SUB:  picked up '{message.message_type}' msg after {millis_to_pickup}ms with {subscriber_method_signatures}; https://collaya.com/admin/message_queue/{message.id}")
+            common.log_info(f"PUB SUB:  picked up '{message.message_type}' msg after {millis_to_pickup}ms with {subscriber_method_signatures};")
 
             PubSubMessage.mark_processing(message.id, self.handler_instance_id)
             close_old_connections()
@@ -631,7 +631,7 @@ class PubSubManager:
                         PubSubMessageStatus.PROCESSED,
                         self.handler_instance_id
                     )
-                    common.log_info(f"PUB SUB:  handled '{message.message_type}' msg with {subscriber_method_signatures}; https://collaya.com/admin/message_queue/{message.id}")
+                    common.log_info(f"PUB SUB:  handled '{message.message_type}' msg with {subscriber_method_signatures};")
 
                     # no errors, great let's break
                     break

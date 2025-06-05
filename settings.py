@@ -1,3 +1,5 @@
+import logging.config
+import logging
 import tempfile
 from pathlib import Path
 
@@ -121,3 +123,9 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+LOGGING = settings_utils.get_logging(
+    config("DEBUG_SQL", default=False, cast=bool)
+)
+
+logging.config.dictConfig(LOGGING)

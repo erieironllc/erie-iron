@@ -2,7 +2,7 @@ export ERIELAB_ENV=dev
 
 alias dj='python manage.py $1'
 alias f='find . -type f -name'
-alias ns='cd /home/collaya-msg-processor-1/src/erielab-webservice && source ./env/bin/activate'
+alias ns='cd ~/src/erielab-webservice && source ./env/bin/activate'
 alias ll='ls -alhF'
 alias la='ls -A'
 alias l='ls -CF'

@@ -3,7 +3,7 @@
 exec > >(logger -t baremetal-container-manager) 2>&1
 
 AWS_REGION="us-west-2"
-LOG_GROUP="collaya-baremetal-logs"
+LOG_GROUP="erieiron-baremetal-logs"
 LOG_STREAM="system-logs"
 
 aws logs create-log-group --log-group-name "$LOG_GROUP" 2>/dev/null || true
