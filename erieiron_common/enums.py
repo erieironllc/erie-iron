@@ -71,6 +71,13 @@ class ErieEnum(Enum):
         return [(key.value, key.label if isinstance(key.label, str) else key.label()) for key in cls if not key.name.startswith("_")]
 
 
+class SystemAgentTask(ErieEnum):
+    GENERATE_IDEA = "generate_idea"
+    REVIEW_BUSINESSES = "review_businesses"
+    FLESH_OUT_IDEA = "flesh_out_idea"
+    LEGAL_REVIEW = "legal_review"
+
+
 class SystemCapacity(ErieEnum):
     AVAILABLE = "available"
     CAPPED = "capped"

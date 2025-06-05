@@ -20,9 +20,9 @@ PARSE_MODELS_IN_ORDER = [
 ]
 
 CHAT_MODELS_IN_ORDER = [
+    LlmModel.OPENAI_GPT_4o,
     LlmModel.OPENAI_GPT_4_1_MINI,
     LlmModel.GEMINI_2_5_PRO,
-    LlmModel.OPENAI_GPT_4o,
     LlmModel.OPENAI_GPT_O3_MINI,
     LlmModel.CLAUDE_3_7,
     LlmModel.DEEPSEEK_CHAT,

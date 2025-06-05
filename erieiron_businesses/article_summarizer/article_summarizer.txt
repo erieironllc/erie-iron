@@ -1,0 +1,24 @@
+I put together a chatgpt project that takes a series of article links, reads them analyzes them and responds with a rating of 0 to 10 and should I read it or not,
+and then some analysis of the article.
+
+You can find the entire system prompt in my "Article Parser" chatgpt project.
+
+I want to turn this into a service where I can email the links of articles to a well-known email address
+(or forward the newsletter emails that I get that contain the articles)
+and the service will run the analysis and respond to the email with the summary.
+
+I can open this up for public use and allow people to do three or some other number of
+free email article summaries and then after that they need to subscribe.
+
+A subscriber can do X number of email summaries per day, and perhaps a pro plan would allow more but that is TBD.
+
+For marketing I will have erie iron look for popular articles on Twitter, summarize them and provide a link to
+the summary as a retweet.
+
+The landing page for the summary link Will explain the email service. Will be somewhat
+similar to the Twitter unroll service. Perhaps subscribers could subscribe to Reddit boards or hacker news or other
+similar link aggregators. When changes happen to these read boards or link aggregator landing pages I can email the subscriber
+a list of articles the service thinks is worth their time to read read.
+
+Subscribers could have custom profiles where the bar for worth their time or not worth their time can be adjusted, and they
+can express areas of interest.
