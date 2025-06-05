@@ -2,7 +2,7 @@
 
 # AWS Configuration
 AWS_REGION="us-west-2"
-LOG_GROUP="collaya-baremetal-logs"
+LOG_GROUP="erieiron-baremetal-logs"
 LOG_STREAM="system-logs"
 ACCESS_KEY=SET_ACCESS_KEY
 SECRET_KEY=SET_SECRET_KEY

@@ -4,7 +4,7 @@ import urllib.request
 def lambda_handler(event, context):
     try:
         request = urllib.request.Request(
-            f"https://collaya.com/admin/job/request?job=dashboard_refresh",
+            f"https://erieiron/admin/job/request?job=dashboard_refresh",
             headers={
                 'X-Custom-Service': "lambda_job_requester"
             })

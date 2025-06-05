@@ -95,7 +95,7 @@ def get_cloudwatch_url(around_time: datetime.datetime):
 
     return (
         f"https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2"
-        f"#logsV2:log-groups/log-group/collaya-baremetal-logs/log-events/container-logs"
+        f"#logsV2:log-groups/log-group/erieiron-baremetal-logs/log-events/container-logs"
         f"$3FfilterPattern$3D$26start$3D{logging_start_time}$26end$3D{logging_end_time}"
     )
 

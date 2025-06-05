@@ -308,7 +308,7 @@ class PubSubMessage(BaseErieIronModel):
         return self.message_type
 
     def __str__(self):
-        return f"{self.get_age()}\t{self.status}: {self.get_job_name()} https://collaya.com/admin/message_queue/{self.id}"
+        return f"{self.get_age()}\t{self.status}: {self.get_job_name()}"
 
     def get_age(self):
         created_time_delta = int((timezone.now() - self.created_at).total_seconds())
@@ -617,6 +617,7 @@ class PubSubEnvironment(BaseErieIronModel):
     class Meta:
         db_table = "pubsub_environment"
 
+    id = models.TextField(primary_key=True, editable=False)
     desired_handler_instance_count = models.IntegerField(null=False, default=1)
     last_requested_increase = models.DateTimeField(null=True, auto_now_add=True)
 
@@ -645,6 +646,7 @@ class PubSubHanderInstance(BaseErieIronModel):
     class Meta:
         db_table = "pubsub_message_handler_instance"
 
+    id = models.TextField(primary_key=True, editable=False)
     environment = models.ForeignKey(PubSubEnvironment, null=False, on_delete=models.PROTECT)
     env = models.TextField(null=False, db_index=True, default=settings.MESSAGE_QUEUE_ENV)
     instance_status = models.TextField(null=False, default=PubSubHandlerInstanceStatus.NOT_AVAILABLE)

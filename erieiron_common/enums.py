@@ -195,6 +195,10 @@ class ClientMessage(ErieEnum):
 
 
 class PubSubMessageType(ErieEnum):
+    EVERY_MINUTE = "every_minute"
+    EVERY_HOUR = "every_hour"
+    EVERY_DAY = "every_day"
+
     CHAT_INTERACTION_INITIATED = "chat_interaction_initiated"
     CHAT_CHANNEL_LLM = "chat_channel_llm"
 
