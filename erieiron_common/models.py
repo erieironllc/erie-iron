@@ -1040,6 +1040,7 @@ class Capability(BaseErieIronModel):
     estimated_cost_per_execution = models.FloatField(null=True)
     version = models.TextField(null=True)
     used_by_businesses = models.JSONField(default=list)
+    can_build_autonomously = models.BooleanField(default=False)
 
 
 class Business(BaseErieIronModel):
@@ -1050,6 +1051,17 @@ class Business(BaseErieIronModel):
     description = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    autonomy_level = models.TextField(null=True)
+    summary = models.TextField(null=True)
+    revenue_model = models.TextField(null=True)
+    time_to_first_dollar_days = models.IntegerField(null=True)
+    capabilities = models.ManyToManyField("Capability", related_name="businesses")
+
+    # Risk assessment fields
+    risk_legal = models.TextField(null=True)
+    risk_ethical = models.TextField(null=True)
+    risk_regulatory = models.TextField(null=True)
+    risk_reputation = models.TextField(null=True)
 
     @staticmethod
     def get_erie_iron_business() -> 'Business':
@@ -1125,6 +1137,12 @@ class ShutdownTrigger(BaseErieIronModel):
 
     condition = models.TextField()
     severity = models.TextField(choices=Severity.choices)
+    business = models.ForeignKey(
+        Business,
+        on_delete=models.CASCADE,
+        related_name="shutdown_triggers",
+        null=True
+    )
 
 
 class ShutdownPlan(BaseErieIronModel):
@@ -1209,7 +1227,7 @@ class SelfDrivingTask(BaseErieIronModel):
     @staticmethod
     def get_or_create(
             config_file: Path,
-            sandbox_root_dir:Path,
+            sandbox_root_dir: Path,
             business_name: Optional[str]
     ) -> 'SelfDrivingTask':
         with transaction.atomic():
