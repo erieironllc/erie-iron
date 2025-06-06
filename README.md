@@ -66,3 +66,50 @@ Each morning, the System Agent emails JJ with:
 - Building autonomous capability management
 - Launching the first end-to-end business loop
 - Laying the groundwork for a scalable portfolio of money-making agents
+
+---
+
+## ✅ Current Capabilities
+
+- Identify required capabilities for a task
+- Search the web for related strategies or examples
+- Generate working Python code and scaffolding
+- Commit and push changes to GitHub
+
+---
+
+## 🧪 In Progress
+
+- Task queue and execution log
+- Capability registry and memory
+- Retry and self-assessment loops
+
+---
+
+## 🧭 Roadmap: Future Goals
+
+- Financial scoring of ideas
+- Fully autonomous end-to-end workflows
+- Agent memory & strategy refinement
+- Incorporate performance feedback loops (e.g., earnings, engagement)
+- Extend into non-code tasks (e.g., launching ads, forming LLCs)
+
+---
+
+## 🔁 Execution Flow
+
+1. Define a problem or goal.
+2. Run `identify_required_capabilities.py` to list needed tools.
+3. Check if the capability already exists.
+4. If missing, invoke `codegen_capability.py` to build it.
+5. Test and log the result.
+6. Push completed components to GitHub for transparency and reuse.
+
+---
+
+## 👁️‍🗨️ Notes for Future JJ
+
+- If something feels stuck, check the logs before debugging the code.
+- Don’t get fancy too fast—small, repeatable actions win.
+- If a task takes more than an hour, ask: *should Erie Iron be doing this instead of me?*
+

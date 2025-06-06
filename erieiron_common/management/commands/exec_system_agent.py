@@ -14,7 +14,7 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
-            '--file',
+            '--arg',
             type=str,
             required=False
         )
@@ -22,5 +22,5 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         system_agent.execute(
             SystemAgentTask.valid_or(options.get("task"), SystemAgentTask.REVIEW_BUSINESSES),
-            options.get("file")
+            options.get("arg")
         )

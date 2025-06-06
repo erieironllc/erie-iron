@@ -289,6 +289,10 @@ class LlmResponse:
 
 class LlmMessage:
     def __init__(self, message_type: LlmMessageType, text: str, file: Path = None):
+        if isinstance(text, Path) and text.exists():
+            file = text
+            text = None
+
         self.message_type: LlmMessageType = message_type
         self.file = file
 
