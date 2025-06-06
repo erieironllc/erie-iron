@@ -74,6 +74,7 @@ class ErieEnum(Enum):
 class SystemAgentTask(ErieEnum):
     GENERATE_IDEA = "generate_idea"
     REVIEW_BUSINESSES = "review_businesses"
+    IDENTIFY_CAPABILITIES = "identify_capabilities"
     FLESH_OUT_IDEA = "flesh_out_idea"
     LEGAL_REVIEW = "legal_review"
 
