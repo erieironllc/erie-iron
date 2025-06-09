@@ -56,7 +56,7 @@ def interact(
             logging.exception(e)
             on_chat_channel_error(payload, None, e)
     else:
-        PubSubManager.get_instance().publish(
+        PubSubManager.publish(
             PubSubMessageType.CHAT_INTERACTION_INITIATED,
             interaction.id,
             payload,
@@ -103,7 +103,7 @@ def interpret_prompt(payload, prompt_parse_msg: Optional[PubSubMessage]):
     message_type = prompt_parser.CHAT_CHANNEL_CLS_TO_MESSAGE[channel_cls]
     if message_type in MESSAGETYPES_GPU_ONLY:
         # send message out to actually build the chat response
-        pubsub_msg = PubSubManager.get_instance().publish(
+        pubsub_msg = PubSubManager.publish(
             message_type,
             interaction.id,
             {

@@ -18,7 +18,7 @@ def get_api_key():
 
 def chat(
         messages: List[dict],
-        model=LlmModel.OPENAI_GPT_O3_MINI,
+        model=LlmModel.OPENAI_GPT_4o,
         code_response=False
 ):
     return openai.OpenAI(

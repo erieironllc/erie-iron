@@ -458,14 +458,15 @@ class PubSubManager:
         msgs.append("")
         print("\n".join(["\t" + str(m) for m in msgs]))
 
+    @staticmethod
     def publish_id(
-            self,
             message_type: PubSubMessageType,
             msg_id,
             priority: PubSubMessagePriority = PubSubMessagePriority.NORMAL,
             batch_idx=None
     ) -> PubSubMessage:
-        return self.publish(
+        instance = PubSubManager.get_instance()
+        return instance.publish(
             message_type=message_type,
             namespace_context=msg_id,
             payload=msg_id,
@@ -473,19 +474,21 @@ class PubSubManager:
             batch_idx=batch_idx
         )
 
+    @staticmethod
     def publish(
-            self,
             message_type: PubSubMessageType,
             namespace_context=None,
             payload=None,
             priority: PubSubMessagePriority = PubSubMessagePriority.NORMAL,
             batch_idx=None
     ) -> PubSubMessage:
+        instance = PubSubManager.get_instance()
+
         if payload is None:
             payload = {}
 
         message = PubSubMessage.create(
-            env=self.environment_id,
+            env=instance.environment_id,
             message_type=message_type,
             priority=priority,
             namespace=message_type.get_namespace(namespace_context),
@@ -493,7 +496,7 @@ class PubSubManager:
             batch_idx=batch_idx
         )
 
-        self.log_status("1. PUBLISHED", message)
+        instance.log_status("1. PUBLISHED", message)
 
         return message
 

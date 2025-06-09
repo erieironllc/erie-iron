@@ -9,7 +9,7 @@ from erieiron_chat_engine.prompt import Prompt
 from erieiron_common import models, common
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.models import ProjectInteraction, Person, Project
-from json_encoder import ErieIronJSONEncoder
+from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 
 class ChatValidationException(Exception):

@@ -1,17 +1,14 @@
 import faulthandler
 import os
 import time
-from datetime import timedelta
 
 import openai
 from django.core.management.base import BaseCommand
 
-import models
 from erieiron_common import common
 from erieiron_common.common import parse_bool
-from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, PubSubMessageType
+from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority
 from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance
-from message_queue.pubsub_manager import PubSubManager
 
 
 class Command(BaseCommand):
@@ -81,7 +78,7 @@ class Command(BaseCommand):
 
         faulthandler.enable()
 
-        print_debug_info = options.get('debug_output')
+        print_debug_info = True  # options.get('debug_output')
         kill_on_drain = options.get('kill_on_drain')
         run_isolated = options.get('run_isolated')
         reset_host = options.get('reset_host')
@@ -131,7 +128,7 @@ class Command(BaseCommand):
             while True:
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
 
-                publish_timing_messages()
+                # publish_timing_messages()
 
                 if not process:
                     common.log_info(f"""
@@ -180,7 +177,7 @@ class Command(BaseCommand):
                     process.ping()
 
                     if idx % 10 == 0 and print_debug_info:
-                        # log(f'message_queue_processor running for env {env} ', log_prefix, log_suffix)
+                        log(f'message_queue_processor running for env {env} ', log_prefix, log_suffix)
                         pubsub_manager.print_pending()
 
                 idx += 1
@@ -191,28 +188,28 @@ class Command(BaseCommand):
             exit(0)
 
 
-def publish_timing_messages():
-    one_minute_ago = common.get_now() - timedelta(minutes=1)
-    one_hour_ago = common.get_now() - timedelta(hours=1)
-    one_day_ago = common.get_now() - timedelta(days=1)
-
-    if not models.PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_MINUTE,
-            created_at__lt=one_minute_ago
-    ).exists():
-        PubSubManager.get_instance().publish(PubSubMessageType.EVERY_MINUTE)
-
-    if not models.PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_HOUR,
-            created_at__lt=one_hour_ago
-    ).exists():
-        PubSubManager.get_instance().publish(PubSubMessageType.EVERY_HOUR)
-
-    if not models.PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_DAY,
-            created_at__lt=one_day_ago
-    ).exists():
-        PubSubManager.get_instance().publish(PubSubMessageType.EVERY_DAY)
+# def publish_timing_messages():
+# one_minute_ago = common.get_now() - timedelta(minutes=1)
+# one_hour_ago = common.get_now() - timedelta(hours=1)
+# one_day_ago = common.get_now() - timedelta(days=1)
+#
+# if not PubSubMessage.objects.filter(
+#         message_type=PubSubMessageType.EVERY_MINUTE,
+#         created_at__lt=one_minute_ago
+# ).exists():
+#     PubSubManager.publish(PubSubMessageType.EVERY_MINUTE)
+#
+# if not PubSubMessage.objects.filter(
+#         message_type=PubSubMessageType.EVERY_HOUR,
+#         created_at__lt=one_hour_ago
+# ).exists():
+#     PubSubManager.publish(PubSubMessageType.EVERY_HOUR)
+#
+# if not PubSubMessage.objects.filter(
+#         message_type=PubSubMessageType.EVERY_DAY,
+#         created_at__lt=one_day_ago
+# ).exists():
+#     PubSubManager.publish(PubSubMessageType.EVERY_DAY)
 
 
 def log(msg, prefix, suffix):
