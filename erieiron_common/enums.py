@@ -200,6 +200,7 @@ class ClientMessage(ErieEnum):
 
 
 class PubSubMessageType(ErieEnum):
+    BUSINESS_ANALYSIS_ADDED = auto()
     EVERY_MINUTE = auto()
     EVERY_HOUR = auto()
     EVERY_DAY = auto()

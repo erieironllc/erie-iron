@@ -24,21 +24,15 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
 
-def get_account_id():
+def assert_account_name(required_account_name):
     sts = boto3.client('sts')
     account_id = sts.get_caller_identity()["Account"]
 
     org = boto3.client('organizations')
-    try:
-        resp = org.describe_account(AccountId=account_id)
-        account_name = resp["Account"]["Name"]
-        print(f"Account name: {account_name}")
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code == "AccessDeniedException":
-            print(f"Access denied when retrieving account name. Account ID: {account_id}")
-        else:
-            raise  # re-raise unexpected errors
+    resp = org.describe_account(AccountId=account_id)
+    account_name = resp["Account"]["Name"]
+    if account_name != required_account_name:
+        raise Exception(f"Invalid Account {account_name} != {required_account_name}")
 
 
 def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
