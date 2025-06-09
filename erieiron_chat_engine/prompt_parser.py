@@ -11,11 +11,11 @@ from erieiron_chat_engine.language_utils import SYSTEM_COMMAND_TYPE_TO_EXAMPLE_P
 from erieiron_chat_engine.prompt import Prompt
 from erieiron_common import common, models
 from erieiron_common.enums import PromptIntent, PubSubMessageType
+from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis import prompt_engineered_utils
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.models import ProjectInteraction, Project, Person
 from erieiron_common.runtime_config import RuntimeConfig
-from json_encoder import ErieIronJSONEncoder
 
 MESSAGE_TO_CHAT_CHANNEL_CLS = {
     PubSubMessageType.CHAT_CHANNEL_LLM: LlmChatChannel,

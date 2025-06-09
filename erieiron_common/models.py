@@ -1050,26 +1050,61 @@ class Business(BaseErieIronModel):
         db_table = "business"
 
     name = models.TextField(unique=True)
-    description = models.TextField(null=True)
+    source = models.TextField(null=False)  # "HUMAN" | "AUTONOMOUS"
+    status = models.TextField(default="ACTIVE")  # ACTIVE, PAUSED, SHUTDOWN
+    allow_autonomous_shutdown = models.BooleanField(default=True)
+    autonomy_level = models.TextField(null=True)
+    shutdown_rationale = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    autonomy_level = models.TextField(null=True)
+
+
+class BusinessStructure(BaseErieIronModel):
+    class Meta:
+        db_table = "business_structure"
+
+    business = models.OneToOneField("Business", on_delete=models.CASCADE, related_name="structure")
+    description = models.TextField(null=True)
     summary = models.TextField(null=True)
     revenue_model = models.TextField(null=True)
-    time_to_first_dollar_days = models.IntegerField(null=True)
-    capabilities = models.ManyToManyField("Capability", related_name="businesses")
-
-    # Risk assessment fields
-    risk_legal = models.TextField(null=True)
-    risk_ethical = models.TextField(null=True)
-    risk_regulatory = models.TextField(null=True)
-    risk_reputation = models.TextField(null=True)
+    audience = models.TextField(null=True)
+    core_functions = models.JSONField(default=list)
+    execution_dependencies = models.JSONField(default=list)
+    growth_channels = models.JSONField(default=list)
+    personalization_options = models.JSONField(default=list)
 
     @staticmethod
     def get_erie_iron_business() -> 'Business':
         return Business.objects.get_or_create(
             name="Erie Iron, LLC"
         )[0]
+
+
+# New model: BusinessReviewLog – stores periodic re-evaluations
+class BusinessReviewLog(BaseErieIronModel):
+    class Meta:
+        db_table = "business_review_log"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="reviews")
+    review_time = models.DateTimeField(auto_now_add=True)
+    decision = models.TextField()  # MAINTAIN, INCREASE_BUDGET, DECREASE_BUDGET, SHUTDOWN
+    justification = models.TextField(null=True)
+    capacity_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    analyst_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    legal_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+
+
+# New model: PortfolioRunLog – logs each run of the portfolio leader
+class PortfolioRunLog(BaseErieIronModel):
+    class Meta:
+        db_table = "portfolio_run_log"
+
+    start_time = models.DateTimeField(auto_now_add=True)
+    end_time = models.DateTimeField(null=True)
+    launched_business = models.ForeignKey(Business, null=True, on_delete=models.SET_NULL, related_name="launch_logs")
+    skipped_reason = models.TextField(null=True)
+    capacity_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    next_run_time = models.DateTimeField(null=True)
 
 
 class CapabilityExecution(BaseErieIronModel):
@@ -1385,3 +1420,57 @@ class CodeVersion(BaseErieIronModel):
         file_path.write_text(self.code)
 
         return file_path
+
+
+class BusinessAnalysis(BaseErieIronModel):
+    class Meta:
+        db_table = "business_analysis"
+
+    business = models.ForeignKey("Business", on_delete=models.CASCADE, related_name="analysis")
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    business_name = models.TextField()
+    estimated_monthly_revenue_at_steady_state_usd = models.FloatField(null=True)
+    time_to_profit_estimate_months = models.IntegerField(null=True)
+    potential_mode = models.TextField(null=True)
+    summary = models.TextField(null=True)
+
+    final_recommendation_justification = models.TextField(null=True)
+    final_recommendation_score_1_to_10 = models.IntegerField(null=True)
+
+    estimated_operating_total_cost_per_month_usd = models.FloatField(null=True)
+
+    upfront_investment_estimated_amount_usd = models.FloatField(null=True)
+
+    total_addressable_market_estimate_usd_per_year = models.FloatField(null=True)
+    total_addressable_market_source_or_rationale = models.TextField(null=True)
+
+
+class MacroTrend(BaseErieIronModel):
+    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="macro_trends")
+    description = models.TextField()
+
+
+class Risk(BaseErieIronModel):
+    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="risks")
+    description = models.TextField()
+
+
+class MonthlyExpense(BaseErieIronModel):
+    # Link to BusinessAnalysis directly, since OperatingExpense is removed
+    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="monthly_expenses")
+    name = models.TextField()
+    purpose = models.TextField()
+    monthly_expense_usd = models.FloatField()
+
+
+class PotentialCompetitor(BaseErieIronModel):
+    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="potential_competitors")
+    name = models.TextField()
+    notes = models.TextField()
+    url = models.URLField()
+
+
+class UseOfFunds(BaseErieIronModel):
+    # Link to BusinessAnalysis directly, since UpfrontInvestment is removed
+    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="use_of_funds")
+    description = models.TextField()

@@ -1,6 +1,6 @@
 from typing import Type
 
-from chat_channels.llm_chat_context_makers.persona_chat_context_maker import BasePersonaContextMaker
+from erieiron_chat_engine.chat_channels.llm_chat_context_makers.persona_chat_context_maker import BasePersonaContextMaker
 from erieiron_chat_engine.base_chat_channel import BaseChatChannel
 from erieiron_chat_engine.chat_channels.llm_chat_context_makers.base_chat_context_maker import BaseChatContextMaker
 from erieiron_common.llm_apis import llm_interface

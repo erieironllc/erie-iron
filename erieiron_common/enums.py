@@ -1,11 +1,15 @@
 import datetime
 import random
 import uuid
-from enum import Enum
+from enum import StrEnum, auto
 from typing import List, Tuple
 
 
-class ErieEnum(Enum):
+class ErieEnum(StrEnum):
+    # noinspection PyMethodParameters
+    def _generate_next_value_(name, start, count, last_values):
+        return name
+
     @classmethod
     def to_dict(cls):
         return {str(key.name): str(key.value) for key in cls}
@@ -72,34 +76,34 @@ class ErieEnum(Enum):
 
 
 class SystemAgentTask(ErieEnum):
-    GENERATE_IDEA = "generate_idea"
-    REVIEW_BUSINESSES = "review_businesses"
-    IDENTIFY_CAPABILITIES = "identify_capabilities"
-    FLESH_OUT_IDEA = "flesh_out_idea"
-    LEGAL_REVIEW = "legal_review"
+    GENERATE_IDEA = auto()
+    REVIEW_BUSINESSES = auto()
+    IDENTIFY_CAPABILITIES = auto()
+    FLESH_OUT_IDEA = auto()
+    LEGAL_REVIEW = auto()
 
 
 class SystemCapacity(ErieEnum):
-    AVAILABLE = "available"
-    CAPPED = "capped"
-    OVERLOAD = "overload"
+    AVAILABLE = auto()
+    CAPPED = auto()
+    OVERLOAD = auto()
 
 
 class PromptIntent(ErieEnum):
-    UNKNOWN = "unknown"
-    CONTINUE_PREVIOUS_CONVERSATION = "continue_previous_conversation"
-    ERIE_GENERATED = "erie_generated"
+    UNKNOWN = auto()
+    CONTINUE_PREVIOUS_CONVERSATION = auto()
+    ERIE_GENERATED = auto()
 
 
 class Role(ErieEnum):
-    SYSTEM = "system"  # this is not meant to be a human user.  used for things like the shared library
-    DEVELOPER = "developer"
-    ADMIN = "admin"
-    BETA_USER = "beta_user"
-    SUBSCRIBER_PRO = "subscriber_pro"
-    SUBSCRIBER = "subscriber"
-    FREE_USER = "free_user"
-    BANNED = "banned"
+    SYSTEM = auto()
+    DEVELOPER = auto()
+    ADMIN = auto()
+    BETA_USER = auto()
+    SUBSCRIBER_PRO = auto()
+    SUBSCRIBER = auto()
+    FREE_USER = auto()
+    BANNED = auto()
 
     @staticmethod
     def roles_in_order():
@@ -121,30 +125,30 @@ class Role(ErieEnum):
 
 
 class Status(ErieEnum):
-    NOT_STARTED = "not started"
-    IN_PROGRESS = "in progress"
-    COMPLETE = "complete"
-    WONT_DO = "won't do"
-    ERROR = "error"
+    NOT_STARTED = auto()
+    IN_PROGRESS = auto()
+    COMPLETE = auto()
+    WONT_DO = auto()
+    ERROR = auto()
 
 
 class SystemPersonIds(ErieEnum):
-    TRAINING_DATA = uuid.UUID('00000000-0000-0000-0000-000000000000')
+    TRAINING_DATA = '00000000-0000-0000-0000-000000000000'
 
 
 class PubSubHandlerInstanceStatus(ErieEnum):
-    AVAILABLE = 'available'
-    NOT_AVAILABLE = 'not_available'
-    KILL_REQUESTED = 'kill_requested'
+    AVAILABLE = auto()
+    NOT_AVAILABLE = auto()
+    KILL_REQUESTED = auto()
 
 
 class PubSubMessageStatus(ErieEnum):
-    PENDING = 'pending'
-    PROCESSING = 'processing'
-    PROCESSED = 'processed'
-    FAILED = 'failed'
-    OBSOLETE = 'obsolete'
-    NO_CONSUMER = 'no_consumer'
+    PENDING = auto()
+    PROCESSING = auto()
+    PROCESSED = auto()
+    FAILED = auto()
+    OBSOLETE = auto()
+    NO_CONSUMER = auto()
 
     @staticmethod
     def inprog_statuses() -> List['PubSubMessageStatus']:
@@ -152,9 +156,9 @@ class PubSubMessageStatus(ErieEnum):
 
 
 class PubSubMessagePriority(ErieEnum):
-    HIGH = "high"
-    NORMAL = "normal"
-    LOW = "low"
+    HIGH = auto()
+    NORMAL = auto()
+    LOW = auto()
 
     @staticmethod
     def get_priorities_in_order() -> 'PubSubMessagePriority':
@@ -192,16 +196,19 @@ class PubSubMessagePriority(ErieEnum):
 
 
 class ClientMessage(ErieEnum):
-    INTERACTION_RESPONSE_UPDATED = "interaction_response_updated"
+    INTERACTION_RESPONSE_UPDATED = auto()
 
 
 class PubSubMessageType(ErieEnum):
-    EVERY_MINUTE = "every_minute"
-    EVERY_HOUR = "every_hour"
-    EVERY_DAY = "every_day"
+    EVERY_MINUTE = auto()
+    EVERY_HOUR = auto()
+    EVERY_DAY = auto()
 
-    CHAT_INTERACTION_INITIATED = "chat_interaction_initiated"
-    CHAT_CHANNEL_LLM = "chat_channel_llm"
+    CHAT_INTERACTION_INITIATED = auto()
+    CHAT_CHANNEL_LLM = auto()
+
+    BUSINESS_IDEA_SUBMITTED = auto()
+    BUSINESS_STRUCTURE_UPDATED = auto()
 
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
@@ -216,35 +223,35 @@ class PubSubMessageType(ErieEnum):
 
 
 class ScaleAction(ErieEnum):
-    INCREASE = "increase"
-    NO_CHANGE = "no_change"
-    DECREASE = "decrease"
-    GO_TO_ZERO = "go_to_zero"
+    INCREASE = auto()
+    NO_CHANGE = auto()
+    DECREASE = auto()
+    GO_TO_ZERO = auto()
 
 
 class AutoScalingGroup(ErieEnum):
-    MESSAGE_PROCESSOR = "messageprocessor-ecs-asg"
-    WEBSERVICE = "ui-ecs-asg"
+    MESSAGE_PROCESSOR = auto()
+    WEBSERVICE = auto()
 
 
 class PersonAuthStatus(ErieEnum):
-    NOT_LOGGED_IN = "not_logged_in"
-    BANNED = "banned"
-    NOT_INVITED = "not_invited"
-    INVITED_BUT_NOT_CONFIRMED = "invite_but_not_confirmed"
-    ALL_GOOD = "all_good"
+    NOT_LOGGED_IN = auto()
+    BANNED = auto()
+    NOT_INVITED = auto()
+    INVITED_BUT_NOT_CONFIRMED = auto()
+    ALL_GOOD = auto()
 
 
 class DataSplit(ErieEnum):
-    TRAIN = "train"
-    TEST = "test"
-    VALIDATE = "validate"
+    TRAIN = auto()
+    TEST = auto()
+    VALIDATE = auto()
 
 
 class ReportingPeriod(ErieEnum):
-    WEEK = 7
-    THIRTY_DAYS = 30
-    NINETY_DAYS = 90
+    WEEK = "7"
+    THIRTY_DAYS = "30"
+    NINETY_DAYS = "90"
 
     def get_start_date(self):
         return datetime.date.today() - datetime.timedelta(days=self.value)
@@ -259,7 +266,7 @@ class ReportingPeriod(ErieEnum):
 
 
 class LlmRole(ErieEnum):
-    ML_ENGINEER = "ml_engineer"
+    ML_ENGINEER = auto()
 
     @staticmethod
     def get_role_desc(role: 'LlmRole') -> str:
@@ -304,12 +311,12 @@ class LlmModel(ErieEnum):
 
 
 class S3Bucket(ErieEnum):
-    MODELS = "MODELS"
+    MODELS = auto()
 
 
 class ConsentChoice(ErieEnum):
-    ACCEPTED = "accepted"
-    DECLINED = "declined"
+    ACCEPTED = auto()
+    DECLINED = auto()
 
     @staticmethod
     def from_bool(bool_val) -> "ConsentChoice":
