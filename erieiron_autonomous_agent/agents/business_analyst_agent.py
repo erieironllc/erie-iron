@@ -1,4 +1,3 @@
-import pprint
 from pathlib import Path
 
 from erieiron_common import common
@@ -19,19 +18,49 @@ def initialize_workflow(pubsub_manager: PubSubManager):
 
 def on_business_structure_updated(business_id):
     business = Business.objects.get(id=business_id)
+    business_analysis = execute_business_analysis(business)
+    execute_legal_analysis(business, business_analysis)
+
+    PubSubManager.publish_id(
+        PubSubMessageType.BUSINESS_ANALYSIS_ADDED,
+        business.id
+    )
+
+
+def execute_legal_analysis(business: Business, business_analysis: BusinessAnalysis):
+    resp = llm_interface.chat([
+        LlmMessage.sys(Path("./prompts/legal_analysis_agent.md")),
+        LlmMessage.user(
+            f"""
+            Please analyze this Business
+
+            {business.name}
+
+            {common.model_to_dict_s(business.structure)}
+
+            {common.model_to_dict_s(business_analysis)}
+            """
+        )
+    ])
+
+    legal_analysis = resp.json()
+
+
+def execute_business_analysis(business) -> BusinessAnalysis:
     resp = llm_interface.chat([
         LlmMessage.sys(Path("./prompts/business_analyst.md")),
         LlmMessage.user(
             f"""
             Please analyze this Business
 
-            {common.get_dict(business)}
+            {business.name}
+            
+            {common.model_to_dict_s(business.structure)}
             """
         )
     ])
-    business_analysis = resp.json()
 
-    # Save the business_analysis data on the BusinessAnalysis (and related) models
+    business_analysis = resp.json()
 
     analysis = BusinessAnalysis.objects.create(
         business=business,
@@ -72,9 +101,5 @@ def on_business_structure_updated(business_id):
 
     for fund in business_analysis.get("upfront_cash_investment_required", {}).get("use_of_funds", []):
         UseOfFunds.objects.create(business_analysis=analysis, description=fund)
-    pprint.pprint(business_analysis)
 
-    # PubSubManager.publish_id(
-    #     PubSubMessageType.BUSINESS_STRUCTURE_UPDATED,
-    #     business.id
-    # )
+    return analysis

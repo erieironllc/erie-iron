@@ -3,6 +3,8 @@
 import os
 import sys
 
+import settings
+
 
 def main():
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings')
@@ -24,8 +26,8 @@ def main():
 
     argv = [a for a in argv if "erieiron-env" not in a]
 
-    from erieiron_common.aws_utils import get_account_id
-    get_account_id()
+    from erieiron_common.aws_utils import assert_account_name
+    assert_account_name(settings.REQUIRED_ACCOUNT_NAME)
 
     try:
         from django.core.management import execute_from_command_line

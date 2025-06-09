@@ -22,18 +22,23 @@ from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 
-class BaseErieIronModel(models.Model):
+class ErieIronModelBase(models.base.ModelBase):
+    def __new__(cls, name, bases, attrs, **kwargs):
+        meta = attrs.get('Meta', type('Meta', (), {}))
+        if not getattr(meta, 'abstract', False) and not getattr(meta, 'db_table', None):
+            setattr(meta, 'db_table', f'erieiron_{name.lower()}')
+            attrs['Meta'] = meta
+        return super().__new__(cls, name, bases, attrs, **kwargs)
+
+
+class BaseErieIronModel(models.Model, metaclass=ErieIronModelBase):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     class Meta:
-        app_label = "erieiron_common"
         abstract = True
 
 
 class Person(BaseErieIronModel):
-    class Meta:
-        db_table = "person"
-
     cognito_sub = models.UUIDField(db_index=True, null=True, unique=True)
     name = models.TextField(null=True)
     email = models.TextField()
@@ -116,9 +121,6 @@ class Person(BaseErieIronModel):
 
 
 class Project(BaseErieIronModel):
-    class Meta:
-        db_table = "project"
-
     NEW_PROJECT_NAME = "New Project"
 
     name = models.TextField(null=False, default="")
@@ -166,17 +168,11 @@ class Project(BaseErieIronModel):
 
 
 class RuntimeConfigVal(models.Model):
-    class Meta:
-        db_table = "runtime_config"
-
     name = models.TextField(primary_key=True, editable=False)
     value = models.TextField(null=True)
 
 
 class CacheData(models.Model):
-    class Meta:
-        db_table = "cachedata"
-
     key = models.CharField(primary_key=True, max_length=1024)
     val = models.TextField()
 
@@ -187,9 +183,6 @@ class ProjectInteraction(BaseErieIronModel):
     INTERACTION_PLACEHOLDER = 'interaction_placeholder'
     SYSTEM_PROJECT = 'erieiron_system'
     FEATURE_CONFIRMATION = 'feature_confirmation'
-
-    class Meta:
-        db_table = "project_interaction"
 
     project = models.ForeignKey(Project, on_delete=models.PROTECT)
     person = models.ForeignKey(Person, on_delete=models.PROTECT, null=True)
@@ -272,18 +265,12 @@ class ProjectInteraction(BaseErieIronModel):
 
 
 class ProjectInteractionFeature(BaseErieIronModel):
-    class Meta:
-        db_table = "project_interaction_feature"
-
     project_interaction = models.ForeignKey(ProjectInteraction, on_delete=models.CASCADE)
     name = models.TextField(null=False)
     value = models.TextField(null=False)
 
 
 class PubSubMessage(BaseErieIronModel):
-    class Meta:
-        db_table = "pubsub_message"
-
     env = models.TextField(null=False, db_index=True)
     namespace = models.TextField(null=False, db_index=True)
     message_type = models.TextField(null=False)
@@ -614,9 +601,6 @@ class PubSubMessage(BaseErieIronModel):
 
 
 class PubSubEnvironment(BaseErieIronModel):
-    class Meta:
-        db_table = "pubsub_environment"
-
     id = models.TextField(primary_key=True, editable=False)
     desired_handler_instance_count = models.IntegerField(null=False, default=1)
     last_requested_increase = models.DateTimeField(null=True, auto_now_add=True)
@@ -643,9 +627,6 @@ class PubSubEnvironment(BaseErieIronModel):
 
 
 class PubSubHanderInstance(BaseErieIronModel):
-    class Meta:
-        db_table = "pubsub_message_handler_instance"
-
     id = models.TextField(primary_key=True, editable=False)
     environment = models.ForeignKey(PubSubEnvironment, null=False, on_delete=models.PROTECT)
     env = models.TextField(null=False, db_index=True, default=settings.MESSAGE_QUEUE_ENV)
@@ -888,10 +869,6 @@ class PubSubHanderInstance(BaseErieIronModel):
 
 
 class PubSubHanderInstanceProcess(BaseErieIronModel):
-    class Meta:
-        db_table = "pubsub_message_handler_instance_process"
-        unique_together = (('handler_instance', 'pid'),)
-
     handler_instance = models.ForeignKey(PubSubHanderInstance, null=True, on_delete=models.PROTECT)
     pid = models.IntegerField(null=False)
     process_status = models.TextField(null=False, default=PubSubHandlerInstanceStatus.AVAILABLE)
@@ -1033,9 +1010,6 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
 
 # Erie Iron core entities
 class Capability(BaseErieIronModel):
-    class Meta:
-        db_table = "capability"
-
     name = models.TextField(unique=True)
     description = models.TextField(null=True)
     endpoint = models.URLField(null=True)
@@ -1046,9 +1020,6 @@ class Capability(BaseErieIronModel):
 
 
 class Business(BaseErieIronModel):
-    class Meta:
-        db_table = "business"
-
     name = models.TextField(unique=True)
     source = models.TextField(null=False)  # "HUMAN" | "AUTONOMOUS"
     status = models.TextField(default="ACTIVE")  # ACTIVE, PAUSED, SHUTDOWN
@@ -1058,11 +1029,14 @@ class Business(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @staticmethod
+    def get_erie_iron_business() -> 'Business':
+        return Business.objects.get_or_create(
+            name="Erie Iron, LLC"
+        )[0]
+
 
 class BusinessStructure(BaseErieIronModel):
-    class Meta:
-        db_table = "business_structure"
-
     business = models.OneToOneField("Business", on_delete=models.CASCADE, related_name="structure")
     description = models.TextField(null=True)
     summary = models.TextField(null=True)
@@ -1073,18 +1047,9 @@ class BusinessStructure(BaseErieIronModel):
     growth_channels = models.JSONField(default=list)
     personalization_options = models.JSONField(default=list)
 
-    @staticmethod
-    def get_erie_iron_business() -> 'Business':
-        return Business.objects.get_or_create(
-            name="Erie Iron, LLC"
-        )[0]
-
 
 # New model: BusinessReviewLog – stores periodic re-evaluations
 class BusinessReviewLog(BaseErieIronModel):
-    class Meta:
-        db_table = "business_review_log"
-
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="reviews")
     review_time = models.DateTimeField(auto_now_add=True)
     decision = models.TextField()  # MAINTAIN, INCREASE_BUDGET, DECREASE_BUDGET, SHUTDOWN
@@ -1096,9 +1061,6 @@ class BusinessReviewLog(BaseErieIronModel):
 
 # New model: PortfolioRunLog – logs each run of the portfolio leader
 class PortfolioRunLog(BaseErieIronModel):
-    class Meta:
-        db_table = "portfolio_run_log"
-
     start_time = models.DateTimeField(auto_now_add=True)
     end_time = models.DateTimeField(null=True)
     launched_business = models.ForeignKey(Business, null=True, on_delete=models.SET_NULL, related_name="launch_logs")
@@ -1108,9 +1070,6 @@ class PortfolioRunLog(BaseErieIronModel):
 
 
 class CapabilityExecution(BaseErieIronModel):
-    class Meta:
-        db_table = "capability_execution"
-
     class Executor(models.TextChoices):
         AUTONOMOUS = 'AUTONOMOUS'
         HUMAN = 'HUMAN'
@@ -1142,9 +1101,6 @@ class CapabilityExecution(BaseErieIronModel):
 
 
 class Goal(BaseErieIronModel):
-    class Meta:
-        db_table = "goal"
-
     class Type(models.TextChoices):
         KPI = 'KPI'
         MILESTONE = 'MILESTONE'
@@ -1164,9 +1120,6 @@ class Goal(BaseErieIronModel):
 
 
 class ShutdownTrigger(BaseErieIronModel):
-    class Meta:
-        db_table = "shutdown_trigger"
-
     class Severity(models.TextChoices):
         LOW = 'LOW'
         MEDIUM = 'MEDIUM'
@@ -1183,9 +1136,6 @@ class ShutdownTrigger(BaseErieIronModel):
 
 
 class ShutdownPlan(BaseErieIronModel):
-    class Meta:
-        db_table = "shutdown_plan"
-
     business = models.OneToOneField(Business, on_delete=models.CASCADE, related_name="shutdown_plan")
     triggers = models.ManyToManyField(ShutdownTrigger, related_name="plans")
     legal_review_completed = models.BooleanField(default=False)
@@ -1423,9 +1373,6 @@ class CodeVersion(BaseErieIronModel):
 
 
 class BusinessAnalysis(BaseErieIronModel):
-    class Meta:
-        db_table = "business_analysis"
-
     business = models.ForeignKey("Business", on_delete=models.CASCADE, related_name="analysis")
     created_timestamp = models.DateTimeField(auto_now_add=True)
     business_name = models.TextField()

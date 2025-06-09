@@ -1,3 +1,4 @@
+import pprint
 from pathlib import Path
 
 from erieiron_common.enums import PubSubMessageType
@@ -30,6 +31,8 @@ def on_business_idea_submitted(payload):
         )
     ])
     business_structure = resp.json()
+
+    pprint.pprint(business_structure)
 
     business, created = Business.objects.update_or_create(
         id=business_id,
