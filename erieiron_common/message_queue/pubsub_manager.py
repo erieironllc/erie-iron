@@ -634,7 +634,7 @@ class PubSubManager:
             for handler_method, error_handler_method, completed_message_type in subscriber_methods:
                 try:
                     # hey let's stop messing around and actually do some work around here
-                    self.execute_message_handler(
+                    ret_val = self.execute_message_handler(
                         handler_method,
                         message
                     )
@@ -649,7 +649,7 @@ class PubSubManager:
                         PubSubManager.publish(
                             completed_message_type,
                             namespace_context=message.namespace,
-                            payload=message.payload,
+                            payload=ret_val or message.payload,
                             priority=message.priority
                         )
 
@@ -710,13 +710,17 @@ class PubSubManager:
 
         self.log_status("3. HANDLING", message)
         if param_count == 0:
-            handler_method()
+            ret_val = handler_method()
         elif param_count == 1:
-            handler_method(message.payload)
+            ret_val = handler_method(message.payload)
         elif param_count == 2:
-            handler_method(message.payload, message)
+            ret_val = handler_method(message.payload, message)
+        else:
+            raise ValueError(f"invalid method signature {handler_method}: {param_count} parms")
 
         self.log_status("4. DONE HANDLING", message)
+
+        return ret_val
 
     def log_status(self, prefix, message: PubSubMessage):
         thread_name = common.get_current_thread_name()

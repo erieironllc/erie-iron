@@ -32,7 +32,7 @@ def execute_business_analysis(business) -> BusinessAnalysis:
 
             {business.name}
             
-            {common.model_to_dict_s(business.businessstructure)}
+            {common.model_to_dict_s(business)}
             """
         )
     ])
@@ -74,7 +74,7 @@ def execute_legal_analysis(
 
             {business.name}
 
-            {common.model_to_dict_s(business.businessstructure)}
+            {common.model_to_dict_s(business)}
 
             {common.model_to_dict_s(business_analysis)}
             """

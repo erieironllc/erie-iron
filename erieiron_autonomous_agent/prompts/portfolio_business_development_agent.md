@@ -11,7 +11,7 @@ You are tasked with identifying novel, monetizable business ideas that Erie Iron
 
 ## 🎯 Objectives
 
-- Identify **viable businesses** that Erie Iron can run.
+- Identify new **viable businesses** that Erie Iron can run, avoiding our Existing Businesses
 - Prioritize:
   - Short-term revenue generation
   - Full or partial **autonomy**
@@ -48,10 +48,11 @@ Draw inspiration from:
 
 ## 🧾 Output Format
 
-Respond with a **valid JSON object** defining the pitch for the business opportunity:
+Respond with a **valid JSON object** defining the pitch for the business opportunity.  Do not mention capacity containts in the pitch.  Keep it focused soley on the idea and in a vacuum:
 
 ```json
 {
-  "pitch": "very detailed multi-paragraph pitch for the business idea" 
+  "summary": "single sentence summary",
+  "detailed_pitch": "very detailed multi-paragraph pitch for the business idea" 
 }
 ```

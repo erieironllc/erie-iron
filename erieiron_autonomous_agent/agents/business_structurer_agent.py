@@ -4,7 +4,7 @@ from erieiron_common.enums import PubSubMessageType, Constants
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
-from erieiron_common.models import Business, BusinessStructure
+from erieiron_common.models import Business
 
 
 @pubsub_workflow
@@ -37,16 +37,14 @@ def on_business_idea_submitted(business_id):
             name=business_structure.get("name")
         )
 
-    BusinessStructure.objects.update_or_create(
-        business=business,
-        defaults={
-            "description": business_structure.get("business_plan"),
-            "summary": business_structure.get("value_proposition"),
-            "revenue_model": business_structure.get("monetization"),
-            "audience": business_structure.get("audience"),
-            "core_functions": business_structure.get("core_functions", []),
-            "execution_dependencies": business_structure.get("execution_dependencies", []),
-            "growth_channels": business_structure.get("growth_channels", []),
-            "personalization_options": business_structure.get("personalization_options", []),
-        }
+    Business.objects.filter(id=business_id).update(
+        summary=business_structure.get("summary"),
+        business_plan=business_structure.get("business_plan"),
+        value_prop=business_structure.get("value_proposition"),
+        revenue_model=business_structure.get("monetization"),
+        audience=business_structure.get("audience"),
+        core_functions=business_structure.get("core_functions", []),
+        execution_dependencies=business_structure.get("execution_dependencies", []),
+        growth_channels=business_structure.get("growth_channels", []),
+        personalization_options=business_structure.get("personalization_options", [])
     )
