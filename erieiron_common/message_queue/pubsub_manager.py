@@ -504,11 +504,13 @@ class PubSubManager:
             self,
             message_type: PubSubMessageType,
             handler_method,
+            completed_message_type: PubSubMessageType = None,
             error_handler_method=None
+
     ) -> 'PubSubManager':
         for mt in common.ensure_list(message_type):
             subscribers[mt].add(
-                (handler_method, error_handler_method)
+                (handler_method, error_handler_method, completed_message_type)
             )
 
         return self
@@ -596,7 +598,15 @@ class PubSubManager:
 
         subscriber_methods = subscribers[message_type]
         if len(subscriber_methods) == 0:
-            raise Exception(f"No consumer for {message_type}")
+            logging.error(f"No consumer for {message_type}")
+
+            PubSubMessage.mark_finished(
+                message.id,
+                PubSubMessageStatus.NO_CONSUMER,
+                self.handler_instance_id
+            )
+
+            return
 
         current_thread_name = common.get_current_thread_name()
         try:
@@ -621,7 +631,7 @@ class PubSubManager:
             PubSubMessage.mark_processing(message.id, self.handler_instance_id)
             close_old_connections()
 
-            for handler_method, error_handler_method in subscriber_methods:
+            for handler_method, error_handler_method, completed_message_type in subscriber_methods:
                 try:
                     # hey let's stop messing around and actually do some work around here
                     self.execute_message_handler(
@@ -634,6 +644,15 @@ class PubSubManager:
                         PubSubMessageStatus.PROCESSED,
                         self.handler_instance_id
                     )
+
+                    if completed_message_type:
+                        PubSubManager.publish(
+                            completed_message_type,
+                            namespace_context=message.namespace,
+                            payload=message.payload,
+                            priority=message.priority
+                        )
+
                     common.log_info(f"PUB SUB:  handled '{message.message_type}' msg with {subscriber_method_signatures};")
 
                     # no errors, great let's break
@@ -666,7 +685,7 @@ class PubSubManager:
                 str(e)
             )
 
-            for handler_method, error_handler_method in subscriber_methods:
+            for _, error_handler_method, _ in subscriber_methods:
                 if error_handler_method:
                     try:
                         error_handler_method(

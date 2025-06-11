@@ -48,22 +48,10 @@ Draw inspiration from:
 
 ## 🧾 Output Format
 
-Respond with a **valid JSON object** defining the business opportunity:
+Respond with a **valid JSON object** defining the pitch for the business opportunity:
 
 ```json
 {
-  "name": "string",
-  "summary": "1-2 sentence description of the business",
-  "revenue_model": "how the business will make money",
-  "autonomy_level": "HIGH | MEDIUM | LOW",  // Based on Erie Iron's ability to run this business with minimal human input
-  "time_to_first_dollar_days": integer,
-  "estimated_upfront_cash_required_usd": number,
-  "estimated_monthly_revenue_after_60_days_usd": number,
-  "risk_assessment": {
-    "legal": "LOW | MEDIUM | HIGH",
-    "ethical": "LOW | MEDIUM | HIGH",
-    "regulatory": "LOW | MEDIUM | HIGH",
-    "reputation": "LOW | MEDIUM | HIGH"
-  }
+  "pitch": "very detailed multi-paragraph pitch for the business idea" 
 }
 ```

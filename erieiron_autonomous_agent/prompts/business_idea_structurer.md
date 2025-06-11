@@ -16,6 +16,7 @@ Produce a valid JSON object with the following structure:
 
 ```json
 {
+  "business_name": "A unique, short but descriptive name for the business",
   "business_plan": "A clear, concise, one-paragraph summary of what the business does.",
   "core_functions": [
     "Receive article links via email",

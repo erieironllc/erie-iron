@@ -33,7 +33,7 @@ Return a single valid JSON object with the following fields:
 ```json
 {
   "approved": true,
-  "risk_rating": "low | medium | high",
+  "risk_rating": "LOW | MEDIUM | HIGH",
   "justification": "Detailed explanation of risks and how they are (or are not) mitigated.",
   "required_disclaimers_or_terms": [
     "Clearly state this service does not offer medical or legal advice.",
@@ -61,10 +61,3 @@ Return a single valid JSON object with the following fields:
 - Violating copyright, trademarks, or using protected datasets
 - Deceptive marketing, email spam, or impersonation
 
----
-
-## 📌 Output Rules
-
-- Output only a valid JSON object
-- Use double quotes for all strings
-- Do not include any markdown, commentary, or narrative outside the JSON

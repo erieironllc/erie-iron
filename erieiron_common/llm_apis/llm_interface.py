@@ -12,6 +12,13 @@ from erieiron_common import common
 from erieiron_common.enums import LlmModel, LlmMessageType
 from erieiron_common.llm_apis import gemini_chat_api, openai_chat_api, claude_chat_api, deepseek_chat_api
 
+SYSTEM_AGENT_MODELS_IN_ORDER = [
+    LlmModel.OPENAI_GPT_4_1_NANO,
+    # LlmModel.OPENAI_O3_PRO,
+    # LlmModel.GEMINI_2_5_PRO,
+    # LlmModel.CLAUDE_3_7
+]
+
 # want these to be cheap and fast- only need to parse a simple prompt and return json
 PARSE_MODELS_IN_ORDER = [
     LlmModel.OPENAI_GPT_4_1_NANO,
@@ -23,7 +30,7 @@ CHAT_MODELS_IN_ORDER = [
     LlmModel.OPENAI_GPT_4o,
     LlmModel.OPENAI_GPT_4_1_MINI,
     LlmModel.GEMINI_2_5_PRO,
-    LlmModel.OPENAI_GPT_O3_MINI,
+    LlmModel.OPENAI_O3_MINI,
     LlmModel.CLAUDE_3_7,
     LlmModel.DEEPSEEK_CHAT,
 ]
@@ -36,7 +43,8 @@ CODE_MODELS_IN_ORDER = [
 ]
 
 MODEL_TO_IMPL = {
-    LlmModel.OPENAI_GPT_O3_MINI: openai_chat_api,
+    LlmModel.OPENAI_O3_MINI: openai_chat_api,
+    LlmModel.OPENAI_O3_PRO: openai_chat_api,
     LlmModel.OPENAI_GPT_4o: openai_chat_api,
     LlmModel.OPENAI_GPT_4o_20240806: openai_chat_api,
     LlmModel.OPENAI_GPT_4_TURBO: openai_chat_api,
@@ -63,7 +71,7 @@ MODEL_TO_IMPL = {
 }
 
 MODEL_TO_MAX_TOKENS = {
-    LlmModel.OPENAI_GPT_O3_MINI: 200_000,
+    LlmModel.OPENAI_O3_MINI: 200_000,
     LlmModel.OPENAI_GPT_4o: 128_000,
     LlmModel.OPENAI_GPT_4o_20240806: 128_000,
     LlmModel.OPENAI_GPT_4_TURBO: 128_000,
@@ -99,7 +107,7 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
         "input": 15.00,
         "output": 75.00,
     },
-    LlmModel.OPENAI_GPT_O3_MINI: {
+    LlmModel.OPENAI_O3_MINI: {
         "input": 1.10,
         "output": 4.40,
     },
@@ -143,9 +151,13 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
         "input": 3.00,
         "output": 12.00,
     },
+    LlmModel.OPENAI_O3_PRO: {
+        "input": 20.00,
+        "output": 80.00,
+    },
     LlmModel.OPENAI_O3: {
-        "input": 10.00,
-        "output": 40.00,
+        "input": 2.00,
+        "output": 8.00,
     },
     LlmModel.OPENAI_O4: {
         "input": 20.00,
@@ -182,11 +194,28 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
 }
 
 
-def chat(prompt, model: LlmModel = None, code_response=False) -> 'LlmResponse':
-    if model is None:
+def portfolio_agent_chat(messages: list['LlmMessage']) -> 'LlmResponse':
+    messages = common.ensure_list(messages)
+    messages = [LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/portfolio_base_prompt.md"))] + messages
+
+    return agent_chat(messages)
+
+
+def agent_chat(messages: 'LlmMessage') -> 'LlmResponse':
+    messages = common.ensure_list(messages)
+    messages.append(LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/_base_agent.md")))
+    return chat(
+        messages,
+        SYSTEM_AGENT_MODELS_IN_ORDER,
+        code_response=False
+    )
+
+
+def chat(messages: list['LlmMessage'], model: LlmModel = None, code_response=False) -> 'LlmResponse':
+    if not model:
         models = CODE_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
     else:
-        models = [model]
+        models = common.ensure_list(model)
 
     for idx, model in enumerate(models):
         model = LlmModel(model)
@@ -194,7 +223,7 @@ def chat(prompt, model: LlmModel = None, code_response=False) -> 'LlmResponse':
         try:
             impl = MODEL_TO_IMPL[LlmModel(model)]
 
-            messages = LlmMessage.parse_prompt(model, prompt, code_response)
+            messages = LlmMessage.parse_prompt(model, messages, code_response)
             json_messages = [m.get_message_json(model) for m in messages]
 
             start_time = time.time()
@@ -375,22 +404,10 @@ class LlmMessage:
         )
 
     @staticmethod
-    def parse_prompt(model, prompt, code_response=False) -> List['LlmMessage']:
-        messages = []
+    def parse_prompt(model, messages: list['LlmMessage'], code_response=False) -> List['LlmMessage']:
+        messages = common.ensure_list(messages)
 
-        if code_response:
-            messages.append(
-                LlmMessage(
-                    message_type=LlmMessageType.SYSTEM,
-                    text="""
-you are an expert code generation assistant. 
-respond only with valid code. do not include any markdown formatting, such as triple backticks or language tags.
-if responding with json, the property names must be encosed in "double quotes"
-                    """
-                )
-            )
-
-        for m in common.filter_none(prompt):
+        for m in common.filter_none(messages):
             if isinstance(m, str):
                 if m:
                     messages.append(LlmMessage.user(m))
@@ -399,6 +416,18 @@ if responding with json, the property names must be encosed in "double quotes"
                     messages.append(m)
             else:
                 raise ValueError(f"invalid message type {m}")
+
+            if code_response:
+                messages.append(
+                    LlmMessage(
+                        message_type=LlmMessageType.SYSTEM,
+                        text="""
+    you are an expert code generation assistant. 
+    respond only with valid code. do not include any markdown formatting, such as triple backticks or language tags.
+    if responding with json, the property names must be encosed in "double quotes"
+                        """
+                    )
+                )
 
         token_count = LlmMessage.get_total_token_count(model, messages)
         while token_count > MODEL_TO_MAX_TOKENS.get(model, sys.maxsize):
@@ -478,7 +507,7 @@ the previous attempt at parsing this content resulted in this error:  {e}
 
 resond only with parsable json.  do not include any comments, explanations, or non-json markdown
 """,
-                LlmModel.OPENAI_GPT_O3_MINI,
+                LlmModel.OPENAI_O3_MINI,
                 code_response=True
             )
             json_text = llm_response_reformat.text

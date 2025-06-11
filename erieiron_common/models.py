@@ -3,6 +3,7 @@ import logging
 import sys
 import threading
 import uuid
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple, Optional
@@ -17,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1021,23 +1022,163 @@ class Capability(BaseErieIronModel):
 
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
-    source = models.TextField(null=False)  # "HUMAN" | "AUTONOMOUS"
-    status = models.TextField(default="ACTIVE")  # ACTIVE, PAUSED, SHUTDOWN
+    raw_idea = models.TextField(null=True)
+    source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
+    status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
     allow_autonomous_shutdown = models.BooleanField(default=True)
-    autonomy_level = models.TextField(null=True)
-    shutdown_rationale = models.TextField(null=True)
+    autonomy_level = models.TextField(null=True, choices=Level.choices())
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def get_latest_capacity(self) -> 'BusinessCapacityAnalysis':
+        return self.businesscapacityanalysis_set.order_by("created_timestamp").last()
+
+    def get_latest_analysist(self) -> tuple['BusinessAnalysis', 'BusinessLegalAnalysis']:
+        return self.businessanalysis_set.order_by("created_timestamp").last(), self.businesslegalanalysis_set.order_by("created_timestamp").last()
 
     @staticmethod
     def get_erie_iron_business() -> 'Business':
         return Business.objects.get_or_create(
-            name="Erie Iron, LLC"
+            name="Erie Iron, LLC",
+            defaults={
+                "source": BusinessIdeaSource.HUMAN
+            }
         )[0]
+
+    def needs_capacity_analysis(self):
+        """
+        Returns True if no BusinessCapacityAnalysis has been created in the past 1 hours.
+        """
+        return not self.businesscapacityanalysis_set.filter(created_timestamp__gt=common.get_now() - timedelta(hours=1)).exists()
+
+    def needs_analysis(self):
+        """
+        Returns True if no BusinessAnalysis has been created in the past 14 days.
+        """
+        return not self.businessanalysis_set.filter(created_timestamp__gt=common.get_now() - timedelta(days=14)).exists()
+
+    def get_human_capacity(self):
+        # TODO make this real
+        return {
+            "timestamp": "2025-06-10T18:00:00Z",
+            "active_humans": [
+                {
+                    "id": "jj",
+                    "name": "JJ",
+                    "available_hours_per_week": 10,
+                    "current_task_load": 8,
+                    "tasks_pending": 6,
+                    "average_response_time_hours": 36.2,
+                    "max_response_time_hours": 84.0,
+                    "blocked_capabilities": ["Setup Zapier integration", "Review AWS IAM policy"],
+                    "status": "HAS_CAPACITY"
+                }
+            ],
+            "total_human_capacity_hours": 18,
+            "total_pending_task_hours": 10,
+            "capacity_utilization_percent": 52
+        }
+
+    def get_budget_capacity(self):
+        # todo make this real
+        return {
+            "timestamp": "2025-06-10T18:00:00Z",
+            "cash_on_hand_usd": 12432.75,
+            "monthly_burn_rate_usd": 2800.00,
+            "runway_months": 4.4,
+            "committed_monthly_expenses": {
+                "aws": 700,
+                "contractors": 1200,
+                "software_tools": 300,
+                "other": 600
+            },
+            "forecasted_revenue_usd": {
+                "next_30_days": 350.00,
+                "next_90_days": 1100.00
+            },
+            "available_budget_for_new_investments_usd": 2000.00
+        }
+
+    def get_aws_capacity(self):
+        # TODO make this real
+        return {
+            "timestamp": "2025-06-10T18:00:00Z",
+            "region": "us-west-2",
+            "compute": {
+                "ec2_instances_available": {
+                    "t3.medium": 20,
+                    "g4dn.xlarge": 2,
+                    "c5.large": 10
+                },
+                "autoscaling_groups": [
+                    {
+                        "name": "collaya-inference-asg",
+                        "desired_capacity": 2,
+                        "max_capacity": 5,
+                        "current_capacity": 2
+                    }
+                ],
+                "lambda_invocations_per_minute": {
+                    "limit": 1000,
+                    "current_usage": 540
+                },
+                "ecs_clusters": [
+                    {
+                        "name": "collaya-prod",
+                        "running_tasks": 12,
+                        "available_capacity_percent": 40
+                    }
+                ]
+            },
+            "gpu": {
+                "available_gpus": {
+                    "g4dn.xlarge": 2,
+                    "p3.2xlarge": 0
+                },
+                "inference_queue_length": 3,
+                "expected_wait_time_seconds": 120
+            },
+            "storage": {
+                "s3": {
+                    "total_objects": 120000,
+                    "total_size_gb": 310.4
+                },
+                "ebs": {
+                    "total_volumes": 12,
+                    "used_storage_gb": 240
+                },
+                "efs": {
+                    "used_storage_gb": 38
+                }
+            },
+            "network": {
+                "api_gateway": {
+                    "requests_per_second": {
+                        "limit": 5000,
+                        "current_usage": 1300
+                    }
+                },
+                "bandwidth_mbps": {
+                    "ingress": 220,
+                    "egress": 180
+                }
+            },
+            "cost": {
+                "month_to_date_spend_usd": 342.18,
+                "forecasted_monthly_spend_usd": 720,
+                "budget_limit_usd": 1000
+            },
+            "alerts": [
+                "Low GPU availability in us-west-2",
+                "Lambda usage > 50% of quota",
+                "S3 nearing 90% of cost allocation warning threshold"
+            ]
+        }
 
 
 class BusinessStructure(BaseErieIronModel):
-    business = models.OneToOneField("Business", on_delete=models.CASCADE, related_name="structure")
+    business = models.OneToOneField("Business", on_delete=models.CASCADE)
     description = models.TextField(null=True)
     summary = models.TextField(null=True)
     revenue_model = models.TextField(null=True)
@@ -1048,25 +1189,59 @@ class BusinessStructure(BaseErieIronModel):
     personalization_options = models.JSONField(default=list)
 
 
-# New model: BusinessReviewLog – stores periodic re-evaluations
-class BusinessReviewLog(BaseErieIronModel):
-    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="reviews")
-    review_time = models.DateTimeField(auto_now_add=True)
-    decision = models.TextField()  # MAINTAIN, INCREASE_BUDGET, DECREASE_BUDGET, SHUTDOWN
+class BusinessAnalysis(BaseErieIronModel):
+    business = models.ForeignKey("Business", on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    business_name = models.TextField()
+    estimated_monthly_revenue_at_steady_state_usd = models.FloatField(null=True)
+    time_to_profit_estimate_months = models.IntegerField(null=True)
+    potential_mode = models.TextField(null=True)
+    summary = models.TextField(null=True)
+
+    final_recommendation_justification = models.TextField(null=True)
+    final_recommendation_score_1_to_10 = models.IntegerField(null=True)
+
+    estimated_operating_total_cost_per_month_usd = models.FloatField(null=True)
+
+    upfront_investment_estimated_amount_usd = models.FloatField(null=True)
+
+    total_addressable_market_estimate_usd_per_year = models.FloatField(null=True)
+    total_addressable_market_source_or_rationale = models.TextField(null=True)
+
+    macro_trends_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    risks_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    monthly_expenses_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    potential_competitors_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    use_of_funds_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+
+
+class BusinessGuidance(BaseErieIronModel):
+    business = models.ForeignKey("Business", on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    guidance = models.TextField(choices=BusinessGuidanceRating.choices())
     justification = models.TextField(null=True)
-    capacity_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
-    analyst_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
-    legal_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
 
 
-# New model: PortfolioRunLog – logs each run of the portfolio leader
-class PortfolioRunLog(BaseErieIronModel):
-    start_time = models.DateTimeField(auto_now_add=True)
-    end_time = models.DateTimeField(null=True)
-    launched_business = models.ForeignKey(Business, null=True, on_delete=models.SET_NULL, related_name="launch_logs")
-    skipped_reason = models.TextField(null=True)
-    capacity_snapshot = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
-    next_run_time = models.DateTimeField(null=True)
+class BusinessLegalAnalysis(BaseErieIronModel):
+    business = models.ForeignKey("Business", on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+
+    approved = models.BooleanField()
+    justification = models.TextField(null=True)
+    required_disclaimers_or_terms = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    risk_rating = models.TextField(null=True, choices=Level.choices())
+
+
+class BusinessCapacityAnalysis(BaseErieIronModel):
+    business = models.ForeignKey("Business", on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+
+    cash_capacity_status = models.TextField(choices=TrafficLight.choices())
+    compute_capacity_status = models.TextField(choices=TrafficLight.choices())
+    human_capacity_status = models.TextField(choices=TrafficLight.choices())
+    recommendation = models.TextField(choices=TrafficLight.choices())
+
+    justification = models.TextField(null=True)
 
 
 class CapabilityExecution(BaseErieIronModel):
@@ -1110,38 +1285,13 @@ class Goal(BaseErieIronModel):
         AT_RISK = 'AT_RISK'
         OFF_TRACK = 'OFF_TRACK'
 
-    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="goals")
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
     name = models.TextField()
     type = models.TextField(choices=Type.choices)
     target_value = models.TextField()
     actual_value = models.TextField()
     status = models.TextField(choices=Status.choices)
     evaluation_interval_days = models.IntegerField()
-
-
-class ShutdownTrigger(BaseErieIronModel):
-    class Severity(models.TextChoices):
-        LOW = 'LOW'
-        MEDIUM = 'MEDIUM'
-        HIGH = 'HIGH'
-
-    condition = models.TextField()
-    severity = models.TextField(choices=Severity.choices)
-    business = models.ForeignKey(
-        Business,
-        on_delete=models.CASCADE,
-        related_name="shutdown_triggers",
-        null=True
-    )
-
-
-class ShutdownPlan(BaseErieIronModel):
-    business = models.OneToOneField(Business, on_delete=models.CASCADE, related_name="shutdown_plan")
-    triggers = models.ManyToManyField(ShutdownTrigger, related_name="plans")
-    legal_review_completed = models.BooleanField(default=False)
-    ethical_review_completed = models.BooleanField(default=False)
-    data_purge_strategy = models.TextField(null=True)
-    user_communication_plan = models.TextField(null=True)
 
 
 class SelfDrivingTask(BaseErieIronModel):
@@ -1370,54 +1520,3 @@ class CodeVersion(BaseErieIronModel):
         file_path.write_text(self.code)
 
         return file_path
-
-
-class BusinessAnalysis(BaseErieIronModel):
-    business = models.ForeignKey("Business", on_delete=models.CASCADE, related_name="analysis")
-    created_timestamp = models.DateTimeField(auto_now_add=True)
-    business_name = models.TextField()
-    estimated_monthly_revenue_at_steady_state_usd = models.FloatField(null=True)
-    time_to_profit_estimate_months = models.IntegerField(null=True)
-    potential_mode = models.TextField(null=True)
-    summary = models.TextField(null=True)
-
-    final_recommendation_justification = models.TextField(null=True)
-    final_recommendation_score_1_to_10 = models.IntegerField(null=True)
-
-    estimated_operating_total_cost_per_month_usd = models.FloatField(null=True)
-
-    upfront_investment_estimated_amount_usd = models.FloatField(null=True)
-
-    total_addressable_market_estimate_usd_per_year = models.FloatField(null=True)
-    total_addressable_market_source_or_rationale = models.TextField(null=True)
-
-
-class MacroTrend(BaseErieIronModel):
-    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="macro_trends")
-    description = models.TextField()
-
-
-class Risk(BaseErieIronModel):
-    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="risks")
-    description = models.TextField()
-
-
-class MonthlyExpense(BaseErieIronModel):
-    # Link to BusinessAnalysis directly, since OperatingExpense is removed
-    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="monthly_expenses")
-    name = models.TextField()
-    purpose = models.TextField()
-    monthly_expense_usd = models.FloatField()
-
-
-class PotentialCompetitor(BaseErieIronModel):
-    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="potential_competitors")
-    name = models.TextField()
-    notes = models.TextField()
-    url = models.URLField()
-
-
-class UseOfFunds(BaseErieIronModel):
-    # Link to BusinessAnalysis directly, since UpfrontInvestment is removed
-    business_analysis = models.ForeignKey("BusinessAnalysis", on_delete=models.CASCADE, related_name="use_of_funds")
-    description = models.TextField()

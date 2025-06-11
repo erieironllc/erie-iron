@@ -65,10 +65,3 @@ Return a JSON object for each business, structured like this:
 - Reject or shut down businesses with unsound models, legal ambiguity, or slow time-to-profit
 - Favor simplicity, clarity, and speed to cash
 
----
-
-## 📌 Output Rules
-
-- Return one decision per business
-- Use double quotes for all strings
-- Include 1–3 action items per decision
