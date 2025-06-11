@@ -1022,7 +1022,17 @@ class Capability(BaseErieIronModel):
 
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
+    summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
+    bank_account_id = models.TextField(null=True)
+    business_plan = models.TextField(null=True)
+    value_prop = models.TextField(null=True)
+    revenue_model = models.TextField(null=True)
+    audience = models.TextField(null=True)
+    core_functions = models.JSONField(default=list)
+    execution_dependencies = models.JSONField(default=list)
+    growth_channels = models.JSONField(default=list)
+    personalization_options = models.JSONField(default=list)
     source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
     status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
     allow_autonomous_shutdown = models.BooleanField(default=True)
@@ -1046,6 +1056,9 @@ class Business(BaseErieIronModel):
             }
         )[0]
 
+    def needs_bank_balance_update(self):
+        return not self.businessbankbalancesnapshot_set.filter(created_timestamp__gt=common.get_now() - timedelta(days=1)).exists()
+
     def needs_capacity_analysis(self):
         """
         Returns True if no BusinessCapacityAnalysis has been created in the past 1 hours.
@@ -1067,41 +1080,62 @@ class Business(BaseErieIronModel):
                     "id": "jj",
                     "name": "JJ",
                     "available_hours_per_week": 10,
-                    "current_task_load": 8,
-                    "tasks_pending": 6,
-                    "average_response_time_hours": 36.2,
-                    "max_response_time_hours": 84.0,
-                    "blocked_capabilities": ["Setup Zapier integration", "Review AWS IAM policy"],
+                    "current_task_load": 0,
+                    "tasks_pending": 0,
                     "status": "HAS_CAPACITY"
                 }
             ],
             "total_human_capacity_hours": 18,
-            "total_pending_task_hours": 10,
-            "capacity_utilization_percent": 52
+            "total_pending_task_hours": 0,
+            "capacity_utilization_percent": 0
         }
+
+    def get_new_business_budget_capacity(self):
+        bank_balance = self.businessbankbalancesnapshot_set.order_by("created_timestamp").last()
+        if not bank_balance:
+            return {
+                "status": "bank balance is unknown"
+            }
+        else:
+            return bank_balance.get_aggregate_balance_data(.5)
 
     def get_budget_capacity(self):
-        # todo make this real
-        return {
-            "timestamp": "2025-06-10T18:00:00Z",
-            "cash_on_hand_usd": 12432.75,
-            "monthly_burn_rate_usd": 2800.00,
-            "runway_months": 4.4,
-            "committed_monthly_expenses": {
-                "aws": 700,
-                "contractors": 1200,
-                "software_tools": 300,
-                "other": 600
-            },
-            "forecasted_revenue_usd": {
-                "next_30_days": 350.00,
-                "next_90_days": 1100.00
-            },
-            "available_budget_for_new_investments_usd": 2000.00
-        }
+        bank_balance = self.businessbankbalancesnapshot_set.order_by("created_timestamp").last()
+        if not bank_balance:
+            return {
+                "status": "bank balance is unknown"
+            }
+        else:
+            return bank_balance.get_aggregate_balance_data()
 
-    def get_aws_capacity(self):
+        # todo make this real
+        # return {
+        #     "timestamp": "2025-06-11T18:00:00Z",
+        #     "cash_on_hand_usd": 12432.75,
+        #     "monthly_burn_rate_usd": 2800.00,
+        #     "runway_months": 4.4,
+        #     "committed_monthly_expenses": {
+        #         "aws": 700,
+        #         "contractors": 1200,
+        #         "software_tools": 300,
+        #         "other": 600
+        #     },
+        #     "forecasted_revenue_usd": {
+        #         "next_30_days": 350.00,
+        #         "next_90_days": 1100.00
+        #     },
+        #     "available_budget_for_new_investments_usd": 2000.00
+        # }
+
+    def get_aws_capacity(self, fake_aws=False):
         # TODO make this real
+
+        if not fake_aws:
+            return {
+                "compute": "virtually unlimited",
+                "storage": "virtually unlimited",
+            }
+
         return {
             "timestamp": "2025-06-10T18:00:00Z",
             "region": "us-west-2",
@@ -1177,18 +1211,6 @@ class Business(BaseErieIronModel):
         }
 
 
-class BusinessStructure(BaseErieIronModel):
-    business = models.OneToOneField("Business", on_delete=models.CASCADE)
-    description = models.TextField(null=True)
-    summary = models.TextField(null=True)
-    revenue_model = models.TextField(null=True)
-    audience = models.TextField(null=True)
-    core_functions = models.JSONField(default=list)
-    execution_dependencies = models.JSONField(default=list)
-    growth_channels = models.JSONField(default=list)
-    personalization_options = models.JSONField(default=list)
-
-
 class BusinessAnalysis(BaseErieIronModel):
     business = models.ForeignKey("Business", on_delete=models.CASCADE)
     created_timestamp = models.DateTimeField(auto_now_add=True)
@@ -1230,6 +1252,35 @@ class BusinessLegalAnalysis(BaseErieIronModel):
     justification = models.TextField(null=True)
     required_disclaimers_or_terms = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     risk_rating = models.TextField(null=True, choices=Level.choices())
+
+
+class BusinessBankBalanceSnapshot(BaseErieIronModel):
+    business = models.ForeignKey("Business", on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+
+    def get_aggregate_balance_data(self, reserve_percent=0):
+        available_balance = []
+        current_balance = []
+        status = []
+        for account in self.businessbankbalancesnapshotaccount_set.all():
+            available_balance.append(account.available_balance)
+            current_balance.append(account.current_balance)
+            status.append(account.status)
+
+        return {
+            "available_balance": common.safe_sum(available_balance) * (1 - reserve_percent),
+            "current_balance": common.safe_sum(current_balance) * (1 - reserve_percent),
+            "status": common.join_with_and(list(set(status)))
+        }
+
+
+class BusinessBankBalanceSnapshotAccount(BaseErieIronModel):
+    snapshot = models.ForeignKey("BusinessBankBalanceSnapshot", on_delete=models.CASCADE)
+    account_name = models.TextField()
+    account_id = models.TextField()
+    available_balance = models.FloatField(null=True)
+    current_balance = models.FloatField(null=True)
+    status = models.TextField(null=True)
 
 
 class BusinessCapacityAnalysis(BaseErieIronModel):

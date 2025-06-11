@@ -18,6 +18,9 @@ Produce a valid JSON object with the following structure:
 {
   "business_name": "A unique, short but descriptive name for the business",
   "business_plan": "A clear, concise, one-paragraph summary of what the business does.",
+  "value_proposition": "Why this business is useful or appealing to its users",
+  "summary": "A single sentence summary of the business plan and value prop",
+  
   "core_functions": [
     "Receive article links via email",
     "Summarize articles using LLMs",
@@ -27,7 +30,6 @@ Produce a valid JSON object with the following structure:
     "Accept subscription payments"
   ],
   "audience": "Describe the target users or customers",
-  "value_proposition": "Why this business is useful or appealing to its users",
   "monetization": "How it makes money (freemium, pro plans, ads, etc.)",
   "growth_channels": [
     "Twitter auto-summary and retweet system",

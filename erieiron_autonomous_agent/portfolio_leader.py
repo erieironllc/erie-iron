@@ -1,4 +1,3 @@
-import pprint
 from pathlib import Path
 
 from erieiron_common import common
@@ -38,8 +37,11 @@ def initialize_workflow(pubsub_manager: PubSubManager):
         PubSubMessageType.BUSINESS_GUIDANCE_REQUESTED,
         on_business_guidance_requested
     ).on(
-        PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED,
-        on_portfolio_add_businesses_requested
+        PubSubMessageType.BUSINESS_GUIDANCE_UPDATED,
+        on_business_guidance_updated
+    ).on(
+        PubSubMessageType.PORTFOLIO_SUBMIT_BUSINESS_IDEA,
+        on_portfolio_submit_business_idea
     ).on(
         PubSubMessageType.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
         on_portfolio_reduce_businesses_requested
@@ -129,33 +131,25 @@ def on_business_guidance_requested(business_id):
         )
 
 
-def on_portfolio_add_businesses_requested(erieiron_business_id):
-    erieiron_business = Business.get_erie_iron_business()
-    resp = portfolio_agent_chat([
-        LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/portfolio_business_development_agent.md")),
-        LlmMessage.user(
-            f"""
-            Please find a business that fits this capacity
-
-            ## Erie Iron Capacity
-            {common.model_to_dict_s(erieiron_business.get_latest_capacity())}
-            """
-        )
-    ])
-
-    pitch = resp.json().get("pitch")
-    pprint.pprint(pitch)
-    submit_business_idea(
-        idea_content=pitch,
-        source=BusinessIdeaSource.BUSINESS_FINDER_AGENT
-    )
+def on_business_guidance_updated(business_id):
+    print("on_business_guidance_updated", business_id)
 
 
 def on_portfolio_reduce_businesses_requested(erieiron_business_id):
     pass
 
 
+def on_portfolio_submit_business_idea(payload):
+    submit_business_idea(
+        summary=payload.get("summary"),
+        idea_content=payload.get("idea_content"),
+        existing_business_id=payload.get("existing_business_id"),
+        source=payload.get("source"),
+    )
+
+
 def submit_business_idea(
+        summary: str,
         idea_content: str,
         existing_business_id=None,
         source=BusinessIdeaSource.HUMAN

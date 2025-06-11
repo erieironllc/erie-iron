@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
+from django.db import transaction
+
+from erieiron_common import bank_utils
 from erieiron_common.enums import PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
-from erieiron_common.models import Business, BusinessCapacityAnalysis
+from erieiron_common.models import Business, BusinessCapacityAnalysis, BusinessBankBalanceSnapshot, BusinessBankBalanceSnapshotAccount
 
 
 @pubsub_workflow
@@ -18,6 +21,21 @@ def initialize_workflow(pubsub_manager: PubSubManager):
 
 def on_business_capacity_analysis_requested(business_id):
     business = Business.objects.get(id=business_id)
+
+    # TODO move this to a daily job
+    if business.needs_bank_balance_update():
+        balance_data = bank_utils.get_account_balance_data()
+        with transaction.atomic():
+            balance_snapshot = BusinessBankBalanceSnapshot.objects.create(business=business)
+            for account_data in balance_data.get("accounts"):
+                BusinessBankBalanceSnapshotAccount.objects.create(
+                    snapshot=balance_snapshot,
+                    account_name=account_data.get("legalBusinessName", 0),
+                    account_id=account_data.get("accountNumber", 0),
+                    available_balance=account_data.get("availableBalance", 0),
+                    current_balance=account_data.get("currentBalance", 0),
+                    status=account_data.get("status", "")
+                )
 
     resp = llm_interface.portfolio_agent_chat([
         LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/business_capacity_analyst_agent.md")),
@@ -35,7 +53,7 @@ def on_business_capacity_analysis_requested(business_id):
             {json.dumps(business.get_human_capacity(), indent=4)}
             """
         )
-    ])
+    ], debug=True)
 
     capacity_analysis = resp.json()
 

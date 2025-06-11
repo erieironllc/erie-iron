@@ -194,24 +194,30 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
 }
 
 
-def portfolio_agent_chat(messages: list['LlmMessage']) -> 'LlmResponse':
+def portfolio_agent_chat(messages: list['LlmMessage'], debug=False) -> 'LlmResponse':
     messages = common.ensure_list(messages)
     messages = [LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/portfolio_base_prompt.md"))] + messages
 
-    return agent_chat(messages)
+    return agent_chat(messages, debug)
 
 
-def agent_chat(messages: 'LlmMessage') -> 'LlmResponse':
+def agent_chat(messages: 'LlmMessage', debug=False) -> 'LlmResponse':
     messages = common.ensure_list(messages)
     messages.append(LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/_base_agent.md")))
     return chat(
         messages,
         SYSTEM_AGENT_MODELS_IN_ORDER,
-        code_response=False
+        code_response=False,
+        debug=debug
     )
 
 
-def chat(messages: list['LlmMessage'], model: LlmModel = None, code_response=False) -> 'LlmResponse':
+def chat(
+        messages: list['LlmMessage'],
+        model: LlmModel = None,
+        code_response=False,
+        debug=False
+) -> 'LlmResponse':
     if not model:
         models = CODE_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
     else:
@@ -226,6 +232,9 @@ def chat(messages: list['LlmMessage'], model: LlmModel = None, code_response=Fal
             messages = LlmMessage.parse_prompt(model, messages, code_response)
             json_messages = [m.get_message_json(model) for m in messages]
 
+            if debug:
+                debug_messages(model, messages)
+
             start_time = time.time()
             resp = impl.chat(
                 json_messages,
@@ -237,6 +246,14 @@ def chat(messages: list['LlmMessage'], model: LlmModel = None, code_response=Fal
             logging.info(f"chat with {model.value} took {chat_time:.2f}ms for {token_count} tokens")
 
             response_text = post_process_response(resp)
+
+            if debug:
+                print(f"""
+{model} response:
+{response_text}
+--------------------------------------
+--------------------------------------
+""")
 
             price_total, price_input, price_output = LlmMessage.get_price(
                 model,
@@ -386,7 +403,14 @@ class LlmMessage:
 
     @staticmethod
     def get_total_token_count(model: LlmModel, messages: List['LlmMessage']) -> int:
-        return sum([m.get_token_count(model) for m in messages]) + (4 * len(messages))
+        messages_processed = []
+        for m in messages:
+            if isinstance(m, LlmMessage):
+                messages_processed.append(m)
+            else:
+                messages_processed.append(LlmMessage.user(str(m)))
+
+        return sum([m.get_token_count(model) for m in messages_processed]) + (4 * len(messages_processed))
 
     @staticmethod
     def _get_token_count(model: LlmModel, s: str) -> int:
@@ -404,21 +428,21 @@ class LlmMessage:
         )
 
     @staticmethod
-    def parse_prompt(model, messages: list['LlmMessage'], code_response=False) -> List['LlmMessage']:
-        messages = common.ensure_list(messages)
+    def parse_prompt(model, messages_in: list['LlmMessage'], code_response=False) -> List['LlmMessage']:
+        messages_out = []
 
-        for m in common.filter_none(messages):
+        for m in common.filter_none(messages_in):
             if isinstance(m, str):
                 if m:
-                    messages.append(LlmMessage.user(m))
+                    messages_out.append(LlmMessage.user(m))
             elif isinstance(m, LlmMessage):
                 if m.text:
-                    messages.append(m)
+                    messages_out.append(m)
             else:
                 raise ValueError(f"invalid message type {m}")
 
             if code_response:
-                messages.append(
+                messages_out.append(
                     LlmMessage(
                         message_type=LlmMessageType.SYSTEM,
                         text="""
@@ -429,12 +453,12 @@ class LlmMessage:
                     )
                 )
 
-        token_count = LlmMessage.get_total_token_count(model, messages)
+        token_count = LlmMessage.get_total_token_count(model, messages_out)
         while token_count > MODEL_TO_MAX_TOKENS.get(model, sys.maxsize):
-            messages = messages[1:]
-            token_count = LlmMessage.get_total_token_count(model, messages)
+            messages_out = messages_out[1:]
+            token_count = LlmMessage.get_total_token_count(model, messages_out)
 
-        return messages
+        return messages_out
 
     @classmethod
     def assistant(cls, txt, file=None):
@@ -513,3 +537,15 @@ resond only with parsable json.  do not include any comments, explanations, or n
             json_text = llm_response_reformat.text
 
     raise last_e
+
+
+def debug_messages(model: LlmModel, messages: list[LlmMessage]):
+    print(f"""
+--------------- --------------- --------------- --------------- ---------------
+Begin chat with {model}
+    """)
+    
+    for m in common.ensure_list(messages):
+        print(str(m))
+        
+    print("--------------- --------------- --------------- --------------- ---------------")
