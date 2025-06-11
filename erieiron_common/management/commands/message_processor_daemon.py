@@ -7,8 +7,8 @@ from django.core.management.base import BaseCommand
 
 from erieiron_common import common
 from erieiron_common.common import parse_bool
-from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority
-from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance
+from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, PubSubMessageStatus
+from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage
 
 
 class Command(BaseCommand):
@@ -16,6 +16,13 @@ class Command(BaseCommand):
         parser.add_argument(
             '--reset_host',
             help='start with a fresh instance metadata',
+            type=parse_bool,
+            required=False,
+            default=False
+        )
+
+        parser.add_argument(
+            '--retry_failed',
             type=parse_bool,
             required=False,
             default=False
@@ -75,6 +82,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from erieiron_common.llm_apis import openai_chat_api
         openai.api_key = openai_chat_api.get_api_key()
+
+        if options.get("retry_failed"):
+            PubSubMessage.objects.filter(status=PubSubMessageStatus.FAILED).update(
+                status=PubSubMessageStatus.PENDING
+            )
 
         faulthandler.enable()
 

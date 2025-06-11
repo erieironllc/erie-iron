@@ -89,11 +89,3 @@ Return a valid JSON object in the following format:
 - Favor capability definitions that Erie Iron can **autonomously build and test**
 - If human help is required (e.g. for credentials), indicate clearly via `human_role_desc`
 
----
-
-## 📌 Output Rules
-
-- Return a **single JSON object** with `existing_capabilities` and `new_capabilities`
-- Use `[]` for either field if empty
-- All strings must use double quotes
-- Do not include markdown or commentary

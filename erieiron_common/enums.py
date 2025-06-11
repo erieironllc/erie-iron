@@ -1,6 +1,5 @@
 import datetime
 import random
-import uuid
 from enum import StrEnum, auto
 from typing import List, Tuple
 
@@ -73,14 +72,6 @@ class ErieEnum(StrEnum):
     @classmethod
     def choices(cls):
         return [(key.value, key.label if isinstance(key.label, str) else key.label()) for key in cls if not key.name.startswith("_")]
-
-
-class SystemAgentTask(ErieEnum):
-    GENERATE_IDEA = auto()
-    REVIEW_BUSINESSES = auto()
-    IDENTIFY_CAPABILITIES = auto()
-    FLESH_OUT_IDEA = auto()
-    LEGAL_REVIEW = auto()
 
 
 class SystemCapacity(ErieEnum):
@@ -200,7 +191,6 @@ class ClientMessage(ErieEnum):
 
 
 class PubSubMessageType(ErieEnum):
-    BUSINESS_ANALYSIS_ADDED = auto()
     EVERY_MINUTE = auto()
     EVERY_HOUR = auto()
     EVERY_DAY = auto()
@@ -208,8 +198,17 @@ class PubSubMessageType(ErieEnum):
     CHAT_INTERACTION_INITIATED = auto()
     CHAT_CHANNEL_LLM = auto()
 
+    PORTFOLIO_LEADER_EXEC_REQUESTED = auto()
+    PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
+    PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
+
     BUSINESS_IDEA_SUBMITTED = auto()
-    BUSINESS_STRUCTURE_UPDATED = auto()
+    BUSINESS_CAPACITY_ANALYSIS_REQUESTED = auto()
+    BUSINESS_ANALYSIS_REQUESTED = auto()
+    BUSINESS_ANALYSIS_ADDED = auto()
+
+    BUSINESS_GUIDANCE_REQUESTED = auto()
+    BUSINESS_GUIDANCE_UPDATED = auto()
 
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
@@ -221,6 +220,10 @@ class PubSubMessageType(ErieEnum):
             return self.__class__.__name__
 
         return f"{self}_{namespace_id}"
+
+
+class Constants(ErieEnum):
+    NEW_BUSINESS_NAME_PREFIX = "New Business Idea"
 
 
 class ScaleAction(ErieEnum):
@@ -292,7 +295,8 @@ class LlmModel(ErieEnum):
     OPENAI_GPT_4_TURBO = "gpt-4-turbo"
     OPENAI_GPT_4o = "gpt-4o"
     OPENAI_GPT_4o_20240806 = "gpt-4o-2024-08-06"
-    OPENAI_GPT_O3_MINI = "o3-mini-2025-01-31"
+    OPENAI_O3_MINI = "o3-mini-2025-01-31"
+    OPENAI_O3_PRO = "o3-pro-2025-06-10"
     OPENAI_O1 = "o1"
     OPENAI_O1_MINI = "o1-mini"
     OPENAI_O3 = "o3"
@@ -323,3 +327,46 @@ class ConsentChoice(ErieEnum):
     def from_bool(bool_val) -> "ConsentChoice":
         from erieiron_common import common
         return ConsentChoice.ACCEPTED if common.parse_bool(bool_val) else ConsentChoice.DECLINED
+
+
+class Level(ErieEnum):
+    HIGH = "100"
+    MEDIUM = "050"
+    LOW = "000"
+
+    @classmethod
+    def valid_or(cls, value, default_val=None):
+        value = (value or "").upper()
+        if value == Level.HIGH.name:
+            return Level.HIGH
+        elif value == Level.MEDIUM.name:
+            return Level.MEDIUM
+        elif value == Level.LOW.name:
+            return Level.LOW
+        else:
+            return ErieEnum.valid_or(cls, value, default_val)
+
+
+class BusinessIdeaSource(ErieEnum):
+    HUMAN = auto()
+    BUSINESS_FINDER_AGENT = auto()
+
+
+class BusinessStatus(ErieEnum):
+    IDEA = auto()
+    ACTIVE = auto()
+    PAUSED = auto()
+    SHUTDOWN = auto()
+
+
+class BusinessGuidanceRating(ErieEnum):
+    MAINTAIN = auto()
+    INCREASE_BUDGET = auto()
+    DECREASE_BUDGET = auto()
+    SHUTDOWN = auto()
+
+
+class TrafficLight(ErieEnum):
+    GREEN = auto()
+    YELLOW = auto()
+    RED = auto()

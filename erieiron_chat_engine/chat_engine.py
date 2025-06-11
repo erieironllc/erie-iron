@@ -20,11 +20,11 @@ def initialize_workflow(pubsub_manager: PubSubManager):
     pubsub_manager.on(
         PubSubMessageType.CHAT_INTERACTION_INITIATED,
         interpret_prompt,
-        on_chat_channel_error
+        error_handler_method=on_chat_channel_error
     ).on(
         [mt for mt in prompt_parser.MESSAGE_TO_CHAT_CHANNEL_CLS.keys()],
         on_chat_work_requested,
-        on_chat_channel_error
+        error_handler_method=on_chat_channel_error
     )
 
 

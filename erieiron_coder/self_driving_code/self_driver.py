@@ -595,7 +595,7 @@ the previous attempt at parsing this content resulted in this error:  {e}
 
 resond only with parsable json.  do not include any comments, explanations, or non-json markdown
 """,
-                LlmModel.OPENAI_GPT_O3_MINI,
+                LlmModel.OPENAI_O3_MINI,
                 code_response=True
             )
             price += llm_response_reformat.price_total
@@ -649,7 +649,7 @@ def get_coding_llm_response(
         instructions,
         previous_exception: Optional[CodeCompilationError]
 ) -> LlmResponse:
-    model = LlmModel.OPENAI_GPT_O3_MINI
+    model = LlmModel.OPENAI_O3_MINI
 
     messages = []
     messages.append(

@@ -56,10 +56,3 @@ Return a single valid JSON object with this format:
 - Avoid hardcoding business-specific logic; generalize using inputs
 - Clearly specify inputs, outputs, and if human intervention is required
 
----
-
-## 📌 Output Rules
-
-- Return a single JSON object with all fields
-- Use double quotes for strings
-- Use `[]` if no new or existing capabilities apply

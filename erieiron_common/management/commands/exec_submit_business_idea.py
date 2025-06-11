@@ -2,8 +2,8 @@ from pathlib import Path
 
 from django.core.management import BaseCommand
 
-from erieiron_autonomous_agent import system_agent, agent_api
-from erieiron_common.enums import SystemAgentTask, PubSubMessageStatus
+from erieiron_autonomous_agent import portfolio_leader
+from erieiron_common.enums import BusinessIdeaSource
 from erieiron_common.models import BusinessAnalysis, PubSubMessage
 
 
@@ -25,7 +25,8 @@ class Command(BaseCommand):
         PubSubMessage.objects.all().delete()
         BusinessAnalysis.objects.filter(business__id=options.get("business_id")).delete()
 
-        agent_api.submit_business_idea(
+        portfolio_leader.submit_business_idea(
             Path(options.get("file_name")),
-            options.get("business_id")
+            options.get("business_id"),
+            source=BusinessIdeaSource.HUMAN
         )

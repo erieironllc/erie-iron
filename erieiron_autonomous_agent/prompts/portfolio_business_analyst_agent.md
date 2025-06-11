@@ -34,27 +34,27 @@ Return a **valid JSON object** in the following format:
   "business_name": "string",
   "summary": "1–2 sentence summary of the business opportunity",
   "total_addressable_market": {
-    "estimate_usd_per_year": number,
+    "estimate_usd_per_year": integer,
     "source_or_rationale": "How this estimate was derived"
   },
-  "time_to_profit_estimate_months": "integer",
+  "time_to_profit_estimate_months": integer,
   "operating_expenses": {
     "estimated_operating_total_cost_per_month_usd": "string",
     "monthly_expenses": [
       {
         "name": "expense 1",
         "purpose": "string",
-        "monthly_expense_usd": number
+        "monthly_expense_usd": integer
       }
     ]
   },
-  "estimated_monthly_revenue_at_steady_state_usd": "string",
+  "estimated_monthly_revenue_at_steady_state_usd": integer,
   "potential_mode": "string (e.g., brand, data, network effects, tech advantage, none)",
   "potential_competitors": [
     { "name": "string", "url": "string", "notes": "brief comparison to this business" }
   ],
   "upfront_cash_investment_required": {
-    "estimated_amount_usd": number,
+    "estimated_amount_usd": float,
     "use_of_funds": "bullet list of how this cash would be used"
   },
   "risks": [
@@ -67,7 +67,7 @@ Return a **valid JSON object** in the following format:
     "Optional list of major blockers that would need to be resolved before launching"
   ],
   "final_recommendation": {
-    "score_1_to_10": "integer",
+    "score_1_to_10": integer,
     "justification": "Why this score was given"
   }
 }
@@ -103,4 +103,4 @@ You will receive a JSON object from the Business Plan Structuring Agent like thi
 }
 ```
 
-Only return a **valid JSON object**. Do not include any narrative explanation or markdown.
+Only return a **valid JSON object**. Do not include any narrative explanation or markdown.  if a field is of type number or integer, it must be a single number

@@ -814,7 +814,10 @@ def model_to_dict(instance):
 
 
 def model_to_dict_s(model):
-    return json.dumps(model_to_dict(model), cls=DjangoJSONEncoder)
+    if not model:
+        return ""
+    else:
+        return json.dumps(model_to_dict(model), cls=DjangoJSONEncoder)
 
 
 def get_file_name(file_path):
