@@ -1,0 +1,98 @@
+{
+  "type": "object",
+  "required": [
+    "business_name",
+    "product_initiatives"
+  ],
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "product_initiatives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "initiative_id",
+          "priority",
+          "title",
+          "description",
+          "linked_kpis",
+          "linked_goals",
+          "expected_kpi_lift",
+          "requirements",
+          "initiative_token"
+        ],
+        "properties": {
+          "initiative_id": {
+            "type": "string",
+            "description": "Must be namespaced to the business and descriptive (e.g., 'articleinsight_user_personalization_prototype_q3'). Avoid generic names."
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "linked_kpis": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "linked_goals": {
+            "type": "array",
+            "description": "List of goal IDs from the CEO Agent that are directly supported by this initiative. Reinforces traceability to business goals.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expected_kpi_lift": {
+            "type": "object",
+            "description": "Estimated positive impact on KPIs. Values must be realistic and derived from prototypes or benchmarks when possible.",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "summary",
+                "acceptance_criteria",
+                "testable"
+              ],
+              "properties": {
+                "summary": {
+                  "type": "string",
+                  "description": "Smallest independently testable unit of functionality. Avoid compound or vague requirements."
+                },
+                "acceptance_criteria": {
+                  "type": "string"
+                },
+                "testable": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "initiative_token": {
+            "type": "string",
+            "description": "Namespaced, unique identifier for the initiative (e.g., 'articleinsight_feature_definition_q3')"
+          }
+        }
+      }
+    }
+  }
+}
