@@ -44,9 +44,7 @@ def on_business_guidance_updated(business_id):
             f"## Product Lead status update\n{product_status}",
             f"## Engineering Lead status update\n{eng_status}",
             "Please evaluate the Board Guidance, evaluate the business updates, and issue directives (if necessary)"
-        ],
-        output_schema="ceo.md.schema.json",
-        debug=True
+        ]
     )
 
     for kpi_data in ceo_analysis.get("kpis", []):

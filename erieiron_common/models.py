@@ -1366,6 +1366,27 @@ class BusinessCeoDirective(BaseErieIronModel):
     initiative_reference = models.TextField(default="")
 
 
+class ProductInitiative(BaseErieIronModel):
+    id = models.TextField(primary_key=True)  # initiative_token
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    title = models.TextField()
+    description = models.TextField()
+    priority = models.TextField(choices=Level.choices())
+    linked_kpis = models.JSONField(default=list)
+    linked_goals = models.JSONField(default=list)
+    expected_kpi_lift = models.JSONField(default=dict)
+
+
+class ProductRequirement(BaseErieIronModel):
+    id = models.TextField(primary_key=True)  # requirement_token
+    product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name='requirements')
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    summary = models.TextField()
+    acceptance_criteria = models.TextField()
+    testable = models.BooleanField(default=True)
+
+
 class CapabilityExecution(BaseErieIronModel):
     class Executor(models.TextChoices):
         AUTONOMOUS = 'AUTONOMOUS'

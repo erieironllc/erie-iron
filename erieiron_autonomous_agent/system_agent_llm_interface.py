@@ -12,35 +12,57 @@ BASE_PROMPTS_PATH = Path("./erieiron_autonomous_agent/base_prompts")
 
 
 def board_level_chat(
-        system_prompts: list[str],
+        system_prompt: str,
         user_messages: list[LlmMessage],
-        output_schema: str = None,
         text_output=False,
         debug=False
 ):
-    system_prompts = [BOARD_LEVEL_BASE_PATH / s for s in common.ensure_list(system_prompts)]
-    system_prompts.append(BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level.md")
+    system_prompt = assert_exists(BOARD_LEVEL_BASE_PATH / system_prompt)
 
-    if output_schema:
-        output_schema = BOARD_LEVEL_BASE_PATH / output_schema
+    system_prompts = [
+        system_prompt,
+        BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level.md"
+    ]
 
-    return agent_chat(system_prompts, user_messages, output_schema, text_output, debug)
+    output_schema = BOARD_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
+
+    if not output_schema.exists():
+        output_schema = None
+
+    return agent_chat(
+        system_prompts,
+        user_messages,
+        output_schema,
+        text_output,
+        debug
+    )
 
 
 def business_level_chat(
-        system_prompts: list[str],
+        system_prompt: str,
         user_messages: list[LlmMessage],
-        output_schema: str = None,
         text_output=False,
         debug=False
 ):
-    system_prompts = [BUSINESS_LEVEL_BASE_PATH / s for s in common.ensure_list(system_prompts)]
-    # system_prompts.append(BUSINESS_LEVEL_BASE_PATH / "_base_prompt--business.md")
+    system_prompt = assert_exists(BUSINESS_LEVEL_BASE_PATH / system_prompt)
 
-    if output_schema:
-        output_schema = BUSINESS_LEVEL_BASE_PATH / output_schema
+    system_prompts = [
+        system_prompt,
+        # BUSINESS_LEVEL_BASE_PATH / "_base_prompt--business_level.md"
+    ]
 
-    return agent_chat(system_prompts, user_messages, output_schema, text_output, debug)
+    output_schema = BUSINESS_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
+
+    if not output_schema.exists():
+        output_schema = None
+
+    return agent_chat(
+        system_prompts,
+        user_messages,
+        output_schema,
+        text_output,
+        debug
+    )
 
 
 def agent_chat(

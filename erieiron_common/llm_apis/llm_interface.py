@@ -11,6 +11,7 @@ from jsonschema import validate as jsonschema_validate
 
 from erieiron_common import common
 from erieiron_common.enums import LlmModel, LlmMessageType
+from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_constants import CODE_MODELS_IN_ORDER, CHAT_MODELS_IN_ORDER, MODEL_TO_IMPL, MODEL_PRICE_USD_PER_MILLION_TOKENS, MODEL_TO_MAX_TOKENS
 
 
@@ -252,6 +253,9 @@ class LlmMessage:
             if isinstance(m, str):
                 if m:
                     messages_out.append(LlmMessage.user(m))
+            elif isinstance(m, dict):
+                if m:
+                    messages_out.append(LlmMessage.user(json.dumps(m, indent=4, cls=ErieIronJSONEncoder)))
             elif isinstance(m, LlmMessage):
                 if m.text:
                     messages_out.append(m)
