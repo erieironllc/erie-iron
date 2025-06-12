@@ -8,12 +8,10 @@ You are tasked with identifying novel, monetizable business ideas that Erie Iron
 -
 """
 import json
-import pprint
 from pathlib import Path
 
 from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource
-from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, portfolio_agent_chat
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
 from erieiron_common.models import Business
@@ -49,22 +47,18 @@ def on_portfolio_add_businesses_requested(erieiron_business_id):
             we'll remember it for the future, but if you have a really great idea that
             fits within the capacity, bias towards that.
 
-            ## Erie Iron Financial Position minus reserves
+            ## Erie Iron's current financial position minus reserves
             {json.dumps(erieiron_business.get_new_business_budget_capacity(), indent=4)}
             
-            ## Erie Iron Capacity
+            ## Erie Iron Capacity summary
             {common.model_to_dict_s(erieiron_business.get_latest_capacity())}
             """
     ))
 
-    resp = portfolio_agent_chat(messages, debug=True)
-
-    summary = resp.json().get("summary")
-    pitch = resp.json().get("detailed_pitch")
-    pprint.pprint(pitch)
+    resp = portfolio_agent_chat(messages).json()
 
     return {
-        "summary": summary,
-        "idea_content": pitch,
+        "summary": resp.get("summary"),
+        "idea_content": resp.get("detailed_pitch"),
         "source": BusinessIdeaSource.BUSINESS_FINDER_AGENT,
     }

@@ -35,10 +35,8 @@ def initialize_workflow(pubsub_manager: PubSubManager):
         on_business_analysis_added
     ).on(
         PubSubMessageType.BUSINESS_GUIDANCE_REQUESTED,
-        on_business_guidance_requested
-    ).on(
-        PubSubMessageType.BUSINESS_GUIDANCE_UPDATED,
-        on_business_guidance_updated
+        on_business_guidance_requested,
+        PubSubMessageType.BUSINESS_GUIDANCE_UPDATED
     ).on(
         PubSubMessageType.PORTFOLIO_SUBMIT_BUSINESS_IDEA,
         on_portfolio_submit_business_idea
@@ -124,11 +122,6 @@ def on_business_guidance_requested(business_id):
             Business.objects.filter(id=business.id).update(
                 status=BusinessStatus.ACTIVE
             )
-
-        PubSubManager.publish_id(
-            PubSubMessageType.BUSINESS_GUIDANCE_UPDATED,
-            business.id
-        )
 
 
 def on_business_guidance_updated(business_id):
