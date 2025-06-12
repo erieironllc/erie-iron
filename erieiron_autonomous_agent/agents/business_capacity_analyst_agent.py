@@ -53,7 +53,7 @@ def on_business_capacity_analysis_requested(business_id):
             {json.dumps(business.get_human_capacity(), indent=4)}
             """
         )
-    ], debug=True)
+    ])
 
     capacity_analysis = resp.json()
 
