@@ -2,7 +2,7 @@ from pathlib import Path
 
 from django.core.management import BaseCommand
 
-from erieiron_autonomous_agent import portfolio_leader
+from erieiron_autonomous_agent.portfolio_level_agents import portfolio_leader
 from erieiron_common.enums import BusinessIdeaSource
 from erieiron_common.models import BusinessAnalysis, PubSubMessage
 

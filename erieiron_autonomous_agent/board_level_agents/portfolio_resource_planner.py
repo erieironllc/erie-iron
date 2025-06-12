@@ -1,12 +1,10 @@
 import json
-from pathlib import Path
 
 from django.db import transaction
 
+from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import bank_utils
 from erieiron_common.enums import PubSubMessageType
-from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import Business, BusinessCapacityAnalysis, BusinessBankBalanceSnapshot, BusinessBankBalanceSnapshotAccount
 
@@ -37,11 +35,10 @@ def on_business_capacity_analysis_requested(business_id):
                     status=account_data.get("status", "")
                 )
 
-    resp = llm_interface.portfolio_agent_chat([
-        LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/business_capacity_analyst_agent.md")),
-        LlmMessage.user(
-            f"""
-            Please analyze these metrics 
+    capacity_analysis = board_level_chat(
+        "portfolio_resource_planner.md",
+        f"""
+            Please analyze these metrics give resource planning guidance
 
             ## AWS Capacity
             {json.dumps(business.get_aws_capacity(), indent=4)}
@@ -51,11 +48,8 @@ def on_business_capacity_analysis_requested(business_id):
             
             ## Human Capacity
             {json.dumps(business.get_human_capacity(), indent=4)}
-            """
-        )
-    ])
-
-    capacity_analysis = resp.json()
+        """
+    )
 
     BusinessCapacityAnalysis.objects.create(
         business=business,
