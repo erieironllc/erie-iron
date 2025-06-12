@@ -1,9 +1,6 @@
-from pathlib import Path
-
+from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType
-from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import Business, BusinessAnalysis, BusinessLegalAnalysis
 
@@ -11,33 +8,29 @@ from erieiron_common.models import Business, BusinessAnalysis, BusinessLegalAnal
 @pubsub_workflow
 def initialize_workflow(pubsub_manager: PubSubManager):
     pubsub_manager.on(
-        PubSubMessageType.BUSINESS_ANALYSIS_REQUESTED,
-        on_business_structure_updated,
-        PubSubMessageType.BUSINESS_ANALYSIS_ADDED
+        PubSubMessageType.ANALYSIS_REQUESTED,
+        on_analysis_requested,
+        PubSubMessageType.ANALYSIS_ADDED
     )
 
 
-def on_business_structure_updated(business_id):
+def on_analysis_requested(business_id):
     business = Business.objects.get(id=business_id)
     business_analysis = execute_business_analysis(business)
     execute_legal_analysis(business, business_analysis)
 
 
 def execute_business_analysis(business) -> BusinessAnalysis:
-    resp = llm_interface.portfolio_agent_chat([
-        LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/portfolio_business_analyst_agent.md")),
-        LlmMessage.user(
-            f"""
+    business_analysis = board_level_chat(
+        "board_analyst--business.md",
+        f"""
             Please analyze this Business
 
             {business.name}
             
             {common.model_to_dict_s(business)}
-            """
-        )
-    ])
-
-    business_analysis = resp.json()
+        """
+    )
 
     analysis = BusinessAnalysis.objects.create(
         business=business,
@@ -66,10 +59,9 @@ def execute_legal_analysis(
         business: Business,
         business_analysis: BusinessAnalysis
 ):
-    resp = llm_interface.portfolio_agent_chat([
-        LlmMessage.sys(Path("./erieiron_autonomous_agent/prompts/portfolio_general_counsel_agent.md")),
-        LlmMessage.user(
-            f"""
+    legal_analysis = board_level_chat(
+        "board_analyst--legal.md",
+        f"""
             Please analyze this Business
 
             {business.name}
@@ -77,11 +69,8 @@ def execute_legal_analysis(
             {common.model_to_dict_s(business)}
 
             {common.model_to_dict_s(business_analysis)}
-            """
-        )
-    ])
-
-    legal_analysis = resp.json()
+        """
+    )
 
     BusinessLegalAnalysis.objects.create(
         business=business,

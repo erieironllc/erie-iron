@@ -1,0 +1,158 @@
+{
+  "type": "object",
+  "required": [
+    "business_name",
+    "guidance",
+    "justification",
+    "kpis",
+    "goals",
+    "ceo_directives"
+  ],
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "guidance": {
+      "type": "string",
+      "enum": [
+        "MAINTAIN",
+        "INCREASE_BUDGET",
+        "DECREASE_BUDGET"
+      ]
+    },
+    "justification": {
+      "type": "string"
+    },
+    "kpis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kpi_id",
+          "name",
+          "description",
+          "target_value",
+          "unit",
+          "priority"
+        ],
+        "properties": {
+          "kpi_id": {
+            "type": "string",
+            "description": "Must be namespaced to the business (e.g., 'articleinsight_retention_rate')"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "target_value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
+          }
+        }
+      }
+    },
+    "goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "goal_id",
+          "kpi_id",
+          "description",
+          "target_value",
+          "unit",
+          "due_date",
+          "priority",
+          "status"
+        ],
+        "properties": {
+          "goal_id": {
+            "type": "string",
+            "description": "Must be namespaced to the business (e.g., 'articleinsight_q4_retention')"
+          },
+          "kpi_id": {
+            "type": "string",
+            "description": "Must be namespaced to the business (e.g., 'articleinsight_retention_rate')"
+          },
+          "description": {
+            "type": "string"
+          },
+          "target_value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ON_TRACK",
+              "AT_RISK",
+              "OFF_TRACK"
+            ]
+          }
+        }
+      }
+    },
+    "ceo_directives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "target_agent",
+          "directive_summary",
+          "goal_alignment",
+          "kpi_targets",
+          "initiative_reference"
+        ],
+        "properties": {
+          "target_agent": {
+            "type": "string"
+          },
+          "directive_summary": {
+            "type": "string"
+          },
+          "goal_alignment": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kpi_targets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "initiative_reference": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

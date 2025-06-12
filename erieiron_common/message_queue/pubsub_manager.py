@@ -620,7 +620,7 @@ class PubSubManager:
             try:
                 subscriber_method_signatures = ", ".join([
                     f"{subscriber_method[0].__module__}.{subscriber_method[0].__qualname__}()"
-                    for subscriber_method in subscriber_methods
+                    for subscriber_method in subscriber_methods if subscriber_method[0]
                 ])
             except Exception as e:
                 subscriber_method_signatures = str(e)
@@ -633,11 +633,15 @@ class PubSubManager:
 
             for handler_method, error_handler_method, completed_message_type in subscriber_methods:
                 try:
-                    # hey let's stop messing around and actually do some work around here
-                    ret_val = self.execute_message_handler(
-                        handler_method,
-                        message
-                    )
+                    if handler_method:
+                        # hey let's stop messing around and actually do some work around here
+                        ret_val = self.execute_message_handler(
+                            handler_method,
+                            message
+                        )
+                    else:
+                        # no-op handler
+                        ret_val = None
 
                     PubSubMessage.mark_finished(
                         message.id,

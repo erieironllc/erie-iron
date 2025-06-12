@@ -123,11 +123,3 @@ Return a valid JSON object like the following:
 Determine the execution mode for each task. If any required capability is not autonomous, the entire task must be marked HUMAN.
 
 Each task must trace back to a specific product requirement and inherit its acceptance criteria context.
-
----
-
-## 📌 Output Rules
-
-- Return a single valid JSON object
-- Use double quotes on all strings
-- Do not include commentary, markdown, or narrative output outside of the JSON

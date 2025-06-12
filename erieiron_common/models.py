@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1041,6 +1041,9 @@ class Business(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def get_latest_board_guidance(self) -> 'BusinessGuidance':
+        return self.businessguidance_set.order_by("created_timestamp").last()
+
     def get_latest_capacity(self) -> 'BusinessCapacityAnalysis':
         return self.businesscapacityanalysis_set.order_by("created_timestamp").last()
 
@@ -1210,6 +1213,34 @@ class Business(BaseErieIronModel):
             ]
         }
 
+    def get_kpis_status(self):
+        kpis = self.businesskpi_set.order_by("created_timestamp")
+        if not kpis.exists():
+            kpis_status = {"summary": "No KPIs defined"}
+        else:
+            kpis_status = {
+                "summary": "\n".join(
+                    f"{k.name} (kpi_id={k.kpi_id}): latest value = {BusinessKPIProgress.objects.filter(kpi=k).order_by('-created_timestamp').first().value if BusinessKPIProgress.objects.filter(kpi=k).exists() else 'N/A'}"
+                    for k in kpis
+                )
+            }
+
+        return kpis_status
+
+    def get_goals_status(self):
+        goals = self.businessgoal_set.order_by("created_timestamp")
+        if not goals.exists():
+            goals_status = {"summary": "No Goals defined"}
+        else:
+            goals_status = {
+                "summary": "\n".join(
+                    f"{g.goal_id} (kpi_id={g.kpi.kpi_id}): {g.status}"
+                    for g in goals
+                )
+            }
+
+        return goals_status
+
 
 class BusinessAnalysis(BaseErieIronModel):
     business = models.ForeignKey("Business", on_delete=models.CASCADE)
@@ -1295,6 +1326,46 @@ class BusinessCapacityAnalysis(BaseErieIronModel):
     justification = models.TextField(null=True)
 
 
+class BusinessKPI(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    kpi_id = models.TextField()
+    name = models.TextField()
+    description = models.TextField(null=True)
+    target_value = models.FloatField()
+    unit = models.TextField()
+    priority = models.TextField(choices=Level.choices())
+
+
+class BusinessKPIProgress(BaseErieIronModel):
+    kpi = models.ForeignKey(BusinessKPI, on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    value = models.FloatField()
+
+
+class BusinessGoal(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    goal_id = models.TextField()
+    kpi = models.ForeignKey(BusinessKPI, on_delete=models.CASCADE)
+    description = models.TextField()
+    target_value = models.FloatField()
+    unit = models.TextField()
+    due_date = models.DateField()
+    priority = models.TextField(choices=Level.choices())
+    status = models.TextField(choices=GoalStatus.choices())
+
+
+class BusinessCeoDirective(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    target_agent = models.TextField()
+    directive_summary = models.TextField()
+    goal_alignment = models.JSONField(default=list)
+    kpi_targets = models.JSONField(default=dict)
+    initiative_reference = models.TextField(default="")
+
+
 class CapabilityExecution(BaseErieIronModel):
     class Executor(models.TextChoices):
         AUTONOMOUS = 'AUTONOMOUS'
@@ -1324,25 +1395,6 @@ class CapabilityExecution(BaseErieIronModel):
     start_time = models.DateTimeField(null=True)
     end_time = models.DateTimeField(null=True)
     cost = models.FloatField(null=True)
-
-
-class Goal(BaseErieIronModel):
-    class Type(models.TextChoices):
-        KPI = 'KPI'
-        MILESTONE = 'MILESTONE'
-
-    class Status(models.TextChoices):
-        ON_TRACK = 'ON_TRACK'
-        AT_RISK = 'AT_RISK'
-        OFF_TRACK = 'OFF_TRACK'
-
-    business = models.ForeignKey(Business, on_delete=models.CASCADE)
-    name = models.TextField()
-    type = models.TextField(choices=Type.choices)
-    target_value = models.TextField()
-    actual_value = models.TextField()
-    status = models.TextField(choices=Status.choices)
-    evaluation_interval_days = models.IntegerField()
 
 
 class SelfDrivingTask(BaseErieIronModel):

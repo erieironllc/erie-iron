@@ -115,6 +115,12 @@ class Role(ErieEnum):
         return [(role.value, role.label()) for role in Role.roles_in_order()]
 
 
+class GoalStatus(ErieEnum):
+    ON_TRACK = auto()
+    AT_RISK = auto()
+    OFF_TRACK = auto()
+
+
 class Status(ErieEnum):
     NOT_STARTED = auto()
     IN_PROGRESS = auto()
@@ -198,18 +204,24 @@ class PubSubMessageType(ErieEnum):
     CHAT_INTERACTION_INITIATED = auto()
     CHAT_CHANNEL_LLM = auto()
 
-    PORTFOLIO_LEADER_EXEC_REQUESTED = auto()
+    BOARD_CHAIR_EXEC_REQUESTED = auto()
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
-    PORTFOLIO_SUBMIT_BUSINESS_IDEA = auto()
-
     BUSINESS_IDEA_SUBMITTED = auto()
     BUSINESS_CAPACITY_ANALYSIS_REQUESTED = auto()
-    BUSINESS_ANALYSIS_REQUESTED = auto()
-    BUSINESS_ANALYSIS_ADDED = auto()
+    ANALYSIS_REQUESTED = auto()
+    ANALYSIS_ADDED = auto()
+    BOARD_GUIDANCE_REQUESTED = auto()
+    BOARD_GUIDANCE_UPDATED = auto()
+    CEO_DIRECTIVES_ISSUED = auto()
 
-    BUSINESS_GUIDANCE_REQUESTED = auto()
-    BUSINESS_GUIDANCE_UPDATED = auto()
+    CAPABILITIES_IDENTIFIED = auto()
+    CAPABILITY_SPEC_READY = auto()
+    ENGINEERING_TASK_READY_FOR_EXECUTION = auto()
+    AUTONOMOUS_TASK_APPROVED = auto()
+    ENGINEERING_TASKS_DEFINED = auto()
+    PRODUCT_INITIATIVES_DEFINED = auto()
+    TASK_EXECUTION_RESULT = auto()
 
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
