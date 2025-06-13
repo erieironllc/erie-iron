@@ -84,7 +84,7 @@ class Command(BaseCommand):
         openai.api_key = openai_chat_api.get_api_key()
 
         if options.get("retry_failed"):
-            PubSubMessage.objects.filter(status__in=[PubSubMessageStatus.FAILED, PubSubMessageStatus.NO_CONSUMER]).update(
+            PubSubMessage.objects.filter(status__in=[PubSubMessageStatus.FAILED, PubSubMessageStatus.PROCESSING, PubSubMessageStatus.NO_CONSUMER]).update(
                 status=PubSubMessageStatus.PENDING
             )
 

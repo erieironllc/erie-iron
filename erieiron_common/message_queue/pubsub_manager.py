@@ -37,7 +37,7 @@ SLEEP_BACKOFF_NO_WORK = 0
 
 # MESSAGE_HANDLER_ATTEMPT_COUNT must be at least one, otherwise we'll never do any work.
 # if it's greater than one, we'll retry on error
-MESSAGE_HANDLER_MAX_RETRIES = 3
+MESSAGE_HANDLER_MAX_RETRIES = 1
 
 subscribers = defaultdict(set)
 
@@ -650,12 +650,21 @@ class PubSubManager:
                     )
 
                     if completed_message_type:
-                        PubSubManager.publish(
-                            completed_message_type,
-                            namespace_context=message.namespace,
-                            payload=ret_val or message.payload,
-                            priority=message.priority
-                        )
+                        if common.is_list_like(ret_val):
+                            for rt in ret_val:
+                                PubSubManager.publish(
+                                    completed_message_type,
+                                    namespace_context=message.namespace,
+                                    payload=ret_val or message.payload,
+                                    priority=message.priority
+                                )
+                        else:
+                            PubSubManager.publish(
+                                completed_message_type,
+                                namespace_context=message.namespace,
+                                payload=ret_val or message.payload,
+                                priority=message.priority
+                            )
 
                     common.log_info(f"PUB SUB:  handled '{message.message_type}' msg with {subscriber_method_signatures};")
 

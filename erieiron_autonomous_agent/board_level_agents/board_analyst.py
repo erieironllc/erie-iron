@@ -5,14 +5,6 @@ from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSub
 from erieiron_common.models import Business, BusinessAnalysis, BusinessLegalAnalysis
 
 
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.ANALYSIS_REQUESTED,
-        on_analysis_requested,
-        PubSubMessageType.ANALYSIS_ADDED
-    )
-
 
 def on_analysis_requested(business_id):
     business = Business.objects.get(id=business_id)

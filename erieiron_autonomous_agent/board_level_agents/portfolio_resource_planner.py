@@ -9,15 +9,8 @@ from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSub
 from erieiron_common.models import Business, BusinessCapacityAnalysis, BusinessBankBalanceSnapshot, BusinessBankBalanceSnapshotAccount
 
 
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.BUSINESS_CAPACITY_ANALYSIS_REQUESTED,
-        on_business_capacity_analysis_requested
-    )
 
-
-def on_business_capacity_analysis_requested(business_id):
+def on_resource_planning_requested(business_id):
     business = Business.objects.get(id=business_id)
 
     # TODO move this to a daily job

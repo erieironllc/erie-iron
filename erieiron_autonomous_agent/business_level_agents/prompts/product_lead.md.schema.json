@@ -44,13 +44,14 @@
           },
           "linked_kpis": {
             "type": "array",
+            "description": "List of KPI IDs from the CEO Agent. Must match existing BusinessKPI model instances by `kpi_id`.",
             "items": {
               "type": "string"
             }
           },
           "linked_goals": {
             "type": "array",
-            "description": "List of goal IDs from the CEO Agent that are directly supported by this initiative. Reinforces traceability to business goals.",
+            "description": "List of goal IDs from the CEO Agent that are directly supported by this initiative. Must match existing BusinessGoal model instances by `goal_id`.",
             "items": {
               "type": "string"
             }

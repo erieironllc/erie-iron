@@ -5,20 +5,6 @@ from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_w
 from erieiron_common.models import Business, BusinessGuidance
 
 
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.BOARD_CHAIR_EXEC_REQUESTED,
-        exec_board_chair_tasks
-    ).on(
-        [PubSubMessageType.ANALYSIS_ADDED, PubSubMessageType.BOARD_GUIDANCE_REQUESTED],
-        on_board_guidance_requested,
-        PubSubMessageType.BOARD_GUIDANCE_UPDATED
-    ).on(
-        PubSubMessageType.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
-        on_portfolio_reduce_businesses_requested
-    )
-
 
 def exec_board_chair_tasks():
     erieiron_business = Business.get_erie_iron_business()
@@ -37,7 +23,7 @@ def exec_board_chair_tasks():
 
     if erieiron_business.needs_capacity_analysis():
         PubSubManager.publish_id(
-            PubSubMessageType.BUSINESS_CAPACITY_ANALYSIS_REQUESTED,
+            PubSubMessageType.RESOURCE_PLANNING_REQUESTED,
             erieiron_business.id
         )
     else:

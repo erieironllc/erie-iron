@@ -8,20 +8,7 @@ from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSub
 from erieiron_common.models import Business
 
 
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED,
-        on_portfolio_add_businesses_requested,
-        PubSubMessageType.BUSINESS_IDEA_SUBMITTED
-    ).on(
-        PubSubMessageType.BUSINESS_IDEA_SUBMITTED,
-        on_business_idea_submitted,
-        PubSubMessageType.ANALYSIS_REQUESTED
-    )
-
-
-def on_portfolio_add_businesses_requested(erieiron_business_id):
+def find_new_business_opportunity(erieiron_business_id):
     erieiron_business = Business.get_erie_iron_business()
 
     messages = []
@@ -60,7 +47,7 @@ def on_portfolio_add_businesses_requested(erieiron_business_id):
     }
 
 
-def on_business_idea_submitted(payload):
+def submit_business_opportunity(payload):
     existing_business_id = payload.get("existing_business_id")
     summary = payload.get("summary")
     idea_content = payload.get("idea_content")

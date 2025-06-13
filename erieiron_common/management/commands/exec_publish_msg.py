@@ -13,7 +13,7 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
-            '--business_id',
+            '--id',
             type=str,
             required=True
         )
@@ -21,5 +21,5 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         PubSubManager.publish_id(
             PubSubMessageType(options.get("msg_type")),
-            options.get("business_id")
+            options.get("id")
         )

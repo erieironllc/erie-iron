@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, CapabilityStatus, ExecutionMode
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1009,17 +1009,6 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
             )
 
 
-# Erie Iron core entities
-class Capability(BaseErieIronModel):
-    name = models.TextField(unique=True)
-    description = models.TextField(null=True)
-    endpoint = models.URLField(null=True)
-    estimated_cost_per_execution = models.FloatField(null=True)
-    version = models.TextField(null=True)
-    used_by_businesses = models.JSONField(default=list)
-    can_build_autonomously = models.BooleanField(default=False)
-
-
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
     summary = models.TextField(null=True)
@@ -1373,8 +1362,8 @@ class ProductInitiative(BaseErieIronModel):
     title = models.TextField()
     description = models.TextField()
     priority = models.TextField(choices=Level.choices())
-    linked_kpis = models.JSONField(default=list)
-    linked_goals = models.JSONField(default=list)
+    linked_kpis = models.ManyToManyField("BusinessKPI", related_name="initiatives", blank=True)
+    linked_goals = models.ManyToManyField("BusinessGoal", related_name="initiatives", blank=True)
     expected_kpi_lift = models.JSONField(default=dict)
 
 
@@ -1387,35 +1376,51 @@ class ProductRequirement(BaseErieIronModel):
     testable = models.BooleanField(default=True)
 
 
-class CapabilityExecution(BaseErieIronModel):
-    class Executor(models.TextChoices):
-        AUTONOMOUS = 'AUTONOMOUS'
-        HUMAN = 'HUMAN'
+class EngineeringTask(BaseErieIronModel):
+    id = models.TextField(primary_key=True)
+    product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name="engineering_tasks")
+    validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
+    task_description = models.TextField()
+    depends_on = models.JSONField(default=list)
+    raw_llm_payload = models.JSONField(default=list)
+    risk_notes = models.TextField()
+    test_plan = models.TextField()
+    execution_mode = models.TextField(choices=ExecutionMode.choices())
 
-    class State(models.TextChoices):
-        NEW = 'NEW'
-        PENDING = 'PENDING'
-        RETRYING = 'RETRYING'
-        BLOCKED = 'BLOCKED'
-        EXPIRED = 'EXPIRED'
-        RESOLVED = 'RESOLVED'
 
-    class Result(models.TextChoices):
-        SUCCESS = 'SUCCESS'
-        FAIL_RETRYABLE = 'FAIL_RETRYABLE'
-        FAIL_FATAL = 'FAIL_FATAL'
-        TIMEOUT = 'TIMEOUT'
-        BLOCKED_DEPENDENCY = 'BLOCKED_DEPENDENCY'
+class EngineeringTaskStep(BaseErieIronModel):
+    task = models.ForeignKey(EngineeringTask, on_delete=models.CASCADE)
+    step_index = models.IntegerField()
+    capabilities = models.ManyToManyField("Capability", blank=True)
+    inputs = models.JSONField(default=dict)
+    outputs = models.JSONField(default=dict)
 
-    capability = models.ForeignKey(Capability, on_delete=models.CASCADE)
-    business = models.ForeignKey(Business, on_delete=models.CASCADE)
-    executor = models.TextField(choices=Executor.choices)
-    state = models.TextField(choices=State.choices)
-    result = models.TextField(choices=Result.choices)
-    retry_count = models.IntegerField(default=0)
-    start_time = models.DateTimeField(null=True)
-    end_time = models.DateTimeField(null=True)
-    cost = models.FloatField(null=True)
+
+class Capability(BaseErieIronModel):
+    id = models.TextField(primary_key=True)
+    name = models.TextField(unique=True)
+    description = models.TextField(null=True)
+    inputs = models.JSONField(default=dict)  # key: name, value: {type, description}
+    output_schema = models.JSONField(default=dict)
+    test_plan = models.TextField(null=True)
+    runtime_env = models.TextField(null=True)  # e.g. 'python:3.11', 'aws_lambda'
+    entry_point = models.TextField(null=True)  # callable or URI
+    execution_sandbox = models.TextField(null=True)  # e.g. 'lambda', 'ecs', 'local'
+
+    status = models.TextField(choices=CapabilityStatus.choices(), default=CapabilityStatus.PENDING)
+
+    depends_on = models.ManyToManyField("self", symmetrical=False, blank=True)
+    can_be_built_autonomously = models.BooleanField(default=True)
+
+    builder_notes = models.TextField(null=True)
+    last_built_at = models.DateTimeField(null=True)
+    implemented_by = models.TextField(
+        null=True,
+        help_text="Name of the person or LLM models used to implement this capability"
+    )
+
+    def is_blocked(self):
+        return self.depends_on.exclude(status=CapabilityStatus.COMPLETE).exists()
 
 
 class SelfDrivingTask(BaseErieIronModel):
