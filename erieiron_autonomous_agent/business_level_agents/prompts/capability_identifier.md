@@ -17,8 +17,8 @@ You receive:
 
 You must:
 - Identify all capabilities needed to execute the task
-- Indicate which ones already exist vs. need to be defined
-- For new capabilities, output a spec
+- Look up existing capabilities
+- Return a mix of capability IDs (for known capabilities) and full specs (for new capabilities)
 
 ### Mode 2: Given a Capability
 You receive:
@@ -28,6 +28,8 @@ You receive:
 You must:
 - Break it down into smaller capabilities that would compose it
 - Identify any sub-capabilities that are missing
+- Look up existing capabilities
+- Return a mix of capability IDs (for known capabilities) and full specs (for new capabilities)
 
 In both modes:
 - New capabilities must be atomic, reusable, and autonomously executable if possible
@@ -41,29 +43,25 @@ In both modes:
 {
   "input_type": "task | capability",
   "input_summary": "short description of input (task or capability)",
-  "capabilities_required": [
-    "capability_name_1",
-    "capability_name_2"
-  ],
-  "existing_capabilities": [
-    "capability_name_1"
-  ],
-  "new_capabilities": [
+  "resolved_capabilities": [
+    { "capability_id": "extract_hyperlinks_from_html" },
     {
-      "name": "extract_hyperlinks_from_html",
-      "description": "Extracts all anchor href links from an HTML string",
-      "platform_capability": true,
-      "can_be_built_autonomously": true,
-      "can_be_executed_autonomously": true,
-      "human_role_desc": "",
-      "depends_on": [],
-      "inputs": [
-        { "name": "html_string", "type": "string", "description": "The HTML content to parse" }
-      ],
-      "output_schema": {
-        "hyperlinks": { "type": "list", "description": "List of extracted URLs" }
-      },
-      "testability_notes": "Can be tested with known HTML input/output pairs"
+      "spec": {
+        "name": "extract_hyperlinks_from_html",
+        "description": "Extracts all anchor href links from an HTML string",
+        "platform_capability": true,
+        "can_be_built_autonomously": true,
+        "can_be_executed_autonomously": true,
+        "human_role_desc": "",
+        "depends_on": [],
+        "inputs": [
+          { "name": "html_string", "type": "string", "description": "The HTML content to parse" }
+        ],
+        "output_schema": {
+          "hyperlinks": { "type": "list", "description": "List of extracted URLs" }
+        },
+        "testability_notes": "Can be tested with known HTML input/output pairs"
+      }
     }
   ]
 }
@@ -77,4 +75,5 @@ In both modes:
 - All capabilities should be small, independently testable, and reusable
 - Prefer composability over large bespoke functionality
 - Be specific with inputs and outputs — this supports test generation and reliability
+- You are responsible for inspecting the system's capability inventory and returning a mix of resolved and unresolved specifications
 - Leave naming, scoping, and refinement of specs to the Capability Builder

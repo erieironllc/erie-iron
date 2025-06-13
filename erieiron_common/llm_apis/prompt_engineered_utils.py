@@ -3,7 +3,8 @@ from typing import Tuple
 
 from erieiron_common import common
 from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_interface import PARSE_MODELS_IN_ORDER, LlmResponse, LlmMessage
+from erieiron_common.llm_apis.llm_constants import PARSE_MODELS_IN_ORDER
+from erieiron_common.llm_apis.llm_interface import LlmResponse, LlmMessage
 
 
 def parse_int(question: str, fuzzy_input: str, min_max: Tuple[int, int] = None) -> int:

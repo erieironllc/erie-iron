@@ -6,14 +6,6 @@ from erieiron_common.models import Business
 from erieiron_common.models import BusinessKPI, BusinessGoal, BusinessCeoDirective
 
 
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.BOARD_GUIDANCE_UPDATED,
-        on_business_guidance_updated,
-        PubSubMessageType.CEO_DIRECTIVES_ISSUED
-    )
-
 
 def on_business_guidance_updated(business_id):
     business = Business.objects.get(id=business_id)

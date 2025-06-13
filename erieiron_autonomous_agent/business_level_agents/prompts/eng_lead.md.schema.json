@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EngineeringTaskOutput",
+  "type": "object",
+  "required": [
+    "business_name",
+    "product_initiative_id",
+    "new_capabilities",
+    "engineering_tasks"
+  ],
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "product_initiative_id": {
+      "type": "string"
+    },
+    "new_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "inputs",
+          "output_schema",
+          "test_plan",
+          "execution_sandbox",
+          "can_be_built_autonomously"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Tokenized unique identifier for referencing this capability."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for this capability."
+          },
+          "description": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "test_plan": {
+            "type": "string"
+          },
+          "execution_sandbox": {
+            "type": "string"
+          },
+          "can_be_built_autonomously": {
+            "type": "boolean"
+          },
+          "builder_notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "engineering_tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "depends_on",
+          "task_description",
+          "required_capabilities",
+          "risk_notes",
+          "test_plan",
+          "execution_mode"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Use an empty string to indicate a new task. A non-empty task_id indicates an update."
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "task_description": {
+            "type": "string"
+          },
+          "required_capabilities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "capability_id": { "type": "string" },
+                "spec": { "type": "object" }
+              },
+              "required": [],
+              "oneOf": [
+                { "required": ["capability_id"], "not": { "required": ["spec"] } },
+                { "required": ["spec"], "not": { "required": ["capability_id"] } }
+              ]
+            }
+          },
+          "risk_notes": {
+            "type": "string"
+          },
+          "test_plan": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "AUTONOMOUS",
+              "HUMAN"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "step_index",
+                "capability",
+                "inputs",
+                "outputs"
+              ],
+              "properties": {
+                "step_index": {
+                  "type": "integer"
+                },
+                "capability": {
+                  "type": "string"
+                },
+                "inputs": {
+                  "type": "object"
+                },
+                "outputs": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "validated_requirements": {
+            "type": "array",
+            "description": "List of requirement IDs this task satisfies. Must be included if the task fulfills any product requirement’s acceptance criteria.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "execution_mode": { "const": "AUTONOMOUS" }
+              }
+            },
+            "then": {
+              "required": ["steps"]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

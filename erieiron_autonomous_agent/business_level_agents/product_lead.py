@@ -1,22 +1,12 @@
 from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common.enums import PubSubMessageType
-from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import Business, BusinessCapacityAnalysis
 from erieiron_common.models import BusinessKPI, BusinessGoal, BusinessCeoDirective
 from erieiron_common.models import ProductInitiative, ProductRequirement
 
 
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.CEO_DIRECTIVES_ISSUED,
-        on_ceo_directives_issued
-    )
-
-
-def on_ceo_directives_issued(business_id):
+def define_product_initiatives(business_id):
     business = Business.objects.get(id=business_id)
 
     kpis = list(BusinessKPI.objects.filter(business=business).values(
@@ -57,25 +47,40 @@ def on_ceo_directives_issued(business_id):
             "capacity_summary": capacity_summary,
             "existing_initiatives": initiatives,
             "existing_requirements": requirements
-        },
-        debug=True
+        }
     )
+
+    updated_or_created_initiative_ids = []
 
     with transaction.atomic():
         for initiative_data in product_lead_response.get("product_initiatives", []):
             initiative_token = initiative_data["initiative_token"]
-            initiative = ProductInitiative.objects.update_or_create(
+            initiative, created = ProductInitiative.objects.update_or_create(
                 id=initiative_token,
                 defaults={
                     "business": business,
                     "title": initiative_data["title"],
                     "description": initiative_data["description"],
                     "priority": initiative_data["priority"],
-                    "linked_kpis": initiative_data.get("linked_kpis", []),
-                    "linked_goals": initiative_data.get("linked_goals", []),
                     "expected_kpi_lift": initiative_data.get("expected_kpi_lift", {}),
                 }
-            )[0]
+            )
+
+            if created or any(getattr(initiative, k) != v for k, v in {
+                "title": initiative_data["title"],
+                "description": initiative_data["description"],
+                "priority": initiative_data["priority"],
+                "expected_kpi_lift": initiative_data.get("expected_kpi_lift", {})
+            }.items()):
+                updated_or_created_initiative_ids.append(initiative.id)
+
+            initiative.linked_kpis.set(
+                list(BusinessKPI.objects.filter(kpi_id__in=initiative_data.get("linked_kpis", [])))
+            )
+
+            initiative.linked_goals.set(
+                list(BusinessGoal.objects.filter(goal_id__in=initiative_data.get("linked_goals", [])))
+            )
 
             for req in initiative_data.get("requirements", []):
                 requirement_token = req["requirement_token"]
@@ -88,3 +93,4 @@ def on_ceo_directives_issued(business_id):
                         "testable": req["testable"]
                     }
                 )
+    return updated_or_created_initiative_ids

@@ -208,7 +208,7 @@ class PubSubMessageType(ErieEnum):
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     BUSINESS_IDEA_SUBMITTED = auto()
-    BUSINESS_CAPACITY_ANALYSIS_REQUESTED = auto()
+    RESOURCE_PLANNING_REQUESTED = auto()
     ANALYSIS_REQUESTED = auto()
     ANALYSIS_ADDED = auto()
     BOARD_GUIDANCE_REQUESTED = auto()
@@ -220,7 +220,7 @@ class PubSubMessageType(ErieEnum):
     ENGINEERING_TASK_READY_FOR_EXECUTION = auto()
     AUTONOMOUS_TASK_APPROVED = auto()
     ENGINEERING_TASKS_DEFINED = auto()
-    PRODUCT_INITIATIVES_DEFINED = auto()
+    PRODUCT_INITIATIVE_DEFINED = auto()
     TASK_EXECUTION_RESULT = auto()
 
     @staticmethod
@@ -357,12 +357,17 @@ class Level(ErieEnum):
         elif value == Level.LOW.name:
             return Level.LOW
         else:
-            return ErieEnum.valid_or(cls, value, default_val)
+            return cls.valid_or(value, default_val)
 
 
 class BusinessIdeaSource(ErieEnum):
     HUMAN = auto()
     BUSINESS_FINDER_AGENT = auto()
+
+
+class ExecutionMode(ErieEnum):
+    HUMAN = auto()
+    AUTONOMOUS = auto()
 
 
 class BusinessStatus(ErieEnum):
@@ -383,3 +388,11 @@ class TrafficLight(ErieEnum):
     GREEN = auto()
     YELLOW = auto()
     RED = auto()
+
+
+class CapabilityStatus(ErieEnum):
+    PENDING = auto()
+    SPECIFIED = auto()
+    BUILDING = auto()
+    COMPLETE = auto()
+    FAILED = auto()
