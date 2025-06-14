@@ -213,15 +213,13 @@ class PubSubMessageType(ErieEnum):
     ANALYSIS_ADDED = auto()
     BOARD_GUIDANCE_REQUESTED = auto()
     BOARD_GUIDANCE_UPDATED = auto()
-    CEO_DIRECTIVES_ISSUED = auto()
 
-    CAPABILITIES_IDENTIFIED = auto()
-    CAPABILITY_SPEC_READY = auto()
-    ENGINEERING_TASK_READY_FOR_EXECUTION = auto()
-    AUTONOMOUS_TASK_APPROVED = auto()
-    ENGINEERING_TASKS_DEFINED = auto()
+    CEO_DIRECTIVES_ISSUED = auto()
     PRODUCT_INITIATIVE_DEFINED = auto()
-    TASK_EXECUTION_RESULT = auto()
+    CODING_WORK_REQUESTED = auto()
+    DESIGN_WORK_REQUESTED = auto()
+    HUMAN_WORK_REQUESTED = auto()
+    WORK_COMPLETED = auto()
 
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
@@ -365,9 +363,10 @@ class BusinessIdeaSource(ErieEnum):
     BUSINESS_FINDER_AGENT = auto()
 
 
-class ExecutionMode(ErieEnum):
+class TaskAssigneeType(ErieEnum):
     HUMAN = auto()
-    AUTONOMOUS = auto()
+    ENGINEERING = auto()
+    DESIGN = auto()
 
 
 class BusinessStatus(ErieEnum):
@@ -391,8 +390,13 @@ class TrafficLight(ErieEnum):
 
 
 class CapabilityStatus(ErieEnum):
+    # obsolete
     PENDING = auto()
-    SPECIFIED = auto()
-    BUILDING = auto()
+    pass
+
+
+class TaskStatus(ErieEnum):
+    NOT_STARTED = auto()
+    IN_PROGRESS = auto()
     COMPLETE = auto()
     FAILED = auto()

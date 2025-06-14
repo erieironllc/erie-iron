@@ -1,44 +1,49 @@
+from django.db import transaction
+
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType
-from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import Business
 from erieiron_common.models import BusinessKPI, BusinessGoal, BusinessCeoDirective
-
 
 
 def on_business_guidance_updated(business_id):
     business = Business.objects.get(id=business_id)
 
-    business_analysis, legal_analysis = business.get_latest_analysist()
-
-    product_status = {
-        "summary": "Not started.  No product features have been defined.  Blocked by no "
-    }
-
-    eng_status = {
-        "summary": "No engineering started or in progress. Blocked by product"
-    }
-
-    sales_status = {
-        "summary": "No Sales or Marketing initiatives started or in progress. Blocked by not having a product in market"
-    }
+    chat_data = build_chat_data(business)
 
     ceo_analysis = business_level_chat(
         "ceo.md",
-        [
-            f"## Board Guidance\n{common.model_to_dict_s(business.get_latest_board_guidance())}",
-            f"## Business Analysis\n{common.model_to_dict_s(business_analysis)}",
-            f"## Legal Analysis\n{common.model_to_dict_s(legal_analysis)}",
-            f"## Current KPI status\n{business.get_kpis_status()}",
-            f"## Current Goals status\n{business.get_goals_status()}",
-            f"## Sales and Marketing Lead status update\n{sales_status}",
-            f"## Product Lead status update\n{product_status}",
-            f"## Engineering Lead status update\n{eng_status}",
-            "Please evaluate the Board Guidance, evaluate the business updates, and issue directives (if necessary)"
-        ]
+        chat_data
     )
 
+    process_response(business, ceo_analysis)
+
+def build_chat_data(business):
+    business_analysis, legal_analysis = business.get_latest_analysist()
+    product_status = {
+        "summary": "Not started.  No product features have been defined.  Blocked by no "
+    }
+    eng_status = {
+        "summary": "No engineering started or in progress. Blocked by product"
+    }
+    sales_status = {
+        "summary": "No Sales or Marketing initiatives started or in progress. Blocked by not having a product in market"
+    }
+    chat_data = [
+        f"## Board Guidance\n{common.model_to_dict_s(business.get_latest_board_guidance())}",
+        f"## Business Analysis\n{common.model_to_dict_s(business_analysis)}",
+        f"## Legal Analysis\n{common.model_to_dict_s(legal_analysis)}",
+        f"## Current KPI status\n{business.get_kpis_status()}",
+        f"## Current Goals status\n{business.get_goals_status()}",
+        f"## Sales and Marketing Lead status update\n{sales_status}",
+        f"## Product Lead status update\n{product_status}",
+        f"## Engineering Lead status update\n{eng_status}",
+        "Please evaluate the Board Guidance, evaluate the business updates, and issue directives (if necessary)"
+    ]
+    return chat_data
+
+@transaction.atomic()
+def process_response(business, ceo_analysis):
     for kpi_data in ceo_analysis.get("kpis", []):
         BusinessKPI.objects.update_or_create(
             business=business,
@@ -51,7 +56,6 @@ def on_business_guidance_updated(business_id):
                 "priority": kpi_data["priority"]
             }
         )
-
     for goal_data in ceo_analysis.get("goals", []):
         kpi = BusinessKPI.objects.get(business=business, kpi_id=goal_data["kpi_id"])
         BusinessGoal.objects.update_or_create(
@@ -67,7 +71,6 @@ def on_business_guidance_updated(business_id):
                 "status": goal_data["status"]
             }
         )
-
     for directive in ceo_analysis.get("ceo_directives", []):
         BusinessCeoDirective.objects.update_or_create(
             business=business,
@@ -79,3 +82,5 @@ def on_business_guidance_updated(business_id):
                 "initiative_reference": directive.get("initiative_reference", "")
             }
         )
+
+

@@ -5,7 +5,6 @@
   "required": [
     "business_name",
     "product_initiative_id",
-    "new_capabilities",
     "engineering_tasks"
   ],
   "properties": {
@@ -15,53 +14,6 @@
     "product_initiative_id": {
       "type": "string"
     },
-    "new_capabilities": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "description",
-          "inputs",
-          "output_schema",
-          "test_plan",
-          "execution_sandbox",
-          "can_be_built_autonomously"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Tokenized unique identifier for referencing this capability."
-          },
-          "name": {
-            "type": "string",
-            "description": "Human-readable name for this capability."
-          },
-          "description": {
-            "type": "string"
-          },
-          "inputs": {
-            "type": "object"
-          },
-          "output_schema": {
-            "type": "object"
-          },
-          "test_plan": {
-            "type": "string"
-          },
-          "execution_sandbox": {
-            "type": "string"
-          },
-          "can_be_built_autonomously": {
-            "type": "boolean"
-          },
-          "builder_notes": {
-            "type": "string"
-          }
-        }
-      }
-    },
     "engineering_tasks": {
       "type": "array",
       "items": {
@@ -70,18 +22,19 @@
           "task_id",
           "depends_on",
           "task_description",
-          "required_capabilities",
           "risk_notes",
           "test_plan",
-          "execution_mode"
+          "role_assignee",
+          "completion_criteria"
         ],
         "properties": {
           "task_id": {
             "type": "string",
-            "description": "Use an empty string to indicate a new task. A non-empty task_id indicates an update."
+            "description": "Required. If the task is new, provide a unique ID. If the task already exists and needs to be updated, reuse the same ID."
           },
           "depends_on": {
             "type": "array",
+            "description": "List of task IDs that must be completed before this task can begin. These may reference existing or newly defined tasks.",
             "items": {
               "type": "string"
             }
@@ -89,59 +42,11 @@
           "task_description": {
             "type": "string"
           },
-          "required_capabilities": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "capability_id": { "type": "string" },
-                "spec": { "type": "object" }
-              },
-              "required": [],
-              "oneOf": [
-                { "required": ["capability_id"], "not": { "required": ["spec"] } },
-                { "required": ["spec"], "not": { "required": ["capability_id"] } }
-              ]
-            }
-          },
           "risk_notes": {
             "type": "string"
           },
           "test_plan": {
             "type": "string"
-          },
-          "execution_mode": {
-            "type": "string",
-            "enum": [
-              "AUTONOMOUS",
-              "HUMAN"
-            ]
-          },
-          "steps": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "step_index",
-                "capability",
-                "inputs",
-                "outputs"
-              ],
-              "properties": {
-                "step_index": {
-                  "type": "integer"
-                },
-                "capability": {
-                  "type": "string"
-                },
-                "inputs": {
-                  "type": "object"
-                },
-                "outputs": {
-                  "type": "object"
-                }
-              }
-            }
           },
           "validated_requirements": {
             "type": "array",
@@ -149,20 +54,54 @@
             "items": {
               "type": "string"
             }
-          }
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "execution_mode": { "const": "AUTONOMOUS" }
+          },
+          "completion_criteria": {
+            "type": "array",
+            "description": "List of natural language statements describing when the task can be considered successfully complete.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "role_assignee": {
+            "type": "string",
+            "enum": ["ENGINEERING", "DESIGN", "HUMAN"],
+            "description": "Which agent or actor is responsible for executing this task."
+          },
+          "design_handoff": {
+            "type": "object",
+            "description": "Structured output from a DESIGN task, used for handoff to engineering tasks. May include component IDs, layout guidance, and design tokens.",
+            "properties": {
+              "component_ids": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "layout": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "type": "string" },
+                  "regions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "components": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "design_tokens": {
+                "type": "array",
+                "items": { "type": "string" }
               }
             },
-            "then": {
-              "required": ["steps"]
-            }
+            "additionalProperties": false
           }
-        ]
+        }
       }
     }
   }
