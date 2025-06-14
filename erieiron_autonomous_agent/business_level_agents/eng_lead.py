@@ -1,8 +1,7 @@
 from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common.enums import TaskStatus, TaskAssigneeType, PubSubMessageType
-from erieiron_common.message_queue.pubsub_manager import PubSubManager
+from erieiron_common.enums import TaskStatus
 from erieiron_common.models import (
     ProductInitiative,
     Task,
@@ -10,12 +9,6 @@ from erieiron_common.models import (
     TaskDesignRequirements,
     DesignComponent
 )
-
-ASSIGNEE_TO_MSGTYPE = {
-    TaskAssigneeType.DESIGN: PubSubMessageType.DESIGN_WORK_REQUESTED,
-    TaskAssigneeType.ENGINEERING: PubSubMessageType.CODING_WORK_REQUESTED,
-    TaskAssigneeType.HUMAN: PubSubMessageType.HUMAN_WORK_REQUESTED,
-}
 
 
 def define_tasks_for_initiative(product_initiative_id):
@@ -26,7 +19,7 @@ def define_tasks_for_initiative(product_initiative_id):
 
     eng_lead_response = business_level_chat("eng_lead.md", chat_data)
 
-    process_response(initiative, eng_lead_response)
+    return process_response(initiative, eng_lead_response)
 
 
 def build_chat_data(business, initiative):
@@ -180,18 +173,5 @@ def process_response(initiative, eng_lead_response):
         if created or was_updated:
             updated_or_created_task_ids.append(eng_task.id)
 
-        print(f"Saved task: {eng_task.id} — {eng_task.task_description[:80]}")
+    return updated_or_created_task_ids
 
-    for task in Task.objects.filter(id__in=updated_or_created_task_ids):
-        msg_type = ASSIGNEE_TO_MSGTYPE.get(TaskAssigneeType(task.role_assignee))
-
-        if not msg_type:
-            raise Exception(f"unhandled assignee: {task.role_assignee}")
-
-        PubSubManager.publish_id(msg_type, task.id)
-
-
-def on_work_completed(task_id):
-    Task.objects.filter(id=task_id).update(
-        status=TaskStatus.COMPLETE
-    )

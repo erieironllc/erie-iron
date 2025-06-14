@@ -38,6 +38,7 @@ from numpy import ndarray
 from sklearn.metrics.pairwise import cosine_similarity
 
 import settings
+from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 UUID_NULL_OBJECT = uuid.UUID('11111111-1111-1111-1111-111111111111')
 
@@ -938,9 +939,9 @@ def write_json_to_tempfile(json_data):
 def write_json(file_name, json_data, indent=4):
     with open(file_name, "w") as f:
         if indent:
-            json.dump(json_data, f, indent=indent)
+            json.dump(json_data, f, indent=indent, cls=ErieIronJSONEncoder)
         else:
-            json.dump(json_data, f, separators=(",", ":"))
+            json.dump(json_data, f, separators=(",", ":"), cls=ErieIronJSONEncoder)
     return json_data
 
 
