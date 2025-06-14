@@ -1,9 +1,6 @@
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType
-from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import Business, BusinessAnalysis, BusinessLegalAnalysis
-
 
 
 def on_analysis_requested(business_id):
@@ -70,4 +67,6 @@ def execute_legal_analysis(
         justification=legal_analysis.get("justification"),
         required_disclaimers_or_terms=legal_analysis.get("required_disclaimers_or_terms"),
         risk_rating=legal_analysis.get("risk_rating"),
+        recommended_entity_structure=legal_analysis.get("recommended_entity_structure"),
+        entity_structure_justification=legal_analysis.get("entity_structure_justification")
     )

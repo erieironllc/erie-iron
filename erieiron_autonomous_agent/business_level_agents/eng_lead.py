@@ -24,11 +24,7 @@ def define_tasks_for_initiative(product_initiative_id):
 
     chat_data = build_chat_data(business, initiative)
 
-    eng_lead_response = business_level_chat(
-        "eng_lead.md",
-        chat_data,
-        debug=True
-    )
+    eng_lead_response = business_level_chat("eng_lead.md", chat_data)
 
     process_response(initiative, eng_lead_response)
 
@@ -193,3 +189,9 @@ def process_response(initiative, eng_lead_response):
             raise Exception(f"unhandled assignee: {task.role_assignee}")
 
         PubSubManager.publish_id(msg_type, task.id)
+
+
+def on_work_completed(task_id):
+    EngineeringTask.objects.filter(id=task_id).update(
+        status=TaskStatus.COMPLETE
+    )

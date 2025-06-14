@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BusinessStructuringAgentOutput",
+  "type": "object",
+  "required": [
+    "business_name",
+    "business_plan",
+    "value_proposition",
+    "summary",
+    "core_functions",
+    "audience",
+    "monetization",
+    "growth_channels",
+    "personalization_options",
+    "execution_dependencies",
+    "kpis"
+  ],
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "business_plan": {
+      "type": "string"
+    },
+    "value_proposition": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "core_functions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "audience": {
+      "type": "string"
+    },
+    "monetization": {
+      "type": "string"
+    },
+    "growth_channels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "personalization_options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "execution_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "kpis": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

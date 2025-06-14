@@ -49,13 +49,13 @@ Return a **valid JSON object** in the following format:
     ]
   },
   "estimated_monthly_revenue_at_steady_state_usd": integer,
-  "potential_mode": "string (e.g., brand, data, network effects, tech advantage, none)",
+  "potential_mode": "referral-based network effects, content engagement loops, and recurring subscription lock-in",
   "potential_competitors": [
     { "name": "string", "url": "string", "notes": "brief comparison to this business" }
   ],
   "upfront_cash_investment_required": {
     "estimated_amount_usd": float,
-    "use_of_funds": "bullet list of how this cash would be used"
+    "use_of_funds": "A string description of how this cash would be used. If multiple items, use a bulleted list formatted within a single string using \\n between bullets."
   },
   "risks": [
     "List of potential risks—technical, legal, competitive, operational"
@@ -68,7 +68,7 @@ Return a **valid JSON object** in the following format:
   ],
   "final_recommendation": {
     "score_1_to_10": integer,
-    "justification": "Why this score was given"
+  "justification": "The business has strong alignment with macro trends and leverages Erie Iron's autonomous development strengths. Competition exists, but the unique delivery mechanism and potential for recurring subscription revenue offer promising differentiation. A freemium tier with AI summaries and a $5/mo pro plan could reach $7.5k MRR from 1,500 subscribers. The idea can be tested via a low-risk GTM loop (e.g., automated Twitter summaries with links to sign up). Careful attention to user trust and summary clarity will be key to conversion."
   }
 }
 ```

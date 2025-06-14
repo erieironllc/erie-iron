@@ -1,9 +1,10 @@
+from django.db import transaction
+
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessGuidanceRating, BusinessStatus, TrafficLight
-from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import Business, BusinessGuidance
-
 
 
 def exec_board_chair_tasks():
@@ -61,12 +62,16 @@ def on_board_guidance_requested(business_id):
         """
     )
 
+    process_response(business, business_guidance)
+
+
+@transaction.atomic
+def process_response(business, business_guidance):
     BusinessGuidance.objects.create(
         business=business,
         guidance=business_guidance.get("guidance"),
         justification=business_guidance.get("justification")
     )
-
     # TODO maybe look at last x number of guidances?
     business_guidance = business.businessguidance_set.order_by("created_timestamp").last()
     if not BusinessGuidanceRating.MAINTAIN.eq(business_guidance.guidance):

@@ -3,8 +3,7 @@ from pathlib import Path
 
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType, Constants, BusinessIdeaSource
-from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
+from erieiron_common.enums import Constants, BusinessIdeaSource
 from erieiron_common.models import Business
 
 
@@ -63,6 +62,7 @@ def submit_business_opportunity(payload):
         id=existing_business_id,
         defaults={
             "name": name,
+            "sandbox_dir_name": common.strip_non_alpha(name),
             "source": source,
             "raw_idea": idea_content
         }
@@ -71,15 +71,16 @@ def submit_business_opportunity(payload):
     business_structure = board_level_chat(
         "corporate_development--business_structurer.md",
         f"""
+            Existing business names: {[b.name for b in Business.objects.all()]}
+            
             Please structure this business idea:
-
             {idea_content}
         """
     )
 
-    if business.name.startswith(Constants.NEW_BUSINESS_NAME_PREFIX.value) and business_structure.get("name"):
+    if business.name.startswith(Constants.NEW_BUSINESS_NAME_PREFIX.value) and business_structure.get("business_name"):
         Business.objects.filter(id=business.id).update(
-            name=business_structure.get("name")
+            name=business_structure.get("business_name")
         )
 
     Business.objects.filter(id=business.id).update(

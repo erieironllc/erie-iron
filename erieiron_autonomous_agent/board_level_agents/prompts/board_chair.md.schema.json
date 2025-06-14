@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BoardChairDecision",
+  "type": "object",
+  "required": [
+    "business_name",
+    "guidance",
+    "justification"
+  ],
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "guidance": {
+      "type": "string",
+      "enum": [
+        "MAINTAIN",
+        "INCREASE_BUDGET",
+        "DECREASE_BUDGET",
+        "SHUTDOWN"
+      ]
+    },
+    "justification": {
+      "type": "object",
+      "required": [
+        "kpi_analysis",
+        "budget_alignment",
+        "legal_ethics",
+        "capacity_alignment",
+        "overall_summary"
+      ],
+      "properties": {
+        "kpi_analysis": {
+          "type": "string"
+        },
+        "budget_alignment": {
+          "type": "string"
+        },
+        "legal_ethics": {
+          "type": "string"
+        },
+        "capacity_alignment": {
+          "type": "string"
+        },
+        "overall_summary": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

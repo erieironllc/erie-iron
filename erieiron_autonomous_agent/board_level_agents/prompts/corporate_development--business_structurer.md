@@ -16,7 +16,7 @@ Produce a valid JSON object with the following structure:
 
 ```json
 {
-  "business_name": "A unique, short but descriptive name for the business",
+  "business_name": "A unique, short but descriptive name for the business. Must not duplicate any existing business name.",
   "business_plan": "A clear, concise, one-paragraph summary of what the business does.",
   "value_proposition": "Why this business is useful or appealing to its users",
   "summary": "A single sentence summary of the business plan and value prop",
@@ -53,10 +53,10 @@ Produce a valid JSON object with the following structure:
 
 ## 🧠 Processing Guidelines
 
+- You will be given a list of existing business names. Ensure the `business_name` you choose is unique and not already used. If the idea is similar to an existing business, choose a distinct name that avoids confusion.
 - Think like a technical cofounder trying to write the one-pager you’d give to a product manager and engineering lead
 - Be specific about **user actions**, **automated responses**, and **product constraints**
 - Do not include vague or general statements—restate everything as productizable components
 - Do **not include any explanation outside the JSON**
 - Prefer business structures that can be executed with **high autonomy** and **minimal human intervention**
 - Highlight opportunities for Erie Iron to build and operate the business **without requiring cash-intensive steps or ongoing manual work**
-

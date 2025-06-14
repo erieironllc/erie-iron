@@ -23,6 +23,9 @@ You must:
 - Highlight reputational, platform policy, or ethical pitfalls
 - Recommend whether the business is **approved** to launch or continue
 - Suggest any required disclaimers or legal policies
+- Recommend whether the business should operate as part of **Erie Iron LLC** or requires a **separate LLC**  
+- Base this recommendation on liability risk, data handling, reputational exposure, or contractual/legal separation needs  
+- If the business starts within Erie Iron LLC but could require separation later, indicate that reevaluation may be needed at scale
 
 ---
 
@@ -38,7 +41,9 @@ Return a single valid JSON object with the following fields:
   "required_disclaimers_or_terms": [
     "Clearly state this service does not offer medical or legal advice.",
     "Include a privacy policy if collecting email addresses."
-  ]
+  ],
+  "recommended_entity_structure": "ERIE_IRON_LLC | SEPARATE_LLC",
+  "entity_structure_justification": "Explanation of why this business can operate safely within Erie Iron or needs separation due to risk or regulatory isolation."
 }
 ```
 
@@ -60,4 +65,3 @@ Return a single valid JSON object with the following fields:
 - Collecting or storing user data without clear consent
 - Violating copyright, trademarks, or using protected datasets
 - Deceptive marketing, email spam, or impersonation
-
