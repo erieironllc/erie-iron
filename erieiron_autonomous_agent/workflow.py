@@ -1,5 +1,5 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
-from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder
+from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, task_manager, worker_human
 from erieiron_common.enums import PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 
@@ -63,28 +63,40 @@ def business_workflow(pubsub_manager: PubSubManager):
     # Eng Lead
     pubsub_manager.on(
         PubSubMessageType.PRODUCT_INITIATIVE_DEFINED,
-        eng_lead.define_tasks_for_initiative
-        # publishes ENGINEERING_WORK_REQUESTED | DESIGN_WORK_REQUESTED | HUMAN_WORK_REQUESTED
+        eng_lead.define_tasks_for_initiative,
+        PubSubMessageType.TASK_UPDATED
+    )
+
+    # Task Manager
+    pubsub_manager.on(
+        PubSubMessageType.TASK_UPDATED,
+        task_manager.on_task_updated,
     ).on(
-        PubSubMessageType.WORK_COMPLETED,
-        eng_lead.on_work_completed
+        PubSubMessageType.TASK_COMPLETED,
+        task_manager.on_task_complete,
+        PubSubMessageType.TASK_UPDATED
+    ).on(
+        PubSubMessageType.TASK_FAILED,
+        task_manager.on_task_complete,
+        PubSubMessageType.TASK_UPDATED
     )
 
     # Desiger
     pubsub_manager.on(
         PubSubMessageType.DESIGN_WORK_REQUESTED,
         worker_design.do_work,
-        PubSubMessageType.WORK_COMPLETED
+        # publishs either TASK_COMPLETED or TASK_FAILED
     )
 
     # Coder
     pubsub_manager.on(
         PubSubMessageType.CODING_WORK_REQUESTED,
         worker_coder.do_work
+        # publishs either TASK_COMPLETED or TASK_FAILED
     )
 
     # Human
-    # pubsub_manager.on(
-    #     PubSubMessageType.HUMAN_WORK_REQUESTED,
-    #     worker_human.do_work
-    # )
+    pubsub_manager.on(
+        PubSubMessageType.HUMAN_WORK_REQUESTED,
+        worker_human.do_work
+    )

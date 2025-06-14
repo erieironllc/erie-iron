@@ -1407,6 +1407,9 @@ class Task(BaseErieIronModel):
     attachments = models.JSONField(default=list)
     created_by = models.TextField(null=True)
 
+    def are_dependencies_complete(self):
+        return all(dep.status == TaskStatus.COMPLETE for dep in self.depends_on.all())
+
 
 # Design system and handoff models
 class DesignComponent(BaseErieIronModel):
