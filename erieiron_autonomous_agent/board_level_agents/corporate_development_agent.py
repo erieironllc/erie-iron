@@ -62,7 +62,7 @@ def submit_business_opportunity(payload):
         id=existing_business_id,
         defaults={
             "name": name,
-            "sandbox_dir_name": common.strip_non_alpha(name),
+            "sandbox_dir_name": common.strip_non_alpha(name).lower(),
             "source": source,
             "raw_idea": idea_content
         }
@@ -74,6 +74,9 @@ def submit_business_opportunity(payload):
             Existing business names: {[b.name for b in Business.objects.all()]}
             
             Please structure this business idea:
+            
+            {summary}
+            
             {idea_content}
         """
     )
@@ -85,6 +88,7 @@ def submit_business_opportunity(payload):
 
     Business.objects.filter(id=business.id).update(
         summary=business_structure.get("summary"),
+        sandbox_dir_name=common.strip_non_alpha(business_structure.get("business_name")).lower(),
         business_plan=business_structure.get("business_plan"),
         value_prop=business_structure.get("value_proposition"),
         revenue_model=business_structure.get("monetization"),

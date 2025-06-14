@@ -1,12 +1,12 @@
 from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common.models import EngineeringTask
-from erieiron_common.models import EngineeringTaskDesignHandoff, DesignComponent
+from erieiron_common.models import Task
+from erieiron_common.models import TaskDesignRequirements, DesignComponent
 
 
 def do_work(task_id):
-    task = EngineeringTask.objects.get(id=task_id)
+    task = Task.objects.get(id=task_id)
 
     chat_data = build_chat_data(task)
 
@@ -47,7 +47,7 @@ def build_chat_data(task):
 
 @transaction.atomic
 def process_response(task, designer_resp):
-    handoff_obj, _ = EngineeringTaskDesignHandoff.objects.get_or_create(task=task)
+    handoff_obj, _ = TaskDesignRequirements.objects.get_or_create(task=task)
     handoff_data = designer_resp.get("design_handoff", {})
 
     # Component IDs

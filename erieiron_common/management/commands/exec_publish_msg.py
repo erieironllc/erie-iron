@@ -15,7 +15,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--id',
             type=str,
-            required=True
+            required=False
         )
 
     def handle(self, *args, **options):

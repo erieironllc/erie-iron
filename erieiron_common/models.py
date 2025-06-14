@@ -1385,7 +1385,7 @@ class ProductRequirement(BaseErieIronModel):
     testable = models.BooleanField(default=True)
 
 
-class EngineeringTask(BaseErieIronModel):
+class Task(BaseErieIronModel):
     id = models.TextField(primary_key=True)
     product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name="engineering_tasks")
     status = models.TextField(null=False, choices=TaskStatus.choices())
@@ -1405,6 +1405,7 @@ class EngineeringTask(BaseErieIronModel):
     comment_requests = models.JSONField(default=list)
     max_budget_usd = models.FloatField(null=True)
     attachments = models.JSONField(default=list)
+    created_by = models.TextField(null=True)
 
 
 # Design system and handoff models
@@ -1414,15 +1415,15 @@ class DesignComponent(BaseErieIronModel):
     description = models.TextField(null=True)
 
 
-class EngineeringTaskDesignHandoff(BaseErieIronModel):
-    task = models.OneToOneField("EngineeringTask", on_delete=models.CASCADE, related_name="design_handoff")
+class TaskDesignRequirements(BaseErieIronModel):
+    task = models.OneToOneField("Task", on_delete=models.CASCADE, related_name="design_handoff")
     component_ids = models.ManyToManyField(DesignComponent, blank=True)
     layout = models.JSONField(default=dict, null=True)
 
 
 class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
-    engineering_task = models.OneToOneField(EngineeringTask, on_delete=models.SET_NULL, null=True, blank=True)
+    related_task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True)
     config_path = models.TextField(null=False)
     sandbox_root_dir = models.TextField(null=False)
     created_at = models.DateTimeField(auto_now_add=True)
