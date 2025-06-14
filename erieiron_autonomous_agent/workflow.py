@@ -1,11 +1,11 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
-from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, capability_identifier, capability_builder
+from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, worker_human
 from erieiron_common.enums import PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 
 
 @pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
+def board_workflow(pubsub_manager: PubSubManager):
     # Board Chair
     pubsub_manager.on(
         PubSubMessageType.BOARD_CHAIR_EXEC_REQUESTED,
@@ -43,37 +43,46 @@ def initialize_workflow(pubsub_manager: PubSubManager):
         portfolio_resource_planner.on_resource_planning_requested
     )
 
-    # Business CEO
+
+@pubsub_workflow
+def business_workflow(pubsub_manager: PubSubManager):
+    # CEO
     pubsub_manager.on(
         PubSubMessageType.BOARD_GUIDANCE_UPDATED,
         ceo.on_business_guidance_updated,
         PubSubMessageType.CEO_DIRECTIVES_ISSUED
     )
 
-    # Business Product Lead
+    # Product Lead
     pubsub_manager.on(
         PubSubMessageType.CEO_DIRECTIVES_ISSUED,
         product_lead.define_product_initiatives,
-        PubSubMessageType.PRODUCT_INITIATIVE_DEFINED # one fired for each initiative
+        PubSubMessageType.PRODUCT_INITIATIVE_DEFINED  # one fired for each initiative
     )
 
-    # Business Eng Lead
+    # Eng Lead
     pubsub_manager.on(
         PubSubMessageType.PRODUCT_INITIATIVE_DEFINED,
-        eng_lead.define_tasks_for_initiative,
-        # PubSubMessageType.ENGINEERING_TASKS_DEFINED
+        eng_lead.define_tasks_for_initiative
+        # publishes ENGINEERING_WORK_REQUESTED | DESIGN_WORK_REQUESTED | HUMAN_WORK_REQUESTED
     )
 
-    # Capability Identifier
+    # Desiger
+    pubsub_manager.on(
+        PubSubMessageType.DESIGN_WORK_REQUESTED,
+        worker_design.do_work,
+        PubSubMessageType.WORK_COMPLETED
+    )
+
+    # Coder
     # pubsub_manager.on(
-    #     PubSubMessageType.ENGINEERING_TASKS_DEFINED,
-    #     capability_identifier.on_engineering_tasks_defined,
-    #     PubSubMessageType.CAPABILITIES_IDENTIFIED
+    #     PubSubMessageType.CODING_WORK_REQUESTED,
+    #     worker_coder.do_work,
+    #     PubSubMessageType.WORK_COMPLETED
     # )
 
-    # Capability Builder
+    # Human
     # pubsub_manager.on(
-    #     PubSubMessageType.CAPABILITIES_IDENTIFIED,
-    #     capability_builder.on_capabilities_identified,
-    #     PubSubMessageType.CAPABILITY_SPEC_READY
+    #     PubSubMessageType.HUMAN_WORK_REQUESTED,
+    #     worker_human.do_work
     # )

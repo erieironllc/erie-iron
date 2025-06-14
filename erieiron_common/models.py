@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, CapabilityStatus, ExecutionMode
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1379,52 +1379,41 @@ class ProductRequirement(BaseErieIronModel):
 class EngineeringTask(BaseErieIronModel):
     id = models.TextField(primary_key=True)
     product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name="engineering_tasks")
+    status = models.TextField(null=False, choices=TaskStatus.choices())
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
     task_description = models.TextField()
-    depends_on = models.JSONField(default=list)
+    depends_on = models.ManyToManyField(
+        'self',
+        symmetrical=False,
+        related_name='dependent_tasks',
+        blank=True
+    )
     raw_llm_payload = models.JSONField(default=list)
     risk_notes = models.TextField()
     test_plan = models.TextField()
-    execution_mode = models.TextField(choices=ExecutionMode.choices())
+    role_assignee = models.TextField(choices=TaskAssigneeType.choices())
+    completion_criteria = models.JSONField(default=list)
+    comment_requests = models.JSONField(default=list)
+    max_budget_usd = models.FloatField(null=True)
+    attachments = models.JSONField(default=list)
 
 
-class EngineeringTaskStep(BaseErieIronModel):
-    task = models.ForeignKey(EngineeringTask, on_delete=models.CASCADE)
-    step_index = models.IntegerField()
-    capabilities = models.ManyToManyField("Capability", blank=True)
-    inputs = models.JSONField(default=dict)
-    outputs = models.JSONField(default=dict)
-
-
-class Capability(BaseErieIronModel):
+# Design system and handoff models
+class DesignComponent(BaseErieIronModel):
     id = models.TextField(primary_key=True)
-    name = models.TextField(unique=True)
+    name = models.TextField()
     description = models.TextField(null=True)
-    inputs = models.JSONField(default=dict)  # key: name, value: {type, description}
-    output_schema = models.JSONField(default=dict)
-    test_plan = models.TextField(null=True)
-    runtime_env = models.TextField(null=True)  # e.g. 'python:3.11', 'aws_lambda'
-    entry_point = models.TextField(null=True)  # callable or URI
-    execution_sandbox = models.TextField(null=True)  # e.g. 'lambda', 'ecs', 'local'
 
-    status = models.TextField(choices=CapabilityStatus.choices(), default=CapabilityStatus.PENDING)
 
-    depends_on = models.ManyToManyField("self", symmetrical=False, blank=True)
-    can_be_built_autonomously = models.BooleanField(default=True)
-
-    builder_notes = models.TextField(null=True)
-    last_built_at = models.DateTimeField(null=True)
-    implemented_by = models.TextField(
-        null=True,
-        help_text="Name of the person or LLM models used to implement this capability"
-    )
-
-    def is_blocked(self):
-        return self.depends_on.exclude(status=CapabilityStatus.COMPLETE).exists()
+class EngineeringTaskDesignHandoff(BaseErieIronModel):
+    task = models.OneToOneField("EngineeringTask", on_delete=models.CASCADE, related_name="design_handoff")
+    component_ids = models.ManyToManyField(DesignComponent, blank=True)
+    layout = models.JSONField(default=dict, null=True)
 
 
 class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    engineering_task = models.OneToOneField(EngineeringTask, on_delete=models.SET_NULL, null=True, blank=True)
     config_path = models.TextField(null=False)
     sandbox_root_dir = models.TextField(null=False)
     created_at = models.DateTimeField(auto_now_add=True)
