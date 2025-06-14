@@ -65,6 +65,9 @@ def business_workflow(pubsub_manager: PubSubManager):
         PubSubMessageType.PRODUCT_INITIATIVE_DEFINED,
         eng_lead.define_tasks_for_initiative
         # publishes ENGINEERING_WORK_REQUESTED | DESIGN_WORK_REQUESTED | HUMAN_WORK_REQUESTED
+    ).on(
+        PubSubMessageType.WORK_COMPLETED,
+        eng_lead.on_work_completed
     )
 
     # Desiger
@@ -75,11 +78,10 @@ def business_workflow(pubsub_manager: PubSubManager):
     )
 
     # Coder
-    # pubsub_manager.on(
-    #     PubSubMessageType.CODING_WORK_REQUESTED,
-    #     worker_coder.do_work,
-    #     PubSubMessageType.WORK_COMPLETED
-    # )
+    pubsub_manager.on(
+        PubSubMessageType.CODING_WORK_REQUESTED,
+        worker_coder.do_work
+    )
 
     # Human
     # pubsub_manager.on(

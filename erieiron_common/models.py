@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1011,6 +1011,7 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
 
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
+    sandbox_dir_name = models.TextField(null=False)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
     bank_account_id = models.TextField(null=True)
@@ -1029,6 +1030,12 @@ class Business(BaseErieIronModel):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def get_sandbox_dir(self) -> Path:
+        p = Path("./erieiron_businesses") / self.sandbox_dir_name
+        p.mkdir(parents=True, exist_ok=True)
+
+        return p
 
     def get_latest_board_guidance(self) -> 'BusinessGuidance':
         return self.businessguidance_set.order_by("created_timestamp").last()
@@ -1272,6 +1279,8 @@ class BusinessLegalAnalysis(BaseErieIronModel):
     justification = models.TextField(null=True)
     required_disclaimers_or_terms = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     risk_rating = models.TextField(null=True, choices=Level.choices())
+    recommended_entity_structure = models.TextField(choices=LlcStructure.choices(), null=False)
+    entity_structure_justification = models.TextField(null=True)
 
 
 class BusinessBankBalanceSnapshot(BaseErieIronModel):

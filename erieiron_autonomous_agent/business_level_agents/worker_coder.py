@@ -1,7 +1,6 @@
-def do_work (business_id):
-    raise Exception("capability_identifier not implemented")
+from erieiron_common.models import Business
 
-    # capability_identifier_response = business_level_chat(
-    #     "capability_identifier.md",
-    #     ""
-    # )
+
+def do_work(business_id):
+    business = Business.objects.get(id=business_id)
+    business.get_sandbox_dir()

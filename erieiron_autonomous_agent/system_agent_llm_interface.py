@@ -20,8 +20,8 @@ def board_level_chat(
     system_prompt = assert_exists(BOARD_LEVEL_BASE_PATH / system_prompt)
 
     system_prompts = [
-        system_prompt,
-        BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level.md"
+        BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level.md",
+        system_prompt
     ]
 
     output_schema = BOARD_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"

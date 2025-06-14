@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LegalAnalystOutput",
+  "type": "object",
+  "required": [
+    "approved",
+    "risk_rating",
+    "justification",
+    "required_disclaimers_or_terms",
+    "recommended_entity_structure",
+    "entity_structure_justification"
+  ],
+  "properties": {
+    "approved": {
+      "type": "boolean"
+    },
+    "risk_rating": {
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ]
+    },
+    "justification": {
+      "type": "string"
+    },
+    "required_disclaimers_or_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommended_entity_structure": {
+      "type": "string",
+      "enum": ["ERIE_IRON_LLC", "SEPARATE_LLC"]
+    },
+    "entity_structure_justification": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

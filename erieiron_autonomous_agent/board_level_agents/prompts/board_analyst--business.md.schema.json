@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BusinessAnalystOutput",
+  "type": "object",
+  "required": [
+    "business_name",
+    "summary",
+    "total_addressable_market",
+    "time_to_profit_estimate_months",
+    "operating_expenses",
+    "estimated_monthly_revenue_at_steady_state_usd",
+    "potential_mode",
+    "potential_competitors",
+    "upfront_cash_investment_required",
+    "risks",
+    "macro_trends_aligned",
+    "blocking_factors",
+    "final_recommendation"
+  ],
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "total_addressable_market": {
+      "type": "object",
+      "required": [
+        "estimate_usd_per_year",
+        "source_or_rationale"
+      ],
+      "properties": {
+        "estimate_usd_per_year": {
+          "type": "integer"
+        },
+        "source_or_rationale": {
+          "type": "string"
+        }
+      }
+    },
+    "time_to_profit_estimate_months": {
+      "type": "integer"
+    },
+    "operating_expenses": {
+      "type": "object",
+      "required": [
+        "estimated_operating_total_cost_per_month_usd",
+        "monthly_expenses"
+      ],
+      "properties": {
+        "estimated_operating_total_cost_per_month_usd": {
+          "type": "string"
+        },
+        "monthly_expenses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "purpose",
+              "monthly_expense_usd"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "monthly_expense_usd": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    },
+    "estimated_monthly_revenue_at_steady_state_usd": {
+      "type": "integer"
+    },
+    "potential_mode": {
+      "type": "string",
+      "minLength": 5
+    },
+    "potential_competitors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "url",
+          "notes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "upfront_cash_investment_required": {
+      "type": "object",
+      "required": [
+        "estimated_amount_usd",
+        "use_of_funds"
+      ],
+      "properties": {
+        "estimated_amount_usd": {
+          "type": "number"
+        },
+        "use_of_funds": {
+          "type": "string"
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "macro_trends_aligned": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blocking_factors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "final_recommendation": {
+      "type": "object",
+      "required": [
+        "score_1_to_10",
+        "justification"
+      ],
+      "properties": {
+        "score_1_to_10": {
+          "type": "integer"
+        },
+        "justification": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

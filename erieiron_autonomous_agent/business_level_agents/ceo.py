@@ -18,6 +18,7 @@ def on_business_guidance_updated(business_id):
 
     process_response(business, ceo_analysis)
 
+
 def build_chat_data(business):
     business_analysis, legal_analysis = business.get_latest_analysist()
     product_status = {
@@ -41,6 +42,7 @@ def build_chat_data(business):
         "Please evaluate the Board Guidance, evaluate the business updates, and issue directives (if necessary)"
     ]
     return chat_data
+
 
 @transaction.atomic()
 def process_response(business, ceo_analysis):
@@ -82,5 +84,3 @@ def process_response(business, ceo_analysis):
                 "initiative_reference": directive.get("initiative_reference", "")
             }
         )
-
-

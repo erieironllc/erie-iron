@@ -400,3 +400,8 @@ class TaskStatus(ErieEnum):
     IN_PROGRESS = auto()
     COMPLETE = auto()
     FAILED = auto()
+
+
+class LlcStructure(ErieEnum):
+    ERIE_IRON_LLC = auto()
+    SEPARATE_LLC = auto()

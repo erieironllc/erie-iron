@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PortfolioResourcePlannerOutput",
+  "type": "object",
+  "required": [
+    "cash_capacity_status",
+    "compute_capacity_status",
+    "human_capacity_status",
+    "recommendation",
+    "justification"
+  ],
+  "properties": {
+    "cash_capacity_status": {
+      "type": "string",
+      "enum": [
+        "GREEN",
+        "YELLOW",
+        "RED"
+      ]
+    },
+    "compute_capacity_status": {
+      "type": "string",
+      "enum": [
+        "GREEN",
+        "YELLOW",
+        "RED"
+      ]
+    },
+    "human_capacity_status": {
+      "type": "string",
+      "enum": [
+        "GREEN",
+        "YELLOW",
+        "RED"
+      ]
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": [
+        "GREEN",
+        "YELLOW",
+        "RED"
+      ]
+    },
+    "justification": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
