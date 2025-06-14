@@ -80,8 +80,7 @@
       "type": "integer"
     },
     "potential_mode": {
-      "type": "string",
-      "minLength": 5
+      "type": "string"
     },
     "potential_competitors": {
       "type": "array",

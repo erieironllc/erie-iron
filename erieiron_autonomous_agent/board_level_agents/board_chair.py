@@ -10,7 +10,7 @@ from erieiron_common.models import Business, BusinessGuidance
 def exec_board_chair_tasks():
     erieiron_business = Business.get_erie_iron_business()
 
-    for business in Business.objects.all():
+    for business in Business.objects.exclude(id=erieiron_business.id):
         if business.needs_analysis():
             PubSubManager.publish_id(
                 PubSubMessageType.ANALYSIS_REQUESTED,

@@ -1,6 +1,7 @@
-from erieiron_common.models import Business
+from erieiron_common.models import Business, Task
 
 
-def do_work(business_id):
-    business = Business.objects.get(id=business_id)
-    business.get_sandbox_dir()
+def do_work(task_id):
+    task = Task.objects.get(id=task_id)
+    sandbox = task.product_initiative.business.get_sandbox_dir()
+    print("SANDBOX", sandbox)

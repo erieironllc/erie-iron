@@ -2,7 +2,7 @@ from pathlib import Path
 
 from django.core.management import BaseCommand
 
-from erieiron_autonomous_agent.portfolio_level_agents import portfolio_leader
+from erieiron_autonomous_agent.board_level_agents import corporate_development_agent
 from erieiron_common.enums import BusinessIdeaSource
 from erieiron_common.models import BusinessAnalysis, PubSubMessage
 
@@ -22,11 +22,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        PubSubMessage.objects.all().delete()
-        BusinessAnalysis.objects.filter(business__id=options.get("business_id")).delete()
-
-        portfolio_leader.submit_business_idea(
-            Path(options.get("file_name")),
-            options.get("business_id"),
-            source=BusinessIdeaSource.HUMAN
+        corporate_development_agent.submit_business_opportunity(
+            {
+                "idea_content": Path(options.get("file_name")),
+                "source": BusinessIdeaSource.HUMAN
+            }
         )

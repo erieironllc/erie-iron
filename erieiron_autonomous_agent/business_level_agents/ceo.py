@@ -7,6 +7,9 @@ from erieiron_common.models import BusinessKPI, BusinessGoal, BusinessCeoDirecti
 
 
 def on_business_guidance_updated(business_id):
+    if Business.get_erie_iron_business().id == business_id:
+        return
+
     business = Business.objects.get(id=business_id)
 
     chat_data = build_chat_data(business)

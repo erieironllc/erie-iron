@@ -1,5 +1,5 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
-from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, worker_human
+from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder
 from erieiron_common.enums import PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 

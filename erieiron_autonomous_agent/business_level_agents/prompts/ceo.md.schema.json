@@ -17,7 +17,8 @@
       "enum": [
         "MAINTAIN",
         "INCREASE_BUDGET",
-        "DECREASE_BUDGET"
+        "DECREASE_BUDGET",
+        "SHUTDOWN"
       ]
     },
     "justification": {

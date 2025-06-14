@@ -5,9 +5,9 @@ from erieiron_common.enums import TaskStatus, TaskAssigneeType, PubSubMessageTyp
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import (
     ProductInitiative,
-    EngineeringTask,
+    Task,
     ProductRequirement,
-    EngineeringTaskDesignHandoff,
+    TaskDesignRequirements,
     DesignComponent
 )
 
@@ -103,7 +103,7 @@ def process_response(initiative, eng_lead_response):
         if invalid_ids:
             raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
 
-        eng_task, created = EngineeringTask.objects.update_or_create(
+        eng_task, created = Task.objects.update_or_create(
             id=task_id if task_id else None,
             defaults={
                 "product_initiative": initiative,
@@ -120,7 +120,7 @@ def process_response(initiative, eng_lead_response):
         # Handle design_handoff for DESIGN tasks
         if eng_task.role_assignee == "DESIGN" and "design_handoff" in task_data:
             handoff_data = task_data["design_handoff"]
-            handoff_obj, _ = EngineeringTaskDesignHandoff.objects.get_or_create(task=eng_task)
+            handoff_obj, _ = TaskDesignRequirements.objects.get_or_create(task=eng_task)
 
             # Components
             component_ids = handoff_data.get("component_ids", [])
@@ -141,7 +141,7 @@ def process_response(initiative, eng_lead_response):
 
         # Set depends_on M2M relationship after update_or_create
         dependency_ids = task_data.get("depends_on", [])
-        dependencies = EngineeringTask.objects.filter(id__in=dependency_ids)
+        dependencies = Task.objects.filter(id__in=dependency_ids)
 
         # Dependency validation before assignment
         resolved_ids = set(dependencies.values_list("id", flat=True))
@@ -182,7 +182,7 @@ def process_response(initiative, eng_lead_response):
 
         print(f"Saved task: {eng_task.id} — {eng_task.task_description[:80]}")
 
-    for task in EngineeringTask.objects.filter(id__in=updated_or_created_task_ids):
+    for task in Task.objects.filter(id__in=updated_or_created_task_ids):
         msg_type = ASSIGNEE_TO_MSGTYPE.get(TaskAssigneeType(task.role_assignee))
 
         if not msg_type:
@@ -192,6 +192,6 @@ def process_response(initiative, eng_lead_response):
 
 
 def on_work_completed(task_id):
-    EngineeringTask.objects.filter(id=task_id).update(
+    Task.objects.filter(id=task_id).update(
         status=TaskStatus.COMPLETE
     )
