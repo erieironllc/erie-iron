@@ -216,12 +216,14 @@ class PubSubMessageType(ErieEnum):
 
     CEO_DIRECTIVES_ISSUED = auto()
     PRODUCT_INITIATIVE_DEFINED = auto()
-    TASK_UPDATED = auto()
     CODING_WORK_REQUESTED = auto()
     DESIGN_WORK_REQUESTED = auto()
     HUMAN_WORK_REQUESTED = auto()
+
+    TASK_UPDATED = auto()
     TASK_COMPLETED = auto()
     TASK_FAILED = auto()
+    TASK_SPEND = auto()
 
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:

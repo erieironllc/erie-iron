@@ -15,12 +15,14 @@ import settings
 from erieiron_common import common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.codegen_utils import lint_and_format, CodeCompilationError
-from erieiron_common.enums import LlmRole, LlmModel, S3Bucket
+from erieiron_common.enums import LlmRole, LlmModel, S3Bucket, PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER, LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import CodeFile, SelfDrivingTask, CodeVersion, SelfDrivingTaskIteration, LlmRequest
 
 ARTIFACTS = "artifacts"
+PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 
@@ -28,133 +30,6 @@ COUNT_FULL_LOGS_IN_CONTEXT = 2
 class GoalAchieved(Exception):
     def __init__(self, planning_data):
         self.planning_data = planning_data
-
-
-SYSTEM_MESSAGE_PLANNING = """
-You are a Principal Engineer and expert in generating structured instructions for code generation. 
-
-Your task is to
-1) fully understand the user's GOAL
-2) evaluate the code and logs from previous iterations if they exist.  
-    - The previous iteration messages are in order oldest to newest.  Priorize evaluation of the very latest code and output first and give it context priority.  Then look to previous versions as necessary to add to context of previous changes
-    - if no code or logs exist, proceed solely based on the GOAL
-3) from your review of the previous iterations code and logs, identify optimizations to the previous code that you think will get it closer to achieving the stated GOAL
-4) then produce clear, unambiguous instructions that the code generation model can follow exactly to implement the optimization from step 3.  This will be a combination of modifying existing code and optionally new code files
-5) you can keep all code in the single main code file, but if you think it's better feel free to define new code files in the code_files list
-
-Output your answer as a json object with 
-    a key "best_iteration_id" mapping to the id of what you think is the 'best' iteration so far.  value should be null if this is the first iteration of the code
-    a key "iteration_id_to_modify" mapping to the id of the iteration you'd like to modify in the next version of the code.  this is useful if the code has gone down a bad path and you want to revert to a previous version
-      - If you'd like to modify the latest version of the code, you can just say "latest".  
-      - of, if you'd like to revert back to a previous iteration of the code prior to making your changes, iteration_id_to_modify maps to the id of the iteration you'd like to revert back to
-    a key "evaluation" mapping to a list of evaluation items identified in both step 2 and requested in the user prompt. each evaluation object must include:
-      - "summary": a short summary of the evaluation item
-      - "details": rich details on the evaluation item.  use this area to teach when applicable
-    a key "code_files" mapping to a list of code_file data structures.  For each data structure in the code_files list shall contain the following keys:
-        a key "code_file_path" mapping to the path (relative to working directory) of the code file to add or modify
-        a key "instructions" mapping to a list of instruction objects. each instruction object must include:
-          - "step_number": a sequential number (starting at 1)
-          - "action": a concise description of the required modification or additions to the code file
-          - "details": additional context or specifics to clarify the action
-          NOTE:  if no modifications a required for the file, "instructions" shall be an empty list ([])
-    a key "goal_achieved" mapping to a boolean value indicating if you think we have achieved the user's GOAL with at least 97% confidence
-    a key "previous_iteration_count" mapping to a value indicating the number of previous iterations your feel are useful to your task.  
-      - If an iteration is before this number, we won't include it in the context for future evaluations
-      - If you think all are useful, set the value to the string 'all'
-      
-      
-    ensure that each instruction is self-contained, clearly defined, and provides all necessary context. avoid ambiguity or unnecessary verbosity.
-    example output:{
-        "goal_achieved": false,
-        "previous_iteration_count": <number of previous iterations | 'all'>,
-        "best_iteration_id": <id of best iteration>
-        "iteration_id_to_modify": "latest" or the id of the previous iteration of the code you'd like to revert to
-        "evaluation": [
-            {
-                "summary": "logs reflected we are getting closer to the user's GOAL",
-                "details": "lots of details in support of logs reflected we are getting closer to the user's GOAL"
-            }
-        ],
-        "code_files": [
-            {
-                "code_file_path": "./dir1/dir2/code_file1.py",
-                "instructions": [
-                    {
-                        "step_number": 1,
-                        "action": "modify batch_size variable from 12 to 24",
-                        "details": "increasing the batch size will allow for more efficient learning"
-                    },
-                    {
-                        "step_number": 2,
-                        "action": "modify cnn layers to 6",
-                        "details": "more layers, more features"
-                    },
-                    ...
-                ],
-            },
-            {
-                "code_file_path": "./dir1/dir2/code_file2.py",
-                "instructions": [],
-            },
-            ...
-        ]
-    }
-
-Important Policies.  All policies must be followed:
-  - You will never do anything that would be destructive to your outside environment.  If unsure, don't do it and raise an exception.
-  - You may only create, edit, or delete files within the <sandbox_dir>. Use Path(__file__).parent / "<filename>" for all file paths.
-  - Never use absolute paths or paths outside the allowed directory.
-  - If multiple issues exist in the previous code, attempt to address all issues you find
-  - Experiment with various techniques, including adjusting variable values, to achieve the user's GOAL.
-  - If recent iterations have plateaued, consider experimenting with bold, unconventional strategies to spark further progress.
-  - If previous runs were killed by the keyboard, assume the previous run was going too slow and you need to make it run faster
-  - If previous runs failed because of exception, go back to the previous 'good' file and modify that one.  Do not modify the file that generated the exception
-  - Ensure that optimizations are genuinely effective and do not rely on superficial fixes.
-"""
-
-SYSTEM_MESSAGE_CODE = f"""
-You are an expert python code generator. 
-
-Security & File Constraints
- • You must never generate self-modifying code. Code should not read or write to its own file.
- • You may only create, edit, or delete files within the <sandbox_dir> directory. Use Path(__file__).parent / "<filename>" for all file paths.
- • Never use absolute paths or paths outside the allowed directory.
-
-Output Format
- • Your response must contain only raw, valid Python code. No explanations, no markdown formatting.
-
-Iteration & Logging
- • You are part of an iterative code loop. Each version builds toward a defined GOAL.
- • Include helpful print() logs and metrics to track success and support future improvement.
- • Use tqdm to show progress in long-running loops.
- • Cache any API or asset fetches that will remain constant between runs.
-
-Code Quality
- • Remove unused imports.
- • All code must be free of bugs (e.g., missing imports).
- • Follow this style:
- • Use snake_case for variable and function names
- • Comments should be lowercase and only used for non-obvious logic
-
-Dependencies
-You may only use the libraries listed in the following requirements.txt:
-========== begin requirements.txt ================
-{Path('./requirements.txt').read_text()}
-========== end requirements.txt ================
-"""
-
-
-ADDITIONAL_SYSTEM_MESSAGE_ML_CODE = f"""
-Additional Important Policies.  All policies must be followed:
-  - the main code file MUST save the ensemble checkpoints to a directory named <artifacts_directory>
-        - The checkpoint files need to have all of the data required to use the model at a later point for inference
-  - the main code file must expose a method named "def infer(obj)" on the <execute_module> - ie it should expose "<execute_module>.infer(obj)"
-        - the infer(obj) method accepts a single item from the test dataset, and returns the inferred value or values
-        - the infer(obj) method must load a model from the checkpoints in <artifacts_directory> (or ensemble checkpoints in <artifacts_directory>).  This is necessary to validate the model can be reconstructed from the checkpoint files
-        - the final test evaluation must use this infer() method when scoring the performance of the model
-        - if you want to use the infer(obj) method in the train or test steps, that is ok but not necessary
-  - the code must plot learing rate and loss curve diagrams and same them to the directory <artifacts_directory>
-"""
 
 
 class SelfDriverConfigException(Exception):
@@ -178,11 +53,14 @@ class SelfDriverConfig:
 
         self.main_file = Path(config.get("main_file", config_file.parent / f"{common.get_basename(config_file)}.py"))
         self.main_code_file = CodeFile.get(self.main_file)
+        self.task_log = Path(config.get("log_file", config_file.parent / f"{common.get_basename(config_file)}.output.log"))
         self.sandbox_root_dir = config.get("sandbox_root_dir", self.main_file.parent)
         self.code_directory = self.main_file.parent
         self.code_basename = common.get_basename(self.main_file)
 
+        self.task_id = config.get("task_id")
         self.task = SelfDrivingTask.get_or_create(
+            related_task_id=self.task_id,
             config_file=str(config_file),
             sandbox_root_dir=self.sandbox_root_dir,
             business_name=config.get("business")
@@ -191,14 +69,13 @@ class SelfDriverConfig:
 
         self.current_iteration = None
         self.artifacts_dir = None
-        self.task_log = Path(settings.BASE_DIR) / f"{self.code_basename}_task.log"
 
         self.is_model_trainer = common.parse_bool(config.get("is_model_trainer", "False"))
 
         self.attachments = common.get(config, "attachments", [])
         self.comment_requests = common.get(config, "comment_requests", [])
 
-        self.goal = "\n".join(common.ensure_list(config['goal']))
+        self.goal = "\n".join(common.ensure_list(config.get('completion_criteria', config.get('goal'))))
         self.llm_role = LlmRole(config.get("llm_role", LlmRole.ML_ENGINEER))
         self.never_done = common.parse_bool(config.get("never_done", False))
         self.max_budget_usd = float(config.get("max_budget_usd", 20))
@@ -245,8 +122,6 @@ def execute(config_file: Path):
             config = SelfDriverConfig(config_file)
 
             if i == 0:
-                common.quietly_delete(config.task_log)
-                config.task_log.touch()
                 print(f"tail -f {os.path.abspath(config.task_log)}")
 
             total_spend = config.task.get_cost()
@@ -282,10 +157,15 @@ def execute(config_file: Path):
             except GoalAchieved as goal_achieved:
                 pprint.pprint(goal_achieved.planning_data)
                 stop_reason = "Goal Achieved"
+                if config.task_id:
+                    PubSubManager.publish_id(PubSubMessageType.TASK_COMPLETED, config.task_id)
+
                 break
             except Exception as e:
                 logging.exception(e)
                 supress_eval = True
+                if config.task_id:
+                    PubSubManager.publish_id(PubSubMessageType.TASK_FAILED, config.task_id)
                 break
             finally:
                 if iteration:
@@ -347,6 +227,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         logfile
     )
     log_output = logfile.read_text()
+    log(config, log_output, f"iteration-{iteration.id}")
     common.quietly_delete(logfile)
     return log_output
 
@@ -436,21 +317,31 @@ the user's GOAL is:
     return messages
 
 
-def build_instructions_system_messages(config: SelfDriverConfig):
-    messages = []
+def get_sys_prompt(file_name: str, replacements: tuple[str, str] = None) -> LlmMessage:
+    msg = (PROMPTS_DIR / "worker_coder--planning.md").read_text()
+    for look_for_str, replace_with_str in common.ensure_list(replacements):
+        msg = msg.replace(look_for_str, replace_with_str)
+    return LlmMessage.sys(msg)
 
-    messages.append(
-        LlmMessage.sys(SYSTEM_MESSAGE_PLANNING.replace("<sandbox_dir>", str(config.sandbox_root_dir)))
-    )
+
+def build_instructions_system_messages(config: SelfDriverConfig):
+    messages = [
+        get_sys_prompt(
+            "worker_coder--planning.md",
+            ("<sandbox_dir>", str(config.sandbox_root_dir))
+        ),
+        get_helper_methods_msg(config),
+        get_dependencies_msg()
+    ]
 
     if config.is_model_trainer:
-        messages.append(
-            LlmMessage.sys(ADDITIONAL_SYSTEM_MESSAGE_ML_CODE.replace(
-                "<artifacts_directory>", str(config.artifacts_dir)
-            ).replace(
-                "<execute_module>", config.code_basename
-            ))
-        )
+        messages.append(get_sys_prompt(
+            "worker_coder--ml_coder.md",
+            [
+                ("<artifacts_directory>", str(config.artifacts_dir)),
+                ("<execute_module>", config.code_basename)
+            ]
+        ))
 
     return messages
 
@@ -651,19 +542,23 @@ def get_coding_llm_response(
 ) -> LlmResponse:
     model = LlmModel.OPENAI_O3_MINI
 
-    messages = []
-    messages.append(
-        LlmMessage.sys(SYSTEM_MESSAGE_CODE.replace("<sandbox_dir>", str(config.sandbox_root_dir)))
-    )
+    messages: list[LlmMessage] = [
+        get_sys_prompt(
+            "worker_coder--code.md",
+            ("<sandbox_dir>", str(config.sandbox_root_dir))
+        ),
+        get_helper_methods_msg(config),
+        get_dependencies_msg()
+    ]
 
     if config.is_model_trainer:
-        messages.append(
-            LlmMessage.sys(ADDITIONAL_SYSTEM_MESSAGE_ML_CODE.replace(
-                "<artifacts_directory>", str(config.artifacts_dir)
-            ).replace(
-                "<execute_module>", config.code_basename
-            ))
-        )
+        messages.append(get_sys_prompt(
+            "worker_coder--ml_coder.md",
+            [
+                ("<artifacts_directory>", str(config.artifacts_dir)),
+                ("<execute_module>", config.code_basename)
+            ]
+        ))
 
     if previous_exception:
         messages.append(
@@ -745,6 +640,37 @@ please write the initial version of {code_file_path}, following each of these in
     print(f"\t\tcost of code gen: total ${llm_response_codegen.price_total:.4f}; input ${llm_response_codegen.price_input:.4f}; output ${llm_response_codegen.price_output:.4f}")
 
     return llm_response_codegen
+
+
+def get_dependencies_msg():
+    return LlmMessage.sys(
+        f"""
+Dependencies
+
+You may only use the libraries listed in the following requirements.txt:
+========== begin requirements.txt ================
+{Path('./requirements.txt').read_text()}
+========== end requirements.txt ================
+"""
+    )
+
+
+def get_helper_methods_msg(config) -> LlmMessage:
+    return LlmMessage.sys(
+        f"""
+Helper Methods
+
+You may use the helper methods defined in agent_tools.py
+========== begin agent_tools.py ================
+{(Path(__file__).parent / "agent_tools_stub.py").read_text()}
+========== end agent_tools.py ================
+
+If you use any of these helper methods, you must import agent_tools with the following line of code:
+from erieiron_autonomous_agent.business_level_agents.self_driving_coder import agent_tools
+
+if a helper method has a parameter named 'task_id', use the following value for task_id: "{config.task_id or None}"
+"""
+    )
 
 
 def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):

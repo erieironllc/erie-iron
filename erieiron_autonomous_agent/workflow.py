@@ -79,6 +79,10 @@ def business_workflow(pubsub_manager: PubSubManager):
         PubSubMessageType.TASK_FAILED,
         task_manager.on_task_complete,
         PubSubMessageType.TASK_UPDATED
+    ).on(
+        PubSubMessageType.TASK_SPEND,
+        task_manager.on_task_spend,
+        PubSubMessageType.TASK_UPDATED
     )
 
     # Desiger

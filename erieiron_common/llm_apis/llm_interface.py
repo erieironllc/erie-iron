@@ -142,9 +142,9 @@ class LlmResponse:
     price_output: float
     token_count: int
     chat_millis: float
-    parsed_json: Optional = None
+    parsed_json: Optional[dict] = None
 
-    def json(self):
+    def json(self) -> dict:
         if not self.parsed_json:
             self.parsed_json = ensure_parsable_json(self.text)
 
@@ -157,7 +157,7 @@ class LlmMessage:
             file = text
             text = None
 
-        self.message_type: LlmMessageType = message_type
+        self.message_type: LlmMessageType = LlmMessageType(message_type)
         self.file = file
 
         if text and file:
