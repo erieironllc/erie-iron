@@ -1,5 +1,9 @@
 import logging
 
+from django.db import transaction
+from django.db.models import F, Value
+from django.db.models.functions import Coalesce
+
 from erieiron_common.enums import TaskAssigneeType, PubSubMessageType, TaskStatus
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import Task
@@ -46,6 +50,16 @@ def on_task_complete(task_id):
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.COMPLETE
     )
+
+
+def on_task_spend(payload):
+    task_id = payload['task_id']
+    usd_spent = float(payload['usd_spent'])
+
+    with transaction.atomic():
+        Task.objects.filter(id=task_id).update(
+            current_spend=Coalesce(F('current_spend'), Value(0)) + usd_spent
+        )
 
 
 def on_task_failed(payload):

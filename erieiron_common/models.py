@@ -1403,6 +1403,7 @@ class Task(BaseErieIronModel):
     role_assignee = models.TextField(choices=TaskAssigneeType.choices())
     completion_criteria = models.JSONField(default=list)
     comment_requests = models.JSONField(default=list)
+    current_spend = models.FloatField(null=True)
     max_budget_usd = models.FloatField(null=True)
     attachments = models.JSONField(default=list)
     created_by = models.TextField(null=True)
@@ -1494,6 +1495,7 @@ class SelfDrivingTask(BaseErieIronModel):
 
     @staticmethod
     def get_or_create(
+            related_task_id: str,
             config_file: Path,
             sandbox_root_dir: Path,
             business_name: Optional[str]
@@ -1507,6 +1509,7 @@ class SelfDrivingTask(BaseErieIronModel):
                 business = Business.get_erie_iron_business()
 
             return SelfDrivingTask.objects.get_or_create(
+                related_task_id=related_task_id,
                 config_path=str(config_file),
                 sandbox_root_dir=sandbox_root_dir,
                 business=business
