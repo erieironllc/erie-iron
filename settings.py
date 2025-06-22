@@ -33,6 +33,8 @@ MESSAGE_QUEUE_ENV = config('MESSAGE_QUEUE_ENV', default=None, cast=str)
 MESSAGE_TYPES = config('MESSAGE_TYPES', default=None, cast=str)
 BUCKETS = settings_utils.get_buckets(config)
 
+BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
+
 
 ALLOWED_HOSTS = []
 

@@ -15,11 +15,11 @@ import settings
 from erieiron_common import common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.codegen_utils import lint_and_format, CodeCompilationError
-from erieiron_common.enums import LlmRole, LlmModel, S3Bucket, PubSubMessageType
+from erieiron_common.enums import LlmRole, LlmModel, S3Bucket, PubSubMessageType, TaskExecutionType, TaskPhase
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER, LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import CodeFile, SelfDrivingTask, CodeVersion, SelfDrivingTaskIteration, LlmRequest
+from erieiron_common.models import CodeFile, SelfDrivingTask, CodeVersion, SelfDrivingTaskIteration, LlmRequest, Business
 
 ARTIFACTS = "artifacts"
 PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
@@ -54,17 +54,33 @@ class SelfDriverConfig:
         self.main_file = Path(config.get("main_file", config_file.parent / f"{common.get_basename(config_file)}.py"))
         self.main_code_file = CodeFile.get(self.main_file)
         self.task_log = Path(config.get("log_file", config_file.parent / f"{common.get_basename(config_file)}.output.log"))
-        self.sandbox_root_dir = config.get("sandbox_root_dir", self.main_file.parent)
         self.code_directory = self.main_file.parent
         self.code_basename = common.get_basename(self.main_file)
 
-        self.task_id = config.get("task_id")
-        self.task = SelfDrivingTask.get_or_create(
-            related_task_id=self.task_id,
-            config_file=str(config_file),
-            sandbox_root_dir=self.sandbox_root_dir,
-            business_name=config.get("business")
-        )
+        if config.get("selfdriving_task_id"):
+            self.task = SelfDrivingTask.objects.get(id=config.get("selfdriving_task_id"))
+            self.task_id = self.task.related_task_id
+            business = self.task.business
+        elif config.get("task_id"):
+            self.task_id = config.get("task_id")
+            self.task = SelfDrivingTask.get_or_create(
+                related_task_id=self.task_id,
+                config_file=str(config_file)
+            )
+            business = Business.objects.get(productinitiative__engineering_tasks__id=self.task_id)
+        elif config.get("business_id"):
+            business = Business.objects.get(id=config.get("business_id"))
+            self.task_id = None
+            self.task = SelfDrivingTask.get_or_create(
+                related_task_id=self.task_id,
+                config_file=str(config_file),
+                business=business
+            )
+        else:
+            raise ValueError(f"need either config or task_id or business_id to start selfdriver")
+
+        self.sandbox_root_dir = business.get_sandbox_dir()
+
         self.previous_iteration = self.task.get_most_recent_iteration()
 
         self.current_iteration = None
@@ -79,6 +95,7 @@ class SelfDriverConfig:
         self.llm_role = LlmRole(config.get("llm_role", LlmRole.ML_ENGINEER))
         self.never_done = common.parse_bool(config.get("never_done", False))
         self.max_budget_usd = float(config.get("max_budget_usd", 20))
+        self.generate_single_file = common.parse_bool(config.get("generate_single_file"))
 
         model_str = config.get("model")
         if model_str:
@@ -189,7 +206,7 @@ def execute_eval(config_file: Path):
 
 
 def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
-    if not config.main_file.exists():
+    if not config.main_code_file.get_latest_version():
         iteration = generate_code(
             config=config,
             iteration_instructions=f"""
@@ -222,10 +239,18 @@ def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
 
 def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
-    common.execute_management_cmd(
-        f"exec_self_driver --code_file={config.main_code_file.file_path}",
-        logfile
-    )
+
+    if TaskPhase.BUILD.eq( config.task.related_task.phase):
+        common.exec_cmd(
+            f"pytest -v ./erieiron_businesses/articlesummarizer/task_implement_summary_processing_worker_test.py",
+            logfile
+        )
+    else:
+        common.execute_management_cmd(
+            f"exec_self_driver --code_file={config.main_code_file.file_path}",
+            logfile
+        )
+
     log_output = logfile.read_text()
     log(config, log_output, f"iteration-{iteration.id}")
     common.quietly_delete(logfile)
@@ -318,17 +343,34 @@ the user's GOAL is:
 
 
 def get_sys_prompt(file_name: str, replacements: tuple[str, str] = None) -> LlmMessage:
-    msg = (PROMPTS_DIR / "worker_coder--planning.md").read_text()
+    msg = (PROMPTS_DIR / file_name).read_text()
     for look_for_str, replace_with_str in common.ensure_list(replacements):
         msg = msg.replace(look_for_str, replace_with_str)
     return LlmMessage.sys(msg)
 
 
-def build_instructions_system_messages(config: SelfDriverConfig):
+def build_system_message_planning(config: SelfDriverConfig):
+    if config.generate_single_file:
+        files_strategy = " ".join([
+            f"The functional (non-test) code should be contained in a single file named '{config.main_file.name}'.",
+            f"You will keep all of the functional code you generate in this single file.",
+            f"Be sure to list '{config.main_file.name}' in `code_files` list in the response datastructure with the associated instructions"
+        ])
+    else:
+        files_strategy = " ".join([
+            f"The main entry point for the code should be an 'execute' method in the file named '{config.main_file.name}'",
+            f"You may keep all code in '{config.main_file.name}'",
+            "but if appropriate you may define new code files.",
+            "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
+        ])
+
     messages = [
         get_sys_prompt(
             "worker_coder--planning.md",
-            ("<sandbox_dir>", str(config.sandbox_root_dir))
+            [
+                ("<sandbox_dir>", str(config.sandbox_root_dir)),
+                ("<files_strategy>", files_strategy)
+            ]
         ),
         get_helper_methods_msg(config),
         get_dependencies_msg()
@@ -351,7 +393,7 @@ def generate_code(
         iteration_instructions: str
 ) -> SelfDrivingTaskIteration:
     messages = [
-        *build_instructions_system_messages(config),
+        *build_system_message_planning(config),
         *build_iteration_context_messages(config),
         *[LlmMessage.user(s) for s in common.ensure_list(iteration_instructions)]
     ]
@@ -374,11 +416,12 @@ def generate_code(
     evaluation_of_previous_code = planning_data.get("evaluation", [])
     goal_achieved = common.parse_bool(planning_data['goal_achieved'])
 
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=config.previous_iteration.id).update(
-            achieved_goal=goal_achieved,
-            evaluation_json=planning_data.get("evaluation", [])
-        )
+    if config.previous_iteration:
+        with transaction.atomic():
+            SelfDrivingTaskIteration.objects.filter(id=config.previous_iteration.id).update(
+                achieved_goal=goal_achieved,
+                evaluation_json=planning_data.get("evaluation", [])
+            )
 
     iteration_id_to_modify = planning_data.get("iteration_id_to_modify", "latest")
     try:
@@ -386,19 +429,21 @@ def generate_code(
     except:
         iteration_to_modify = config.previous_iteration
 
-    print(f"\n{json.dumps(planning_data, indent=4)}\n")
+    # print(f"\n{json.dumps(planning_data, indent=4)}\n")
 
     if not config.never_done and goal_achieved:
         raise GoalAchieved(planning_data)
 
     iteration = config.initialize_new_iteration()
+    if not iteration_to_modify:
+        iteration_to_modify = iteration
 
     code_file_instructions = planning_data.get("code_files", [])
     if not code_file_instructions:
         raise Exception("no code files found")
 
     for cfi in code_file_instructions:
-        code_file_path = cfi.get("code_file_path")
+        code_file_path = config.sandbox_root_dir / cfi.get("code_file_path")
         if not code_file_path:
             raise Exception(f"missing code file name: {json.dumps(cfi)}")
 
@@ -524,6 +569,7 @@ def get_planning_llm_response(
     llm_response_planning = llm_interface.chat(
         messages,
         model,
+        output_schema=PROMPTS_DIR / "worker_coder--planning.md.schema.json",
         code_response=True
     )
     log_llm_response(config, llm_response_planning)

@@ -4,6 +4,15 @@ Security & File Constraints
  • You must never generate self-modifying code. Code should not read or write to its own file.
  • You may only create, edit, or delete files within the <sandbox_dir> directory. Use Path(__file__).parent / "<filename>" for all file paths.
  • Never use absolute paths or paths outside the allowed directory.
+ • If the code is a unit or acceptance test, it must not touch production data or otherwise affect production systems
+
+
+Execution Entrypoint
+* The main code file must expose a module level method named 'execute' with the following signature:
+  *  "def execute(payload:dict) -> Optional[dict]"
+  * where payload is a dictionary containing the input to the method
+  * the return value is a dict containing method output, or None if this is not applicable
+  * It's fine for the method to throw an exception to indicate a failure.  The exception method should contain all relavent information to autonomously fix the error 
 
 Output Format
  • Your response must contain only raw, valid Python code. No explanations, no markdown formatting.

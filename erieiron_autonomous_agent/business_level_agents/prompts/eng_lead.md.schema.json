@@ -25,7 +25,8 @@
           "risk_notes",
           "test_plan",
           "role_assignee",
-          "completion_criteria"
+          "completion_criteria",
+          "phase"
         ],
         "properties": {
           "task_id": {
@@ -100,6 +101,16 @@
               }
             },
             "additionalProperties": false
+          },
+          "phase": {
+            "type": "string",
+            "enum": ["BUILD", "EXECUTE"],
+            "description": "Determines whether the task represents a build-time activity or a runtime execution. Required for ENGINEERING tasks."
+          },
+          "task_type": {
+            "type": "string",
+            "enum": ["RUN", "DEPLOY", "VALIDATE", "MONITOR"],
+            "description": "Optional semantic subtype for EXECUTE-phase tasks to support tracking, filtering, and specialized handling. Defaults to RUN if omitted."
           }
         }
       }

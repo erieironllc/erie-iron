@@ -30,6 +30,11 @@ class Command(BaseCommand):
             self_driver.execute_eval(
                 options.get("config")
             )
+        elif options.get("test_file"):
+            python_file = options.get("test_file")
+            print(f"executing {python_file}")
+            code_module = common.import_module_from_path(python_file)
+            code_module.execute()
         elif options.get("code_file"):
             python_file = options.get("code_file")
             print(f"executing {python_file}")
