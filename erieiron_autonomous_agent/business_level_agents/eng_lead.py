@@ -48,7 +48,7 @@ def build_chat_data(business, initiative):
     existing_tasks = [
         {
             "task_id": task.id,
-            "task_description": task.task_description
+            "task_description": task.description
         }
         for task in initiative.engineering_tasks.all()
     ]
@@ -96,17 +96,27 @@ def process_response(initiative, eng_lead_response):
         if invalid_ids:
             raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
 
+        phase = task_data.get("phase")
+        if phase not in {"BUILD", "EXECUTE"}:
+            raise ValueError(f"Invalid or missing phase for task {task_id}: {phase}")
+
+        task_type = task_data.get("task_type")
+        if task_type is not None and task_type not in {"RUN", "DEPLOY", "VALIDATE", "MONITOR"}:
+            raise ValueError(f"Invalid task_type for task {task_id}: {task_type}")
+
         eng_task, created = Task.objects.update_or_create(
             id=task_id if task_id else None,
             defaults={
                 "product_initiative": initiative,
                 "status": TaskStatus.NOT_STARTED.value,
-                "task_description": task_data.get("task_description", ""),
+                "description": task_data.get("task_description", ""),
                 "risk_notes": task_data.get("risk_notes", ""),
                 "test_plan": task_data.get("test_plan", ""),
                 "role_assignee": task_data.get("role_assignee", "ENGINEERING"),
                 "completion_criteria": task_data.get("completion_criteria"),
                 "raw_llm_payload": task_data,
+                "phase": phase,
+                "task_type": task_type,
             }
         )
 
@@ -148,7 +158,7 @@ def process_response(initiative, eng_lead_response):
         )
 
         fields_to_compare = {
-            "task_description": task_data.get("task_description", ""),
+            "description": task_data.get("task_description", ""),
             "risk_notes": task_data.get("risk_notes", ""),
             "test_plan": task_data.get("test_plan", ""),
             "role_assignee": task_data.get("role_assignee"),

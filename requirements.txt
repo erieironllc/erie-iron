@@ -38,6 +38,7 @@ psycopg2-binary
 pydot
 pydub
 python-decouple
+pytest-django
 rapidfuzz
 requests
 resampy>=0.4

@@ -31,7 +31,7 @@ def build_chat_data(task):
 
     triggering_task_data = {
         "task_id": task.id,
-        "task_description": task.task_description,
+        "description": task.description,
         "validated_requirements": list(task.validated_requirements.values_list("id", flat=True)),
     }
 

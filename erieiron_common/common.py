@@ -1545,6 +1545,10 @@ def execute_management_cmd(command, output_file: Path = None) -> Optional[Path]:
     python_executable = os.path.join("env", "bin", "python")
     full_command = f"{python_executable} manage.py {command}"
 
+    return exec_cmd(full_command, output_file)
+
+
+def exec_cmd(full_command, output_file):
     def set_death_signal():
         if sys.platform.startswith('linux'):
             try:
@@ -1589,6 +1593,6 @@ tail -f {os.path.abspath(output_file)}
 def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
     file_path = Path(file_path).resolve()
     sandbox_root_dir = Path(sandbox_root_dir).resolve()
-    if not str(file_path).startswith(str(sandbox_root_dir)):
-        raise ValueError(f"file_path {file_path} is not within sandbox_root_dir {sandbox_root_dir}")
+    if not os.path.abspath(file_path).startswith(os.path.abspath(sandbox_root_dir)):
+        raise ValueError(f"file_path {os.path.abspath(file_path)} is not within sandbox_root_dir {os.path.abspath(sandbox_root_dir)}")
     return file_path

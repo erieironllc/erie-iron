@@ -37,9 +37,9 @@ def on_task_updated(task_id):
 
             PubSubManager.publish_id(msg_type, task.id)
     elif TaskStatus.FAILED.eq(status):
-        logging.error(f"Task {task.id}: {task.task_description} FAILED")
+        logging.error(f"Task {task.id}: {task.description} FAILED")
     elif TaskStatus.COMPLETE.eq(status):
-        logging.info(f"Task {task.id}: {task.task_description} is complete")
+        logging.info(f"Task {task.id}: {task.description} is complete")
     else:
         raise ValueError(f"un-supported task status {status}")
 
@@ -66,7 +66,7 @@ def on_task_failed(payload):
     task = Task.objects.get(id=payload.get("task_id"))
 
     logging.error(f"""
-Task {task.id}: {task.task_description} FAILED
+Task {task.id}: {task.description} FAILED
 {payload.get('error')} """)
 
     Task.objects.filter(id=task.id).update(

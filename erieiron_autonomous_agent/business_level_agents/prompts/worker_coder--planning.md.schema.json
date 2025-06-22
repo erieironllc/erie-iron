@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "goal_achieved",
+    "previous_iteration_count",
+    "best_iteration_id",
+    "iteration_id_to_modify",
+    "evaluation",
+    "code_files"
+  ],
+  "properties": {
+    "goal_achieved": { "type": "boolean" },
+    "previous_iteration_count": {
+      "oneOf": [
+        { "type": "string", "enum": ["all"] },
+        { "type": "string", "pattern": "^[0-9]+$" },
+        { "type": "integer", "minimum": 0 }
+      ]
+    },
+    "best_iteration_id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "iteration_id_to_modify": {
+      "anyOf": [
+        { "type": "string", "enum": ["latest"] },
+        { "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "evaluation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["summary", "details"],
+        "properties": {
+          "summary": { "type": "string" },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "code_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code_file_path", "instructions"],
+        "properties": {
+          "code_file_path": { "type": "string" },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["step_number", "action", "details"],
+              "properties": {
+                "step_number": { "type": "integer", "minimum": 1 },
+                "action": { "type": "string" },
+                "details": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "blocked": {
+      "type": "object",
+      "required": ["category", "reason", "requirements_to_unblock"],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["tool_req", "task_def", "design", "human", "other"]
+        },
+        "reason": { "type": "string" },
+        "requirements_to_unblock": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "if": {
+    "properties": { "goal_achieved": { "const": false } }
+  },
+  "then": {
+    "anyOf": [
+      { "required": ["blocked"] },
+      { "not": { "required": ["blocked"] } }
+    ]
+  }
+}

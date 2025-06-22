@@ -399,6 +399,18 @@ class CapabilityStatus(ErieEnum):
     pass
 
 
+class TaskExecutionType(ErieEnum):
+    RUN = auto()
+    MONITOR = auto()
+    VALIDATE = auto()
+    DEPLOY = auto()
+
+
+class TaskPhase(ErieEnum):
+    EXECUTE = auto()
+    BUILD = auto()
+
+
 class TaskStatus(ErieEnum):
     BLOCKED = auto()
     NOT_STARTED = auto()

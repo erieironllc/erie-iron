@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure, TaskExecutionType, TaskPhase
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1032,7 +1032,7 @@ class Business(BaseErieIronModel):
     updated_at = models.DateTimeField(auto_now=True)
 
     def get_sandbox_dir(self) -> Path:
-        p = Path("./erieiron_businesses") / self.sandbox_dir_name
+        p = settings.BUSINESS_SANDBOX_ROOTDIR / self.sandbox_dir_name
         p.mkdir(parents=True, exist_ok=True)
 
         return p
@@ -1387,10 +1387,11 @@ class ProductRequirement(BaseErieIronModel):
 
 class Task(BaseErieIronModel):
     id = models.TextField(primary_key=True)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
     product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name="engineering_tasks")
     status = models.TextField(null=False, choices=TaskStatus.choices())
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
-    task_description = models.TextField()
+    description = models.TextField()
     depends_on = models.ManyToManyField(
         'self',
         symmetrical=False,
@@ -1407,6 +1408,9 @@ class Task(BaseErieIronModel):
     max_budget_usd = models.FloatField(null=True)
     attachments = models.JSONField(default=list)
     created_by = models.TextField(null=True)
+
+    phase = models.TextField(choices=TaskPhase.choices(), null=False)
+    task_type = models.TextField(choices=TaskExecutionType.choices(), null=True, blank=True)
 
     def are_dependencies_complete(self):
         return all(dep.status == TaskStatus.COMPLETE for dep in self.depends_on.all())
@@ -1429,7 +1433,6 @@ class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     related_task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True)
     config_path = models.TextField(null=False)
-    sandbox_root_dir = models.TextField(null=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def rollback_to(self, iteraton: 'SelfDrivingTaskIteration'):
@@ -1438,7 +1441,7 @@ class SelfDrivingTask(BaseErieIronModel):
         for cf in CodeFile.objects.filter(codeversion__task_iteration__task=self):
             common.quietly_delete(
                 common.assert_in_sandbox(
-                    self.sandbox_root_dir,
+                    self.business.get_sandbox_dir(),
                     cf.file_path
                 )
             )
@@ -1497,21 +1500,15 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_or_create(
             related_task_id: str,
             config_file: Path,
-            sandbox_root_dir: Path,
-            business_name: Optional[str]
+            business: Business = None
     ) -> 'SelfDrivingTask':
         with transaction.atomic():
-            if business_name:
-                business = Business.objects.get_or_create(
-                    name=business_name
-                )[0]
-            else:
-                business = Business.get_erie_iron_business()
+            if not business:
+                business = Business.objects.get(productinitiative__engineering_tasks__id=related_task_id)
 
             return SelfDrivingTask.objects.get_or_create(
                 related_task_id=related_task_id,
                 config_path=str(config_file),
-                sandbox_root_dir=sandbox_root_dir,
                 business=business
             )[0]
 
@@ -1527,11 +1524,13 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     timestamp = models.DateTimeField(auto_now_add=True)
 
     def write_to_disk(self):
-        sandbox_root_dir = self.task.sandbox_root_dir
+        sandbox_root_dir = self.task.business.get_sandbox_dir()
         for cv in self.codeversion_set.all():
             cv.write_to_disk(sandbox_root_dir)
 
     def get_code_version(self, code_file_path: Path):
+        code_file_path = Path(code_file_path)
+
         code_file = CodeFile.get(code_file_path)
 
         code_version_to_modify = code_file.get_version(self)
@@ -1608,7 +1607,7 @@ class CodeFile(BaseErieIronModel):
         )
 
         file_path = common.assert_in_sandbox(
-            task_iteration.task.sandbox_root_dir,
+            task_iteration.task.business.get_sandbox_dir(),
             self.file_path
         )
 
@@ -1643,7 +1642,7 @@ class CodeVersion(BaseErieIronModel):
 
     def write_to_disk(self, sandbox_root_dir=None) -> Path:
         if not sandbox_root_dir:
-            sandbox_root_dir = self.task_iteration.task.sandbox_root_dir
+            sandbox_root_dir = self.task_iteration.task.business.get_sandbox_dir()
 
         file_path = common.assert_in_sandbox(
             sandbox_root_dir,
