@@ -101,8 +101,11 @@ def process_response(initiative, eng_lead_response):
             raise ValueError(f"Invalid or missing phase for task {task_id}: {phase}")
 
         task_type = task_data.get("task_type")
-        if task_type is not None and task_type not in {"RUN", "DEPLOY", "VALIDATE", "MONITOR"}:
-            raise ValueError(f"Invalid task_type for task {task_id}: {task_type}")
+        if phase == "EXECUTE":
+            if not task_type:
+                raise ValueError(f"Missing required task_type for EXECUTE-phase task {task_id}")
+            if task_type not in {"RUN", "DEPLOY", "VALIDATE", "MONITOR"}:
+                raise ValueError(f"Invalid task_type for task {task_id}: {task_type}")
 
         eng_task, created = Task.objects.update_or_create(
             id=task_id if task_id else None,
@@ -184,4 +187,3 @@ def process_response(initiative, eng_lead_response):
             updated_or_created_task_ids.append(eng_task.id)
 
     return updated_or_created_task_ids
-

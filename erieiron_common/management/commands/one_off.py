@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand
 import settings
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.business_level_agents.self_driving_coder import self_driving_coder_agent
+from erieiron_common import common
 from erieiron_common.enums import TaskAssigneeType
 from erieiron_common.models import CodeFile, SelfDrivingTask, PubSubMessage, SelfDrivingTaskIteration, SelfDrivingTaskBestIteration, Task, Business
 
@@ -13,7 +14,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         business = Business.objects.get(id="dac393bb-9999-4009-a8e0-3b9c451a27dd")
         # self.reset_initiatives(business)
-        self.do_selfdriver(business, 'task_implement_summarizer_service_v1')
+        self.do_selfdriver(business, 'task_build_dev_runtime_container')
 
     def reset_initiatives(self, business: Business):
         PubSubMessage.objects.all().delete()
