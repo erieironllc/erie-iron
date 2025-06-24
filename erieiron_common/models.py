@@ -1012,6 +1012,8 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
     sandbox_dir_name = models.TextField(null=False)
+    db_name = models.TextField(null=False)
+    aws_tag = models.TextField(null=False)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
     bank_account_id = models.TextField(null=True)
@@ -1412,6 +1414,16 @@ class Task(BaseErieIronModel):
     phase = models.TextField(choices=TaskPhase.choices(), null=False)
     task_type = models.TextField(choices=TaskExecutionType.choices(), null=True, blank=True)
 
+    def create_execution(self, input) -> 'TaskExecution':
+        TaskExecution.objects.create(
+            task=self,
+            status=TaskStatus.NOT_STARTED,
+            input=input
+        )
+
+    def get_last_execution(self) -> Optional['TaskExecution']:
+        return self.taskexecution_set.filter(executed_time__isnull=False).order_by("executed_time").last()
+
     def are_dependencies_complete(self):
         return all(dep.status == TaskStatus.COMPLETE for dep in self.depends_on.all())
 
@@ -1432,6 +1444,16 @@ class DesignComponent(BaseErieIronModel):
     id = models.TextField(primary_key=True)
     name = models.TextField()
     description = models.TextField(null=True)
+
+
+class TaskExecution(BaseErieIronModel):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE)
+    status = models.TextField(default=TaskStatus.NOT_STARTED, null=False, choices=TaskStatus.choices())
+    created_time = models.DateTimeField(auto_now_add=True)
+    executed_time = models.DateTimeField(null=True)
+    input = models.JSONField(default=dict, null=True)
+    output = models.JSONField(default=dict, null=True)
+    error_msg = models.TextField(null=True)
 
 
 class TaskDesignRequirements(BaseErieIronModel):
@@ -1542,6 +1564,69 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             )
 
         return code_version_to_modify
+
+    def execute(self, logfile=None) -> Optional[TaskExecution]:
+        from erieiron_autonomous_agent.business_level_agents.self_driving_coder.self_driving_coder_config import SelfDriverConfig
+
+        self.write_to_disk()
+
+        self_driving_task = self.task
+
+        config = SelfDriverConfig.get(
+            self_driving_task.config_path,
+            self_driving_task.related_task_id
+        )
+
+        test_exit_code = common.exec_cmd(
+            f"pytest -v {config.main_code_file_test.get_path()}",
+            logfile
+        )
+        if test_exit_code != 0:
+            return None
+
+        python_file = str(config.main_code_file.get_path())
+        print(f"executing {python_file}")
+        code_module = common.import_module_from_path(python_file)
+
+        task = self_driving_task.related_task
+        if not task:
+            code_module.execute({})
+            return None
+        else:
+            task_input = {}
+            for upstream_task in task.depends_on.all():
+                if not TaskStatus.COMPLETE.eq(upstream_task.status):
+                    task.status = TaskStatus.BLOCKED
+                    task.save()
+                    raise Exception(f"task {task.id} depends on task {upstream_task.id}, but the upstream task's status is {upstream_task.status}")
+
+                previous_task_execution = upstream_task.get_last_execution()
+                if not previous_task_execution:
+                    task.status = TaskStatus.BLOCKED
+                    task.save()
+                    raise Exception(f"task {task.id} depends on task {upstream_task.id}, but the upstream task has not executed")
+
+                task_input[upstream_task.id] = previous_task_execution.output
+
+            te = task.create_execution(task_input)
+            try:
+                output = code_module.execute(task_input)
+                status = TaskStatus.COMPLETE
+                error_msg = None
+            except Exception as e:
+                output = None
+                status = TaskStatus.FAILED
+                error_msg = str(e)
+
+            with transaction.atomic():
+                TaskExecution.objects.filter(id=te.id).update(
+                    status=status,
+                    error_msg=error_msg,
+                    output=output,
+                    executed_time=common.get_now()
+                )
+                te.refresh_from_db()
+            return te
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):

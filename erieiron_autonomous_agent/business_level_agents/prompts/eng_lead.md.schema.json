@@ -112,7 +112,19 @@
             "enum": ["RUN", "DEPLOY", "VALIDATE", "MONITOR"],
             "description": "Optional semantic subtype for EXECUTE-phase tasks to support tracking, filtering, and specialized handling. Defaults to RUN if omitted."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": { "const": "EXECUTE" }
+              }
+            },
+            "then": {
+              "required": ["task_type"]
+            }
+          }
+        ]
       }
     }
   }
