@@ -1415,6 +1415,17 @@ class Task(BaseErieIronModel):
     def are_dependencies_complete(self):
         return all(dep.status == TaskStatus.COMPLETE for dep in self.depends_on.all())
 
+    def get_work_desc(self):
+        completion_criteria = "\n".join(common.ensure_list(self.completion_criteria))
+
+        return f"""
+## GOAL
+{self.description}
+
+## Completion Criteria
+{self.completion_criteria}
+        """
+
 
 # Design system and handoff models
 class DesignComponent(BaseErieIronModel):
@@ -1431,8 +1442,10 @@ class TaskDesignRequirements(BaseErieIronModel):
 
 class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
-    related_task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True)
-    config_path = models.TextField(null=False)
+    main_name = models.TextField(null=False)
+    goal = models.TextField(null=False)
+    related_task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
+    config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def rollback_to(self, iteraton: 'SelfDrivingTaskIteration'):
@@ -1496,22 +1509,6 @@ class SelfDrivingTask(BaseErieIronModel):
                 version_number=max_version + 1
             )
 
-    @staticmethod
-    def get_or_create(
-            related_task_id: str,
-            config_file: Path,
-            business: Business = None
-    ) -> 'SelfDrivingTask':
-        with transaction.atomic():
-            if not business:
-                business = Business.objects.get(productinitiative__engineering_tasks__id=related_task_id)
-
-            return SelfDrivingTask.objects.get_or_create(
-                related_task_id=related_task_id,
-                config_path=str(config_file),
-                business=business
-            )[0]
-
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
     task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
@@ -1565,6 +1562,15 @@ class CodeFile(BaseErieIronModel):
     # gotta be unique tho
     file_path = models.TextField(unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def get_path(self) -> Path:
+        return Path(self.file_path)
+
+    def get_base_name(self) -> Path:
+        return common.get_basename(self.get_path())
+
+    def get_dir(self) -> Path:
+        return self.get_path().parent
 
     def get_latest_version(self) -> 'CodeVersion':
         return self.codeversion_set.order_by("created_at").last()

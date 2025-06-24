@@ -2,6 +2,7 @@ from erieiron_common.enums import LlmMessageType, PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
+import sys
 
 
 def llm_chat_text_response(task_id: str, messages: list[tuple[str, str]]) -> str:
@@ -26,14 +27,15 @@ def llm_chat_text_response(task_id: str, messages: list[tuple[str, str]]) -> str
 
     llm_response = llm_interface.chat(llm_messages)
 
-    PubSubManager.publish(
-        PubSubMessageType.TASK_SPEND,
-        task_id,
-        {
-            "task_id": task_id,
-            "usd_spent": llm_response.price_total
-        }
-    )
+    if "pytest" not in sys.modules:
+        PubSubManager.publish(
+            PubSubMessageType.TASK_SPEND,
+            task_id,
+            {
+                "task_id": task_id,
+                "usd_spent": llm_response.price_total
+            }
+        )
 
     return llm_response.text
 
@@ -59,13 +61,14 @@ def llm_chat_json_response(task_id: str, messages: list[tuple[str, str]]) -> dic
 
     llm_response = llm_interface.chat(llm_messages, code_response=True)
 
-    PubSubManager.publish(
-        PubSubMessageType.TASK_SPEND,
-        task_id,
-        {
-            "task_id": task_id,
-            "usd_spent": llm_response.price_total
-        }
-    )
+    if "pytest" not in sys.modules:
+        PubSubManager.publish(
+            PubSubMessageType.TASK_SPEND,
+            task_id,
+            {
+                "task_id": task_id,
+                "usd_spent": llm_response.price_total
+            }
+        )
 
     return llm_response.json()
