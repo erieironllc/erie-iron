@@ -1541,14 +1541,14 @@ def xml_to_json(xml_string):
     return json.dumps({root.tag: recurse(root)}, indent=2)
 
 
-def execute_management_cmd(command, output_file: Path = None) -> Optional[Path]:
+def execute_management_cmd(command, output_file: Path = None) -> int:
     python_executable = os.path.join("env", "bin", "python")
     full_command = f"{python_executable} manage.py {command}"
 
     return exec_cmd(full_command, output_file)
 
 
-def exec_cmd(full_command, output_file):
+def exec_cmd(full_command, output_file=None) -> int:
     def set_death_signal():
         if sys.platform.startswith('linux'):
             try:
@@ -1575,7 +1575,7 @@ tail -f {os.path.abspath(output_file)}
                 preexec_fn=set_death_signal
             )
             process.wait()
-        return output_file
+        return process.returncode
     else:
         print(f'about to execute "{full_command}". sending log to sysout')
         process = subprocess.Popen(
@@ -1587,7 +1587,7 @@ tail -f {os.path.abspath(output_file)}
             preexec_fn=set_death_signal
         )
         process.wait()
-        return None
+        return process.returncode
 
 
 def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
@@ -1596,3 +1596,9 @@ def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
     if not os.path.abspath(file_path).startswith(os.path.abspath(sandbox_root_dir)):
         raise ValueError(f"file_path {os.path.abspath(file_path)} is not within sandbox_root_dir {os.path.abspath(sandbox_root_dir)}")
     return file_path
+
+
+def safe_filename(s, replacement="_", max_length=255):
+    # Remove any character that is not alphanumeric, dot, dash, or underscore
+    safe = re.sub(r'[^a-zA-Z0-9.\-_]', replacement, s)
+    return safe[:max_length]

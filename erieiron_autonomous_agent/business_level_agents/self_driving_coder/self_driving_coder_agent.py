@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import pprint
-import random
 import tempfile
 import zipfile
 from pathlib import Path
@@ -12,14 +11,15 @@ from django.db import transaction
 from django.utils import timezone
 
 import settings
+from erieiron_autonomous_agent.business_level_agents.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException
 from erieiron_common import common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.codegen_utils import lint_and_format, CodeCompilationError
-from erieiron_common.enums import LlmRole, LlmModel, S3Bucket, PubSubMessageType, TaskExecutionType, TaskPhase
+from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER, LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
+from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import CodeFile, SelfDrivingTask, CodeVersion, SelfDrivingTaskIteration, LlmRequest, Business
+from erieiron_common.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest
 
 ARTIFACTS = "artifacts"
 PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
@@ -32,116 +32,18 @@ class GoalAchieved(Exception):
         self.planning_data = planning_data
 
 
-class SelfDriverConfigException(Exception):
-    pass
-
-
-class SelfDriverConfig:
-    def __init__(self, config_file: Path):
-        self.config_file = common.assert_exists(config_file)
-        if self.config_file.name.endswith(".json"):
-            try:
-                config = common.read_json(self.config_file)
-            except Exception as e:
-                raise SelfDriverConfigException(e)
-        else:
-            config = {
-                "goal": self.config_file.read_text()
-            }
-
-        config_base_name = common.get_basename(self.config_file)
-
-        self.main_file = Path(config.get("main_file", config_file.parent / f"{common.get_basename(config_file)}.py"))
-        self.main_code_file = CodeFile.get(self.main_file)
-        self.task_log = Path(config.get("log_file", config_file.parent / f"{common.get_basename(config_file)}.output.log"))
-        self.code_directory = self.main_file.parent
-        self.code_basename = common.get_basename(self.main_file)
-
-        if config.get("selfdriving_task_id"):
-            self.task = SelfDrivingTask.objects.get(id=config.get("selfdriving_task_id"))
-            self.task_id = self.task.related_task_id
-            business = self.task.business
-        elif config.get("task_id"):
-            self.task_id = config.get("task_id")
-            self.task = SelfDrivingTask.get_or_create(
-                related_task_id=self.task_id,
-                config_file=str(config_file)
-            )
-            business = Business.objects.get(productinitiative__engineering_tasks__id=self.task_id)
-        elif config.get("business_id"):
-            business = Business.objects.get(id=config.get("business_id"))
-            self.task_id = None
-            self.task = SelfDrivingTask.get_or_create(
-                related_task_id=self.task_id,
-                config_file=str(config_file),
-                business=business
-            )
-        else:
-            raise ValueError(f"need either config or task_id or business_id to start selfdriver")
-
-        self.sandbox_root_dir = business.get_sandbox_dir()
-
-        self.previous_iteration = self.task.get_most_recent_iteration()
-
-        self.current_iteration = None
-        self.artifacts_dir = None
-
-        self.is_model_trainer = common.parse_bool(config.get("is_model_trainer", "False"))
-
-        self.attachments = common.get(config, "attachments", [])
-        self.comment_requests = common.get(config, "comment_requests", [])
-
-        self.goal = "\n".join(common.ensure_list(config.get('completion_criteria', config.get('goal'))))
-        self.llm_role = LlmRole(config.get("llm_role", LlmRole.ML_ENGINEER))
-        self.never_done = common.parse_bool(config.get("never_done", False))
-        self.max_budget_usd = float(config.get("max_budget_usd", 20))
-        self.generate_single_file = common.parse_bool(config.get("generate_single_file"))
-
-        model_str = config.get("model")
-        if model_str:
-            self.model = random.choice(LlmModel.to_list(model_str.split(",")))
-        else:
-            self.model = random.choice(CODE_MODELS_IN_ORDER)
-
-    def initialize_new_iteration(self) -> SelfDrivingTaskIteration:
-        self.current_iteration = self.task.iterate()
-        self.artifacts_dir = self.main_file.parent / ARTIFACTS / f"{self.code_basename}_v{self.current_iteration.version_number}"
-        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-        iteration_count = self.task.selfdrivingtaskiteration_set.count()
-
-        headline = f"""
---------------------------------------------------
-{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
-
-Self-driving {self.config_file} 
-iteration id {self.current_iteration.id} (v{iteration_count})
-sandbox root dir: {self.sandbox_root_dir}  
-total spend: ${self.task.get_cost() :.2f}/${self.max_budget_usd:.2f}
-
-https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
---------------------------------------------------
-                    """
-        print(headline)
-        log(self, headline)
-
-        return self.current_iteration
-
-
-def execute(config_file: Path):
-    config_file = Path(config_file)
-
+def execute(config_file: Path = None, task_id: str = None):
     config = None
     stop_reason = ""
     supress_eval = False
     try:
         for i in range(100):
-            config = SelfDriverConfig(config_file)
+            config = SelfDriverConfig.get(config_file, task_id)
 
             if i == 0:
-                print(f"tail -f {os.path.abspath(config.task_log)}")
+                print(f"tail -f {os.path.abspath(config.log_path)}")
 
-            total_spend = config.task.get_cost()
+            total_spend = config.self_driving_task.get_cost()
 
             if total_spend > config.max_budget_usd:
                 stop_reason = f"Stopping - hit the max budget ${config.max_budget_usd:.2f}"
@@ -152,9 +54,17 @@ def execute(config_file: Path):
                 stop_reason = f"Stopping for restart"
                 common.quietly_delete((config.code_directory / "restart"))
 
-                common.execute_management_cmd(
-                    f"exec_self_driver --config={config_file}"
-                )
+                if config_file:
+                    common.execute_management_cmd(
+                        f"sda_code --config={config_file}"
+                    )
+                elif task_id:
+                    common.execute_management_cmd(
+                        f"sda_code --task_id={task_id}"
+                    )
+                else:
+                    raise Exception("either config_file or task_id must be supplied")
+
                 break
 
             if (config.code_directory / "stop").exists():
@@ -174,15 +84,15 @@ def execute(config_file: Path):
             except GoalAchieved as goal_achieved:
                 pprint.pprint(goal_achieved.planning_data)
                 stop_reason = "Goal Achieved"
-                if config.task_id:
-                    PubSubManager.publish_id(PubSubMessageType.TASK_COMPLETED, config.task_id)
+                if config.self_driving_task.related_task_id:
+                    PubSubManager.publish_id(PubSubMessageType.TASK_COMPLETED, config.self_driving_task.related_task_id)
 
                 break
             except Exception as e:
                 logging.exception(e)
                 supress_eval = True
-                if config.task_id:
-                    PubSubManager.publish_id(PubSubMessageType.TASK_FAILED, config.task_id)
+                if config.self_driving_task.related_task_id:
+                    PubSubManager.publish_id(PubSubMessageType.TASK_FAILED, config.self_driving_task.related_task_id)
                 break
             finally:
                 if iteration:
@@ -200,9 +110,10 @@ def execute(config_file: Path):
             wrap_up(config)
 
 
-def execute_eval(config_file: Path):
-    config = SelfDriverConfig(config_file)
-    wrap_up(config)
+def execute_eval(config_file: Path = None, task_id: str = None):
+    wrap_up(
+        SelfDriverConfig.get(config_file, task_id)
+    )
 
 
 def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
@@ -214,17 +125,8 @@ def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
         Please take your time to think of the best initial architecture - identify an architecture that will allow for efficient code iteration and give us the best start towards achieving the user's GOAL. 
                     """
         )
-
-    elif not CodeVersion.objects.filter(task_iteration__task=config.task).exists():
-        # this means we have a code file to iterate on, but this is the first time
-        # selfdriver has seen it.  we'll just run it as is to see where we are at
-        iteration = config.initialize_new_iteration()
-        config.main_code_file.init_from_codefile(
-            iteration,
-            config.main_file
-        )
     else:
-        user_msg = f"{config.config_file.name} has just executed.  Please review the code and its output and then write detailed instructions for the next version of this code"
+        user_msg = f"{config.code_basename} has just executed.  Please review the code and its output and then write detailed instructions for the next version of this code"
         if config.comment_requests:
             comment_requests_str = "\n\t\t*".join(config.comment_requests)
             user_msg += f"\n\n Please include the following your evaluation comments: {comment_requests_str}"
@@ -240,19 +142,14 @@ def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
 def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
 
-    if TaskPhase.BUILD.eq( config.task.related_task.phase):
-        common.exec_cmd(
-            f"pytest -v ./erieiron_businesses/articlesummarizer/task_implement_summary_processing_worker_test.py",
-            logfile
-        )
-    else:
-        common.execute_management_cmd(
-            f"exec_self_driver --code_file={config.main_code_file.file_path}",
-            logfile
-        )
+    common.execute_management_cmd(
+        f"sda_execute --iteration_id={iteration.id}",
+        logfile
+    )
 
     log_output = logfile.read_text()
     log(config, log_output, f"iteration-{iteration.id}")
+
     common.quietly_delete(logfile)
     return log_output
 
@@ -281,17 +178,11 @@ def post_process_iteration_execution(
 
 
 def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessage]:
-    messages = []
+    messages = [
+        get_goal_msg(config)
+    ]
 
-    messages.append(
-        LlmMessage.user(f"""
-the user's GOAL is:
-{config.goal}
-        """)
-
-    )
-
-    for task_iteration in config.task.selfdrivingtaskiteration_set.order_by("timestamp"):
+    for task_iteration in config.self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp"):
         if task_iteration == config.current_iteration:
             continue
 
@@ -303,7 +194,7 @@ the user's GOAL is:
                 )
             )
 
-        eval_json = task_iteration.evaluation_json
+        eval_json = task_iteration.evaluation_json or {}
         if eval_json:
             try:
                 count_evals = eval_json['evaluation']
@@ -352,14 +243,14 @@ def get_sys_prompt(file_name: str, replacements: tuple[str, str] = None) -> LlmM
 def build_system_message_planning(config: SelfDriverConfig):
     if config.generate_single_file:
         files_strategy = " ".join([
-            f"The functional (non-test) code should be contained in a single file named '{config.main_file.name}'.",
+            f"The functional (non-test) code should be contained in a single file named '{config.main_code_file.get_base_name()}' and tested by '{config.main_code_file_test.get_path().name}'.",
             f"You will keep all of the functional code you generate in this single file.",
-            f"Be sure to list '{config.main_file.name}' in `code_files` list in the response datastructure with the associated instructions"
+            f"Be sure to list '{config.main_code_file.get_base_name()}' and '{config.main_code_file_test.get_path().name}' in `code_files` list in the response datastructure with the associated instructions"
         ])
     else:
         files_strategy = " ".join([
-            f"The main entry point for the code should be an 'execute' method in the file named '{config.main_file.name}'",
-            f"You may keep all code in '{config.main_file.name}'",
+            f"The main entry point for the code should be an 'execute' method in the file named '{config.main_code_file.get_base_name()}' and shall be tested by tests in '{config.main_code_file_test.get_path().name}'",
+            f"You may keep all code in '{config.main_code_file.get_base_name()}' and tests in '{config.main_code_file_test.get_path().name}'",
             "but if appropriate you may define new code files.",
             "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
         ])
@@ -425,7 +316,7 @@ def generate_code(
 
     iteration_id_to_modify = planning_data.get("iteration_id_to_modify", "latest")
     try:
-        iteration_to_modify = config.task.selfdrivingtaskiteration_set.get(id=iteration_id_to_modify)
+        iteration_to_modify = config.self_driving_task.selfdrivingtaskiteration_set.get(id=iteration_id_to_modify)
     except:
         iteration_to_modify = config.previous_iteration
 
@@ -437,6 +328,23 @@ def generate_code(
     iteration = config.initialize_new_iteration()
     if not iteration_to_modify:
         iteration_to_modify = iteration
+
+    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
+
+    headline = f"""
+--------------------------------------------------
+{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
+
+Self-driving {config.code_basename} 
+iteration id {config.current_iteration.id} (v{iteration_count})
+sandbox root dir: {config.sandbox_root_dir}  
+total spend: ${config.self_driving_task.get_cost() :.2f}/${config.max_budget_usd:.2f}
+
+https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
+--------------------------------------------------
+                    """
+    print(headline)
+    log(config, headline)
 
     code_file_instructions = planning_data.get("code_files", [])
     if not code_file_instructions:
@@ -714,13 +622,13 @@ You may use the helper methods defined in agent_tools.py
 If you use any of these helper methods, you must import agent_tools with the following line of code:
 from erieiron_autonomous_agent.business_level_agents.self_driving_coder import agent_tools
 
-if a helper method has a parameter named 'task_id', use the following value for task_id: "{config.task_id or None}"
+if a helper method has a parameter named 'task_id', use the following value for task_id: "{config.self_driving_task.related_task_id or None}"
 """
     )
 
 
 def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):
-    config.task_log.touch(exist_ok=True)
+    config.log_path.touch(exist_ok=True)
     log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
     log(config, f"LlmRequest")
     for m in common.ensure_list(llm_messages):
@@ -731,13 +639,13 @@ def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):
 
 def log_llm_response(config, llm_response: LlmResponse, suppress_log=False):
     LlmRequest.objects.create(
-        task_iteration=config.task.get_most_recent_iteration(),
+        task_iteration=config.self_driving_task.get_most_recent_iteration(),
         token_count=llm_response.token_count,
         price=llm_response.price_total
     )
 
     if not suppress_log:
-        config.task_log.touch(exist_ok=True)
+        config.log_path.touch(exist_ok=True)
         log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
         log(config, f"Response from {llm_response.model.label()}")
         log(config, llm_response.text, prefix="\t")
@@ -747,8 +655,8 @@ def log_llm_response(config, llm_response: LlmResponse, suppress_log=False):
 
 def log(config: SelfDriverConfig, s: str, prefix: str = None):
     prefix = prefix or ""
-    config.task_log.touch(exist_ok=True)
-    with open(config.task_log, 'a') as messages_log:
+    config.log_path.touch(exist_ok=True)
+    with open(config.log_path, 'a') as messages_log:
         for line in common.safe_split(s, "\n"):
             messages_log.write(f"{prefix}{line}\n")
 
@@ -759,20 +667,15 @@ def wrap_up(config: SelfDriverConfig):
 
     messages = []
 
-    messages.append(
-        LlmMessage.user(f"""
-the user's GOAL is:
-{config.goal}
-        """)
-    )
+    messages.append(get_goal_msg(config))
 
     aval_iterations = []
-    for best_iteration in config.task.selfdrivingtaskbestiteration_set.filter(iteration__evaluation_json__isnull=False).order_by("timestamp"):
+    for best_iteration in config.self_driving_task.selfdrivingtaskbestiteration_set.filter(iteration__evaluation_json__isnull=False).order_by("timestamp"):
         aval_iterations.append(best_iteration.iteration_id)
 
     if not aval_iterations:
         aval_iterations = [
-            i.id for i in config.task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).order_by("timestamp")
+            i.id for i in config.self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).order_by("timestamp")
         ]
 
     for iteration in SelfDrivingTaskIteration.objects.filter(id__in=aval_iterations).order_by("timestamp"):
@@ -854,8 +757,8 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     best_version_num = best_iteration.version_number
 
     code_versions: list[CodeVersion] = \
-        list(best_iteration.codeversion_set.filter(code_file__file_path=str(config.main_file))) \
-        + list(best_iteration.codeversion_set.exclude(code_file__file_path=str(config.main_file)))
+        list(best_iteration.codeversion_set.filter(code_file=config.main_code_file)) \
+        + list(best_iteration.codeversion_set.exclude(code_file=config.main_code_file))
 
     best_iteration_code = []
     for cv in code_versions:
@@ -866,10 +769,10 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         """)
     best_iteration_code = "\n".join(best_iteration_code)
 
-    main_file_name = config.main_file.name
+    main_file_name = config.main_code_file.get_base_name()
     if config.is_model_trainer:
         messages = LlmMessage.user(f"""
-    Please review the following code and write markdown formatted details fully explaining {config.main_file.name}'s model architecture and training strategy:
+    Please review the following code and write markdown formatted details fully explaining {config.main_code_file.get_base_name()}'s model architecture and training strategy:
 {best_iteration_code}
 
     Policies that must be followed:
@@ -980,8 +883,8 @@ Code:  {main_file_name}
             )
 
             zipf.write(
-                config.task_log,
-                arcname=config.task_log.name
+                config.log_path,
+                arcname=config.log_path.name
             )
 
             for cv in best_iteration.codeversion_set.all():
@@ -1000,5 +903,11 @@ Code:  {main_file_name}
 scpc "{os.path.abspath(archive_path)}"
     """)
 
-    config.task.rollback_to(best_iteration)
+    config.self_driving_task.rollback_to(best_iteration)
     print(f"code updated to iteration v{best_version_num}")
+
+
+def get_goal_msg(config):
+    return LlmMessage.user(f"""
+the user's GOAL is:
+{config.self_driving_task.goal}""")
