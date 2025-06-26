@@ -37,7 +37,7 @@ class Command(BaseCommand):
         product_initiative = business.productinitiative_set.get(id="articlesummarizertxt_article_submission_mvp_token")
         eng_lead.define_tasks_for_initiative(product_initiative.id)
 
-        for t in Task.objects.filter(product_initiative__business=business).order_by("created_timestamp"):
+        for t in Task.objects.all():
             PubSubManager.publish_id(
                 PubSubMessageType.TASK_UPDATED,
                 t.id

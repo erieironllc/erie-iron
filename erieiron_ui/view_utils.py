@@ -201,8 +201,12 @@ def json_endpoint(function):
     return wrap
 
 
-def parse_session_cookie(request):
+def parse_session_cookie(request, disabled=True):
+    if disabled:
+        return None
+
     id_token = request.COOKIES.get(COOKIE_SESSION_TOKEN)
+
     if common.is_empty(id_token):
         return None
 

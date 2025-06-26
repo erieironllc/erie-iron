@@ -20,8 +20,9 @@ def on_task_blocked(payload):
     payload["GOAL"] = "unblock this task"
 
     eng_lead_response = business_level_chat(
-        "eng_lead.md",
+        "eng_lead--unblocker.md",
         payload,
+        output_schema="eng_lead.md.schema.json",
         replacements=[
             ("<iam_role_name>", business.get_iam_role_name())
         ]

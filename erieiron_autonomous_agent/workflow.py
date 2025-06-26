@@ -93,7 +93,7 @@ def business_workflow(pubsub_manager: PubSubManager):
     pubsub_manager.on(
         PubSubMessageType.DESIGN_WORK_REQUESTED,
         worker_design.do_work,
-        # publishs either TASK_COMPLETED or TASK_FAILED
+        PubSubMessageType.TASK_COMPLETED
     )
 
     # Coder
