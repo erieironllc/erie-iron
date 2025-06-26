@@ -1,0 +1,127 @@
+{% extends "_base_templates/_base_template.html" %}
+{% block content %}
+    <h1>{{ task.id }}</h1>
+
+    <table class="table table-striped">
+        <tr>
+            <th>Created</th>
+            <td>{{ task.created_timestamp }}</td>
+        </tr>
+        <tr>
+            <th>Status</th>
+            <td>{{ task.status }}</td>
+        </tr>
+        <tr>
+            <th>Initiative</th>
+            <td>{{ task.product_initiative }}</td>
+        </tr>
+        <tr>
+            <th>Role Assignee</th>
+            <td>{{ task.role_assignee }}</td>
+        </tr>
+        <tr>
+            <th>Description</th>
+            <td>{{ task.description }}</td>
+        </tr>
+        <tr>
+            <th>Completion Criteria</th>
+            <td>
+                <ol>
+                    {% for cc in task.completion_criteria %}
+                        <li>{{ cc }}</li>
+                    {% endfor %}
+                </ol>
+            </td>
+        </tr>
+        <tr>
+            <th>Risk Notes</th>
+            <td>{{ task.risk_notes }}</td>
+        </tr>
+        <tr>
+            <th>Test Plan</th>
+            <td>{{ task.test_plan }}</td>
+        </tr>
+        <tr>
+            <th>Phase</th>
+            <td>{{ task.phase }}</td>
+        </tr>
+        <tr>
+            <th>Task Type</th>
+            <td>{{ task.task_type }}</td>
+        </tr>
+        <tr>
+            <th>Execution Mode</th>
+            <td>{{ task.execution_mode }}</td>
+        </tr>
+        <tr>
+            <th>Requires Test</th>
+            <td>{{ task.requires_test }}</td>
+        </tr>
+        <tr>
+            <th>Execution Schedule</th>
+            <td>{{ task.execution_schedule }}</td>
+        </tr>
+        <tr>
+            <th>Execution Start Time</th>
+            <td>{{ task.execution_start_time }}</td>
+        </tr>
+        <tr>
+            <th>Max Budget (USD)</th>
+            <td>{{ task.max_budget_usd }}</td>
+        </tr>
+        <tr>
+            <th>Current Spend</th>
+            <td>{{ task.current_spend }}</td>
+        </tr>
+        <tr>
+            <th>Created By</th>
+            <td>{{ task.created_by }}</td>
+        </tr>
+        <tr>
+            <th>Comment Requests</th>
+            <td>{{ task.comment_requests }}</td>
+        </tr>
+        <tr>
+            <th>Attachments</th>
+            <td>{{ task.attachments }}</td>
+        </tr>
+    </table>
+
+    <hr>
+    <h3>Self Driver Iterations</h3>
+    {% if selfdrivingtask.selfdrivingtaskiteration_set.exists %}
+
+        <table class="table table-striped">
+            {% for iteration in selfdrivingtask.selfdrivingtaskiteration_set|dictsortreversed:"timestamp" %}
+                <tr>
+                    <td>{{ iteration.id }}</td>
+                    <td>{{ iteration.timestamp }}</td>
+                    <td>{{ iteration.achieved_goal }}</td>
+                </tr>
+            {% endfor %}
+        </table>
+    {% else %}
+        <div>None</div>
+    {% endif %}
+
+
+    {% if task.depends_on.exists %}
+        <hr>
+        <h3>Blocked By</h3>
+        <table style="width: 100%">
+            {% for t2 in task.depends_on.all %}
+                {% include "_task_row.html" with task=t2 %}
+            {% endfor %}
+        </table>
+    {% endif %}
+
+    {% if task.dependent_tasks.exists %}
+        <hr>
+        <h3>Blocks</h3>
+        <table style="width: 100%">
+            {% for t2 in task.dependent_tasks.all %}
+                {% include "_task_row.html" with task=t2 %}
+            {% endfor %}
+        </table>
+    {% endif %}
+{% endblock %}

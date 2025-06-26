@@ -282,7 +282,7 @@ class AwsInterface:
             body=body
         )
 
-    def send_email(self, subject, recipient, body, sender=None):
+    def send_email(self, subject, recipient, body, sender="erieironllc@gmail.com"):
         from erieiron_common import common
         common.log_info(f"sending email: {subject} to {recipient}")
 

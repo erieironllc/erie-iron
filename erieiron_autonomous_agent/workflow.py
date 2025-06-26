@@ -65,6 +65,10 @@ def business_workflow(pubsub_manager: PubSubManager):
         PubSubMessageType.PRODUCT_INITIATIVE_DEFINED,
         eng_lead.define_tasks_for_initiative,
         PubSubMessageType.TASK_UPDATED
+    ).on(
+        PubSubMessageType.TASK_BLOCKED,
+        eng_lead.on_task_blocked,
+        PubSubMessageType.TASK_UPDATED
     )
 
     # Task Manager

@@ -58,11 +58,13 @@ def submit_business_opportunity(payload):
     else:
         name = f"{Constants.NEW_BUSINESS_NAME_PREFIX} {common.get_now()}"
 
+    token = common.strip_non_alpha(name).lower()
     business, created = Business.objects.update_or_create(
         id=existing_business_id,
         defaults={
             "name": name,
-            "sandbox_dir_name": common.strip_non_alpha(name).lower(),
+            "sandbox_dir_name": token,
+            "service_token": token,
             "source": source,
             "raw_idea": idea_content
         }

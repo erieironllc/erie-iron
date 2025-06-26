@@ -98,7 +98,7 @@ cat > /home/ec2-user/update_container.sh << 'EOF'
 #!/bin/bash
 
 CONTAINER_NAME="erielab-messageprocessor-container"
-CONTAINER_URI="471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor"
+CONTAINER_URI="782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor"
 
 aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin $CONTAINER_URI
 
@@ -124,7 +124,7 @@ fi
 
 echo $TAG
 
-CONTAINER_URI="471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor$TAG"
+CONTAINER_URI="782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor$TAG"
 
 aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin $CONTAINER_URI
 echo "-> -> python manage.py run_ingest_benchmark --benchmark_type=xxlarge --max_threads=20 --count=2 --max_asset_duration_secs=600"
@@ -159,13 +159,13 @@ cat <<EOF > /etc/docker/daemon.json
 EOF
 
 cat > /home/ec2-user/run_message_processor.sh << 'EOF'
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor
 
 docker stop erielab-messageprocessor-container || true
 docker rm erielab-messageprocessor-container || true
 
-docker rmi -f 471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest || true
-docker pull 471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
+docker rmi -f 782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest || true
+docker pull 782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
 
 docker run \
   --name erielab-messageprocessor-container \
@@ -182,7 +182,7 @@ docker run \
   --log-opt mode=non-blocking \
   --log-opt max-buffer-size=25m \
   -v /opt/erielab-container-volume:/app/staticfiles \
-  471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
+  782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
 EOF
 chmod +x /home/ec2-user/run_message_processor.sh
 

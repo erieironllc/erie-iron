@@ -1,0 +1,26 @@
+{% load static %}
+
+<div class="modal fade"
+     id="modal_common_error_message"
+     tabindex="-1"
+     aria-hidden="true"
+>
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title"></h3>
+            </div>
+
+            <div class="modal-body">
+            </div>
+
+            <div class="modal-footer">
+                <button onclick="$(this).closest('.modal').hide();" data-dismiss="modal" type="button"
+                        class="btn btn-primary w-25 ms-2">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+

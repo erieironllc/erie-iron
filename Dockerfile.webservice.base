@@ -1,4 +1,4 @@
-FROM 471112823728.dkr.ecr.us-west-2.amazonaws.com/python:3.11-slim
+FROM 782005355493.dkr.ecr.us-west-2.amazonaws.com/python:3.11-slim
 
 ENV PATH="/root/.local/bin:${PATH}"
 ENV DEBIAN_FRONTEND=noninteractive

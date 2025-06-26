@@ -107,10 +107,29 @@
             "enum": ["BUILD", "EXECUTE"],
             "description": "Determines whether the task represents a build-time activity or a runtime execution. Required for ENGINEERING tasks."
           },
+          "execution_mode": {
+            "type": "string",
+            "enum": ["HOST", "CONTAINER"],
+            "description": "Optional. One of 'HOST' or 'CONTAINER'. Defaults to 'CONTAINER'. Use 'HOST' for tasks that create or build Docker containers or environments. Use 'CONTAINER' for all workload execution tasks."
+          },
+          "requires_test": {
+            "type": "boolean",
+            "description": "Indicates whether this task must be accompanied by an automated test. Defaults to true for application logic tasks. Set to false for infra/setup tasks (e.g., Dockerfile generation or container push)."
+          },
           "task_type": {
             "type": "string",
             "enum": ["RUN", "DEPLOY", "VALIDATE", "MONITOR"],
             "description": "Optional semantic subtype for EXECUTE-phase tasks to support tracking, filtering, and specialized handling. Defaults to RUN if omitted."
+          },
+          "execution_schedule": {
+            "type": "string",
+            "enum": ["ONCE", "DAEMON", "HOURLY", "DAILY", "WEEKLY"],
+            "description": "Optional. Specifies how often this task should run. Defaults to 'ONCE'. Use 'DAEMON' for background tasks and 'HOURLY'/'DAILY'/'WEEKLY' for recurring execution."
+          },
+          "execution_start_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional ISO 8601 datetime string specifying when the task should first run. Used to anchor recurring schedules."
           }
         },
         "allOf": [

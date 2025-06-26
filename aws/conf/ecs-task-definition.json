@@ -2,7 +2,7 @@
     "containerDefinitions": [
         {
             "name": "erielab-webservice-container",
-            "image": "471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-webservice:latest",
+            "image": "782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-webservice:latest",
             "cpu": 1024,
             "memory": 1024,
             "portMappings": [
@@ -43,7 +43,7 @@
         }
     ],
     "family": "erielab-webservice-taskdefinition-3",
-    "taskRoleArn": "arn:aws:iam::471112823728:role/erielab-container-role",
+    "taskRoleArn": "arn:aws:iam::782005355493:role/erielab-container-role",
     "networkMode": "bridge",
     "volumes": [
         {
