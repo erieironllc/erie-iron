@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import traceback
+import types
 import unicodedata
 import uuid
 from collections import OrderedDict
@@ -1393,7 +1394,25 @@ def import_module_from_path(module_file_path):
     return module
 
 
+def import_module_from_string(code_str: str, module_name: str = "dynamic_module") -> types.ModuleType:
+    """
+    Dynamically imports a Python module from a string of code.
+
+    Args:
+        code_str (str): Python code to execute.
+        module_name (str): Optional name to assign to the module.
+
+    Returns:
+        types.ModuleType: The dynamically created module object.
+    """
+    module = types.ModuleType(module_name)
+    exec(code_str, module.__dict__)
+    sys.modules[module_name] = module
+    return module
+
+
 def get_base_module(module_file_path):
+    module_file_path = str(module_file_path)
     while module_file_path[0] in [".", "/"]:
         module_file_path = module_file_path[1:]
 
@@ -1591,6 +1610,10 @@ tail -f {os.path.abspath(output_file)}
 
 
 def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
+    if is_running_in_container():
+        # if we are running in the container, we are by default running in the sandbox
+        return file_path
+
     file_path = Path(file_path).resolve()
     sandbox_root_dir = Path(sandbox_root_dir).resolve()
     if not os.path.abspath(file_path).startswith(os.path.abspath(sandbox_root_dir)):
@@ -1598,7 +1621,21 @@ def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
     return file_path
 
 
+def is_running_in_container() -> bool:
+    if os.getenv("RUNNING_IN_CONTAINER") == "true":
+        return True
+    try:
+        with open('/proc/1/cgroup', 'rt') as f:
+            return 'docker' in f.read()
+    except:
+        return False
+
+
 def safe_filename(s, replacement="_", max_length=255):
     # Remove any character that is not alphanumeric, dot, dash, or underscore
     safe = re.sub(r'[^a-zA-Z0-9.\-_]', replacement, s)
     return safe[:max_length]
+
+
+def build_absolute_uri(page=""):
+    return f"{settings.BASE_URL}/{page}"

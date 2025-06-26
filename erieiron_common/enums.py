@@ -221,6 +221,7 @@ class PubSubMessageType(ErieEnum):
     HUMAN_WORK_REQUESTED = auto()
 
     TASK_UPDATED = auto()
+    TASK_BLOCKED = auto()
     TASK_COMPLETED = auto()
     TASK_FAILED = auto()
     TASK_SPEND = auto()
@@ -399,11 +400,24 @@ class CapabilityStatus(ErieEnum):
     pass
 
 
+class TaskExecutionMode(ErieEnum):
+    HOST = auto()
+    CONTAINER = auto()
+
+
 class TaskExecutionType(ErieEnum):
     RUN = auto()
     MONITOR = auto()
     VALIDATE = auto()
     DEPLOY = auto()
+
+
+class TaskExecutionSchedule(ErieEnum):
+    ONCE = auto()
+    DAEMON = auto()
+    HOURLY = auto()
+    DAILY = auto()
+    WEEKLY = auto()
 
 
 class TaskPhase(ErieEnum):
@@ -417,7 +431,6 @@ class TaskStatus(ErieEnum):
     IN_PROGRESS = auto()
     COMPLETE = auto()
     FAILED = auto()
-
 
 
 class LlcStructure(ErieEnum):

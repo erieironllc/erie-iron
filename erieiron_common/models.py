@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure, TaskExecutionType, TaskPhase
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure, TaskExecutionType, TaskPhase, TaskExecutionMode, TaskExecutionSchedule, PersonAuthStatus
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -119,6 +119,9 @@ class Person(BaseErieIronModel):
 
         p.save()
         return p
+
+    def get_auth_status(self) -> PersonAuthStatus:
+        return PersonAuthStatus.ALL_GOOD
 
 
 class Project(BaseErieIronModel):
@@ -1012,8 +1015,7 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
     sandbox_dir_name = models.TextField(null=False)
-    db_name = models.TextField(null=False)
-    aws_tag = models.TextField(null=False)
+    service_token = models.TextField(null=False)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
     bank_account_id = models.TextField(null=True)
@@ -1032,6 +1034,9 @@ class Business(BaseErieIronModel):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def get_iam_role_name(self):
+        return f"erieiron-{self.service_token}-role"
 
     def get_sandbox_dir(self) -> Path:
         p = settings.BUSINESS_SANDBOX_ROOTDIR / self.sandbox_dir_name
@@ -1400,7 +1405,6 @@ class Task(BaseErieIronModel):
         related_name='dependent_tasks',
         blank=True
     )
-    raw_llm_payload = models.JSONField(default=list)
     risk_notes = models.TextField()
     test_plan = models.TextField()
     role_assignee = models.TextField(choices=TaskAssigneeType.choices())
@@ -1413,12 +1417,21 @@ class Task(BaseErieIronModel):
 
     phase = models.TextField(choices=TaskPhase.choices(), null=False)
     task_type = models.TextField(choices=TaskExecutionType.choices(), null=True, blank=True)
+    execution_mode = models.TextField(choices=TaskExecutionMode.choices(), default=TaskExecutionMode.CONTAINER, null=False)
+    requires_test = models.BooleanField(default=True)
+    execution_schedule = models.TextField(choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE)
+    execution_start_time = models.DateTimeField(null=True, blank=True)
 
-    def create_execution(self, input) -> 'TaskExecution':
-        TaskExecution.objects.create(
+    def to_dict(self):
+        d = self.__dict__
+
+        return d
+
+    def create_execution(self, input_data) -> 'TaskExecution':
+        return TaskExecution.objects.create(
             task=self,
             status=TaskStatus.NOT_STARTED,
-            input=input
+            input=input_data
         )
 
     def get_last_execution(self) -> Optional['TaskExecution']:
@@ -1531,6 +1544,9 @@ class SelfDrivingTask(BaseErieIronModel):
                 version_number=max_version + 1
             )
 
+    def get_require_tests(self) -> bool:
+        return self.related_task and self.related_task.requires_test
+
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
     task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
@@ -1547,10 +1563,8 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         for cv in self.codeversion_set.all():
             cv.write_to_disk(sandbox_root_dir)
 
-    def get_code_version(self, code_file_path: Path):
-        code_file_path = Path(code_file_path)
-
-        code_file = CodeFile.get(code_file_path)
+    def get_code_version(self, code_file):
+        code_file = CodeFile.coerce_to_codefile(code_file)
 
         code_version_to_modify = code_file.get_version(self)
 
@@ -1560,73 +1574,10 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         if not code_version_to_modify:
             code_version_to_modify = code_file.init_from_codefile(
                 self,
-                code_file_path
+                code_file.file_path
             )
 
         return code_version_to_modify
-
-    def execute(self, logfile=None) -> Optional[TaskExecution]:
-        from erieiron_autonomous_agent.business_level_agents.self_driving_coder.self_driving_coder_config import SelfDriverConfig
-
-        self.write_to_disk()
-
-        self_driving_task = self.task
-
-        config = SelfDriverConfig.get(
-            self_driving_task.config_path,
-            self_driving_task.related_task_id
-        )
-
-        test_exit_code = common.exec_cmd(
-            f"pytest -v {config.main_code_file_test.get_path()}",
-            logfile
-        )
-        if test_exit_code != 0:
-            return None
-
-        python_file = str(config.main_code_file.get_path())
-        print(f"executing {python_file}")
-        code_module = common.import_module_from_path(python_file)
-
-        task = self_driving_task.related_task
-        if not task:
-            code_module.execute({})
-            return None
-        else:
-            task_input = {}
-            for upstream_task in task.depends_on.all():
-                if not TaskStatus.COMPLETE.eq(upstream_task.status):
-                    task.status = TaskStatus.BLOCKED
-                    task.save()
-                    raise Exception(f"task {task.id} depends on task {upstream_task.id}, but the upstream task's status is {upstream_task.status}")
-
-                previous_task_execution = upstream_task.get_last_execution()
-                if not previous_task_execution:
-                    task.status = TaskStatus.BLOCKED
-                    task.save()
-                    raise Exception(f"task {task.id} depends on task {upstream_task.id}, but the upstream task has not executed")
-
-                task_input[upstream_task.id] = previous_task_execution.output
-
-            te = task.create_execution(task_input)
-            try:
-                output = code_module.execute(task_input)
-                status = TaskStatus.COMPLETE
-                error_msg = None
-            except Exception as e:
-                output = None
-                status = TaskStatus.FAILED
-                error_msg = str(e)
-
-            with transaction.atomic():
-                TaskExecution.objects.filter(id=te.id).update(
-                    status=status,
-                    error_msg=error_msg,
-                    output=output,
-                    executed_time=common.get_now()
-                )
-                te.refresh_from_db()
-            return te
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):
@@ -1647,6 +1598,15 @@ class CodeFile(BaseErieIronModel):
     # gotta be unique tho
     file_path = models.TextField(unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    @staticmethod
+    def coerce_to_codefile(code_file) -> 'CodeFile':
+        if isinstance(code_file, Path):
+            return CodeFile.get(code_file)
+        elif isinstance(code_file, CodeFile):
+            return code_file
+        else:
+            raise ValueError(f"{code_file} must either be a path or a CodeFile instance")
 
     def get_path(self) -> Path:
         return Path(self.file_path)
@@ -1677,6 +1637,7 @@ class CodeFile(BaseErieIronModel):
             task_iteration: SelfDrivingTaskIteration,
             file_path: Path
     ) -> 'CodeVersion':
+        file_path = common.assert_exists(file_path)
         return CodeFile.update_from_path(
             task_iteration,
             file_path,
@@ -1716,7 +1677,7 @@ class CodeFile(BaseErieIronModel):
             code_instructions=None
     ) -> 'CodeVersion':
         with transaction.atomic():
-            code_file = CodeFile.objects.get_or_create(file_path=file_path)[0]
+            code_file = CodeFile.coerce_to_codefile(file_path)
             return code_file.update(
                 task_iteration=task_iteration,
                 code=code,

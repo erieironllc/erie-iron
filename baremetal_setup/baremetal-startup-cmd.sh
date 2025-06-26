@@ -1,8 +1,8 @@
 #!/bin/bash
 exec > >(logger -t baremetal-container-manager) 2>&1
 
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 471112823728.dkr.ecr.us-west-2.amazonaws.com
-docker pull 471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 782005355493.dkr.ecr.us-west-2.amazonaws.com
+docker pull 782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
 
 docker stop message-processor || true
 docker rm message-processor || true
@@ -20,4 +20,4 @@ docker run -d \
   --log-opt awslogs-region=us-west-2 \
   --log-opt awslogs-group=erielab-message-processor \
   --log-opt awslogs-create-group=true \
-  471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest
+  782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor:latest

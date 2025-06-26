@@ -71,7 +71,14 @@ def chat(
                 with open(output_schema, "r") as schema_file:
                     schema = json.load(schema_file)
 
-                jsonschema_validate(instance=resp.json(), schema=schema)
+                try:
+                    jsonschema_validate(instance=resp.json(), schema=schema)
+                except Exception:
+                    # Attempt to coerce JSON to schema using a cheaper model
+                    coerced_json = coerce_json_to_schema(resp.text, schema)
+                    resp.parsed_json = coerced_json
+                    # Validate again after coercion
+                    jsonschema_validate(instance=resp.parsed_json, schema=schema)
 
                 if debug:
                     print(f"""
@@ -180,7 +187,7 @@ class LlmMessage:
     def __str__(self):
         return (f"""-----------------------
 {self.message_type.label()}  Message:
-{self.text.strip()}
+{self.text}
 -----------------------""")
 
     @staticmethod
@@ -369,3 +376,48 @@ Begin chat with {model}
         print(str(m))
 
     print("--------------- --------------- --------------- --------------- ---------------")
+
+
+def coerce_json_to_schema(json_text: str, schema: dict) -> dict:
+    prompt = f"""
+You are a helpful assistant that receives a JSON text and a JSON schema.
+Your task is to correct and coerce the JSON text so that it fully conforms to the provided JSON schema.
+Return only the corrected JSON, without any explanations or markdown formatting.
+
+Here is the JSON text:
+{json_text}
+
+Here is the JSON schema:
+{json.dumps(schema, indent=4)}
+
+Please provide the corrected JSON text:
+"""
+    last_exception = None
+    # Try up to 2 retries with OPENAI_GPT_3_5_TURBO
+    for attempt in range(2):
+        try:
+            response = chat(
+                messages=[LlmMessage.user(prompt)],
+                model=LlmModel.OPENAI_GPT_3_5_TURBO,
+                code_response=True
+            )
+            coerced_text = response.text
+            coerced_json = json.loads(coerced_text)
+            return coerced_json
+        except Exception as e:
+            last_exception = e
+    # Fallback once to OPENAI_GPT_4O
+    try:
+        response = chat(
+            messages=[LlmMessage.user(prompt)],
+            model=LlmModel.OPENAI_GPT_4O,
+            code_response=True
+        )
+        coerced_text = response.text
+        coerced_json = json.loads(coerced_text)
+        return coerced_json
+    except Exception as e:
+        last_exception = e
+
+    # If all attempts fail, raise the last exception
+    raise last_exception

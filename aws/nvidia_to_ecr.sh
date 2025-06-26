@@ -7,7 +7,7 @@ set -e
 
 # AWS Configuration
 AWS_REGION="us-west-2"                   # Replace with your AWS region
-AWS_ACCOUNT_ID="471112823728"            # Replace with your AWS account ID
+AWS_ACCOUNT_ID="782005355493"            # Replace with your AWS account ID
 
 # ECR Repository Configuration
 ECR_REPO_NAME="cuda-11.8.0-cudnn8-runtime-ubuntu20.04"  # Desired ECR repository name

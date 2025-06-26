@@ -1,0 +1,27 @@
+{% load static %}
+{% if not no_header %}
+    <!DOCTYPE html>
+    <html lang="en" data-bs-theme="dark">
+    {% include '_base_templates/_base_head.html' %}
+    <body>
+    <div class="main-container">
+    <main id="main-content-container">
+{% endif %}
+
+{% block content %}
+{% endblock %}
+
+<form id="action_form">
+    {% csrf_token %}
+</form>
+
+{% if not no_header %}
+    </main>
+    </div>
+
+{#    {% include '_base_templates/_base_modals.html' %}#}
+
+    {% include '_base_templates/_base_scripting_compontents.html' %}
+    </body>
+    </html>
+{% endif %}

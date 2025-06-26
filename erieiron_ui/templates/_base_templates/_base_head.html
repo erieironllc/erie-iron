@@ -1,0 +1,105 @@
+{% load erieiron_common_tags %}
+{% load static %}
+
+<head>
+    {% if allow_analytics_tracking %}
+        {% if gtag_data %}
+            {{ gtag_data|json_script:"gtag_data" }}
+            <script>
+                let gtag_data = JSON.parse(document.getElementById('gtag_data').textContent);
+
+                {% if current_user_id %}
+                    gtag_data = {
+                        ...gtag_data,
+                        ...{
+                            'user_id': '{{ current_user_id }}',
+                            'page_location': window.location.href,
+                            'artist_token': '{{ current_user_id }}'
+                        }
+                    }
+                {% endif %}
+            </script>
+        {% else %}
+            <script>
+                const gtag_data = null;
+            </script>
+        {% endif %}
+
+        <!-- Google tag (gtag.js) -->
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-WQLTNJHHNZ"></script>
+        <script>
+            window.dataLayer = window.dataLayer || [];
+
+            function gtag() {
+                dataLayer.push(arguments);
+            }
+
+            gtag('js', new Date());
+
+            {% if gtag_data %}
+                gtag('config', 'G-WQLTNJHHNZ', gtag_data);
+            {% elif current_user_id %}
+                gtag('config', 'G-WQLTNJHHNZ', {
+                    'user_id': '{{ current_user_id }}',
+                    'artist_token': '{{ current_user_id }}'
+                });
+            {% else %}
+                gtag('config', 'G-WQLTNJHHNZ');
+            {% endif %}
+        </script>
+    {% endif %}
+
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.14.0/themes/base/jquery-ui.css">
+
+    {% if seo_index %}
+        <meta name="robots" content="index">
+        <meta name="description"
+              content="Collaya is a groundbreaking songwriting tool that uses modern AI music technology to help musicians and songwriters finish their songs with ease. Empower collaboration, unlock creativity, and stay at the heart of the music-making process.">
+        <meta name="keywords" content="music software, DAW, music tool, songwriting, music collaboration, music technology, songwriting tools, AI for music, music platform, beatmaking, melody creation, song arrangement, arrange">
+        <meta name="author" content="Collaya Team">
+        <meta property="og:title" content="Songwriting Tools for Music Creators | Collaya">
+        <meta property="og:description" content="The ultimate platform for songwriters and musicians to collaborate, create, and complete songs.">
+        <meta property="og:url" content="https://collaya.com">
+        <meta property="og:type" content="website">
+        <meta property="og:image" content="/static/img/collaya-logo-og-img.png">
+
+        <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "SoftwareApplication",
+              "name": "Collaya",
+              "headline": "{{ page_title|default:"Songwriting Tools for Music Creators | Collaya" }}",
+              "description": "Collaya is a groundbreaking songwriting tool that uses modern AI music technology to help musicians and songwriters finish their songs with ease. Empower collaboration, unlock creativity, and stay at the heart of the music-making process.",
+              "applicationCategory": "WebApplication",
+              "operatingSystem": "All",
+              "url": "https://collaya.com",
+              "keywords": ["music software", "DAW", "music tool", "songwriting", "music collaboration", "music technology", "songwriting tools", "AI for music", "music platform", "beatmaking", "melody creation", "song arrangement", "arrange"],
+                "publisher": {
+                  "@type": "Organization",
+                  "name": "Collaya",
+                  "url": "https://collaya.com"
+                }
+            }
+        </script>
+    {% else %}
+        <meta name="robots" content="noindex">
+    {% endif %}
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+    <title>{{ page_title|default_if_none:"Collaya" }}</title>
+    {% block extrahead %}{% endblock %}
+
+    <link rel="icon" type="image/png" href="{% static 'img/Collaya-logo-wav-sq-32.png' %}">
+    <link rel="stylesheet" href="https://use.typekit.net/oor4dzp.css">
+    <!-- start: Marketing site fonts --> 
+    <link rel="stylesheet" href="https://use.typekit.net/rzm8bvr.css"> 
+    <!-- end: marketing site fonts -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+    <link href="{% timestamp_static 'style.css' %}" rel="stylesheet">
+
+
+    <script src="{% timestamp_static 'ekko_app.min.js' %}"></script>
+</head>

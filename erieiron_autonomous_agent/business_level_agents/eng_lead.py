@@ -1,7 +1,8 @@
 from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common.enums import TaskStatus
+from erieiron_common import common
+from erieiron_common.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionSchedule
 from erieiron_common.models import (
     ProductInitiative,
     Task,
@@ -11,13 +12,49 @@ from erieiron_common.models import (
 )
 
 
+def on_task_blocked(payload):
+    task = Task.objects.get(id=payload['task_id'])
+    initiative = task.product_initiative
+    business = initiative.business
+
+    payload["GOAL"] = "unblock this task"
+
+    eng_lead_response = business_level_chat(
+        "eng_lead.md",
+        payload,
+        replacements=[
+            ("<iam_role_name>", business.get_iam_role_name())
+        ]
+    )
+
+    new_task_ids = process_response(initiative, eng_lead_response)
+    with transaction.atomic():
+        Task.objects.filter(id=task.id).update(
+            status=TaskStatus.BLOCKED
+        )
+
+        # Preserve existing dependencies and append new blocking tasks, no duplication or self-reference
+        existing_dep_ids = set(task.depends_on.values_list("id", flat=True))
+        new_blocking_ids = set(new_task_ids) - {task.id}
+        combined_dep_ids = existing_dep_ids.union(new_blocking_ids)
+        task.depends_on.set(Task.objects.filter(id__in=combined_dep_ids))
+
+    return new_task_ids
+
+
 def define_tasks_for_initiative(product_initiative_id):
     initiative = ProductInitiative.objects.get(id=product_initiative_id)
     business = initiative.business
 
     chat_data = build_chat_data(business, initiative)
 
-    eng_lead_response = business_level_chat("eng_lead.md", chat_data)
+    eng_lead_response = business_level_chat(
+        "eng_lead.md",
+        chat_data,
+        replacements=[
+            ("<iam_role_name>", business.get_iam_role_name())
+        ]
+    )
 
     return process_response(initiative, eng_lead_response)
 
@@ -97,34 +134,36 @@ def process_response(initiative, eng_lead_response):
             raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
 
         phase = task_data.get("phase")
-        if phase not in {"BUILD", "EXECUTE"}:
+        TaskPhase.valid(phase)
+        if not TaskPhase.valid(phase):
             raise ValueError(f"Invalid or missing phase for task {task_id}: {phase}")
 
         task_type = task_data.get("task_type")
-        if phase == "EXECUTE":
-            if not task_type:
-                raise ValueError(f"Missing required task_type for EXECUTE-phase task {task_id}")
-            if task_type not in {"RUN", "DEPLOY", "VALIDATE", "MONITOR"}:
+        if TaskPhase.EXECUTE.eq(phase):
+            if not TaskExecutionType.valid(task_type):
                 raise ValueError(f"Invalid task_type for task {task_id}: {task_type}")
 
         eng_task, created = Task.objects.update_or_create(
             id=task_id if task_id else None,
             defaults={
                 "product_initiative": initiative,
-                "status": TaskStatus.NOT_STARTED.value,
+                "status": TaskStatus.NOT_STARTED,
                 "description": task_data.get("task_description", ""),
                 "risk_notes": task_data.get("risk_notes", ""),
                 "test_plan": task_data.get("test_plan", ""),
-                "role_assignee": task_data.get("role_assignee", "ENGINEERING"),
+                "role_assignee": TaskAssigneeType(task_data.get("role_assignee", TaskAssigneeType.ENGINEERING)),
                 "completion_criteria": task_data.get("completion_criteria"),
-                "raw_llm_payload": task_data,
-                "phase": phase,
-                "task_type": task_type,
+                "phase": TaskPhase(phase),
+                "task_type": TaskExecutionType.valid_or(task_type),
+                "execution_mode": TaskExecutionMode(task_data.get("execution_mode", TaskExecutionMode.CONTAINER)),
+                "requires_test": common.parse_bool(task_data.get("requires_test", True)),
+                "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule", TaskExecutionSchedule.ONCE)),
+                "execution_start_time": task_data.get("execution_start_time", None),
             }
         )
 
         # Handle design_handoff for DESIGN tasks
-        if eng_task.role_assignee == "DESIGN" and "design_handoff" in task_data:
+        if TaskAssigneeType.DESIGN.eq(eng_task.role_assignee) and "design_handoff" in task_data:
             handoff_data = task_data["design_handoff"]
             handoff_obj, _ = TaskDesignRequirements.objects.get_or_create(task=eng_task)
 

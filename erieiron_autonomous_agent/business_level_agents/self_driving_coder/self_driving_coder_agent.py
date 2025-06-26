@@ -11,25 +11,21 @@ from django.db import transaction
 from django.utils import timezone
 
 import settings
-from erieiron_autonomous_agent.business_level_agents.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException
+from erieiron_autonomous_agent.business_level_agents.self_driving_coder import self_driving_coder_runner
+from erieiron_autonomous_agent.business_level_agents.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
 from erieiron_common import common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.codegen_utils import lint_and_format, CodeCompilationError
-from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType
+from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskStatus
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest
+from erieiron_common.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task
 
 ARTIFACTS = "artifacts"
 PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
-
-
-class GoalAchieved(Exception):
-    def __init__(self, planning_data):
-        self.planning_data = planning_data
 
 
 def execute(config_file: Path = None, task_id: str = None):
@@ -81,18 +77,42 @@ def execute(config_file: Path = None, task_id: str = None):
                     config,
                     iteration
                 )
+            except AgentBlocked as agent_blocked:
+                pprint.pprint(agent_blocked.blocked_data)
+                stop_reason = "Agent Blocked"
+                if config.self_driving_task.related_task_id:
+                    with transaction.atomic():
+                        Task.objects.filter(id=config.self_driving_task.related_task_id).update(
+                            status=TaskStatus.BLOCKED
+                        )
+
+                    PubSubManager.publish(
+                        PubSubMessageType.TASK_BLOCKED,
+                        payload={
+                            **agent_blocked.blocked_data,
+                            "task_id": config.self_driving_task.related_task_id
+                        }
+                    )
+
+                break
             except GoalAchieved as goal_achieved:
-                pprint.pprint(goal_achieved.planning_data)
                 stop_reason = "Goal Achieved"
                 if config.self_driving_task.related_task_id:
-                    PubSubManager.publish_id(PubSubMessageType.TASK_COMPLETED, config.self_driving_task.related_task_id)
+                    PubSubManager.publish_id(
+                        PubSubMessageType.TASK_COMPLETED,
+                        config.self_driving_task.related_task_id
+                    )
 
                 break
             except Exception as e:
                 logging.exception(e)
-                supress_eval = True
+                config.supress_eval = True
                 if config.self_driving_task.related_task_id:
-                    PubSubManager.publish_id(PubSubMessageType.TASK_FAILED, config.self_driving_task.related_task_id)
+                    PubSubManager.publish_id(
+                        PubSubMessageType.TASK_FAILED,
+                        config.self_driving_task.related_task_id
+                    )
+
                 break
             finally:
                 if iteration:
@@ -106,8 +126,8 @@ def execute(config_file: Path = None, task_id: str = None):
         print(f"unable to load config file {config_file}:  {config_exception}")
     finally:
         print("STOP REASON", stop_reason)
-        if not supress_eval:
-            wrap_up(config)
+        # if not supress_eval:
+        #     wrap_up(config)
 
 
 def execute_eval(config_file: Path = None, task_id: str = None):
@@ -142,10 +162,17 @@ def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
 def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
 
-    common.execute_management_cmd(
-        f"sda_execute --iteration_id={iteration.id}",
-        logfile
-    )
+    if config.debug:
+        self_driving_coder_runner.execute(
+            iteration.id,
+            "dev",
+            logfile
+        )
+    else:
+        common.execute_management_cmd(
+            f"sda_execute --iteration_id={iteration.id}",
+            logfile
+        )
 
     log_output = logfile.read_text()
     log(config, log_output, f"iteration-{iteration.id}")
@@ -241,31 +268,67 @@ def get_sys_prompt(file_name: str, replacements: tuple[str, str] = None) -> LlmM
 
 
 def build_system_message_planning(config: SelfDriverConfig):
-    if config.generate_single_file:
-        files_strategy = " ".join([
-            f"The functional (non-test) code should be contained in a single file named '{config.main_code_file.get_base_name()}' and tested by '{config.main_code_file_test.get_path().name}'.",
-            f"You will keep all of the functional code you generate in this single file.",
-            f"Be sure to list '{config.main_code_file.get_base_name()}' and '{config.main_code_file_test.get_path().name}' in `code_files` list in the response datastructure with the associated instructions"
-        ])
+    business = config.self_driving_task.business
+    main_file_name = config.main_code_file.get_path().name
+
+    if config.main_code_file_test:
+        test_file_name = config.main_code_file_test.get_path().name
     else:
-        files_strategy = " ".join([
-            f"The main entry point for the code should be an 'execute' method in the file named '{config.main_code_file.get_base_name()}' and shall be tested by tests in '{config.main_code_file_test.get_path().name}'",
-            f"You may keep all code in '{config.main_code_file.get_base_name()}' and tests in '{config.main_code_file_test.get_path().name}'",
-            "but if appropriate you may define new code files.",
-            "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
-        ])
+        test_file_name = None
+
+    if config.generate_single_file:
+        if config.self_driving_task.get_require_tests():
+            files_strategy = " ".join([
+                f"The functional (non-test, non-Dockerfile) code should be contained in a single file named '{main_file_name}' and tested by '{test_file_name}'.",
+                f"You will keep all of the functional code you generate in this single file.",
+                f"Be sure to list '{main_file_name}' and '{test_file_name}' in `code_files` list in the response datastructure with the associated instructions"
+            ])
+        else:
+            files_strategy = " ".join([
+                f"The functional (non-test, non-Dockerfile) code should be contained in a single file named '{main_file_name}'.",
+                f"You will keep all of the functional code you generate in this single file.",
+                f"Be sure to list '{main_file_name}' in `code_files` list in the response datastructure with the associated instructions"
+            ])
+    else:
+        if config.self_driving_task.get_require_tests():
+            files_strategy = " ".join([
+                f"The main entry point for the code should be an 'execute' method in the file named '{main_file_name}' and shall be tested by tests in '{test_file_name}'",
+                f"You may keep all code in '{main_file_name}' and tests in '{test_file_name}'",
+                "but if appropriate you may define new code files.",
+                "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
+            ])
+        else:
+            files_strategy = " ".join([
+                f"The main entry point for the code should be an 'execute' method in the file named '{main_file_name}'.",
+                f"You may keep all code in '{main_file_name}', but if appropriate you may define new code files.",
+                "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
+            ])
 
     messages = [
         get_sys_prompt(
             "worker_coder--planning.md",
             [
+                ("<aws_tag>", str(business.service_token)),
+                ("<db_name>", str(business.service_token)),
+                ("<iam_role_name>", str(business.get_iam_role_name())),
+                ("<code_directory>", str(config.code_directory)),
                 ("<sandbox_dir>", str(config.sandbox_root_dir)),
                 ("<files_strategy>", files_strategy)
             ]
-        ),
-        get_helper_methods_msg(config),
-        get_dependencies_msg()
+        )
     ]
+
+    if config.self_driving_task.get_require_tests():
+        messages.append(
+            get_sys_prompt("worker_coder--automated_tests.md")
+        )
+
+    messages.append(
+        get_helper_methods_msg(config),
+    )
+    messages.append(
+        get_dependencies_msg()
+    )
 
     if config.is_model_trainer:
         messages.append(get_sys_prompt(
@@ -314,13 +377,18 @@ def generate_code(
                 evaluation_json=planning_data.get("evaluation", [])
             )
 
+    blocked_data = planning_data.get('blocked')
+    if blocked_data:
+        pprint.pprint(planning_data)
+        raise AgentBlocked(blocked_data)
+
     iteration_id_to_modify = planning_data.get("iteration_id_to_modify", "latest")
     try:
         iteration_to_modify = config.self_driving_task.selfdrivingtaskiteration_set.get(id=iteration_id_to_modify)
     except:
         iteration_to_modify = config.previous_iteration
 
-    # print(f"\n{json.dumps(planning_data, indent=4)}\n")
+    print(f"\n{json.dumps(planning_data, indent=4)}\n")
 
     if not config.never_done and goal_achieved:
         raise GoalAchieved(planning_data)
@@ -382,7 +450,10 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                     )
                     price += llm_response_codegen.price_total
 
-                    code_str = lint_and_format(llm_response_codegen.text)
+                    if code_version_to_modify.code_file.get_path().name.endswith(".py"):
+                        code_str = lint_and_format(llm_response_codegen.text)
+                    else:
+                        code_str = llm_response_codegen.text
                     break
                 except CodeCompilationError as e:
                     previous_exception = e
@@ -496,9 +567,17 @@ def get_coding_llm_response(
 ) -> LlmResponse:
     model = LlmModel.OPENAI_O3_MINI
 
+    code_file_name = code_version_to_modify.code_file.get_path().name
+    if code_file_name.endswith(".py") or code_file_name == "requirements.txt":
+        prompt = "worker_coder--python_coder.md"
+    elif code_file_name.startswith("Dockerfile"):
+        prompt = "worker_coder--dockerfile_coder.md"
+    else:
+        raise Exception(f"no coder implemented for {code_file_name}")
+
     messages: list[LlmMessage] = [
         get_sys_prompt(
-            "worker_coder--code.md",
+            prompt,
             ("<sandbox_dir>", str(config.sandbox_root_dir))
         ),
         get_helper_methods_msg(config),
@@ -622,6 +701,7 @@ You may use the helper methods defined in agent_tools.py
 If you use any of these helper methods, you must import agent_tools with the following line of code:
 from erieiron_autonomous_agent.business_level_agents.self_driving_coder import agent_tools
 
+if a helper method has a parameter named 'business_id', use the following value for business_id: "{config.self_driving_task.business_id or None}"
 if a helper method has a parameter named 'task_id', use the following value for task_id: "{config.self_driving_task.related_task_id or None}"
 """
     )

@@ -42,16 +42,22 @@ def business_level_chat(
         system_prompt: str,
         user_messages: list[LlmMessage],
         text_output=False,
-        debug=False
+        debug=False,
+        replacements: list[tuple[str, str]] = None
 ):
     system_prompt = assert_exists(BUSINESS_LEVEL_BASE_PATH / system_prompt)
+    output_schema = BUSINESS_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
+
+    if common.ensure_list(replacements):
+        msg = system_prompt.read_text()
+        for look_for_str, replace_with_str in common.ensure_list(replacements):
+            msg = msg.replace(look_for_str, replace_with_str)
+        system_prompt = LlmMessage.sys(msg)
 
     system_prompts = [
         system_prompt,
         # BUSINESS_LEVEL_BASE_PATH / "_base_prompt--business_level.md"
     ]
-
-    output_schema = BUSINESS_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
 
     if not output_schema.exists():
         output_schema = None
@@ -75,7 +81,17 @@ def agent_chat(
     system_prompts = common.ensure_list(system_prompts)
     system_prompts.append(BASE_PROMPTS_PATH / "_base_prompt--output.md")
 
-    messages = [LlmMessage.sys(assert_exists(p)) for p in system_prompts]
+    messages = []
+    for sp in system_prompts:
+        if isinstance(sp, LlmMessage):
+            messages.append(sp)
+        elif isinstance(sp, Path):
+            messages.append(LlmMessage.sys(assert_exists(sp)))
+        elif isinstance(sp, str):
+            messages.append(LlmMessage.sys(sp))
+        else:
+            raise Exception(f"unhandled prompt type {sp}")
+
     messages += common.ensure_list(user_messages)
 
     resp = llm_interface.chat(

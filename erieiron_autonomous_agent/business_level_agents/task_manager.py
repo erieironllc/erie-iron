@@ -1,9 +1,11 @@
+import json
 import logging
 
 from django.db import transaction
 from django.db.models import F, Value
 from django.db.models.functions import Coalesce
 
+from erieiron_common import aws_utils
 from erieiron_common.enums import TaskAssigneeType, PubSubMessageType, TaskStatus
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import Task
@@ -38,8 +40,17 @@ def on_task_updated(task_id):
             PubSubManager.publish_id(msg_type, task.id)
     elif TaskStatus.FAILED.eq(status):
         logging.error(f"Task {task.id}: {task.description} FAILED")
+
+        aws_utils.get_aws_interface().send_email(
+            subject=f"Task {task.id}: {task.description} FAILED",
+            recipient="jj@jjschultz.com",
+            body=json.dumps(task.completion_criteria)
+        )
     elif TaskStatus.COMPLETE.eq(status):
         logging.info(f"Task {task.id}: {task.description} is complete")
+        for t in task.dependent_tasks.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
+            PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+
     else:
         raise ValueError(f"un-supported task status {status}")
 

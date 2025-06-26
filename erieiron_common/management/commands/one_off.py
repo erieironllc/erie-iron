@@ -5,16 +5,17 @@ from django.core.management.base import BaseCommand
 import settings
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.business_level_agents.self_driving_coder import self_driving_coder_agent
-from erieiron_common import common
-from erieiron_common.enums import TaskAssigneeType
+from erieiron_common import aws_utils
+from erieiron_common.enums import TaskAssigneeType, TaskStatus, PubSubMessageType
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import CodeFile, SelfDrivingTask, PubSubMessage, SelfDrivingTaskIteration, SelfDrivingTaskBestIteration, Task, Business
 
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
         business = Business.objects.get(id="dac393bb-9999-4009-a8e0-3b9c451a27dd")
-        # self.reset_initiatives(business)
-        self.do_selfdriver(business, 'task_build_dev_runtime_container')
+        self.reset_initiatives(business)
+        # self.do_selfdriver(business, 'task_build_dev_runtime_container')
 
     def reset_initiatives(self, business: Business):
         PubSubMessage.objects.all().delete()
@@ -24,6 +25,7 @@ class Command(BaseCommand):
         SelfDrivingTaskBestIteration.objects.all().delete()
 
         business = Business.objects.get(id="dac393bb-9999-4009-a8e0-3b9c451a27dd")
+        shutil.rmtree(settings.BUSINESS_SANDBOX_ROOTDIR / business.sandbox_dir_name, ignore_errors=True)
 
         # business.productinitiative_set.all().delete()
         # product_lead.define_product_initiatives(business.id)
@@ -36,14 +38,22 @@ class Command(BaseCommand):
         eng_lead.define_tasks_for_initiative(product_initiative.id)
 
         for t in Task.objects.filter(product_initiative__business=business).order_by("created_timestamp"):
-            print(t.id, TaskAssigneeType(t.role_assignee).label(), t.description, t.completion_criteria)
+            PubSubManager.publish_id(
+                PubSubMessageType.TASK_UPDATED,
+                t.id
+            )
 
     def do_selfdriver(self, business: Business, task_id):
         PubSubMessage.objects.all().delete()
-        CodeFile.objects.all().delete()
-        SelfDrivingTask.objects.all().delete()
-        SelfDrivingTaskIteration.objects.all().delete()
-        SelfDrivingTaskBestIteration.objects.all().delete()
         shutil.rmtree(settings.BUSINESS_SANDBOX_ROOTDIR / business.sandbox_dir_name, ignore_errors=True)
+
+        Task.objects.get(id=task_id).depends_on.update(
+            status=TaskStatus.COMPLETE
+        )
+
+        CodeFile.objects.filter(codeversion__task_iteration__task__related_task__id=task_id).delete()
+        SelfDrivingTask.objects.filter(selfdrivingtaskbestiteration__iteration__task__related_task__id=task_id).delete()
+        SelfDrivingTaskIteration.objects.filter(task__related_task_id=task_id).delete()
+        SelfDrivingTaskBestIteration.objects.filter(task__related_task_id=task_id).delete()
 
         self_driving_coder_agent.execute(task_id=task_id)

@@ -137,7 +137,7 @@ fi
 
 echo $TAG
 
-CONTAINER_URI="471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor$TAG"
+CONTAINER_URI="782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor$TAG"
 
 aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin $CONTAINER_URI
 docker run -it --gpus all $CONTAINER_URI
@@ -151,7 +151,7 @@ fi
 
 echo $TAG
 
-CONTAINER_URI="471112823728.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor$TAG"
+CONTAINER_URI="782005355493.dkr.ecr.us-west-2.amazonaws.com/erielab-messageprocessor$TAG"
 
 aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin $CONTAINER_URI
 echo "-> -> python manage.py run_ingest_benchmark --benchmark_type=xxlarge --max_threads=20 --count=2 --max_asset_duration_secs=600"

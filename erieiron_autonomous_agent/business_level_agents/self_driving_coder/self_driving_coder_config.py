@@ -9,6 +9,16 @@ from erieiron_common.models import CodeFile, SelfDrivingTask, SelfDrivingTaskIte
 ARTIFACTS = "artifacts"
 
 
+class GoalAchieved(Exception):
+    def __init__(self, planning_data):
+        self.planning_data = planning_data
+
+
+class AgentBlocked(Exception):
+    def __init__(self, blocked_data):
+        self.blocked_data = blocked_data
+
+
 class SelfDriverConfigException(Exception):
     pass
 
@@ -55,6 +65,7 @@ class SelfDriverConfig:
         return SelfDriverConfig({
             **config,
             "sandbox_root_dir": main_code_path.parent,
+            "supress_eval": False,
             "code_directory": main_code_path.parent,
             "artifacts_dir": main_code_path.parent / ARTIFACTS / config_base_name,
             "log_path": Path(config.get("log_file", config_file.parent / f"{common.get_basename(config_file)}.output.log")),
@@ -91,16 +102,19 @@ class SelfDriverConfig:
         main_code_path = code_root / f"{base_file_name}.py"
 
         return SelfDriverConfig({
-            "sandbox_root_dir": code_root,
+            "sandbox_root_dir": business_sandbox_dir,
             "code_directory": code_root,
             "artifacts_dir": artifacts_root,
             "generate_single_file": True,
             "log_path": log_file,
+            "supress_eval": True,
             "self_driving_task": self_driving_task,
         })
 
     def __init__(self, config):
+        self.debug = False
         self.self_driving_task: SelfDrivingTask = config.get("self_driving_task")
+        self.supress_eval = config.get("supress_eval", True)
 
         self.code_directory = config.get("code_directory")
         self.code_basename = self.self_driving_task.main_name
@@ -109,9 +123,12 @@ class SelfDriverConfig:
             self.code_directory / f"{self.code_basename}.py"
         )
 
-        self.main_code_file_test = CodeFile.get(
-            self.code_directory / f"{self.code_basename}_test.py"
-        )
+        if self.self_driving_task.get_require_tests():
+            self.main_code_file_test = CodeFile.get(
+                self.code_directory / f"{self.code_basename}_test.py"
+            )
+        else:
+            self.main_code_file_test = None
 
         self.generate_single_file = common.parse_bool(config.get("generate_single_file"))
         self.sandbox_root_dir = config.get("sandbox_root_dir")

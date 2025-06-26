@@ -59,7 +59,39 @@ def generate_stub(input_file: str, stub_file: str):
                 stub_lines.append(f'    """{doc}"""')
 
             # Placeholder body
-            stub_lines.append("    raise NotImplementedError()")
+            stub_lines.append("    pass")
+        elif isinstance(node, ast.ClassDef):
+            # Check if class inherits from Exception
+            if any(base for base in node.bases if isinstance(base, ast.Name) and "Exception" in base.id):
+                stub_lines.append("")
+                stub_lines.append(f"class {node.name}({', '.join([ast.unparse(base) for base in node.bases])}):")
+                doc = ast.get_docstring(node)
+                if doc:
+                    stub_lines.append(f'    """{doc}"""')
+
+                # Look for an __init__ method and extract signature
+                init_func = next((n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"), None)
+                if init_func:
+                    args = []
+                    for arg in init_func.args.args:
+                        arg_str = arg.arg
+                        if arg.annotation:
+                            arg_str += f": {ast.unparse(arg.annotation)}"
+                        args.append(arg_str)
+                    if init_func.args.vararg:
+                        args.append(f"*{init_func.args.vararg.arg}")
+                    if init_func.args.kwarg:
+                        args.append(f"**{init_func.args.kwarg.arg}")
+                    defaults = [ast.unparse(d) for d in init_func.args.defaults]
+                    num_defaults = len(defaults)
+                    if num_defaults:
+                        for i in range(-1, -num_defaults - 1, -1):
+                            args[i] += f"={defaults[i]}"
+                    signature = f"    def __init__({', '.join(args)}):"
+                    stub_lines.append(signature)
+                    stub_lines.append("        pass")
+                else:
+                    stub_lines.append("    pass")
 
     # Write to stub file
     os.makedirs(os.path.dirname(stub_file), exist_ok=True)

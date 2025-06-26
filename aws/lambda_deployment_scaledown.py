@@ -16,7 +16,7 @@ elbv2_client = boto3.client("elbv2")
 SERVICES = [
     {
         "AUTO_SCALING_GROUP_NAME": 'erie-webservic-ecs-asg',
-        "TARGET_GROUP_ARN": 'arn:aws:elasticloadbalancing:us-west-2:471112823728:targetgroup/erielab-targetgroup/537e79df601e5716',
+        "TARGET_GROUP_ARN": 'arn:aws:elasticloadbalancing:us-west-2:782005355493:targetgroup/erielab-targetgroup/537e79df601e5716',
         "ECS_CLUSTER_NAME": 'erielab-webservice-ecs-cluster',
         "ECS_SERVICE_NAME": 'erielab-webservice-ecs-cluster-service',
         "MIRROR_ECS": False,
@@ -41,7 +41,7 @@ boto_ecs = boto3.client('ecs')
 boto_ec2 = boto3.client('ec2')
 boto_codepipeline = boto3.client('codepipeline')
 
-ALB_ARN = "arn:aws:elasticloadbalancing:us-west-2:471112823728:targetgroup/erielab-targetgroup/537e79df601e5716"
+ALB_ARN = "arn:aws:elasticloadbalancing:us-west-2:782005355493:targetgroup/erielab-targetgroup/537e79df601e5716"
 
 
 def lambda_handler(event, context):
