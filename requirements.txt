@@ -53,3 +53,5 @@ torchvggish
 transformers
 
 cfn-lint
+
+djangorestframework

@@ -263,7 +263,7 @@ def _get_current_user_internal(request) -> models.Person:
         return None
 
 
-def send_response(request, template, context=None, validate=False, status_code=200):
+def send_response(request, template, context=None, validate=False, status_code=200, breadcrumbs=None):
     if context is None:
         context = {}
 
@@ -282,10 +282,11 @@ def send_response(request, template, context=None, validate=False, status_code=2
 
     user_email: str = common.get(request, ["user_data", "email"], default_val="")
 
+    context['breadcrumbs'] = [{"url": url, "label": label} for url, label in common.ensure_list(breadcrumbs)]
     context['allowed_back_dests'] = list(set(allowed_back_dests))
     context['user_data'] = common.get(request, "user_data")
     context['authenticated'] = context['user_data'] is not None
-    context['is_internal_user'] = user_email.endswith("ekkolab.ai") or user_email.endswith("collaya.com")
+    context['is_internal_user'] = user_email.endswith("erieiron.ai") or user_email.endswith("collaya.com")
 
     current_user = None
     try:

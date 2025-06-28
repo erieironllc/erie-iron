@@ -11,8 +11,8 @@ const sourcemaps = require('gulp-sourcemaps');
 // Define paths
 const paths = {
     styles: {
-        src: './webservice/sass/**/*.scss',
-        dest: './webservice/static/compiled/'
+        src: './erieiron_ui/sass/**/*.scss',
+        dest: './erieiron_ui/static/compiled/'
     },
     scripts: {
         src: [
@@ -24,9 +24,9 @@ const paths = {
             './node_modules/bootstrap/dist/js/bootstrap.bundle.js',
             './node_modules/tone/build/Tone.js',
             // './node_modules/chart.js/dist/chart.js',
-            './webservice/js/**/*.js'
+            './erieiron_ui/js/**/*.js'
         ],
-        dest: './webservice/static/compiled/'
+        dest: './erieiron_ui/static/compiled/'
     }
 };
 

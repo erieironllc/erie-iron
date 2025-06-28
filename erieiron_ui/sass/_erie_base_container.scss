@@ -1,0 +1,26 @@
+body{
+  background-color: $body-bg;
+  color: $body-color;
+
+  a:hover{
+    color: $link-hover-color !important;
+  }
+
+  #top_nav{
+    padding-left: 2rem;
+    padding-right: 2rem;
+    .erieiron-logo{
+      height: 2rem;
+      width: 2rem;
+    }
+  }
+
+  .nav-tabs{
+    margin-top: 1rem;
+  }
+
+  #main-content-container{
+    margin: 0 2rem !important;
+    margin-top: -.5rem !important;
+  }
+}

@@ -3,6 +3,7 @@ import logging
 import os
 import pprint
 import tempfile
+import traceback
 import zipfile
 from pathlib import Path
 from typing import List, Optional
@@ -108,9 +109,12 @@ def execute(config_file: Path = None, task_id: str = None):
                 logging.exception(e)
                 config.supress_eval = True
                 if config.self_driving_task.related_task_id:
-                    PubSubManager.publish_id(
+                    PubSubManager.publish(
                         PubSubMessageType.TASK_FAILED,
-                        config.self_driving_task.related_task_id
+                        payload={
+                            "task_id": config.self_driving_task.related_task_id,
+                            "error": traceback.format_exc()
+                        }
                     )
 
                 break
@@ -161,24 +165,31 @@ def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
 
 def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
+    try:
+        if config.debug:
+            self_driving_coder_runner.execute(
+                iteration.id,
+                "dev",
+                logfile
+            )
+        else:
+            common.execute_management_cmd(
+                f"sda_execute --iteration_id={iteration.id}",
+                logfile
+            )
 
-    if config.debug:
-        self_driving_coder_runner.execute(
-            iteration.id,
-            "dev",
-            logfile
-        )
-    else:
-        common.execute_management_cmd(
-            f"sda_execute --iteration_id={iteration.id}",
-            logfile
-        )
+        log_output = logfile.read_text()
+        log(config, log_output, f"iteration-{iteration.id}")
 
-    log_output = logfile.read_text()
-    log(config, log_output, f"iteration-{iteration.id}")
+        return log_output
+    except Exception as e:
+        log_output = logfile.read_text()
+        log_output = f"{log_output}\n\n\nthrew:\n{traceback.format_exc()}"
+        log(config, log_output, f"iteration-{iteration.id}")
 
-    common.quietly_delete(logfile)
-    return log_output
+        return log_output
+    finally:
+        common.quietly_delete(logfile)
 
 
 def post_process_iteration_execution(
@@ -209,7 +220,8 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
         get_goal_msg(config)
     ]
 
-    for task_iteration in config.self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp"):
+    previous_iterations = list(reversed( config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:3]))
+    for task_iteration in previous_iterations:
         if task_iteration == config.current_iteration:
             continue
 
@@ -419,7 +431,11 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
         raise Exception("no code files found")
 
     for cfi in code_file_instructions:
-        code_file_path = config.sandbox_root_dir / cfi.get("code_file_path")
+        code_file_path_str:str = cfi.get("code_file_path")
+        if code_file_path_str.startswith(str(config.sandbox_root_dir)):
+            code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
+
+        code_file_path = config.sandbox_root_dir / code_file_path_str
         if not code_file_path:
             raise Exception(f"missing code file name: {json.dumps(cfi)}")
 

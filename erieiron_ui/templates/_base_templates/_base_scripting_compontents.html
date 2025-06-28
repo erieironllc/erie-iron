@@ -5,7 +5,7 @@
     {#    intentionally obfuscating the var name#}
 
     $(document).ready(function () {
-        erieiron_common_init();
+        erie_common_init();
         {% if websocket_url %}
             getServerCommsManager().init_websocket_connection(
                 "{{ websocket_url|default:"" }}"

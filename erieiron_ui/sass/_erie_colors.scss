@@ -1,0 +1,49 @@
+$cast-iron: #2a2a1e;
+
+$primary: $cast-iron;
+$secondary: #6c757d; // Bootstrap default secondary
+$success: #2a9d4a; // green green
+$info: #56cfe1; // sky blue
+$warning: #f26b00; // tangerine
+$danger: #e63946; // ripe grapefruit red
+$light: #fdfdfd; // off-white
+$dark: #212529; // dark charcoal
+
+$white: #fdfaf6;
+$black: $cast-iron;
+
+$gray-100: #f8f9fa;
+$gray-200: #e9ecef;
+$gray-300: #dee2e6;
+$gray-400: #ced4da;
+$gray-500: #adb5bd;
+$gray-600: #6c757d;
+$gray-700: #495057;
+$gray-800: #343a40;
+$gray-900: #212529;
+
+$body-bg: $white;
+$body-color: $primary;
+$link-color: $primary;
+$link-hover-color: #c1440e;
+
+$theme-colors: (
+  "primary": $primary,
+  "secondary": $secondary,
+  "success": $success,
+  "info": $info,
+  "warning": $warning,
+  "danger": $danger,
+  "light": $light,
+  "dark": $dark
+);
+
+$table-bg: $body-bg;
+$table-color: $body-color;
+$table-border-color: $gray-300;
+$table-striped-bg: rgba($primary, 0.05);
+$table-striped-color: $body-color;
+$table-active-bg: rgba($primary, 0.1);
+$table-active-color: $body-color;
+$table-hover-bg: rgba($primary, 0.075);
+$table-hover-color: $body-color;

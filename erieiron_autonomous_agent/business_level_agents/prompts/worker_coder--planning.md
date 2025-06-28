@@ -89,7 +89,7 @@ each evaluation object must include:
 - "details": rich details on the evaluation item. use this area to teach when applicable
 a key "code_files" mapping to a list of code_file data structures. For each data structure in the code_files list shall
 contain the following keys:
-a key "code_file_path" mapping to the path (relative to "<sandbox_dir>") of the code file to add or modify
+a key "code_file_path" mapping to the path (relative to "<sandbox_dir>") of the code file to add or modify.  **All paths shall be relative to "<sandbox_dir>"**
 a key "instructions" mapping to a list of instruction objects. each instruction object must include:
 - "step_number": a sequential number (starting at 1)
 - "action": a concise description of the required modification or additions to the code file
