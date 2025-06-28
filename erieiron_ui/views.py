@@ -1,56 +1,156 @@
+import json
 from collections import defaultdict
 
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 
-from erieiron_common import common
-from erieiron_common.models import Task, ProductInitiative, Business, SelfDrivingTask
-from erieiron_ui.view_utils import send_response
+from erieiron_common.enums import TaskStatus, PubSubMessageType
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
+from erieiron_common.models import Task, ProductInitiative, Business, SelfDrivingTask, SelfDrivingTaskIteration
+from erieiron_ui.view_utils import send_response, redirect, rget
 
 
 def hello(request):
     return HttpResponse("hello world")
 
 
-def view_tasks(request):
-    task_map = {t.id: t for t in Task.objects.all()}
-    initiativeid_to_tasks = defaultdict(list)
-    for t in Task.objects.order_by("created_timestamp"):
-        initiativeid_to_tasks[t.product_initiative_id].append(t)
+def view_businesses(request):
+    return send_response(
+        request, "businesses.html", {
+            "businesses": Business.objects.exclude(id=Business.get_erie_iron_business().id).order_by("created_at")
+        },
+        breadcrumbs=[
+            (reverse(view_businesses), Business.get_erie_iron_business().name)
+        ]
+    )
 
-    businessid_to_initiatives = defaultdict(list)
-    for initiative in ProductInitiative.objects.filter(id__in=initiativeid_to_tasks).order_by("created_timestamp"):
-        businessid_to_initiatives[initiative.business_id].append(initiative)
 
-    businesses = []
-    for b in Business.objects.all().order_by("created_at"):
-        business_data = common.get_dict(b)
-        has_tasks = False
+def view_business(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
 
-        init_datas = business_data["initiatives"] = []
-        for initiative in businessid_to_initiatives[b.id]:
-            init_data = common.get_dict(initiative)
-            init_datas.append(init_data)
+    # business.businessguidance_set
+    # business.businessceodirective_set
+    # business.businesscapacityanalysis_set
+    tasks = Task.objects.filter(product_initiative__business=business)
 
-            task_datas = init_data["tasks"] = []
-            for task in initiativeid_to_tasks[initiative.id]:
-                has_tasks = True
-                task_data = common.get_dict(task)
+    return send_response(
+        request,
+        "business.html", {
+            "tasks": tasks,
+            "business": business
+        },
+        breadcrumbs=[
+            (reverse(view_businesses), Business.get_erie_iron_business().name)
+        ]
+    )
 
-                task_datas.append(task)
 
-        if has_tasks:
-            businesses.append(business_data)
+def view_initiative(request, initiative_id):
+    initiative = get_object_or_404(ProductInitiative, pk=initiative_id)
+    business = initiative.business
 
-    return send_response(request, "tasks.html", {
-        "businesses": businesses
-    })
+    task_type_tasks = defaultdict(list)
+    for task in initiative.engineering_tasks.all():
+        task_type_tasks[TaskStatus(task.status)].append(task)
+
+    task_datas = []
+    for status in TaskStatus.get_sorted_status():
+        for task in task_type_tasks[status]:
+            task_datas.append(task)
+
+    return send_response(
+        request, "initiative.html",
+        {
+            "tasks": task_datas,
+            "initiative": initiative
+        },
+        breadcrumbs=[
+            (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name)
+        ]
+    )
 
 
 def view_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
+    initiative = task.product_initiative
+    business = initiative.business
 
-    return send_response(request, "task.html", {
-        "selfdrivingtask": SelfDrivingTask.objects.filter(related_task_id=task_id).first(),
-        "task": task
-    })
+    self_driving_task = SelfDrivingTask.objects.filter(related_task_id=task_id).first()
+    if self_driving_task:
+        iterations = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")
+    else:
+        iterations = []
+
+    return send_response(
+        request, "task.html",
+        {
+            "task_executions": list(task.taskexecution_set.order_by("-executed_time")),
+            "iterations": iterations,
+            "self_driving_task": self_driving_task,
+            "task": task
+        },
+        breadcrumbs=[
+            (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
+            (f"{reverse(view_initiative, args=[initiative.id])}#tasks", initiative.title)
+        ]
+    )
+
+
+def view_self_driver_iteration(request, iteration_id):
+    iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
+
+    task = iteration.task.related_task
+    initiative = task.product_initiative
+    business = initiative.business
+
+    total_price, total_tokens = iteration.get_llm_cost()
+
+    return send_response(
+        request, "iteration.html",
+        {
+            "task": task,
+            "initiative": initiative,
+            "business": business,
+
+            "total_price": total_price,
+            "total_tokens": total_tokens,
+            "iteration": iteration
+        },
+        breadcrumbs=[
+            (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
+            (f"{reverse(view_initiative, args=[initiative.id])}#tasks", initiative.title),
+            (f"{reverse(view_task, args=[task.id])}#iterations", task.id)
+        ]
+    )
+
+
+def action_resolve_task(request, task_id):
+    task = get_object_or_404(Task, pk=task_id)
+
+    task.create_execution().resolve(
+        json.loads(rget(request, "output"))
+    )
+    Task.objects.filter(id=task_id).update(
+        status=TaskStatus.COMPLETE
+    )
+    PubSubManager.publish_id(
+        PubSubMessageType.TASK_COMPLETED,
+        task_id
+    )
+
+    return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_retry_task(request, task_id):
+    task = get_object_or_404(Task, pk=task_id)
+
+    Task.objects.filter(id=task_id).update(
+        status=TaskStatus.NOT_STARTED
+    )
+    PubSubManager.publish_id(
+        PubSubMessageType.TASK_UPDATED,
+        task_id
+    )
+
+    return redirect(reverse('view_task', args=[task_id]))

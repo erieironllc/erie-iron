@@ -19,6 +19,7 @@ from erieiron_common.models import TaskExecution, SelfDrivingTaskIteration, Code
 def execute(iteration_id: uuid.UUID, env: str = "dev", logfile=None) -> Optional[TaskExecution]:
     iteration = SelfDrivingTaskIteration.objects.get(id=iteration_id)
     business = iteration.task.business
+    output = None
 
     self_driving_task = iteration.task
     task = self_driving_task.related_task
@@ -59,6 +60,7 @@ def execute(iteration_id: uuid.UUID, env: str = "dev", logfile=None) -> Optional
 
             task_input[upstream_task.id] = previous_task_execution.output
 
+        output = None
         te = task.create_execution(task_input)
         try:
             MAX_RETRIES = 3
@@ -93,20 +95,13 @@ def execute(iteration_id: uuid.UUID, env: str = "dev", logfile=None) -> Optional
             error_msg = None
         except Exception as e:
             logging.exception(e)
-            output = None
             status = TaskStatus.FAILED
             error_msg = str(e)
 
-        with transaction.atomic():
-            TaskExecution.objects.filter(id=te.id).update(
-                status=status,
-                error_msg=error_msg,
-                output=output,
-                executed_time=common.get_now()
-            )
-            te.refresh_from_db()
+        te.resolve(output, status, error_msg)
 
         return te
+
 
 
 def run_module_in_docker(

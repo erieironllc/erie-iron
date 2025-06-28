@@ -1,0 +1,100 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load humanize %}
+{% load erieiron_common_tags %}
+{% block content %}
+
+
+    <h3>
+        {% if iteration.achieved_goal %}
+            <span class="badge bg-success">Goal Achieved</span>
+        {% else %}
+            <span class="badge bg-danger">Failed</span>
+        {% endif %}
+        Iteration: Version {{ iteration.version_number }} ({{ iteration.timestamp }})
+    </h3>
+
+
+    <!-- Nav tabs -->
+    <ul class="nav nav-tabs" id="iterationTab" role="tablist">
+        <li class="nav-item active" role="presentation">
+            <button class="nav-link" id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
+                    role="tab">
+                Code
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs"
+                    type="button" role="tab">
+                Unit Test Output
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link " id="evaluation-tab" data-bs-toggle="tab" data-bs-target="#evaluation"
+                    type="button" role="tab">
+                Evaluation
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content pt-3" id="iterationTabContent">
+        <div class="tab-pane  " id="code" role="tabpanel" aria-labelledby="code-tab">
+            {% for code_version in iteration.codeversion_set.all %}
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <small class="text-muted">
+                            {{ code_version.code_file.file_path }}
+                        </small>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row">
+                            <dt>Instructions:</dt>
+                            <dd>
+                                {% if code_version.code_instructions %}
+                                    <ol>
+                                        {% for instruction in code_version.code_instructions|dictsort:"step_number" %}
+                                            <li>
+                                                <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
+                                            </li>
+                                        {% endfor %}
+                                    </ol>
+                                {% else %}
+                                    no changes this iteration
+                                {% endif %}
+                            </dd>
+                            {% if code_version.code %}
+                                <dt class="mt-3">Resulting Code:</dt>
+                                <dd>
+                                    <pre>{{ code_version.code|safe }}</pre>
+                                </dd>
+                            {% endif %}
+                        </dl>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+        <div class="tab-pane " id="evaluation" role="tabpanel" aria-labelledby="evaluation-tab">
+            <div class="">
+                <div class="card-body">
+                    <dl class="row">
+                        <dt>Total Cost:&nbsp;${{ total_price|floatformat:2 }}</dt>
+                        <dt>LLM Token Count:&nbsp;{{ total_tokens|intcomma }}</dt>
+                    </dl>
+                </div>
+            </div>
+
+            <ul class="mt-3">
+                {% for eval in iteration.evaluation_json %}
+                    <li class="mb-3">
+                        <b>{{ eval.summary }}</b><br>{{ eval.details }}
+                    </li>
+                {% endfor %}
+            </ul>
+
+
+        </div>
+
+        <div class="tab-pane " id="logs" role="tabpanel" aria-labelledby="logs-tab">
+            <pre style="font-size: 8pt">{{ iteration.log_content }}</pre>
+        </div>
+    </div>
+{% endblock %}

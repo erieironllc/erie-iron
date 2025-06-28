@@ -1,0 +1,352 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load humanize %}
+{% load erieiron_common_tags %}
+{% block content %}
+    <h3 >Business: {{ business.name }}</h3>
+    <!-- Nav tabs -->
+    <ul class="nav nav-tabs" id="businessTab" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview"
+                    type="button" role="tab">
+                Overview
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="business-plan-tab" data-bs-toggle="tab" data-bs-target="#business-plan"
+                    type="button"
+                    role="tab">
+                Business Plan
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="business-analysis-tab" data-bs-toggle="tab" data-bs-target="#business-analysis"
+                    type="button"
+                    role="tab">
+                Business Analysis
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="legal-analysis-tab" data-bs-toggle="tab" data-bs-target="#legal-analysis"
+                    type="button"
+                    role="tab">
+                Legal Analysis
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="product-initiatives-tab" data-bs-toggle="tab"
+                    data-bs-target="#product-initiatives"
+                    type="button"
+                    role="tab">
+                Product Initiatives
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button"
+                    role="tab">
+                Details
+            </button>
+        </li>
+    </ul>
+
+    <!-- Tab panes -->
+    <div class="tab-content pt-3" id="businessTabContent">
+        <div class="tab-pane  " id="overview" role="tabpanel" aria-labelledby="overview-tab">
+            <div>{{ business.summary|default_if_none:"" }}</div>
+            <hr>
+
+            <h5>The Pitch</h5>
+            <div>{{ business.raw_idea }}</div>
+        </div>
+        <div class="tab-pane " id="details" role="tabpanel" aria-labelledby="details-tab">
+            <table class="table table-striped">
+                <tr>
+                    <th>Created</th>
+                    <td>{{ business.created_at }}</td>
+                </tr>
+                <tr>
+                    <th>Updated</th>
+                    <td>{{ business.updated_at }}</td>
+                </tr>
+                <tr>
+                    <th>Source</th>
+                    <td>{{ business.source|label }}</td>
+                </tr>
+                <tr>
+                    <th>Status</th>
+                    <td>{{ business.status|label }}</td>
+                </tr>
+                <tr>
+                    <th>Sandbox Directory</th>
+                    <td>{{ business.sandbox_dir_name }}</td>
+                </tr>
+                <tr>
+                    <th>Service Token</th>
+                    <td>{{ business.service_token }}</td>
+                </tr>
+                <tr>
+                    <th>Bank Account ID</th>
+                    <td>{{ business.bank_account_id }}</td>
+                </tr>
+                <tr>
+                    <th>Business Plan</th>
+                    <td>{{ business.business_plan }}</td>
+                </tr>
+                <tr>
+                    <th>Value Proposition</th>
+                    <td>{{ business.value_prop }}</td>
+                </tr>
+                <tr>
+                    <th>Revenue Model</th>
+                    <td>{{ business.revenue_model }}</td>
+                </tr>
+                <tr>
+                    <th>Audience</th>
+                    <td>{{ business.audience }}</td>
+                </tr>
+                <tr>
+                    <th>Core Functions</th>
+                    <td>{{ business.core_functions|join:", " }}</td>
+                </tr>
+                <tr>
+                    <th>Execution Dependencies</th>
+                    <td>{{ business.execution_dependencies|join:", " }}</td>
+                </tr>
+                <tr>
+                    <th>Growth Channels</th>
+                    <td>{{ business.growth_channels|join:", " }}</td>
+                </tr>
+                <tr>
+                    <th>Personalization Options</th>
+                    <td>{{ business.personalization_options|join:", " }}</td>
+                </tr>
+                <tr>
+                    <th>Allow Autonomous Shutdown</th>
+                    <td>{{ business.allow_autonomous_shutdown }}</td>
+                </tr>
+                <tr>
+                    <th>Autonomy Level</th>
+                    <td>{{ business.autonomy_level|label }}</td>
+                </tr>
+            </table>
+        </div>
+        <div class="tab-pane " id="business-analysis" role="tabpanel" aria-labelledby="business-analysis-tab">
+            {% if business.businessanalysis_set.exists %}
+                {% for business_analysis in business.businessanalysis_set.all|dictsortreversed:"created_timestamp" %}
+                    <div class="card my-4">
+                        <div class="card-header">
+                            <small class="text-muted">{{ business_analysis.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-4">Final Recommendation Score</dt>
+                                <dd class="col-sm-8">{{ business_analysis.final_recommendation_score_1_to_10 }}</dd>
+
+                                <dt class="col-sm-4">Final Recommendation Justification</dt>
+                                <dd class="col-sm-8">{{ business_analysis.final_recommendation_justification|linebreaks }}</dd>
+
+                                <dt class="col-sm-4">Upfront Investment Needed (USD)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.upfront_investment_estimated_amount_usd|floatformat:0|intcomma }}</dd>
+
+                                <dt class="col-sm-4">TAM Estimate (USD/year)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.total_addressable_market_estimate_usd_per_year|floatformat:0|intcomma }}</dd>
+
+                                <dt class="col-sm-4">TAM Source / Rationale</dt>
+                                <dd class="col-sm-8">{{ business_analysis.total_addressable_market_source_or_rationale|default:"—" }}</dd>
+
+                                <dt class="col-sm-4">Potential Mode</dt>
+                                <dd class="col-sm-8">{{ business_analysis.potential_mode|default:"—" }}</dd>
+
+                                <dt class="col-sm-4">Estimated Monthly Revenue (USD)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.estimated_monthly_revenue_at_steady_state_usd|floatformat:0|intcomma }}</dd>
+
+                                <dt class="col-sm-4">Estimated Time to Profit (months)</dt>
+                                <dd class="col-sm-8">{{ business_analysis.time_to_profit_estimate_months }}</dd>
+
+                                <dt class="col-sm-4">Estimated Monthly Operating Cost (USD)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.estimated_operating_total_cost_per_month_usd|floatformat:0|intcomma }}</dd>
+
+
+                                {% if business_analysis.use_of_funds_data %}
+                                    <dt class="col-sm-4">Use of Funds</dt>
+                                    <dd class="col-sm-8">
+                                        {{ business_analysis.use_of_funds_data }}
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.macro_trends_data %}
+                                    <dt class="col-sm-4">Macro Trends</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.macro_trends_data %}
+                                                <li>{{ item }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.risks_data %}
+                                    <dt class="col-sm-4">Risks</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.risks_data %}
+                                                <li>{{ item }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.monthly_expenses_data %}
+                                    <dt class="col-sm-4">Monthly Expenses</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.monthly_expenses_data %}
+                                                <li>${{ item.monthly_expense_usd|intcomma }}: {{ item.name }}
+                                                    - {{ item.purpose }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.potential_competitors_data %}
+                                    <dt class="col-sm-4">Potential Competitors</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.potential_competitors_data %}
+                                                <li><a href="{{ item.url }}"
+                                                       target=_blank>{{ item.name }}</a>: {{ item.notes }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                            </dl>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+        <div class="tab-pane " id="legal-analysis" role="tabpanel" aria-labelledby="legal-analysis-tab">
+            {% if business.businesslegalanalysis_set.exists %}
+                {% for business_legal_analysis in business.businesslegalanalysis_set.all|dictsortreversed:"created_timestamp" %}
+                    <div class="card my-4">
+                        <div class="card-header">
+                            <small class="text-muted">{{ business_legal_analysis.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-4">Approved</dt>
+                                <dd class="col-sm-8">
+                                    {% if business_legal_analysis.approved %}
+                                        <span class="badge bg-success">Yes</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">No</span>
+                                    {% endif %}
+                                </dd>
+
+                                <dt class="col-sm-4">Risk Rating</dt>
+                                <dd class="col-sm-8">
+                                    <span class="badge bg-secondary">{{ business_legal_analysis.risk_rating|default:"—" }}</span>
+                                </dd>
+
+                                <dt class="col-sm-4">Justification</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.justification|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Recommended Entity Structure</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.recommended_entity_structure|label }}</dd>
+
+                                <dt class="col-sm-4">Entity Structure Justification</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.entity_structure_justification|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Required Disclaimers or Terms</dt>
+                                <dd class="col-sm-8">
+                                    {% if business_legal_analysis.required_disclaimers_or_terms %}
+                                        <ul class="mb-0">
+                                            {% for disclaimer in business_legal_analysis.required_disclaimers_or_terms %}
+                                                <li>{{ disclaimer }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% else %}
+                                        <em class="text-muted">None specified</em>
+                                    {% endif %}
+                                </dd>
+
+
+                            </dl>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+        <div class="tab-pane " id="business-plan" role="tabpanel" aria-labelledby="business-plan-tab">
+            {{ business.business_plan }}
+
+            {% if business.businesskpi_set.exists %}
+                <hr>
+                <h3>KPIs</h3>
+                <table class="table table-striped">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th>Priority</th>
+                    </tr>
+                    </thead>
+                    {% for kpi in business.businesskpi_set.all|dictsort:"name" %}
+                        <tr>
+                            <td>{{ kpi.name }}</td>
+                            <td>{{ kpi.description }}</td>
+                            <td>{{ kpi.priority }}</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+        </div>
+        <div class="tab-pane " id="product-initiatives" role="tabpanel" aria-labelledby="product-initiatives-tab">
+            {% if business.productinitiative_set.exists %}
+                <table class="table table-striped">
+                    <thead>
+                    <tr>
+                        <th>Priority</th>
+                        <th>Title</th>
+                        <th>Description</th>
+                        <th>Predicted KPI Lift</th>
+                    </tr>
+                    </thead>
+                    {% for initiative in business.productinitiative_set.all|dictsort:"title" %}
+                        <tr>
+                            <td>{{ initiative.priority|label }}</td>
+                            <td><a href="{% url "view_initiative" initiative.id %}">{{ initiative.title }}</a></td>
+                            <td>{{ initiative.description }}</td>
+                            <td>
+                                <ul>
+                                    {% for kpi_lift,v in initiative.expected_kpi_lift.items %}
+                                        <li>{{ kpi_lift|label }}: {{ v }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+        </div>
+        <div class="tab-pane " id="tasks" role="tabpanel" aria-labelledby="tasks-tab">
+            <table class="table table-striped">
+                <thead>
+                <tr>
+                    <th>Priority</th>
+                    <th>Title</th>
+                    <th>Description</th>
+                    <th>Predicted KPI Lift</th>
+                </tr>
+                </thead>
+                {% for task in tasks|dictsort:"title" %}
+                    {% include "_task_row.html" with task=task %}
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+{% endblock %}

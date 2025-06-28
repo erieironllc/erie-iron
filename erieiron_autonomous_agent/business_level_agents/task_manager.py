@@ -40,17 +40,8 @@ def on_task_updated(task_id):
             PubSubManager.publish_id(msg_type, task.id)
     elif TaskStatus.FAILED.eq(status):
         logging.error(f"Task {task.id}: {task.description} FAILED")
-
-        aws_utils.get_aws_interface().send_email(
-            subject=f"Task {task.id}: {task.description} FAILED",
-            recipient="jj@jjschultz.com",
-            body=json.dumps(task.completion_criteria)
-        )
     elif TaskStatus.COMPLETE.eq(status):
         logging.info(f"Task {task.id}: {task.description} is complete")
-        for t in task.dependent_tasks.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
-            PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
-
     else:
         raise ValueError(f"un-supported task status {status}")
 
@@ -61,6 +52,7 @@ def on_task_complete(task_id):
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.COMPLETE
     )
+    task.update_dependent_tasks()
 
 
 def on_task_spend(payload):
@@ -74,14 +66,31 @@ def on_task_spend(payload):
 
 
 def on_task_failed(payload):
+    if isinstance(payload, str):
+        payload = {
+            "task_id": payload,
+            "error": "unknown"
+        }
+
     task = Task.objects.get(id=payload.get("task_id"))
 
+    cc_parts = "<br>".join([cc for cc in task.completion_criteria])
+
+    err = payload.get('error', '').replace("\n", "<br>").replace("\t", "&nbsp;&nbsp;")
     logging.error(f"""
 Task {task.id}: {task.description} FAILED
-{payload.get('error')} """)
+{err} """)
+
+    aws_utils.get_aws_interface().send_email(
+        subject=f"Task failed: {task.id} - {task.description}",
+        recipient="jj@jjschultz.com",
+        body=f"<h3>TaskID</h3>{task.id}<hr><h3>Error</h3>{err}<hr><h3>Completion Criteria</h3>{cc_parts}"
+    )
 
     Task.objects.filter(id=task.id).update(
         status=TaskStatus.FAILED
     )
+
+    task.update_dependent_tasks()
 
     return task.id

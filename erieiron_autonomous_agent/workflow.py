@@ -1,7 +1,8 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
 from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, task_manager, worker_human
-from erieiron_common.enums import PubSubMessageType
+from erieiron_common.enums import PubSubMessageType, TaskStatus
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
+from erieiron_common.models import Task
 
 
 @pubsub_workflow
@@ -46,6 +47,12 @@ def board_workflow(pubsub_manager: PubSubManager):
 
 @pubsub_workflow
 def business_workflow(pubsub_manager: PubSubManager):
+    for t in Task.objects.filter(status=TaskStatus.IN_PROGRESS):
+        t.status = TaskStatus.NOT_STARTED
+        t.save()
+        PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+
+
     # CEO
     pubsub_manager.on(
         PubSubMessageType.BOARD_GUIDANCE_UPDATED,
@@ -77,16 +84,13 @@ def business_workflow(pubsub_manager: PubSubManager):
         task_manager.on_task_updated,
     ).on(
         PubSubMessageType.TASK_COMPLETED,
-        task_manager.on_task_complete,
-        PubSubMessageType.TASK_UPDATED
+        task_manager.on_task_complete
     ).on(
         PubSubMessageType.TASK_FAILED,
-        task_manager.on_task_complete,
-        PubSubMessageType.TASK_UPDATED
+        task_manager.on_task_failed
     ).on(
         PubSubMessageType.TASK_SPEND,
-        task_manager.on_task_spend,
-        PubSubMessageType.TASK_UPDATED
+        task_manager.on_task_spend
     )
 
     # Desiger

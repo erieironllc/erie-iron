@@ -16,7 +16,7 @@ Resources:
   WebServiceLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/ecs/webservice-${EnvironmentName}"
+      LogGroupName: !Sub "/ecs/erieiron_ui-${EnvironmentName}"
       RetentionInDays: 7
 
   TaskDefinition:

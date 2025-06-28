@@ -2,7 +2,7 @@ import random
 from pathlib import Path
 
 from erieiron_common import common
-from erieiron_common.enums import LlmModel
+from erieiron_common.enums import LlmModel, TaskExecutionMode
 from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER
 from erieiron_common.models import CodeFile, SelfDrivingTask, SelfDrivingTaskIteration, Business, Task
 

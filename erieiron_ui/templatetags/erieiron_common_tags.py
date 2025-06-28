@@ -27,7 +27,7 @@ def dictsort_case_insensitive(value, arg):
 @register.simple_tag
 def timestamp_static(orig_filename):
     static_url_root = "/static/compiled"
-    static_dir_root = f"{Path.cwd()}/webservice{static_url_root}"
+    static_dir_root = f"{Path.cwd()}/erieiron_ui{static_url_root}"
     filename, ext = common.get_filename_and_extension(f"{static_dir_root}/{orig_filename}")
 
     files_with_time = []
@@ -118,6 +118,12 @@ def remove_empty_lines(s: str):
 def html_safe_id(obj: models.Model):
     objid = str(common.get(obj, "id")).replace("-", "_")
     return f"{obj.__class__.__name__}__{objid}"
+
+
+@register.filter
+def label(s: str):
+    s = s or ""
+    return s.title().replace("_", " ")
 
 
 @register.filter

@@ -1,11 +1,14 @@
 import logging
 import logging.config
+import os
 import tempfile
 from pathlib import Path
 
 from erieiron_common import settings_utils
 
 BASE_DIR = Path(__file__).resolve().parent
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+
 DEBUG = True
 SECRET_KEY = "django-insecure-4yp%)5s=rx5ph(+zs7mhk&zj9&sko+15(bi=nx-94^m-hrd&2v"
 
@@ -26,6 +29,7 @@ FEEDBACK_EMAIL = config('FEEDBACK_EMAIL', default="erieironllc@gmail.com", cast=
 START_MESSAGE_QUEUE_PROCESSOR = config('START_MESSAGE_QUEUE_PROCESSOR', default=False, cast=bool)
 RUNTIME_CONFIG_OVERRIDES = config("RUNTIME_CONFIG_OVERRIDES", default=None)
 SHOW_TIMERS = config('SHOW_TIMERS', default=False, cast=bool)
+TIME_ZONE = 'America/Los_Angeles'
 
 COGNITO_USER_POOL_ID = config("COGNITO_USER_POOL_ID")
 COGNITO_CLIENT_ID = config("COGNITO_CLIENT_ID")
@@ -48,6 +52,7 @@ INSTALLED_APPS = [
     'erieiron_ui',
     "django.contrib.admin",
     "django.contrib.auth",
+    'django.contrib.humanize',
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -114,8 +119,6 @@ AUTH_PASSWORD_VALIDATORS = [
 # https://docs.djangoproject.com/en/5.1/topics/i18n/
 
 LANGUAGE_CODE = "en-us"
-
-TIME_ZONE = "UTC"
 
 USE_I18N = True
 

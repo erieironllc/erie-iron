@@ -1,6 +1,9 @@
+{% load erieiron_common_tags %}
 <tr>
+    <td>
+        <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
+    </td>
+    <td>{{ task.role_assignee|label }}</td>
     <td><a href="{% url "view_task" task.id %}">{{ task.id }}</a></td>
-    <td>{{ task.role_assignee }}</td>
-    <td>{{ task.status }}</td>
     <td>{{ task.description }}</td>
 </tr>

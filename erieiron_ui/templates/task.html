@@ -1,127 +1,268 @@
 {% extends "_base_templates/_base_template.html" %}
+{% load erieiron_common_tags %}
 {% block content %}
-    <h1>{{ task.id }}</h1>
+    <h3 class="overflow-x-hidden w-75" style="white-space: nowrap">
+        Task: {{ task.id }}
+    </h3>
+    <p><span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
+        &nbsp;Owner: {{ task.role_assignee|label }}</p>
 
-    <table class="table table-striped">
-        <tr>
-            <th>Created</th>
-            <td>{{ task.created_timestamp }}</td>
-        </tr>
-        <tr>
-            <th>Status</th>
-            <td>{{ task.status }}</td>
-        </tr>
-        <tr>
-            <th>Initiative</th>
-            <td>{{ task.product_initiative }}</td>
-        </tr>
-        <tr>
-            <th>Role Assignee</th>
-            <td>{{ task.role_assignee }}</td>
-        </tr>
-        <tr>
-            <th>Description</th>
-            <td>{{ task.description }}</td>
-        </tr>
-        <tr>
-            <th>Completion Criteria</th>
-            <td>
+    <ul class="nav nav-tabs" id="initiativeTab" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview"
+                    type="button" role="tab">
+                Overview
+            </button>
+        </li>
+        {% if task.role_assignee == "HUMAN" and task.status != "COMPLETE" %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="resolve-tab" data-bs-toggle="tab" data-bs-target="#resolve"
+                        type="button" role="tab">
+                    Resolve
+                </button>
+            </li>
+        {% endif %}
+        {% if task.depends_on.exists %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="blockedby-tab" data-bs-toggle="tab" data-bs-target="#blockedby"
+                        type="button"
+                        role="tab">
+                    Blocked By
+                </button>
+            </li>
+        {% endif %}
+        {% if task.dependent_tasks.exists %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="blocks-tab" data-bs-toggle="tab" data-bs-target="#blocks"
+                        type="button"
+                        role="tab">
+                    Blocks
+                </button>
+            </li>
+        {% endif %}
+        {% if iterations|length > 0 %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="iterations-tab" data-bs-toggle="tab" data-bs-target="#iterations"
+                        type="button"
+                        role="tab">
+                    Code Iterations
+                </button>
+            </li>
+        {% endif %}
+        {% if task.taskexecution_set.exists %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="executions-tab" data-bs-toggle="tab" data-bs-target="#executions"
+                        type="button"
+                        role="tab">
+                    Executions
+                </button>
+            </li>
+        {% endif %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details"
+                    type="button" role="tab">
+                Details
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content pt-3" id="initiativeTabContent">
+        <div class="tab-pane  " id="overview" role="tabpanel" aria-labelledby="overview-tab">
+            <div>{{ task.description }}</div>
+
+            {% if task.completion_criteria %}
+                <h5 class="mt-4">Completion Criteria</h5>
                 <ol>
                     {% for cc in task.completion_criteria %}
                         <li>{{ cc }}</li>
                     {% endfor %}
                 </ol>
-            </td>
-        </tr>
-        <tr>
-            <th>Risk Notes</th>
-            <td>{{ task.risk_notes }}</td>
-        </tr>
-        <tr>
-            <th>Test Plan</th>
-            <td>{{ task.test_plan }}</td>
-        </tr>
-        <tr>
-            <th>Phase</th>
-            <td>{{ task.phase }}</td>
-        </tr>
-        <tr>
-            <th>Task Type</th>
-            <td>{{ task.task_type }}</td>
-        </tr>
-        <tr>
-            <th>Execution Mode</th>
-            <td>{{ task.execution_mode }}</td>
-        </tr>
-        <tr>
-            <th>Requires Test</th>
-            <td>{{ task.requires_test }}</td>
-        </tr>
-        <tr>
-            <th>Execution Schedule</th>
-            <td>{{ task.execution_schedule }}</td>
-        </tr>
-        <tr>
-            <th>Execution Start Time</th>
-            <td>{{ task.execution_start_time }}</td>
-        </tr>
-        <tr>
-            <th>Max Budget (USD)</th>
-            <td>{{ task.max_budget_usd }}</td>
-        </tr>
-        <tr>
-            <th>Current Spend</th>
-            <td>{{ task.current_spend }}</td>
-        </tr>
-        <tr>
-            <th>Created By</th>
-            <td>{{ task.created_by }}</td>
-        </tr>
-        <tr>
-            <th>Comment Requests</th>
-            <td>{{ task.comment_requests }}</td>
-        </tr>
-        <tr>
-            <th>Attachments</th>
-            <td>{{ task.attachments }}</td>
-        </tr>
-    </table>
+            {% endif %}
+            <div>
+                <h5 class="mt-4">Test Plan</h5>
+                {{ task.test_plan }}
+            </div>
+        </div>
 
-    <hr>
-    <h3>Self Driver Iterations</h3>
-    {% if selfdrivingtask.selfdrivingtaskiteration_set.exists %}
+        <div class="tab-pane " id="resolve" role="tabpanel" aria-labelledby="resolve-tab">
+            <h3>Task Output</h3>
+            <form action="{% url "action_resolve_task" task.id %}" method=post>
+                <textarea name="output" style="width: 100%; height: 8rem;"></textarea>
+                <input type="submit" value="Resolve"/>
+            </form>
+        </div>
 
-        <table class="table table-striped">
-            {% for iteration in selfdrivingtask.selfdrivingtaskiteration_set|dictsortreversed:"timestamp" %}
+        <div class="tab-pane  " id="blockedby" role="tabpanel" aria-labelledby="blockedby-tab">
+            <table class="table table-striped">
+                <thead>
                 <tr>
-                    <td>{{ iteration.id }}</td>
-                    <td>{{ iteration.timestamp }}</td>
-                    <td>{{ iteration.achieved_goal }}</td>
+                    <th>Status</th>
+                    <th>Task ID</th>
+                    <th>Description</th>
+                    <th>Assignee</th>
                 </tr>
-            {% endfor %}
-        </table>
-    {% else %}
-        <div>None</div>
-    {% endif %}
+                </thead>
+                {% for t2 in task.depends_on.all %}
+                    {% include "_task_row.html" with task=t2 %}
+                {% endfor %}
+            </table>
+        </div>
 
+        <div class="tab-pane  " id="blocks" role="tabpanel" aria-labelledby="blocks-tab">
+            <table class="table table-striped">
+                <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Task ID</th>
+                    <th>Description</th>
+                    <th>Assignee</th>
+                </tr>
+                </thead>
+                {% for t2 in task.dependent_tasks.all %}
+                    {% include "_task_row.html" with task=t2 %}
+                {% endfor %}
+            </table>
+        </div>
 
-    {% if task.depends_on.exists %}
-        <hr>
-        <h3>Blocked By</h3>
-        <table style="width: 100%">
-            {% for t2 in task.depends_on.all %}
-                {% include "_task_row.html" with task=t2 %}
-            {% endfor %}
-        </table>
-    {% endif %}
+        <div class="tab-pane  " id="iterations" role="tabpanel" aria-labelledby="iterations-tab">
+            {% for iteration in iterations %}
+                <div class="card my-4">
+                    <div class="card-header">
+                        <small class="text-muted">
+                            {% if iteration.achieved_goal %}
+                                <span class="badge bg-success">Goal Achieved</span>
+                            {% else %}
+                                <span class="badge bg-danger">Failed</span>
+                            {% endif %}
+                            <span class="ms-3">
+                            <a href="{% url "view_self_driver_iteration" iteration.id %}">
+                                Version {{ iteration.version_number }}
+                                ({{ iteration.timestamp }})
+                            </a>
+                            </span>
+                        </small>
+                    </div>
+                    <div class=" card-body">
+                        <dl class="row">
+                            {% if iteration.evaluation_json %}
+                                <dt class="mt-2 col-sm-12">Evaluation</dt>
+                                <dd class="col-sm-12">
+                                    <ul>
+                                        {% for eval in iteration.evaluation_json %}
+                                            <li>
+                                                {{ eval.summary }} {{ eval.details }}
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                </dd>
+                            {% endif %}
+                            {% if iteration.log_content %}
+                                <dt class="col-sm-12">Log Content</dt>
+                                <dd class="col-sm-12">
+                                    <pre>{{ iteration.log_content }}</pre>
+                                </dd>
+                            {% endif %}
+                        </dl>
+                    </div>
+                </div>
 
-    {% if task.dependent_tasks.exists %}
-        <hr>
-        <h3>Blocks</h3>
-        <table style="width: 100%">
-            {% for t2 in task.dependent_tasks.all %}
-                {% include "_task_row.html" with task=t2 %}
             {% endfor %}
-        </table>
-    {% endif %}
+        </div>
+
+        <div class="tab-pane  " id="executions" role="tabpanel" aria-labelledby="executions-tab">
+            {% for te in task.taskexecution_set.all|dictsortreversed:"executed_time" %}
+                <div class="card my-4">
+                    <div class="card-header">
+                        <small class="text-muted">
+                            {% if te.status == "COMPLETE" %}
+                                <span class="badge bg-success">Successfully Executed</span>
+                            {% else %}
+                                <span class="badge bg-danger">Execution Failed</span>
+                            {% endif %}
+                            <span class="ms-3">
+                                {{ te.executed_time }}
+                            </span>
+                        </small>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row">
+                            {% if te.input %}
+                                <dt>Input</dt>
+                                <dd>
+                                    <pre>{{ te.input|pprint_json }}</pre>
+                                </dd>
+                            {% endif %}
+                            {% if te.output %}
+                                <dt>Output</dt>
+                                <dd>
+                                    <pre>{{ te.output|pprint_json }}</pre>
+                                </dd>
+                            {% endif %}
+                            {% if te.error_msg %}
+                                <dt>Error Message</dt>
+                                <dd>
+                                    <pre>{{ te.error_msg|safe }}</pre>
+                                </dd>
+                            {% endif %}
+                        </dl>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+
+        <div class="tab-pane  " id="details" role="tabpanel" aria-labelledby="details-tab">
+            <table class="table table-striped">
+                <tr>
+                    <th>Created</th>
+                    <td>{{ task.created_timestamp }}</td>
+                </tr>
+
+                <tr>
+                    <th>Phase</th>
+                    <td>{{ task.phase|label }}</td>
+                </tr>
+                <tr>
+                    <th>Task Type</th>
+                    <td>{{ task.task_type|label }}</td>
+                </tr>
+                <tr>
+                    <th>Execution Mode</th>
+                    <td>{{ task.execution_mode|label }}</td>
+                </tr>
+                <tr>
+                    <th>Requires Test</th>
+                    <td>{{ task.requires_test }}</td>
+                </tr>
+                <tr>
+                    <th>Execution Schedule</th>
+                    <td>{{ task.execution_schedule|label }}</td>
+                </tr>
+                <tr>
+                    <th>Execution Start Time</th>
+                    <td>{{ task.execution_start_time }}</td>
+                </tr>
+                <tr>
+                    <th>Max Budget (USD)</th>
+                    <td>{{ task.max_budget_usd }}</td>
+                </tr>
+                <tr>
+                    <th>Current Spend</th>
+                    <td>{{ task.current_spend }}</td>
+                </tr>
+                <tr>
+                    <th>Created By</th>
+                    <td>{{ task.created_by }}</td>
+                </tr>
+                <tr>
+                    <th>Comment Requests</th>
+                    <td>{{ task.comment_requests }}</td>
+                </tr>
+                <tr>
+                    <th>Attachments</th>
+                    <td>{{ task.attachments }}</td>
+                </tr>
+            </table>
+
+        </div>
+    </div>
 {% endblock %}

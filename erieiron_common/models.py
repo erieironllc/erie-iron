@@ -1427,11 +1427,11 @@ class Task(BaseErieIronModel):
 
         return d
 
-    def create_execution(self, input_data) -> 'TaskExecution':
+    def create_execution(self, input_data=None) -> 'TaskExecution':
         return TaskExecution.objects.create(
             task=self,
             status=TaskStatus.NOT_STARTED,
-            input=input_data
+            input=input_data or {}
         )
 
     def get_last_execution(self) -> Optional['TaskExecution']:
@@ -1451,6 +1451,13 @@ class Task(BaseErieIronModel):
 {self.completion_criteria}
         """
 
+    def update_dependent_tasks(self):
+        from erieiron_common.message_queue.pubsub_manager import PubSubManager
+        for t in self.depends_on.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
+            PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+        for t in self.dependent_tasks.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
+            PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+
 
 # Design system and handoff models
 class DesignComponent(BaseErieIronModel):
@@ -1467,6 +1474,18 @@ class TaskExecution(BaseErieIronModel):
     input = models.JSONField(default=dict, null=True)
     output = models.JSONField(default=dict, null=True)
     error_msg = models.TextField(null=True)
+
+    def resolve(self, output=None, status=TaskStatus.COMPLETE, error_msg=None):
+        with transaction.atomic():
+            TaskExecution.objects.filter(id=self.id).update(
+                status=status,
+                error_msg=error_msg,
+                output=output or {},
+                executed_time=common.get_now()
+            )
+
+        self.refresh_from_db()
+        return self
 
 
 class TaskDesignRequirements(BaseErieIronModel):
@@ -1557,6 +1576,13 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content = models.TextField()
     evaluation_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
+
+    def get_llm_cost(self) -> Tuple[float, int]:
+        totals = self.llmrequest_set.aggregate(
+            total_price=Sum('price'),
+            total_tokens=Sum('token_count')
+        )
+        return totals['total_price'] or 0, totals['total_tokens'] or 0
 
     def write_to_disk(self):
         sandbox_root_dir = self.task.business.get_sandbox_dir()

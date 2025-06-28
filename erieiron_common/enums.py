@@ -432,6 +432,16 @@ class TaskStatus(ErieEnum):
     COMPLETE = auto()
     FAILED = auto()
 
+    @staticmethod
+    def get_sorted_status():
+        return [
+            TaskStatus.IN_PROGRESS,
+            TaskStatus.BLOCKED,
+            TaskStatus.NOT_STARTED,
+            TaskStatus.COMPLETE,
+            TaskStatus.FAILED
+        ]
+
 
 class LlcStructure(ErieEnum):
     ERIE_IRON_LLC = auto()
