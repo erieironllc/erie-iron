@@ -54,7 +54,13 @@ def timestamp_static(orig_filename):
 
 @register.filter
 def to_json(s):
-    return json.loads(s.replace("'", "\""))
+    try:
+        return json.loads(s)
+    except:
+        try:
+            return json.loads(s.replace("'", "\""))
+        except:
+            return {}
 
 
 @register.filter
