@@ -33,6 +33,7 @@ BaseContainerView = ErieView.extend({
 
         this.init_page();
 
+        $(".tab-pane:first-child").addClass("active").addClass("show")
         const hash = window.location.hash;
         if (hash) {
             const tabTrigger = document.querySelector(`button[data-bs-target="${hash}"]`);
@@ -40,8 +41,6 @@ BaseContainerView = ErieView.extend({
                 const tab = new bootstrap.Tab(tabTrigger);
                 tab.show();
             }
-        }else{
-            $(".tab-pane:first-child").addClass("active").addClass("show")
         }
 
         // Optional: update the URL hash when a tab is clicked
@@ -143,9 +142,9 @@ BaseContainerView = ErieView.extend({
 
         const content_title = $(".main_content").attr("title");
         if (content_title) {
-            document.title = "Collaya - " + content_title;
+            document.title = "Erie Iron, LLC - " + content_title;
         } else {
-            document.title = "Collaya";
+            document.title = "Erie Iron, LLC";
         }
 
         this.swizzle_waveform_urls();
