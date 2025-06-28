@@ -1,15 +1,76 @@
 {% extends "_base_templates/_base_template.html" %}
 {% load erieiron_common_tags %}
 {% block content %}
-    <h3>Business Portfolio</h3>
-    <table class="table table-striped w-100">
-        {% for business in businesses %}
-            <tr>
-                <td nowrap=true><a href="{% url "view_business" business.id %}">{{ business.name }}</a></td>
-                <td>{{ business.summary|default_if_none:"" }}</td>
-                <td>{{ business.source|label }}</td>
-                <td>{{ business.status|label }}</td>
-            </tr>
-        {% endfor %}
-    </table>
+    <h3>Erie Iron, LLC</h3>
+
+    <!-- Nav tabs -->
+    <ul class="nav nav-tabs" id="businessTab" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="portfolio-tab" data-bs-toggle="tab" data-bs-target="#portfolio"
+                    type="button" role="tab">
+                Portfolio
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="capacity-tab" data-bs-toggle="tab" data-bs-target="#capacity"
+                    type="button"
+                    role="tab">
+                Capacity
+            </button>
+        </li>
+    </ul>
+
+
+    <!-- Tab panes -->
+    <div class="tab-content pt-3" id="businessTabContent">
+        <div class="tab-pane" id="portfolio" role="tabpanel" aria-labelledby="portfolio-tab">
+            <table class="table table-striped">
+                {% for business in businesses %}
+                    <tr>
+                        <td nowrap=true><a href="{% url "view_business" business.id %}">{{ business.name }}</a></td>
+                        <td>{{ business.summary|default_if_none:"" }}</td>
+                        <td>{{ business.source|label }}</td>
+                        <td>{{ business.status|label }}</td>
+                    </tr>
+                {% endfor %}
+            </table>
+        </div>
+        <div class="tab-pane" id="capacity" role="tabpanel" aria-labelledby="capacity-tab">
+            {% for business_capacity_analysis in erieiron_business.businesscapacityanalysis_set.all|dictsortreversed:"created_timestamp" %}
+                <div class="card my-4">
+                    <div class="card-header">
+                        <small class="text-muted">{{ business_capacity_analysis.created_timestamp }}</small>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row">
+                            <dt class="col-sm-4">Cash Capacity</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge bg-{{ business_capacity_analysis.cash_capacity_status|lower }}">{{ business_capacity_analysis.cash_capacity_status }}</span>
+                            </dd>
+
+                            <dt class="col-sm-4">Compute Capacity</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge bg-{{ business_capacity_analysis.compute_capacity_status|lower }}">{{ business_capacity_analysis.compute_capacity_status }}</span>
+                            </dd>
+
+                            <dt class="col-sm-4">Human Capacity</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge bg-{{ business_capacity_analysis.human_capacity_status|lower }}">{{ business_capacity_analysis.human_capacity_status }}</span>
+                            </dd>
+
+                            <dt class="col-sm-4">Overall Recommendation</dt>
+                            <dd class="col-sm-8">
+                                <span class="badge bg-{{ business_capacity_analysis.recommendation|lower }}">{{ business_capacity_analysis.recommendation }}</span>
+                            </dd>
+
+                            <dt class="col-sm-4">Justification</dt>
+                            <dd class="col-sm-8">
+                                {{ business_capacity_analysis.justification|default:"—"|linebreaksbr }}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
 {% endblock %}

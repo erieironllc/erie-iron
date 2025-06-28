@@ -16,12 +16,15 @@ def hello(request):
 
 
 def view_businesses(request):
+    erieiron_business = Business.get_erie_iron_business()
+
     return send_response(
         request, "businesses.html", {
-            "businesses": Business.objects.exclude(id=Business.get_erie_iron_business().id).order_by("created_at")
+            "erieiron_business": erieiron_business,
+            "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at")
         },
         breadcrumbs=[
-            (reverse(view_businesses), Business.get_erie_iron_business().name)
+            (reverse(view_businesses), erieiron_business.name)
         ]
     )
 
@@ -29,9 +32,7 @@ def view_businesses(request):
 def view_business(request, business_id):
     business = get_object_or_404(Business, pk=business_id)
 
-    # business.businessguidance_set
     # business.businessceodirective_set
-    # business.businesscapacityanalysis_set
     tasks = Task.objects.filter(product_initiative__business=business)
 
     return send_response(

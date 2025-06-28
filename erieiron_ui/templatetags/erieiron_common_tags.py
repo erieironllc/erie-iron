@@ -12,6 +12,7 @@ from django.utils.safestring import mark_safe
 
 from erieiron_common import common, date_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
+from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 register = template.Library()
 
@@ -49,6 +50,11 @@ def timestamp_static(orig_filename):
             common.quietly_delete(file)
 
     return f"{static_url_root}/{latest_matching_file}"
+
+
+@register.filter
+def to_json(s):
+    return json.loads(s.replace("'", "\""))
 
 
 @register.filter

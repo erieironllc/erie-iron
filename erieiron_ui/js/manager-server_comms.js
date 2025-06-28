@@ -243,7 +243,7 @@ const ServerCommsManager = ErieView.extend({
                 if (error_resp['responseJSON']) {
                     main_content_container.empty().html("<pre>" + JSON.stringify(error_resp['responseJSON'], null, 2) + "</pre>");
                 } else {
-                    main_content_container.empty().html("<p class='mt-5'>Collaya experienced an error.  Perhaps try <a href='javascript: window.location.reload()'>reloading the page</a>.<br><br>If the error persists, please contact <a href='mailto:support@collaya.com'>Collaya support</a></p>");
+                    main_content_container.empty().html("<p class='mt-5'>Erie Iron, LLC experienced an error.  Perhaps try <a href='javascript: window.location.reload()'>reloading the page</a>.<br><br>If the error persists, please contact <a href='mailto:support@collaya.com'>Erie Iron, LLC support</a></p>");
                 }
             },
             true // we logged the interaction already above
