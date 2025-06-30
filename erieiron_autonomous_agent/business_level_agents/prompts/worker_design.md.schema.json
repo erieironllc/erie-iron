@@ -3,11 +3,11 @@
   "title": "DesignLeadOutput",
   "type": "object",
   "required": [
-    "product_initiative_id",
+    "initiative_id",
     "design_handoff"
   ],
   "properties": {
-    "product_initiative_id": {
+    "initiative_id": {
       "type": "string"
     },
     "design_handoff": {

@@ -1,14 +1,22 @@
+import settings
 from erieiron_common import aws_utils
 from erieiron_common.models import Task
 
 
 def do_work(task_id):
     task = Task.objects.get(id=task_id)
-    subject = f"[ErieIron] Human action required for Task {task.id}"
-    message = f"A task requires your input:\n\nTask ID: {task.id}\nSummary: {task.description}\nSummary: {task.completion_criteria}\n\nPlease log in to take action."
+    if not task.allow_execution():
+        return
 
     aws_utils.get_aws_interface().send_email(
-        subject=subject,
+        subject=f"[ErieIron] Human action required for Task {task.id}",
         recipient="jj@jjschultz.com",
-        body=message
+        body=f"""
+A task requires your input
+{settings.BASE_URL}/task/{task.id}
+
+{task.description}
+
+{task.completion_criteria}
+"""
     )

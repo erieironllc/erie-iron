@@ -11,13 +11,15 @@
                 Overview
             </button>
         </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="business-plan-tab" data-bs-toggle="tab" data-bs-target="#business-plan"
-                    type="button"
-                    role="tab">
-                Business Plan
-            </button>
-        </li>
+        {%  if business.business_plan %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="business-plan-tab" data-bs-toggle="tab" data-bs-target="#business-plan"
+                        type="button"
+                        role="tab">
+                    Business Plan
+                </button>
+            </li>
+        {% endif %}
         {% if business.businessanalysis_set.exists %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="business-analysis-tab" data-bs-toggle="tab"
@@ -67,7 +69,7 @@
                 </button>
             </li>
         {% endif %}
-        {% if business.productinitiative_set.exists %}
+        {% if business.initiative_set.exists %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="product-initiatives-tab" data-bs-toggle="tab"
                         data-bs-target="#product-initiatives"
@@ -92,7 +94,7 @@
             <hr>
 
             <h5>The Pitch</h5>
-            <div>{{ business.raw_idea }}</div>
+            <div>{{ business.raw_idea|linebreaksbr }}</div>
         </div>
         <div class="tab-pane " id="details" role="tabpanel" aria-labelledby="details-tab">
             <table class="table table-striped">
@@ -444,7 +446,7 @@
             {% endfor %}
         </div>
         <div class="tab-pane " id="business-plan" role="tabpanel" aria-labelledby="business-plan-tab">
-            {{ business.business_plan }}
+            {{ business.business_plan|linebreaksbr }}
 
             {% if business.businesskpi_set.exists %}
                 <hr>
@@ -477,7 +479,7 @@
                     <th>Predicted KPI Lift</th>
                 </tr>
                 </thead>
-                {% for initiative in business.productinitiative_set.all|dictsort:"title" %}
+                {% for initiative in business.initiative_set.all|dictsort:"title" %}
                     <tr>
                         <td>{{ initiative.priority|label }}</td>
                         <td><a href="{% url "view_initiative" initiative.id %}">{{ initiative.title }}</a></td>

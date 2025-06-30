@@ -4,6 +4,8 @@ from erieiron_common.models import Task, SelfDrivingTask
 
 def do_work(task_id):
     task = Task.objects.get(id=task_id)
+    if not task.allow_execution():
+        return
 
     print(f"python manage.py sda_code --task_id={task_id}")
 

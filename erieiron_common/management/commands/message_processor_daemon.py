@@ -1,14 +1,25 @@
 import faulthandler
 import os
 import time
+from datetime import datetime, timezone
 
 import openai
 from django.core.management.base import BaseCommand
 
 from erieiron_common import common
 from erieiron_common.common import parse_bool
-from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, PubSubMessageStatus
+from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, PubSubMessageStatus, PubSubMessageType
+from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage
+
+
+@pubsub_workflow
+def add_noop_handlers(pubsub_manager: PubSubManager):
+    # this is here to suppress the 'No consumer' messages
+    pubsub_manager.on(
+        [PubSubMessageType.EVERY_HOUR, PubSubMessageType.EVERY_MINUTE],
+        PubSubManager.noop
+    )
 
 
 class Command(BaseCommand):
@@ -140,7 +151,7 @@ class Command(BaseCommand):
             while True:
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
 
-                # publish_timing_messages()
+                publish_timing_messages()
 
                 if not process:
                     common.log_info(f"""
@@ -188,7 +199,7 @@ class Command(BaseCommand):
                 else:
                     process.ping()
 
-                    if False and idx % 10 == 0 and print_debug_info:
+                    if idx % 10 == 0 and print_debug_info:
                         log(f'message_queue_processor running for env {env} ', log_prefix, log_suffix)
                         pubsub_manager.print_pending()
 
@@ -200,28 +211,112 @@ class Command(BaseCommand):
             exit(0)
 
 
-# def publish_timing_messages():
-# one_minute_ago = common.get_now() - timedelta(minutes=1)
-# one_hour_ago = common.get_now() - timedelta(hours=1)
-# one_day_ago = common.get_now() - timedelta(days=1)
-#
-# if not PubSubMessage.objects.filter(
-#         message_type=PubSubMessageType.EVERY_MINUTE,
-#         created_at__lt=one_minute_ago
-# ).exists():
-#     PubSubManager.publish(PubSubMessageType.EVERY_MINUTE)
-#
-# if not PubSubMessage.objects.filter(
-#         message_type=PubSubMessageType.EVERY_HOUR,
-#         created_at__lt=one_hour_ago
-# ).exists():
-#     PubSubManager.publish(PubSubMessageType.EVERY_HOUR)
-#
-# if not PubSubMessage.objects.filter(
-#         message_type=PubSubMessageType.EVERY_DAY,
-#         created_at__lt=one_day_ago
-# ).exists():
-#     PubSubManager.publish(PubSubMessageType.EVERY_DAY)
+def publish_timing_messages(enable_every_minute=False):
+    """
+    Publishes timing messages at intervals with distributed coordination.
+    Robust to daemon delays/restarts - checks for missing messages in current period.
+    Only one daemon across all hosts will publish each timing message.
+    """
+    from erieiron_common.message_queue.pubsub_manager import PubSubManager
+    from django.db import transaction
+
+    now = datetime.now(timezone.utc)
+
+    # EVERY_MINUTE: check if current minute's message exists
+    minute_namespace = f"timing_minute_{now.strftime('%Y%m%d_%H%M')}"
+    if enable_every_minute and not PubSubMessage.objects.filter(
+            message_type=PubSubMessageType.EVERY_MINUTE.value,
+            namespace=minute_namespace
+    ).exists():
+        try:
+            with transaction.atomic():
+                message, created = PubSubMessage.objects.get_or_create(
+                    message_type=PubSubMessageType.EVERY_MINUTE.value,
+                    namespace=minute_namespace,
+                    defaults={
+                        'env': PubSubManager.get_instance().environment_id,
+                        'priority': PubSubMessagePriority.NORMAL.value,
+                        'status': PubSubMessageStatus.PENDING.value,
+                        'payload': {}
+                    }
+                )
+                if created:
+                    common.log_info(f"Published EVERY_MINUTE message for {minute_namespace}")
+        except Exception as e:
+            # Another daemon already published this timing message
+            pass
+
+    # EVERY_HOUR: check if current hour's message exists
+    hour_namespace = f"timing_hour_{now.strftime('%Y%m%d_%H')}"
+    if not PubSubMessage.objects.filter(
+            message_type=PubSubMessageType.EVERY_HOUR.value,
+            namespace=hour_namespace
+    ).exists():
+        try:
+            with transaction.atomic():
+                message, created = PubSubMessage.objects.get_or_create(
+                    message_type=PubSubMessageType.EVERY_HOUR.value,
+                    namespace=hour_namespace,
+                    defaults={
+                        'env': PubSubManager.get_instance().environment_id,
+                        'priority': PubSubMessagePriority.NORMAL.value,
+                        'status': PubSubMessageStatus.PENDING.value,
+                        'payload': {}
+                    }
+                )
+                if created:
+                    common.log_info(f"Published EVERY_HOUR message for {hour_namespace}")
+        except Exception as e:
+            # Another daemon already published this timing message
+            pass
+
+    # EVERY_DAY: check if current day's message exists
+    day_namespace = f"timing_day_{now.strftime('%Y%m%d')}"
+    if not PubSubMessage.objects.filter(
+            message_type=PubSubMessageType.EVERY_DAY.value,
+            namespace=day_namespace
+    ).exists():
+        try:
+            with transaction.atomic():
+                message, created = PubSubMessage.objects.get_or_create(
+                    message_type=PubSubMessageType.EVERY_DAY.value,
+                    namespace=day_namespace,
+                    defaults={
+                        'env': PubSubManager.get_instance().environment_id,
+                        'priority': PubSubMessagePriority.NORMAL.value,
+                        'status': PubSubMessageStatus.PENDING.value,
+                        'payload': {}
+                    }
+                )
+                if created:
+                    common.log_info(f"Published EVERY_DAY message for {day_namespace}")
+        except Exception as e:
+            # Another daemon already published this timing message
+            pass
+
+    # EVERY_WEEK: check if current week's message exists (Monday-based weeks)
+    week_namespace = f"timing_week_{now.strftime('%Y%U')}"
+    if not PubSubMessage.objects.filter(
+            message_type=PubSubMessageType.EVERY_WEEK.value,
+            namespace=week_namespace
+    ).exists():
+        try:
+            with transaction.atomic():
+                message, created = PubSubMessage.objects.get_or_create(
+                    message_type=PubSubMessageType.EVERY_WEEK.value,
+                    namespace=week_namespace,
+                    defaults={
+                        'env': PubSubManager.get_instance().environment_id,
+                        'priority': PubSubMessagePriority.NORMAL.value,
+                        'status': PubSubMessageStatus.PENDING.value,
+                        'payload': {}
+                    }
+                )
+                if created:
+                    common.log_info(f"Published EVERY_WEEK message for {week_namespace}")
+        except Exception as e:
+            # Another daemon already published this timing message
+            pass
 
 
 def log(msg, prefix, suffix):

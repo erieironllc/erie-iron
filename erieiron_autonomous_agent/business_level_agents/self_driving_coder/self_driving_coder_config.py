@@ -74,7 +74,7 @@ class SelfDriverConfig:
 
     @staticmethod
     def from_task(task_id: str) -> 'SelfDriverConfig':
-        business = Business.objects.get(productinitiative__engineering_tasks__id=task_id)
+        business = Business.objects.get(initiative__tasks__id=task_id)
         task = Task.objects.get(id=task_id)
         base_file_name = common.safe_filename(task_id)
 
@@ -89,7 +89,7 @@ class SelfDriverConfig:
 
         business_sandbox_dir = business.get_sandbox_dir()
 
-        initiative_dir_name = common.safe_filename(task.product_initiative_id)
+        initiative_dir_name = common.safe_filename(task.initiative_id)
 
         artifacts_root = business_sandbox_dir / ARTIFACTS / initiative_dir_name
         artifacts_root.mkdir(parents=True, exist_ok=True)

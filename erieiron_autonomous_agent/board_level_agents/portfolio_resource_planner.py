@@ -10,7 +10,6 @@ from erieiron_common.models import Business, BusinessCapacityAnalysis, BusinessB
 def on_resource_planning_requested(business_id):
     business = Business.objects.get(id=business_id)
 
-    # TODO move this to a daily job
     if business.needs_bank_balance_update():
         balance_data = bank_utils.get_account_balance_data()
         with transaction.atomic():

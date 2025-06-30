@@ -7,8 +7,22 @@ from erieiron_common.enums import Constants, BusinessIdeaSource
 from erieiron_common.models import Business
 
 
-def find_new_business_opportunity(erieiron_business_id):
+def find_new_business_opportunity(payload):
+    placehold_business_id = payload.get("placehold_business_id")
     erieiron_business = Business.get_erie_iron_business()
+
+    """
+    use this:
+    Failed Startup Dataset by Shivam Bansal
+
+A repo with structured data (CSV, JSON) scraped from public postmortems. Could be a starting point for training or heuristic modeling.
+
+Awesome Postmortems
+
+GitHub list of both startup and engineering postmortems. Less indie-focused but still useful for failure patterns.
+
+
+    """
 
     messages = []
 
@@ -40,6 +54,7 @@ def find_new_business_opportunity(erieiron_business_id):
     )
 
     return {
+        "existing_business_id": placehold_business_id,
         "summary": business_idea.get("summary"),
         "idea_content": business_idea.get("detailed_pitch"),
         "source": BusinessIdeaSource.BUSINESS_FINDER_AGENT,
@@ -52,11 +67,14 @@ def submit_business_opportunity(payload):
     idea_content = payload.get("idea_content")
     source = payload.get("source")
 
-    if isinstance(idea_content, Path):
-        name = idea_content.name.capitalize().replace("_", " ")
-        idea_content = idea_content.read_text()
+    if existing_business_id:
+        name = Business.objects.get(id=existing_business_id).name
     else:
-        name = f"{Constants.NEW_BUSINESS_NAME_PREFIX} {common.get_now()}"
+        if isinstance(idea_content, Path):
+            name = idea_content.name.capitalize().replace("_", " ")
+            idea_content = idea_content.read_text()
+        else:
+            name = f"{Constants.NEW_BUSINESS_NAME_PREFIX} {common.get_now()}"
 
     token = common.strip_non_alpha(name).lower()
     business, created = Business.objects.update_or_create(

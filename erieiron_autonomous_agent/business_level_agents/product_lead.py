@@ -3,10 +3,10 @@ from django.db import transaction
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_common.models import Business, BusinessCapacityAnalysis
 from erieiron_common.models import BusinessKPI, BusinessGoal, BusinessCeoDirective
-from erieiron_common.models import ProductInitiative, ProductRequirement
+from erieiron_common.models import Initiative, ProductRequirement
 
 
-def define_product_initiatives(business_id):
+def define_initiatives(business_id):
     business = Business.objects.get(id=business_id)
 
     chat_data = build_chat_data(business)
@@ -36,17 +36,18 @@ def build_chat_data(business):
     ))
     capacity = BusinessCapacityAnalysis.objects.filter(business=business).last()
     capacity_summary = capacity.recommendation if capacity else "No capacity analysis available."
-    initiatives = list(ProductInitiative.objects.filter(business=business).values(
+    initiatives = list(Initiative.objects.filter(business=business).values(
         "id", "title", "description", "priority"
     ))
     requirements = list(ProductRequirement.objects.filter(
-        product_initiative__business=business
+        initiative__business=business
     ).values(
-        "id", "summary", "acceptance_criteria", "testable", "product_initiative_id"
+        "id", "summary", "acceptance_criteria", "testable", "initiative_id"
     ))
     chat_data = {
         "business_name": business.name,
         "business_summary": business.summary,
+        "business_pitch": business.raw_idea,
         "kpis": kpis,
         "goals": goals,
         "ceo_directives": directives,
@@ -61,9 +62,9 @@ def build_chat_data(business):
 def process_response(business, product_lead_response):
     updated_or_created_initiative_ids = []
 
-    for initiative_data in product_lead_response.get("product_initiatives", []):
+    for initiative_data in product_lead_response.get("initiatives", []):
         initiative_token = initiative_data["initiative_token"]
-        initiative, created = ProductInitiative.objects.update_or_create(
+        initiative, created = Initiative.objects.update_or_create(
             id=initiative_token,
             defaults={
                 "business": business,
@@ -95,7 +96,7 @@ def process_response(business, product_lead_response):
             ProductRequirement.objects.update_or_create(
                 id=requirement_token,
                 defaults={
-                    "product_initiative": initiative,
+                    "initiative": initiative,
                     "summary": req["summary"],
                     "acceptance_criteria": req["acceptance_criteria"],
                     "testable": req["testable"]

@@ -1,13 +1,15 @@
 import json
 from collections import defaultdict
 
+from django.contrib import messages
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
-from erieiron_common.enums import TaskStatus, PubSubMessageType
+from erieiron_common import common
+from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Task, ProductInitiative, Business, SelfDrivingTask, SelfDrivingTaskIteration
+from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration
 from erieiron_ui.view_utils import send_response, redirect, rget
 
 
@@ -33,7 +35,7 @@ def view_business(request, business_id):
     business = get_object_or_404(Business, pk=business_id)
 
     # business.businessceodirective_set
-    tasks = Task.objects.filter(product_initiative__business=business)
+    tasks = Task.objects.filter(initiative__business=business)
 
     return send_response(
         request,
@@ -48,11 +50,11 @@ def view_business(request, business_id):
 
 
 def view_initiative(request, initiative_id):
-    initiative = get_object_or_404(ProductInitiative, pk=initiative_id)
+    initiative = get_object_or_404(Initiative, pk=initiative_id)
     business = initiative.business
 
     task_type_tasks = defaultdict(list)
-    for task in initiative.engineering_tasks.all():
+    for task in initiative.tasks.all():
         task_type_tasks[TaskStatus(task.status)].append(task)
 
     task_datas = []
@@ -74,7 +76,7 @@ def view_initiative(request, initiative_id):
 
 def view_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
-    initiative = task.product_initiative
+    initiative = task.initiative
     business = initiative.business
 
     self_driving_task = SelfDrivingTask.objects.filter(related_task_id=task_id).first()
@@ -102,7 +104,7 @@ def view_self_driver_iteration(request, iteration_id):
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
 
     task = iteration.task.related_task
-    initiative = task.product_initiative
+    initiative = task.initiative
     business = initiative.business
 
     total_price, total_tokens = iteration.get_llm_cost()
@@ -155,3 +157,56 @@ def action_retry_task(request, task_id):
     )
 
     return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_add_business(request):
+    if request.method != 'POST':
+        raise Exception()
+
+    business_name = rget(request, 'business_name', '').strip()
+    business_description = rget(request, 'business_description', '').strip()
+
+    if not business_name:
+        messages.error(request, 'Business name is required.')
+        return redirect(reverse('view_businesses'))
+
+    if not business_description:
+        messages.error(request, 'Business description is required.')
+        return redirect(reverse('view_businesses'))
+
+    business = Business.objects.create(
+        name=business_name,
+        source=BusinessIdeaSource.HUMAN,
+        raw_idea=business_description
+    )
+
+    PubSubManager.publish(
+        PubSubMessageType.BUSINESS_IDEA_SUBMITTED,
+        payload={
+            'existing_business_id': business.id,
+            'source': BusinessIdeaSource.HUMAN,
+            'idea_content': business_description
+        }
+    )
+
+    messages.success(request, 'Business idea submitted successfully! It will be reviewed and processed.')
+    return redirect(reverse('view_businesses'))
+
+
+def action_find_business(request):
+    business_name = rget(request, 'business_name', '').strip()
+    business_description = rget(request, 'business_description', '').strip()
+
+    business = Business.objects.create(
+        name=f"{Constants.NEW_BUSINESS_NAME_PREFIX} {common.get_now()}",
+        source=BusinessIdeaSource.BUSINESS_FINDER_AGENT
+    )
+
+    PubSubManager.publish(
+        PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED,
+        payload={
+            "placehold_business_id": business.id
+        }
+    )
+
+    return redirect(reverse('view_businesses'))

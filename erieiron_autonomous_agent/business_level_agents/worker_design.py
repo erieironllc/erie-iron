@@ -7,6 +7,8 @@ from erieiron_common.models import TaskDesignRequirements, DesignComponent
 
 def do_work(task_id):
     task = Task.objects.get(id=task_id)
+    if not task.allow_execution():
+        return
 
     chat_data = build_chat_data(task)
 
@@ -20,7 +22,7 @@ def do_work(task_id):
 
 
 def build_chat_data(task):
-    initiative = task.product_initiative
+    initiative = task.initiative
 
     product_requirements = list(initiative.requirements.all().values(
         "id",
@@ -37,9 +39,9 @@ def build_chat_data(task):
 
     return {
         "business_name": initiative.business.name,
-        "product_initiative_id": initiative.id,
-        "product_initiative_title": initiative.title,
-        "product_initiative_description": initiative.description,
+        "initiative_id": initiative.id,
+        "initiative_title": initiative.title,
+        "initiative_description": initiative.description,
         "product_requirements": product_requirements,
         "design_task": triggering_task_data
     }
