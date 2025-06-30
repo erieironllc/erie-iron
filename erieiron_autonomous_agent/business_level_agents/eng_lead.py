@@ -4,7 +4,7 @@ from erieiron_autonomous_agent.system_agent_llm_interface import business_level_
 from erieiron_common import common
 from erieiron_common.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionSchedule
 from erieiron_common.models import (
-    ProductInitiative,
+    Initiative,
     Task,
     ProductRequirement,
     TaskDesignRequirements,
@@ -14,7 +14,7 @@ from erieiron_common.models import (
 
 def on_task_blocked(payload):
     task = Task.objects.get(id=payload['task_id'])
-    initiative = task.product_initiative
+    initiative = task.initiative
     business = initiative.business
 
     payload["GOAL"] = "unblock this task"
@@ -43,8 +43,8 @@ def on_task_blocked(payload):
     return new_task_ids
 
 
-def define_tasks_for_initiative(product_initiative_id):
-    initiative = ProductInitiative.objects.get(id=product_initiative_id)
+def define_tasks_for_initiative(initiative_id):
+    initiative = Initiative.objects.get(id=initiative_id)
     business = initiative.business
 
     chat_data = build_chat_data(business, initiative)
@@ -88,14 +88,14 @@ def build_chat_data(business, initiative):
             "task_id": task.id,
             "task_description": task.description
         }
-        for task in initiative.engineering_tasks.all()
+        for task in initiative.tasks.all()
     ]
 
     return {
         "business_name": business.name,
-        "product_initiative_id": initiative.id,
-        "product_initiative_title": initiative.title,
-        "product_initiative_description": initiative.description,
+        "initiative_id": initiative.id,
+        "initiative_title": initiative.title,
+        "initiative_description": initiative.description,
         "requirements": requirements,
         "linked_kpis": linked_kpis,
         "linked_goals": linked_goals,
@@ -107,7 +107,7 @@ def build_chat_data(business, initiative):
 def process_response(initiative, eng_lead_response):
     updated_or_created_task_ids = []
 
-    for task_data in eng_lead_response.get("engineering_tasks", []):
+    for task_data in eng_lead_response.get("tasks", []):
         task_id = task_data.get("task_id")
 
         base_required_fields = [
@@ -147,7 +147,7 @@ def process_response(initiative, eng_lead_response):
         eng_task, created = Task.objects.update_or_create(
             id=task_id if task_id else None,
             defaults={
-                "product_initiative": initiative,
+                "initiative": initiative,
                 "status": TaskStatus.NOT_STARTED,
                 "description": task_data.get("task_description", ""),
                 "risk_notes": task_data.get("risk_notes", ""),

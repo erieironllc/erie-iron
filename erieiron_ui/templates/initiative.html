@@ -13,20 +13,24 @@
                 Overview
             </button>
         </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="requirements-tab" data-bs-toggle="tab" data-bs-target="#requirements"
-                    type="button"
-                    role="tab">
-                Requirements
-            </button>
-        </li>
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="tasks-tab" data-bs-toggle="tab" data-bs-target="#tasks"
-                    type="button"
-                    role="tab">
-                Tasks
-            </button>
-        </li>
+        {% if initiative.requirements.exists %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="requirements-tab" data-bs-toggle="tab" data-bs-target="#requirements"
+                        type="button"
+                        role="tab">
+                    Requirements
+                </button>
+            </li>
+        {% endif %}
+        {% if tasks|length > 0 %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tasks-tab" data-bs-toggle="tab" data-bs-target="#tasks"
+                        type="button"
+                        role="tab">
+                    Tasks
+                </button>
+            </li>
+        {% endif %}
     </ul>
 
     <div class="tab-content pt-3" id="initiativeTabContent">
@@ -92,7 +96,7 @@
                         <th>Description</th>
                     </tr>
                     </thead>
-                    {% for task in tasks %}
+                    {% for task in tasks|dictsort:"created_timestamp" %}
                         {% include "_task_row.html" %}
                     {% endfor %}
                 </table>

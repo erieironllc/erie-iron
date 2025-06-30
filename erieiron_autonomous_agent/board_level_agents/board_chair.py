@@ -10,30 +10,10 @@ from erieiron_common.models import Business, BusinessGuidance
 def exec_board_chair_tasks():
     erieiron_business = Business.get_erie_iron_business()
 
-    for business in Business.objects.exclude(id=erieiron_business.id):
-        if business.needs_analysis():
-            PubSubManager.publish_id(
-                PubSubMessageType.ANALYSIS_REQUESTED,
-                business.id
-            )
-        else:
-            PubSubManager.publish_id(
-                PubSubMessageType.BOARD_GUIDANCE_REQUESTED,
-                business.id
-            )
-
-    if erieiron_business.needs_capacity_analysis():
-        PubSubManager.publish_id(
-            PubSubMessageType.RESOURCE_PLANNING_REQUESTED,
-            erieiron_business.id
-        )
-    else:
-        erieiron_capacity = erieiron_business.businesscapacityanalysis_set.order_by("created_timestamp").last()
+    erieiron_capacity = erieiron_business.businesscapacityanalysis_set.order_by("created_timestamp").last()
+    if erieiron_capacity:
         if TrafficLight.GREEN.eq(erieiron_capacity.recommendation):
-            PubSubManager.publish_id(
-                PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED,
-                erieiron_business.id
-            )
+            PubSubManager.publish_id(PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED)
         elif TrafficLight.RED.eq(erieiron_capacity.recommendation):
             PubSubManager.publish_id(
                 PubSubMessageType.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
@@ -41,8 +21,26 @@ def exec_board_chair_tasks():
             )
 
 
+def exec_business_analysis():
+    for business in Business.objects.all():
+        if business.needs_capacity_analysis():
+            PubSubManager.publish_id(
+                PubSubMessageType.RESOURCE_PLANNING_REQUESTED,
+                business.id
+            )
+
+        if business.needs_analysis():
+            PubSubManager.publish_id(
+                PubSubMessageType.ANALYSIS_REQUESTED,
+                business.id
+            )
+
+
 def on_board_guidance_requested(business_id):
     erieiron_business = Business.get_erie_iron_business()
+    if erieiron_business.id == business_id:
+        return None
+
     business = Business.objects.get(id=business_id)
     business_analysis, legal_analysis = business.get_latest_analysist()
 

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import pprint
+import shutil
 import subprocess
 import sys
 import uuid
@@ -641,3 +642,35 @@ def build_and_push_dev_container(
         raise
 
     return image_uri
+
+
+def clone_template_project_to_sandbox(business_id: uuid.UUID) -> Path:
+    """
+    Clones the template project into the business's sandbox directory.
+
+    This is used to bootstrap a new web service or containerized project environment for a business.
+
+    Args:
+        business_id (uuid.UUID): The UUID of the business for which the project should be cloned.
+
+    Returns:
+        Path: The path to the newly created project directory inside the business sandbox.
+
+    Raises:
+        FileNotFoundError: If the template source directory does not exist.
+        Exception: If the copy operation fails for any reason.
+    """
+    template_dir = Path(__file__).parent / "bootstrap_webservice_container"
+    if not template_dir.exists():
+        raise FileNotFoundError(f"Template directory not found at {template_dir}")
+
+    business = Business.objects.get(id=business_id)
+    sandbox_dir = Path(business.get_sandbox_dir())
+    destination_dir = sandbox_dir / "webservice"
+
+    if destination_dir.exists():
+        raise FileExistsError(f"Destination project already exists at {destination_dir}")
+
+    shutil.copytree(template_dir, destination_dir)
+    print(f"[✅] Template project cloned to: {destination_dir}")
+    return destination_dir

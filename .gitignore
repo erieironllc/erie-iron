@@ -181,3 +181,6 @@ __pycache__/
 /staticfiles/
 .idea/
 /.envrc
+/node_modules/
+/erieiron_ui/static/compiled/
+/erieiron_businesses/

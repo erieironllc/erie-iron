@@ -18,7 +18,7 @@ from erieiron_common import common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure, TaskExecutionType, TaskPhase, TaskExecutionMode, TaskExecutionSchedule, PersonAuthStatus
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, BusinessIdeaSource, BusinessStatus, Level, BusinessGuidanceRating, TrafficLight, GoalStatus, TaskAssigneeType, TaskStatus, LlcStructure, TaskExecutionType, TaskPhase, TaskExecutionMode, TaskExecutionSchedule, PersonAuthStatus, InitiativeType
 from erieiron_common.gpu_utils import ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
@@ -1014,8 +1014,11 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
 
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
+    source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
+    status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
+
     sandbox_dir_name = models.TextField(null=False)
-    service_token = models.TextField(null=False)
+    service_token = models.TextField(null=True)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
     bank_account_id = models.TextField(null=True)
@@ -1027,11 +1030,8 @@ class Business(BaseErieIronModel):
     execution_dependencies = models.JSONField(default=list)
     growth_channels = models.JSONField(default=list)
     personalization_options = models.JSONField(default=list)
-    source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
-    status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
     allow_autonomous_shutdown = models.BooleanField(default=True)
     autonomy_level = models.TextField(null=True, choices=Level.choices())
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1371,9 +1371,10 @@ class BusinessCeoDirective(BaseErieIronModel):
     initiative_reference = models.TextField(default="")
 
 
-class ProductInitiative(BaseErieIronModel):
+class Initiative(BaseErieIronModel):
     id = models.TextField(primary_key=True)  # initiative_token
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    initiative_type = models.TextField(choices=InitiativeType.choices(), default=InitiativeType.PRODUCT)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     title = models.TextField()
     description = models.TextField()
@@ -1385,7 +1386,8 @@ class ProductInitiative(BaseErieIronModel):
 
 class ProductRequirement(BaseErieIronModel):
     id = models.TextField(primary_key=True)  # requirement_token
-    product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name='requirements')
+    initiative = models.ForeignKey(Initiative, on_delete=models.CASCADE, related_name='requirements')
+    product_initiative = models.TextField(null=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     summary = models.TextField()
     acceptance_criteria = models.TextField()
@@ -1395,7 +1397,8 @@ class ProductRequirement(BaseErieIronModel):
 class Task(BaseErieIronModel):
     id = models.TextField(primary_key=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
-    product_initiative = models.ForeignKey(ProductInitiative, on_delete=models.CASCADE, related_name="engineering_tasks")
+    initiative = models.ForeignKey(Initiative, on_delete=models.CASCADE, related_name="tasks")
+    product_initiative = models.TextField(null=True)
     status = models.TextField(null=False, choices=TaskStatus.choices())
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
     description = models.TextField()
@@ -1457,6 +1460,9 @@ class Task(BaseErieIronModel):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
         for t in self.dependent_tasks.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+
+    def allow_execution(self):
+        return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
 
 
 # Design system and handoff models

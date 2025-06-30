@@ -4,17 +4,17 @@
   "type": "object",
   "required": [
     "business_name",
-    "product_initiative_id",
-    "engineering_tasks"
+    "initiative_id",
+    "tasks"
   ],
   "properties": {
     "business_name": {
       "type": "string"
     },
-    "product_initiative_id": {
+    "initiative_id": {
       "type": "string"
     },
-    "engineering_tasks": {
+    "tasks": {
       "type": "array",
       "items": {
         "type": "object",

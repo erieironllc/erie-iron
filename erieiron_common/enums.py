@@ -200,11 +200,11 @@ class PubSubMessageType(ErieEnum):
     EVERY_MINUTE = auto()
     EVERY_HOUR = auto()
     EVERY_DAY = auto()
+    EVERY_WEEK = auto()
 
     CHAT_INTERACTION_INITIATED = auto()
     CHAT_CHANNEL_LLM = auto()
 
-    BOARD_CHAIR_EXEC_REQUESTED = auto()
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     BUSINESS_IDEA_SUBMITTED = auto()
@@ -215,7 +215,8 @@ class PubSubMessageType(ErieEnum):
     BOARD_GUIDANCE_UPDATED = auto()
 
     CEO_DIRECTIVES_ISSUED = auto()
-    PRODUCT_INITIATIVE_DEFINED = auto()
+    PRODUCT_INITIATIVES_REQUESTED = auto()
+    INITIATIVE_DEFINED = auto()
     CODING_WORK_REQUESTED = auto()
     DESIGN_WORK_REQUESTED = auto()
     HUMAN_WORK_REQUESTED = auto()
@@ -446,3 +447,9 @@ class TaskStatus(ErieEnum):
 class LlcStructure(ErieEnum):
     ERIE_IRON_LLC = auto()
     SEPARATE_LLC = auto()
+
+
+class InitiativeType(ErieEnum):
+    PRODUCT = auto()
+    ENGINEERING = auto()
+    SALES = auto()

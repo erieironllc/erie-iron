@@ -410,7 +410,7 @@ Please provide the corrected JSON text:
     try:
         response = chat(
             messages=[LlmMessage.user(prompt)],
-            model=LlmModel.OPENAI_GPT_4O,
+            model=LlmModel.OPENAI_GPT_4o,
             code_response=True
         )
         coerced_text = response.text

@@ -25,7 +25,7 @@ You must:
 - Layouts should be responsive by default unless otherwise specified. If needed, include `"responsive": true` in your layout definition.
 - Your `design_handoff` output will be attached to a task defined by the Engineering Lead Agent. Ensure component names and layout regions match the expectations defined in that task.
 
-- You must include `"product_initiative_id"` at the top level of your output JSON. This links your design work back to the business initiative and is required by downstream systems.
+- You must include `"initiative_id"` at the top level of your output JSON. This links your design work back to the business initiative and is required by downstream systems.
 
 ---
 
@@ -37,7 +37,7 @@ You **must return both** `design_handoff` and `ui_tree` in a single JSON object.
 
 ```json
 {
-  "product_initiative_id": "articleinsight_core_feature_mvp_q3_token",
+  "initiative_id": "articleinsight_core_feature_mvp_q3_token",
   "design_handoff": {
     "component_ids": ["ContentFeed", "SortingToolbar"],
     "layout": {

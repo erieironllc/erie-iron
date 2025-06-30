@@ -461,15 +461,15 @@ class PubSubManager:
     @staticmethod
     def publish_id(
             message_type: PubSubMessageType,
-            msg_id,
+            msg_id=None,
             priority: PubSubMessagePriority = PubSubMessagePriority.NORMAL,
             batch_idx=None
     ) -> PubSubMessage:
         instance = PubSubManager.get_instance()
         return instance.publish(
             message_type=message_type,
-            namespace_context=msg_id,
-            payload=msg_id,
+            namespace_context=msg_id or uuid.uuid4(),
+            payload=msg_id or {},
             priority=priority,
             batch_idx=batch_idx
         )
@@ -626,7 +626,7 @@ class PubSubManager:
                 subscriber_method_signatures = str(e)
 
             millis_to_pickup = (get_now() - message.updated_at).microseconds // 1000
-            common.log_info(f"PUB SUB:  picked up '{message.message_type}' msg after {millis_to_pickup}ms with {subscriber_method_signatures};")
+            common.log_info(f"PUB SUB:  picked up '{message.message_type}' {message.id} after {millis_to_pickup}ms with {subscriber_method_signatures};")
 
             PubSubMessage.mark_processing(message.id, self.handler_instance_id)
             close_old_connections()
@@ -651,11 +651,11 @@ class PubSubManager:
 
                     if completed_message_type:
                         if common.is_list_like(ret_val):
-                            for rt in ret_val:
+                            for rt in common.ensure_list(ret_val):
                                 PubSubManager.publish(
                                     completed_message_type,
                                     namespace_context=message.namespace,
-                                    payload=ret_val or message.payload,
+                                    payload=rt or message.payload,
                                     priority=message.priority
                                 )
                         else:
@@ -666,7 +666,7 @@ class PubSubManager:
                                 priority=message.priority
                             )
 
-                    common.log_info(f"PUB SUB:  handled '{message.message_type}' msg with {subscriber_method_signatures};")
+                    common.log_info(f"PUB SUB:  handled '{message.message_type}' {message.id} with {subscriber_method_signatures};")
 
                     # no errors, great let's break
                     break
@@ -818,6 +818,10 @@ class PubSubManager:
         except FileNotFoundError:
             logging.warning("p90 threshold file %s not found – using empty dict", json_path)
             return {}
+
+    @classmethod
+    def noop(cls):
+        pass
 
 
 def init_pubsub_from_cmd_options(options=None):
