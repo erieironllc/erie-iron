@@ -1639,3 +1639,35 @@ def safe_filename(s, replacement="_", max_length=255):
 
 def build_absolute_uri(page=""):
     return f"{settings.BASE_URL}/{page}"
+
+
+def copy_missing_files(src_dir, destination_dir):
+    # Create destination directory if it doesn't exist
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    # Copy files that don't exist, preserving existing files
+
+    copied_files = []
+    skipped_files = []
+    for source_file in src_dir.rglob('*'):
+        if source_file.is_file():
+            # Calculate relative path from template root
+            relative_path = source_file.relative_to(src_dir)
+            dest_file = destination_dir / relative_path
+
+            # Only copy if destination file doesn't exist
+            if not dest_file.exists():
+                # Create parent directories if needed
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                # Copy the file
+                shutil.copy2(source_file, dest_file)
+                copied_files.append(str(relative_path))
+            else:
+                skipped_files.append(str(relative_path))
+    if copied_files:
+        print(f"[✅] Copied {len(copied_files)} new files to: {destination_dir}")
+        for file in copied_files[:5]:  # Show first 5 files
+            print(f"    ├── {file}")
+        if len(copied_files) > 5:
+            print(f"    └── ... and {len(copied_files) - 5} more files")
+    if skipped_files:
+        print(f"[⏭️] Skipped {len(skipped_files)} existing files (preserved)")

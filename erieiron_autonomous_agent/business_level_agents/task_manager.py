@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import F, Value
 from django.db.models.functions import Coalesce
 
+import settings
 from erieiron_common import aws_utils
 from erieiron_common.enums import TaskAssigneeType, PubSubMessageType, TaskStatus
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -42,8 +43,6 @@ def on_task_updated(task_id):
         logging.error(f"Task {task.id}: {task.description} FAILED")
     elif TaskStatus.COMPLETE.eq(status):
         logging.info(f"Task {task.id}: {task.description} is complete")
-    else:
-        raise ValueError(f"un-supported task status {status}")
 
 
 def on_task_complete(task_id):
@@ -84,7 +83,15 @@ Task {task.id}: {task.description} FAILED
     aws_utils.get_aws_interface().send_email(
         subject=f"Task failed: {task.id} - {task.description}",
         recipient="jj@jjschultz.com",
-        body=f"<h3>TaskID</h3>{task.id}<hr><h3>Error</h3>{err}<hr><h3>Completion Criteria</h3>{cc_parts}"
+        body=f"""
+<h3>TaskID</h3>{task.id}<hr>
+
+{settings.BASE_URL}/task/task_build_dev_runtime_container
+
+<h3>Error</h3><pre>{err}</pre><hr>
+
+<h3>Completion Criteria</h3>{cc_parts}
+"""
     )
 
     Task.objects.filter(id=task.id).update(

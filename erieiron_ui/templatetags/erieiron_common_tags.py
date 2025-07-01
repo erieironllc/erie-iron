@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
+import markdown
 from django import template
 from django.db import models
 from django.utils.html import strip_tags
@@ -12,9 +13,13 @@ from django.utils.safestring import mark_safe
 
 from erieiron_common import common, date_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
-from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 register = template.Library()
+
+
+@register.filter(name='markdown')
+def markdown_format(text):
+    return mark_safe(markdown.markdown(text))
 
 
 @register.filter

@@ -1058,7 +1058,8 @@ class Business(BaseErieIronModel):
         return Business.objects.get_or_create(
             name="Erie Iron, LLC",
             defaults={
-                "source": BusinessIdeaSource.HUMAN
+                "source": BusinessIdeaSource.HUMAN,
+                "sandbox_dir_name": "erieiron"
             }
         )[0]
 
@@ -1382,6 +1383,7 @@ class Initiative(BaseErieIronModel):
     linked_kpis = models.ManyToManyField("BusinessKPI", related_name="initiatives", blank=True)
     linked_goals = models.ManyToManyField("BusinessGoal", related_name="initiatives", blank=True)
     expected_kpi_lift = models.JSONField(default=dict)
+    requires_unit_tests = models.BooleanField(default=True)
 
 
 class ProductRequirement(BaseErieIronModel):
@@ -1462,6 +1464,10 @@ class Task(BaseErieIronModel):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
 
     def allow_execution(self):
+        b = self.initiative.business
+        if Business.get_erie_iron_business().id == b.id:
+            return True
+
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
 
 

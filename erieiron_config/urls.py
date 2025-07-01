@@ -8,11 +8,16 @@ urlpatterns = [
     path("business/<uuid:business_id>", views.view_business, name="view_business"),
     path("business/add", views.action_add_business, name="action_add_business"),
     path("business/find", views.action_find_business, name="action_find_business"),
+    path("business/delete/<uuid:business_id>", views.action_delete_business, name="action_delete_business"),
 
     path("initiative/<str:initiative_id>", views.view_initiative, name="view_initiative"),
+    path("_initiative/add", views.action_add_initiative, name="action_add_initiative"),
+    path("_initiative/delete/<str:initiative_id>", views.action_delete_initiative, name="action_delete_initiative"),
+    path("_initiative/dowork/<str:initiative_id>", views.action_dowork_initiative, name="action_dowork_initiative"),
 
     path("task/resolve/<str:task_id>", views.action_resolve_task, name="action_resolve_task"),
     path("task/retry/<str:task_id>", views.action_retry_task, name="action_retry_task"),
+    path("task/restart/<str:task_id>", views.action_restart_task, name="action_restart_task"),
     path("task/<str:task_id>", views.view_task, name="view_task"),
 
     path("self_driver_iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),

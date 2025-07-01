@@ -97,6 +97,15 @@
             <div>{{ business.raw_idea|linebreaksbr }}</div>
         </div>
         <div class="tab-pane " id="details" role="tabpanel" aria-labelledby="details-tab">
+            <div class="d-flex justify-content-end mb-1">
+                <form method="post" action="{% url 'action_delete_business' business.id %}" style="display: inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-danger"
+                            onclick="return confirm('Are you sure you want to delete this business? This action cannot be undone.')">
+                        Delete Business
+                    </button>
+                </form>
+            </div>
             <table class="table table-striped">
                 <tr>
                     <th>Created</th>

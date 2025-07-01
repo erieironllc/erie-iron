@@ -33,7 +33,7 @@ BaseContainerView = ErieView.extend({
 
         this.init_page();
 
-        $(".tab-pane:first-child").addClass("active").addClass("show")
+        $(".tab-pane:first-child").addClass("active").addClass("show");
         const hash = window.location.hash;
         if (hash) {
             const tabTrigger = document.querySelector(`button[data-bs-target="${hash}"]`);

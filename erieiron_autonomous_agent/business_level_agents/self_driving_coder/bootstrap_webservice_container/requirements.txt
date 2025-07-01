@@ -1,0 +1,7 @@
+Django==5.1.6
+django-stubs
+PyJWT
+PyJWT[crypto]>=2.0.0
+moto
+boto3
+botocore

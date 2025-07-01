@@ -17,7 +17,12 @@ from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInst
 def add_noop_handlers(pubsub_manager: PubSubManager):
     # this is here to suppress the 'No consumer' messages
     pubsub_manager.on(
-        [PubSubMessageType.EVERY_HOUR, PubSubMessageType.EVERY_MINUTE],
+        [
+            PubSubMessageType.EVERY_WEEK,
+            PubSubMessageType.EVERY_DAY,
+            PubSubMessageType.EVERY_HOUR,
+            PubSubMessageType.EVERY_MINUTE
+        ],
         PubSubManager.noop
     )
 

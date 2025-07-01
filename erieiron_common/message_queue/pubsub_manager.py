@@ -37,7 +37,7 @@ SLEEP_BACKOFF_NO_WORK = 0
 
 # MESSAGE_HANDLER_ATTEMPT_COUNT must be at least one, otherwise we'll never do any work.
 # if it's greater than one, we'll retry on error
-MESSAGE_HANDLER_MAX_RETRIES = 1
+MESSAGE_HANDLER_MAX_RETRIES = 3
 
 subscribers = defaultdict(set)
 

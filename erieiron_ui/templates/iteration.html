@@ -16,8 +16,8 @@
 
     <!-- Nav tabs -->
     <ul class="nav nav-tabs" id="iterationTab" role="tablist">
-        <li class="nav-item active" role="presentation">
-            <button class="nav-link" id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
+        <li class="nav-item " role="presentation">
+            <button class="nav-link active" id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
                     role="tab">
                 Code
             </button>
@@ -37,7 +37,7 @@
     </ul>
 
     <div class="tab-content pt-3" id="iterationTabContent">
-        <div class="tab-pane  " id="code" role="tabpanel" aria-labelledby="code-tab">
+        <div class="tab-pane active show" id="code" role="tabpanel" aria-labelledby="code-tab">
             {% for code_version in iteration.codeversion_set.all %}
                 <div class="card mb-4">
                     <div class="card-header">

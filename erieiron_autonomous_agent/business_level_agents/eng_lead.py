@@ -2,7 +2,7 @@ from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_common import common
-from erieiron_common.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionSchedule
+from erieiron_common.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionSchedule, InitiativeType
 from erieiron_common.models import (
     Initiative,
     Task,
@@ -69,19 +69,22 @@ def build_chat_data(business, initiative):
         } for req in initiative.requirements.all()
     ]
 
-    linked_kpis = [
-        {
-            "id": kpi.id,
-            "name": kpi.name
-        } for kpi in initiative.linked_kpis.all()
-    ]
+    if InitiativeType.ENGINEERING.eq(initiative.initiative_type):
+        linked_goals = linked_kpis = ["Engineeering Initiative - not linked to Goals / KPIs"]
+    else:
+        linked_kpis = [
+            {
+                "id": kpi.id,
+                "name": kpi.name
+            } for kpi in initiative.linked_kpis.all()
+        ]
 
-    linked_goals = [
-        {
-            "id": goal.id,
-            "description": goal.description
-        } for goal in initiative.linked_goals.all()
-    ]
+        linked_goals = [
+            {
+                "id": goal.id,
+                "description": goal.description
+            } for goal in initiative.linked_goals.all()
+        ]
 
     existing_tasks = [
         {
@@ -157,7 +160,7 @@ def process_response(initiative, eng_lead_response):
                 "phase": TaskPhase(phase),
                 "task_type": TaskExecutionType.valid_or(task_type),
                 "execution_mode": TaskExecutionMode(task_data.get("execution_mode", TaskExecutionMode.CONTAINER)),
-                "requires_test": common.parse_bool(task_data.get("requires_test", True)),
+                "requires_test": initiative.requires_unit_tests and common.parse_bool(task_data.get("requires_test", True)),
                 "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule", TaskExecutionSchedule.ONCE)),
                 "execution_start_time": task_data.get("execution_start_time", None),
             }

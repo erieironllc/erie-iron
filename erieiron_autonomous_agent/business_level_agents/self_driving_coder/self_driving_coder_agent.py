@@ -466,10 +466,8 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                     )
                     price += llm_response_codegen.price_total
 
-                    if code_version_to_modify.code_file.get_path().name.endswith(".py"):
-                        code_str = lint_and_format(llm_response_codegen.text)
-                    else:
-                        code_str = llm_response_codegen.text
+                    code_str = llm_response_codegen.text
+
                     break
                 except CodeCompilationError as e:
                     previous_exception = e
@@ -584,8 +582,10 @@ def get_coding_llm_response(
     model = LlmModel.OPENAI_O3_MINI
 
     code_file_name = code_version_to_modify.code_file.get_path().name
-    if code_file_name.endswith(".py") or code_file_name == "requirements.txt":
+    if code_file_name.endswith(".py"):
         prompt = "worker_coder--python_coder.md"
+    elif code_file_name == "requirements.txt":
+        prompt = "worker_coder--requirements.txt.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "worker_coder--dockerfile_coder.md"
     else:
@@ -599,6 +599,9 @@ def get_coding_llm_response(
         get_helper_methods_msg(config),
         get_dependencies_msg()
     ]
+
+    if code_file_name == "requirements.txt":
+        messages.append(LlmMessage.sys("requirements.txt files are always plain text - they shall never contain python code"))
 
     if config.is_model_trainer:
         messages.append(get_sys_prompt(

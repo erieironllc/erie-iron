@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ErieIron Initiative",
+  "type": "object",
+  "required": [
+    "initiative_id",
+    "initiative_token",
+    "priority",
+    "title",
+    "description",
+    "linked_kpis",
+    "linked_goals",
+    "expected_kpi_lift",
+    "requirements"
+  ],
+  "properties": {
+    "initiative_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9]+_[a-zA-Z0-9_]+_[a-zA-Z0-9]+$"
+    },
+    "initiative_token": {
+      "type": "string"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["HIGH", "MEDIUM", "LOW"]
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "linked_kpis": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "linked_goals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "expected_kpi_lift": {
+      "type": "object",
+      "patternProperties": {
+        ".*": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "assumptions": {
+      "type": "string"
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["summary", "requirement_token", "acceptance_criteria", "testable"],
+        "properties": {
+          "summary": { "type": "string" },
+          "requirement_token": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9]+_[a-zA-Z0-9_]+$"
+          },
+          "acceptance_criteria": { "type": "string" },
+          "testable": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

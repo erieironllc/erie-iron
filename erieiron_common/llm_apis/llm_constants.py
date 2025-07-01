@@ -3,10 +3,10 @@ from erieiron_common.llm_apis import openai_chat_api, gemini_chat_api, claude_ch
 
 SYSTEM_AGENT_MODELS_IN_ORDER = [
     LlmModel.OPENAI_O3,
+    LlmModel.GEMINI_2_5_PRO,
     # LlmModel.OPENAI_GPT_4o,
     # LlmModel.OPENAI_GPT_4_1_NANO,
     # LlmModel.OPENAI_O3_PRO,
-    # LlmModel.GEMINI_2_5_PRO,
     # LlmModel.CLAUDE_3_7
 ]
 
