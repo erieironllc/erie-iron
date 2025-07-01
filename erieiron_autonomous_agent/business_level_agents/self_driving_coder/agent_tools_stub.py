@@ -1,9 +1,22 @@
+import base64
+import json
+import os
+import pprint
+import shutil
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Optional, List
-
 import boto3
-
+from botocore.exceptions import BotoCoreError, NoCredentialsError
+import settings
+from erieiron_common import common
+from erieiron_common.enums import LlmMessageType, PubSubMessageType
+from erieiron_common.llm_apis import llm_interface
+from erieiron_common.llm_apis.llm_interface import LlmMessage
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
+from erieiron_common.models import Business
 
 class PermissionEscalationRequired(Exception):
     """Raised when an operation requires elevated IAM permissions that are not currently granted.
@@ -14,10 +27,8 @@ This exception is used to signal that a task must pause and request additional p
 Attributes:
     action (str): The AWS action that was attempted (e.g., 'ecr:CreateRepository').
     resource (str): The ARN or wildcard of the resource involved in the attempted action."""
-
     def __init__(self, action: str, resource: str):
         pass
-
 
 class CommandExecutionError(Exception):
     """Raised when a shell command executed by the system fails to complete successfully.
@@ -28,10 +39,8 @@ by the underlying `subprocess` module.
 Attributes:
     message (str): A description of the error or failed command.
     original_exception (Optional[Exception]): The exception that was raised, if available."""
-
-    def __init__(self, message: str, original_exception: Optional[Exception] = None):
+    def __init__(self, message: str, original_exception: Optional[Exception]=None):
         pass
-
 
 def debug_payload(payload):
     """Pretty-prints the provided payload using Python's built-in pprint module.
@@ -46,7 +55,6 @@ Args:
 Returns:
     None"""
     pass
-
 
 def llm_chat_text_response(task_id: str, messages: list[tuple[str, str]]) -> str:
     """Sends a sequence of structured messages to the language model and returns a raw text response.
@@ -63,7 +71,6 @@ Raises:
     Exception: If an invalid message_type is encountered."""
     pass
 
-
 def llm_chat_json_response(task_id: str, messages: list[tuple[str, str]]) -> dict:
     """Sends a sequence of structured messages to the language model and returns a JSON-parsed response.
 
@@ -79,8 +86,7 @@ Raises:
     Exception: If an invalid message_type is encountered."""
     pass
 
-
-def get_boto3_client(service: str, region: str = 'us-west-2', role_arn_to_assume: Optional[str] = None, role_session_name: str = 'ErieIronSession') -> 'boto3.client':
+def get_boto3_client(service: str, region: str='us-west-2', role_arn_to_assume: Optional[str]=None, role_session_name: str='ErieIronSession') -> 'boto3.client':
     """Creates and returns a boto3 client for the specified AWS service and region.
 Optionally assumes an IAM role before creating the client.
 
@@ -97,8 +103,7 @@ Raises:
     RuntimeError: If no valid AWS credentials are found or the client initialization fails."""
     pass
 
-
-def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None = None) -> str:
+def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None=None) -> str:
     """Executes an AWS CLI command within the business's sandbox context.
 
 The command is validated to ensure all filesystem-related arguments stay within
@@ -117,7 +122,6 @@ Raises:
     CommandExecutionError: If the command fails or violates sandbox constraints."""
     pass
 
-
 def aws_ecr_login(business_id: uuid.UUID, aws_region: str, aws_account_id: str) -> None:
     """Authenticates Docker with AWS Elastic Container Registry (ECR).
 
@@ -134,8 +138,7 @@ Raises:
     CommandExecutionError: If retrieving the ECR login password or the Docker login fails."""
     pass
 
-
-def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Optional[str] = None) -> str:
+def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Optional[str]=None) -> str:
     """Executes a shell command and captures its output.
 
 Parameters:
@@ -154,7 +157,6 @@ to ensure it remains within the sandbox directory. If a path is detected outside
 the command will be blocked and a CommandExecutionError raised."""
     pass
 
-
 def get_aws_metadata() -> dict:
     """Returns a dictionary containing the AWS account metadata used by the application.
 
@@ -170,7 +172,6 @@ Example:
     {'aws_account_id': '123456789012', 'aws_region': 'us-west-2'}"""
     pass
 
-
 def extract_action_from_error(error: Exception) -> str:
     """Attempts to extract the missing IAM action from an AWS AccessDenied error message.
 
@@ -181,14 +182,12 @@ Returns:
     str: The missing IAM action, if detectable; otherwise 'unknown'."""
     pass
 
-
 def infer_resource_from_context() -> str:
     """Provides a generic resource ARN based on the current AWS context.
 
 Returns:
     str: A guessed resource ARN, defaulting to wildcard if not determinable."""
     pass
-
 
 def aws_iam_get_current_user() -> str:
     """Retrieves the current AWS IAM user or role making requests.
@@ -199,7 +198,6 @@ Returns:
 Raises:
     RuntimeError: If the IAM caller identity cannot be determined."""
     pass
-
 
 def iam_propose_policy_patch(business_id: uuid.UUID, actions: list[str], resources: list[str], reason: str) -> None:
     """Updates or creates a least-privilege IAM policy inline to the specified IAM role or user.
@@ -215,7 +213,6 @@ Raises:
     RuntimeError: If the IAM policy application fails."""
     pass
 
-
 def iam_update_trust_policy(role_name: str, trusted_principal_arn: str) -> None:
     """Ensures the specified role's trust policy allows the given principal to assume it.
 
@@ -227,8 +224,7 @@ Raises:
     RuntimeError: If the trust policy cannot be updated."""
     pass
 
-
-def build_and_push_dev_container(business_id: uuid.UUID, dockerfile: Path, image_tag: str = 'latest') -> str:
+def build_and_push_dev_container(business_id: uuid.UUID, dockerfile: Path, image_tag: str='latest') -> str:
     """Builds a Docker development container image, pushes it to AWS Elastic Container Registry (ECR),
 and returns the image URI.
 
@@ -256,4 +252,20 @@ Raises:
     CommandExecutionError: If a shell command for Docker or AWS CLI fails.
     RuntimeError: For unrecoverable errors with AWS API calls or IAM operations.
     Exception: For any other unexpected errors encountered during the process."""
+    pass
+
+def clone_template_project_to_sandbox(business_id: uuid.UUID) -> Path:
+    """Clones the template project into the business's sandbox directory.
+
+This is used to bootstrap a new web service or containerized project environment for a business.
+
+Args:
+    business_id (uuid.UUID): The UUID of the business for which the project should be cloned.
+
+Returns:
+    Path: The path to the newly created project directory inside the business sandbox.
+
+Raises:
+    FileNotFoundError: If the template source directory does not exist.
+    Exception: If the copy operation fails for any reason."""
     pass

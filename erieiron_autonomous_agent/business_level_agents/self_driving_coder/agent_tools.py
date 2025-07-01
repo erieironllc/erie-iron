@@ -668,9 +668,7 @@ def clone_template_project_to_sandbox(business_id: uuid.UUID) -> Path:
     sandbox_dir = Path(business.get_sandbox_dir())
     destination_dir = sandbox_dir / "webservice"
 
-    if destination_dir.exists():
-        raise FileExistsError(f"Destination project already exists at {destination_dir}")
+    common.copy_missing_files(template_dir, destination_dir)
 
-    shutil.copytree(template_dir, destination_dir)
-    print(f"[✅] Template project cloned to: {destination_dir}")
     return destination_dir
+

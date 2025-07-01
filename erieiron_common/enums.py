@@ -216,6 +216,7 @@ class PubSubMessageType(ErieEnum):
 
     CEO_DIRECTIVES_ISSUED = auto()
     PRODUCT_INITIATIVES_REQUESTED = auto()
+    INITIATIVE_DEFINITION_REQUESTED = auto()
     INITIATIVE_DEFINED = auto()
     CODING_WORK_REQUESTED = auto()
     DESIGN_WORK_REQUESTED = auto()

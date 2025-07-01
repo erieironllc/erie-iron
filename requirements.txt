@@ -55,3 +55,4 @@ transformers
 cfn-lint
 
 djangorestframework
+markdown

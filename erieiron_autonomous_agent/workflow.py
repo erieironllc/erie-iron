@@ -10,12 +10,12 @@ from erieiron_common.models import Task
 def board_workflow(pubsub_manager: PubSubManager):
     # Board Chair
     pubsub_manager.on(
-        T.EVERY_WEEK,
-        board_chair.exec_board_chair_tasks
-    ).on(
-        T.EVERY_DAY,
-        board_chair.exec_business_analysis
-    ).on(
+        # T.EVERY_WEEK,
+        # board_chair.exec_board_chair_tasks
+    # ).on(
+    #     T.EVERY_DAY,
+    #     board_chair.exec_business_analysis
+    # ).on(
         [T.ANALYSIS_ADDED, T.BOARD_GUIDANCE_REQUESTED],
         board_chair.on_board_guidance_requested,
         T.BOARD_GUIDANCE_UPDATED
@@ -73,6 +73,10 @@ def business_workflow(pubsub_manager: PubSubManager):
         T.PRODUCT_INITIATIVES_REQUESTED,
         product_lead.define_initiatives,
         T.INITIATIVE_DEFINED  # one fired for each initiative
+    ).on(
+        T.INITIATIVE_DEFINITION_REQUESTED,
+        product_lead.define_single_initiative,
+        T.INITIATIVE_DEFINED
     )
 
     # Eng Lead

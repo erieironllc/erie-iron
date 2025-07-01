@@ -1,4 +1,5 @@
 import json
+import uuid
 from collections import defaultdict
 
 from django.contrib import messages
@@ -9,7 +10,7 @@ from django.urls import reverse
 from erieiron_common import common
 from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration
+from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, ProductRequirement
 from erieiron_ui.view_utils import send_response, redirect, rget
 
 
@@ -159,6 +160,26 @@ def action_retry_task(request, task_id):
     return redirect(reverse('view_task', args=[task_id]))
 
 
+def action_restart_task(request, task_id):
+    task = get_object_or_404(Task, pk=task_id)
+
+    # Reset task status and clear any existing executions
+    Task.objects.filter(id=task_id).update(
+        status=TaskStatus.NOT_STARTED
+    )
+    
+    # Clear any existing executions to truly restart
+    task.taskexecution_set.all().delete()
+    
+    PubSubManager.publish_id(
+        PubSubMessageType.TASK_UPDATED,
+        task_id
+    )
+
+    messages.success(request, f'Task {task_id} restarted successfully!')
+    return redirect(reverse('view_task', args=[task_id]))
+
+
 def action_add_business(request):
     if request.method != 'POST':
         raise Exception()
@@ -191,6 +212,101 @@ def action_add_business(request):
 
     messages.success(request, 'Business idea submitted successfully! It will be reviewed and processed.')
     return redirect(reverse('view_businesses'))
+
+
+def action_delete_business(request, business_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        business = get_object_or_404(Business, id=business_id)
+        business_name = business.name
+        business.delete()
+        messages.success(request, f'Business "{business_name}" deleted successfully!')
+    except Business.DoesNotExist:
+        messages.error(request, 'Business not found.')
+    except Exception as e:
+        messages.error(request, f'Error deleting business: {str(e)}')
+
+    return redirect(reverse('view_businesses'))
+
+
+def action_add_initiative(request):
+    if request.method != 'POST':
+        raise Exception()
+
+    title = rget(request, 'title', '').strip()
+    initiative_type = rget(request, 'initiative_type', '').strip()
+    description = rget(request, 'description', '').strip()
+    requires_unit_tests = request.POST.get('requires_unit_tests') == 'on'
+
+    if not title:
+        messages.error(request, 'Initiative title is required.')
+        return redirect(reverse('view_businesses'))
+
+    if not initiative_type:
+        messages.error(request, 'Initiative type is required.')
+        return redirect(reverse('view_businesses'))
+
+    if not description:
+        messages.error(request, 'Initiative description is required.')
+        return redirect(reverse('view_businesses'))
+
+    erieiron_business = Business.get_erie_iron_business()
+
+    initiative = Initiative.objects.create(
+        id=str(uuid.uuid4()),
+        business=erieiron_business,
+        title=title,
+        requires_unit_tests=requires_unit_tests,
+        initiative_type=initiative_type,
+        description=description
+    )
+
+    PubSubManager.publish_id(
+        PubSubMessageType.INITIATIVE_DEFINITION_REQUESTED,
+        initiative.id
+    )
+
+    messages.success(request, 'Initiative created successfully!')
+    return redirect(f"{reverse('view_businesses')}#initiatives")
+
+
+def action_dowork_initiative(request, initiative_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        initiative = get_object_or_404(Initiative, id=initiative_id)
+        initiative_title = initiative.title
+
+        for t in initiative.tasks.exclude(status=TaskStatus.COMPLETE):
+            PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+
+        messages.success(request, f'Work successfully kicked off on "{initiative_title}"')
+    except Initiative.DoesNotExist:
+        messages.error(request, 'Initiative not found.')
+    except Exception as e:
+        messages.error(request, f'Error with initiative: {str(e)}')
+
+    return redirect(f"{reverse('view_businesses')}#initiatives")
+
+
+def action_delete_initiative(request, initiative_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        initiative = get_object_or_404(Initiative, id=initiative_id)
+        initiative_title = initiative.title
+        initiative.delete()
+        messages.success(request, f'Initiative "{initiative_title}" deleted successfully!')
+    except Initiative.DoesNotExist:
+        messages.error(request, 'Initiative not found.')
+    except Exception as e:
+        messages.error(request, f'Error deleting initiative: {str(e)}')
+
+    return redirect(f"{reverse('view_businesses')}#initiatives")
 
 
 def action_find_business(request):

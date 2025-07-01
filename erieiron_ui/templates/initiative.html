@@ -2,7 +2,24 @@
 {% load humanize %}
 {% load erieiron_common_tags %}
 {% block content %}
-    <h3>Initiative: {{ initiative.title }}</h3>
+    <div class="d-flex justify-content-between">
+        <h3>Initiative: {{ initiative.title }}</h3>
+        <div class="d-flex">
+            <form class="me-3" method="post" action="{% url 'action_dowork_initiative' initiative.id %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-success">
+                    Do Work
+                </button>
+            </form>
+            <form method="post" action="{% url 'action_delete_initiative' initiative.id %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-outline-danger"
+                        onclick="return confirm('Are you sure you want to delete this initiative? This action cannot be undone.')">
+                    Delete Initiative
+                </button>
+            </form>
+        </div>
+    </div>
 
 
     <!-- Nav tabs -->
@@ -35,7 +52,7 @@
 
     <div class="tab-content pt-3" id="initiativeTabContent">
         <div class="tab-pane  " id="overview" role="tabpanel" aria-labelledby="overview-tab">
-            <div>{{ initiative.description }}</div>
+            <div>{{ initiative.description|linebreaksbr }}</div>
 
 
             {% if initiative.linked_kpis.exists %}
