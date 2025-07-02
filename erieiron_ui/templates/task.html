@@ -77,6 +77,16 @@
                 </button>
             </li>
         {% endif %}
+        {% if running_processes %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="processes-tab" data-bs-toggle="tab" data-bs-target="#processes"
+                        type="button"
+                        role="tab">
+                    Running Processes
+                    <span class="badge bg-danger ms-1">{{ running_processes|length }}</span>
+                </button>
+            </li>
+        {% endif %}
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="guidance-tab" data-bs-toggle="tab" data-bs-target="#guidance"
                     type="button" role="tab">
@@ -158,7 +168,7 @@
         <div class="tab-pane  " id="iterations" role="tabpanel" aria-labelledby="iterations-tab">
             {% for iteration in iterations %}
                 <div class="card my-4">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between">
                         <small class="text-muted">
                             {% if iteration.achieved_goal %}
                                 <span class="badge bg-success">Goal Achieved</span>
@@ -172,6 +182,13 @@
                             </a>
                             </span>
                         </small>
+                        <form method="post" action="{% url 'action_delete_iteration' iteration.id %}" class="d-inline ms-2">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-danger btn-sm" 
+                                    onclick="return confirm('Are you sure you want to delete this iteration? This action cannot be undone.')">
+                                Delete
+                            </button>
+                        </form>
                     </div>
                     <div class=" card-body">
                         <dl class="row">
@@ -239,6 +256,61 @@
                     </div>
                 </div>
             {% endfor %}
+        </div>
+
+        <div class="tab-pane  " id="processes" role="tabpanel" aria-labelledby="processes-tab">
+            {% if running_processes %}
+                <div class="alert alert-info">
+                    <strong>{{ running_processes|length }}</strong> process{{ running_processes|length|pluralize:"es" }} currently running for this task.
+                </div>
+                {% for process in running_processes %}
+                    <div class="card my-3">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="badge bg-success">Running</span>
+                                <strong>{{ process.execution_type|title }} Process</strong>
+                                {% if not process.task_execution %}
+                                    <span class="badge bg-info ms-2">SDA Execute</span>
+                                {% endif %}
+                                <small class="text-muted">Started: {{ process.started_at|date:"M j, Y H:i:s" }}</small>
+                            </div>
+                            <form method="post" action="{% url 'action_kill_process' process.id %}" style="display: inline;">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-danger btn-sm" 
+                                        onclick="return confirm('Are you sure you want to kill this process?')">
+                                    Kill Process
+                                </button>
+                            </form>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                {% if process.process_id %}
+                                    <dt class="col-sm-3">Process ID</dt>
+                                    <dd class="col-sm-9">{{ process.process_id }}</dd>
+                                {% endif %}
+                                {% if process.container_id %}
+                                    <dt class="col-sm-3">Container ID</dt>
+                                    <dd class="col-sm-9">{{ process.container_id }}</dd>
+                                {% endif %}
+                                {% if process.log_file_path %}
+                                    <dt class="col-sm-3">Log File</dt>
+                                    <dd class="col-sm-9"><code>{{ process.log_file_path }}</code></dd>
+                                {% endif %}
+                                {% if process.log_tail %}
+                                    <dt class="col-sm-3">Recent Output</dt>
+                                    <dd class="col-sm-9">
+                                        <pre class="bg-dark text-light p-2" style="max-height: 200px; overflow-y: auto;">{{ process.log_tail }}</pre>
+                                    </dd>
+                                {% endif %}
+                            </dl>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-secondary">
+                    No processes are currently running for this task.
+                </div>
+            {% endif %}
         </div>
 
         <div class="tab-pane  " id="guidance" role="tabpanel" aria-labelledby="guidance-tab">

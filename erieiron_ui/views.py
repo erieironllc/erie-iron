@@ -10,7 +10,7 @@ from django.urls import reverse
 from erieiron_common import common
 from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution
+from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_ui.view_utils import send_response, redirect, rget
 
 
@@ -21,10 +21,14 @@ def hello(request):
 def view_businesses(request):
     erieiron_business = Business.get_erie_iron_business()
 
+    # Get all running processes for the businesses page
+    all_running_processes = RunningProcess.objects.filter(is_running=True).order_by('-started_at')
+
     return send_response(
         request, "businesses.html", {
             "erieiron_business": erieiron_business,
-            "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at")
+            "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at"),
+            "all_running_processes": all_running_processes
         },
         breadcrumbs=[
             (reverse(view_businesses), erieiron_business.name)
@@ -66,7 +70,7 @@ def view_initiative(request, initiative_id):
         sdt: SelfDrivingTask = sdt_dict.get(sdti.task_id)
         task_sdti_dict[sdt.related_task_id].append(sdti)
 
-    task_execution_dict= defaultdict(list)
+    task_execution_dict = defaultdict(list)
     for te in TaskExecution.objects.filter(task__in=tasks).order_by("executed_time"):
         task_execution_dict[te.task_id].append(te)
 
@@ -139,13 +143,21 @@ def view_task(request, task_id):
     else:
         iterations = []
 
+    task_executions = list(task.taskexecution_set.order_by("-executed_time"))
+
+    running_processes = list(RunningProcess.objects.filter(
+        iteration__task__related_task=task,
+        is_running=True
+    ))
+
     return send_response(
         request, "task.html",
         {
-            "task_executions": list(task.taskexecution_set.order_by("-executed_time")),
+            "task_executions": task_executions,
             "iterations": iterations,
             "self_driving_task": self_driving_task,
-            "task": task
+            "task": task,
+            "running_processes": running_processes
         },
         breadcrumbs=[
             (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
@@ -162,6 +174,12 @@ def view_self_driver_iteration(request, iteration_id):
     business = initiative.business
 
     total_price, total_tokens = iteration.get_llm_cost()
+    
+    # Get running processes for this specific iteration
+    running_processes = RunningProcess.objects.filter(
+        iteration=iteration,
+        is_running=True
+    )
 
     return send_response(
         request, "iteration.html",
@@ -172,7 +190,8 @@ def view_self_driver_iteration(request, iteration_id):
 
             "total_price": total_price,
             "total_tokens": total_tokens,
-            "iteration": iteration
+            "iteration": iteration,
+            "running_processes": running_processes
         },
         breadcrumbs=[
             (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
@@ -406,9 +425,9 @@ def action_update_task_guidance(request, task_id):
     try:
         task = get_object_or_404(Task, pk=task_id)
         guidance = rget(request, 'guidance', '').strip()
-        
+
         Task.objects.filter(id=task_id).update(guidance=guidance)
-        
+
         messages.success(request, 'Task guidance updated successfully!')
         return redirect(reverse('view_task', args=[task_id]) + '#guidance')
     except Task.DoesNotExist:
@@ -417,3 +436,54 @@ def action_update_task_guidance(request, task_id):
     except Exception as e:
         messages.error(request, f'Error updating guidance: {str(e)}')
         return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_kill_process(request, process_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        running_process = get_object_or_404(RunningProcess, pk=process_id)
+
+        # Determine redirect target based on whether process has an iteration or TaskExecution
+        if running_process.iteration:
+            # Redirect back to the iteration page
+            redirect_url = reverse('view_self_driver_iteration', args=[running_process.iteration.id]) + '#processes'
+        elif common.get(running_process, ["iteration", "task", "related_task_id"]):
+            task_id = running_process.iteration.task.related_task_id
+            redirect_url = reverse('view_task', args=[task_id]) + '#processes'
+        else:
+            redirect_url = reverse('view_businesses')
+
+        if running_process.kill_process():
+            messages.success(request, f'Process {process_id} killed successfully!')
+        else:
+            messages.warning(request, f'Failed to kill process {process_id} - it may have already terminated.')
+
+        return redirect(redirect_url)
+    except RunningProcess.DoesNotExist:
+        messages.error(request, 'Process not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error killing process: {str(e)}')
+        return redirect(reverse('view_businesses'))
+
+
+def action_delete_iteration(request, iteration_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
+        task_id = iteration.task.related_task.id
+
+        iteration.delete()
+
+        messages.success(request, f'Iteration {iteration_id} deleted successfully!')
+        return redirect(reverse('view_task', args=[task_id]) + '#iterations')
+    except SelfDrivingTaskIteration.DoesNotExist:
+        messages.error(request, 'Iteration not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error deleting iteration: {str(e)}')
+        return redirect(reverse('view_businesses'))

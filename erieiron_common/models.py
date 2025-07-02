@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 import uuid
@@ -1505,7 +1506,6 @@ class TaskExecution(BaseErieIronModel):
         self.refresh_from_db()
         return self
 
-
 class TaskDesignRequirements(BaseErieIronModel):
     task = models.OneToOneField("Task", on_delete=models.CASCADE, related_name="design_handoff")
     component_ids = models.ManyToManyField(DesignComponent, blank=True)
@@ -1587,6 +1587,7 @@ class SelfDrivingTask(BaseErieIronModel):
         return self.related_task and self.related_task.requires_test
 
 
+
 class SelfDrivingTaskIteration(BaseErieIronModel):
     task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
     achieved_goal = models.BooleanField(null=False, default=False)
@@ -1631,6 +1632,52 @@ class SelfDrivingTaskBestIteration(BaseErieIronModel):
     iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
 
+
+class RunningProcess(BaseErieIronModel):
+    iteration = models.OneToOneField(SelfDrivingTaskIteration, on_delete=models.CASCADE, related_name="self_driving_task", null=True, blank=True)
+    process_id = models.IntegerField(null=True, blank=True)
+    container_id = models.TextField(null=True, blank=True)  # For docker processes
+    execution_type = models.TextField(max_length=20, choices=[('local', 'Local'), ('docker', 'Docker')])
+    log_file_path = models.TextField(null=True, blank=True)
+    log_tail = models.TextField(blank=True, default="")  # Store last ~1000 chars of log
+    started_at = models.DateTimeField(auto_now_add=True)
+    is_running = models.BooleanField(default=True)
+    terminated_at = models.DateTimeField(null=True, blank=True)
+
+    def update_log_tail(self, max_chars=1000):
+        """Update the log_tail field with the latest log content"""
+        if self.log_file_path and Path(self.log_file_path).exists():
+            try:
+                with open(self.log_file_path, 'r') as f:
+                    content = f.read()
+                    self.log_tail = content[-max_chars:] if len(content) > max_chars else content
+                    self.save(update_fields=['log_tail'])
+            except Exception as e:
+                logging.warning(f"Failed to update log tail for process {self.id}: {e}")
+
+    def kill_process(self):
+        """Kill the running process"""
+        import signal
+        import os
+
+        if not self.is_running:
+            return False
+
+        try:
+            if self.execution_type == 'docker' and self.container_id:
+                # Kill docker container
+                subprocess.run(['docker', 'kill', self.container_id], check=True)
+            elif self.execution_type == 'local' and self.process_id:
+                # Kill local process
+                os.kill(self.process_id, signal.SIGTERM)
+
+            self.is_running = False
+            self.terminated_at = common.get_now()
+            self.save(update_fields=['is_running', 'terminated_at'])
+            return True
+        except Exception as e:
+            logging.warning(f"Failed to kill process {self.id}: {e}")
+            return False
 
 class LlmRequest(BaseErieIronModel):
     task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)

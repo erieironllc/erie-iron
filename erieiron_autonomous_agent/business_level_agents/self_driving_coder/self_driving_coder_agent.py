@@ -21,7 +21,7 @@ from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskSta
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task
+from erieiron_common.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
 
 ARTIFACTS = "artifacts"
 PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
@@ -164,25 +164,77 @@ def iterate_on_code(config: SelfDriverConfig) -> SelfDrivingTaskIteration:
 
 
 def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
+    import subprocess
+    import time
+    import os
+
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
+    running_process = None
+
     try:
         if config.debug:
+            # In debug mode, call the runner directly
             self_driving_coder_runner.execute(
                 iteration.id,
                 "dev",
                 logfile
             )
         else:
-            common.execute_management_cmd(
-                f"sda_execute --iteration_id={iteration.id}",
-                logfile
+            # Execute sda_execute as a managed subprocess with process tracking
+            python_executable = os.path.join("env", "bin", "python")
+            cmd = [python_executable, "-u", "manage.py", "sda_execute", f"--iteration_id={iteration.id}"]
+
+            # Create RunningProcess record for tracking
+            # Note: Since we don't have a TaskExecution here, we'll create a standalone record
+            running_process, _ = RunningProcess.objects.update_or_create(
+                iteration=iteration,
+                execution_type='local',
+                log_file_path=str(logfile)
             )
+
+            # Start the subprocess
+            with open(logfile, "w") as log_f:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+
+                # Update running process with PID
+                running_process.process_id = process.pid
+                running_process.save(update_fields=['process_id'])
+
+                print(f"sda_execute started with PID {process.pid}, log: {logfile}")
+
+                # Wait for completion while periodically updating log tail
+                while process.poll() is None:
+                    running_process.update_log_tail()
+                    time.sleep(2)  # Check every 2 seconds
+
+                # Final log tail update
+                running_process.update_log_tail()
+                running_process.is_running = False
+                running_process.terminated_at = common.get_now()
+                running_process.save(update_fields=['is_running', 'terminated_at'])
+
+                # Check return code
+                if process.returncode != 0:
+                    with open(logfile, "r") as log_read:
+                        error_output = log_read.read()
+                    raise Exception(f"sda_execute failed with return code {process.returncode}: {error_output}")
 
         log_output = logfile.read_text()
         log(config, log_output, f"iteration-{iteration.id}")
 
         return log_output
     except Exception as e:
+        # Mark process as failed if it exists
+        if running_process and running_process.is_running:
+            running_process.is_running = False
+            running_process.terminated_at = common.get_now()
+            running_process.save(update_fields=['is_running', 'terminated_at'])
+
         log_output = logfile.read_text()
         log_output = f"{log_output}\n\n\nthrew:\n{traceback.format_exc()}"
         log(config, log_output, f"iteration-{iteration.id}")
@@ -220,7 +272,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
         get_goal_msg(config)
     ]
 
-    previous_iterations = list(reversed(config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:3]))
+    previous_iterations = list(reversed(config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:1]))
     for task_iteration in previous_iterations:
         if task_iteration == config.current_iteration:
             continue
