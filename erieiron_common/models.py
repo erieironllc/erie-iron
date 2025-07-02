@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sys
 import threading
 import uuid
@@ -1426,6 +1427,11 @@ class Task(BaseErieIronModel):
     requires_test = models.BooleanField(default=True)
     execution_schedule = models.TextField(choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE)
     execution_start_time = models.DateTimeField(null=True, blank=True)
+    guidance = models.TextField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.description} - {self.id}"
+
 
     def to_dict(self):
         d = self.__dict__
@@ -1504,6 +1510,8 @@ class TaskDesignRequirements(BaseErieIronModel):
     task = models.OneToOneField("Task", on_delete=models.CASCADE, related_name="design_handoff")
     component_ids = models.ManyToManyField(DesignComponent, blank=True)
     layout = models.JSONField(default=dict, null=True)
+    component_tree = models.JSONField(default=dict, null=True)
+    notes = models.TextField(null=True)
 
 
 class SelfDrivingTask(BaseErieIronModel):
@@ -1667,6 +1675,7 @@ class CodeFile(BaseErieIronModel):
     def get(code_file_path: Path) -> 'CodeFile':
         code_file_path = Path(code_file_path)
         if not code_file_path.exists():
+            code_file_path.parent.mkdir(parents=True, exist_ok=True)
             code_file_path.touch()
         return CodeFile.objects.get_or_create(file_path=code_file_path)[0]
 

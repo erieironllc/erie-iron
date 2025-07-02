@@ -12,11 +12,11 @@ from django.db import transaction
 from django.utils import timezone
 
 import settings
-from erieiron_autonomous_agent.business_level_agents.self_driving_coder import self_driving_coder_runner
+from erieiron_autonomous_agent.business_level_agents.self_driving_coder import self_driving_coder_runner, gemini_coder
 from erieiron_autonomous_agent.business_level_agents.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
 from erieiron_common import common
 from erieiron_common.aws_utils import get_aws_interface
-from erieiron_common.codegen_utils import lint_and_format, CodeCompilationError
+from erieiron_common.codegen_utils import CodeCompilationError
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskStatus
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
@@ -220,7 +220,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
         get_goal_msg(config)
     ]
 
-    previous_iterations = list(reversed( config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:3]))
+    previous_iterations = list(reversed(config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:3]))
     for task_iteration in previous_iterations:
         if task_iteration == config.current_iteration:
             continue
@@ -330,6 +330,9 @@ def build_system_message_planning(config: SelfDriverConfig):
         )
     ]
 
+    if config.guidance:
+        messages.append(config.guidance)
+
     if config.self_driving_task.get_require_tests():
         messages.append(
             get_sys_prompt("worker_coder--automated_tests.md")
@@ -431,7 +434,7 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
         raise Exception("no code files found")
 
     for cfi in code_file_instructions:
-        code_file_path_str:str = cfi.get("code_file_path")
+        code_file_path_str: str = cfi.get("code_file_path")
         if code_file_path_str.startswith(str(config.sandbox_root_dir)):
             code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
 
@@ -572,6 +575,136 @@ def get_planning_llm_response(
     return llm_response_planning
 
 
+def get_coding_llm_response_gemini(
+        config: SelfDriverConfig,
+        code_version_to_modify: CodeVersion,
+        evaluation_of_previous_code,
+        instructions,
+        previous_exception: Optional[CodeCompilationError]
+) -> LlmResponse:
+    model = LlmModel.GEMINI_2_5_PRO
+
+    code_file_name = code_version_to_modify.code_file.get_path().name
+    if code_file_name.endswith(".py"):
+        prompt = "worker_coder--python_coder.md"
+    elif code_file_name == "requirements.txt":
+        prompt = "worker_coder--requirements.txt.md"
+    elif code_file_name.startswith("Dockerfile"):
+        prompt = "worker_coder--dockerfile_coder.md"
+    else:
+        raise Exception(f"no coder implemented for {code_file_name}")
+
+    messages: list[LlmMessage] = [
+        get_sys_prompt(
+            prompt,
+            ("<sandbox_dir>", str(config.sandbox_root_dir))
+        ),
+        get_helper_methods_msg(config),
+        get_dependencies_msg()
+    ]
+
+    if code_file_name == "requirements.txt":
+        messages.append(LlmMessage.sys("requirements.txt files are always plain text - they shall never contain python code"))
+
+    if config.is_model_trainer:
+        messages.append(get_sys_prompt(
+            "worker_coder--ml_coder.md",
+            [
+                ("<artifacts_directory>", str(config.artifacts_dir)),
+                ("<execute_module>", config.code_basename)
+            ]
+        ))
+
+    if previous_exception:
+        messages.append(
+            LlmMessage.user(
+                f"""
+This is code from the previous attempt to generate code based on the instruction set:
+{previous_exception.code_str}
+
+This code as the following error(s): 
+{str(previous_exception)}
+
+Please try again, avoiding these errors
+        """
+            )
+        )
+    elif evaluation_of_previous_code and config.previous_iteration:
+        messages.append(
+            LlmMessage.assistant(
+                f"""
+Your evaluation of the previous iteration's (iteration id={str(config.previous_iteration.id)}) performance against the user's GOAL is as follows:
+
+{json.dumps(evaluation_of_previous_code, indent=4)}
+                """
+            )
+        )
+
+    code_file_path = code_version_to_modify.code_file.file_path
+    if code_version_to_modify.code:
+        print("modifying", code_file_path)
+
+        messages.append(
+            LlmMessage.user(
+                f"iteration id={str(code_version_to_modify.task_iteration.id)} code_file_path {code_file_path}",
+                code_version_to_modify.code_file.file_path
+            )
+        )
+
+        messages.append(
+            LlmMessage.user(
+                f"""
+Modify {code_file_path} using these instructions
+
+Never use the self-modification approach. Only return the final version of the Python file
+
+{json.dumps(instructions, indent=4)}
+
+    """
+            )
+        )
+
+    else:
+        messages.append(
+            LlmMessage.user(
+                f"""
+please write the initial version of {code_file_path}, following each of these instructions exactly and in order:
+
+{json.dumps(instructions, indent=4)}
+        """
+            )
+        )
+
+    token_count = LlmMessage.get_total_token_count(model, messages)
+    max_tokens = MODEL_TO_MAX_TOKENS.get(model)
+
+    if max_tokens:
+        print(f"about to call out to {model} to generate code.  {token_count:,}/{max_tokens:,} tokens used")
+    else:
+        print(f"about to call out to {model} to generate code.  {token_count:,} tokens used")
+
+    log_llm_request(config, messages)
+    # Combine messages into a single prompt for Gemini
+    prompt_for_gemini = "\n".join([m.content for m in messages])
+    generated_code = gemini_coder.generate_code_with_gemini(prompt_for_gemini)
+
+    # Create a dummy LlmResponse object.
+    llm_response_codegen = LlmResponse(
+        text=generated_code,
+        model=model,
+        price_input=0,
+        price_output=0,
+        price_total=0,
+        token_count=0,
+    )
+
+    log_llm_response(config, llm_response_codegen)
+
+    print(f"\t\tcost of code gen: total ${llm_response_codegen.price_total:.4f}; input ${llm_response_codegen.price_input:.4f}; output ${llm_response_codegen.price_output:.4f}")
+
+    return llm_response_codegen
+
+
 def get_coding_llm_response(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
@@ -579,7 +712,16 @@ def get_coding_llm_response(
         instructions,
         previous_exception: Optional[CodeCompilationError]
 ) -> LlmResponse:
-    model = LlmModel.OPENAI_O3_MINI
+    model = LlmModel.GEMINI_2_5_PRO
+
+    # if False:
+    #     return get_coding_llm_response_gemini(
+    #         config=config,
+    #         code_version_to_modify=code_version_to_modify,
+    #         evaluation_of_previous_code=evaluation_of_previous_code,
+    #         instructions=instructions,
+    #         previous_exception=previous_exception,
+    #     )
 
     code_file_name = code_version_to_modify.code_file.get_path().name
     if code_file_name.endswith(".py"):
@@ -865,7 +1007,8 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
 ======== start {cv.code_file.file_path}'s code =============
 {cv.code}
 ======== end {cv.code_file.file_path}'s code =============
-        """)
+        """
+                                   )
     best_iteration_code = "\n".join(best_iteration_code)
 
     main_file_name = config.main_code_file.get_base_name()

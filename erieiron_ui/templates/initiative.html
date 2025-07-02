@@ -104,20 +104,88 @@
         </div>
         <div class="tab-pane " id="tasks" role="tabpanel" aria-labelledby="tasks-tab">
             {% if tasks|length > 0 %}
-                <table class="table table-striped">
+                <div class="mb-3">
+                    <label for="statusFilter" class="form-label">Filter by Status:</label>
+                    <select id="statusFilter" class="form-select" style="width: auto; display: inline-block;">
+                        <option value="">All Statuses</option>
+                        <option value="NOT_STARTED">Not Started</option>
+                        <option value="IN_PROGRESS">In Progress</option>
+                        <option value="COMPLETE">Complete</option>
+                        <option value="BLOCKED">Blocked</option>
+                        <option value="FAILED">Failed</option>
+                    </select>
+                </div>
+                <table class="table table-striped" id="tasksTable">
                     <thead>
                     <tr>
                         <th>Status</th>
+                        <th>Started</th>
+                        <th>Updated</th>
                         <th>Assignee</th>
                         <th>Task ID</th>
                         <th>Description</th>
+                        <th>Action</th>
                     </tr>
                     </thead>
+                    <tbody>
                     {% for task in tasks|dictsort:"created_timestamp" %}
                         {% include "_task_row.html" %}
                     {% endfor %}
+                    </tbody>
                 </table>
             {% endif %}
         </div>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const statusFilter = document.getElementById('statusFilter');
+            const tasksTable = document.getElementById('tasksTable');
+            
+            if (statusFilter && tasksTable) {
+                // Function to filter rows based on status
+                function filterRows(selectedStatus) {
+                    const rows = tasksTable.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+                    
+                    for (let i = 0; i < rows.length; i++) {
+                        const row = rows[i];
+                        const statusBadge = row.querySelector('.badge');
+                        
+                        if (statusBadge) {
+                            const statusText = statusBadge.textContent.trim().toUpperCase().replace(' ', '_');
+                            
+                            if (selectedStatus === '' || statusText === selectedStatus) {
+                                row.style.display = '';
+                            } else {
+                                row.style.display = 'none';
+                            }
+                        }
+                    }
+                }
+                
+                // Read URL parameter on page load
+                const urlParams = new URLSearchParams(window.location.search);
+                const statusParam = urlParams.get('status');
+                if (statusParam) {
+                    statusFilter.value = statusParam;
+                    filterRows(statusParam);
+                }
+                
+                // Update URL when filter changes
+                statusFilter.addEventListener('change', function() {
+                    const selectedStatus = this.value;
+                    filterRows(selectedStatus);
+                    
+                    // Update URL without page reload
+                    const url = new URL(window.location);
+                    if (selectedStatus) {
+                        url.searchParams.set('status', selectedStatus);
+                    } else {
+                        url.searchParams.delete('status');
+                    }
+                    window.history.pushState({}, '', url);
+                });
+            }
+        });
+    </script>
 {% endblock %}

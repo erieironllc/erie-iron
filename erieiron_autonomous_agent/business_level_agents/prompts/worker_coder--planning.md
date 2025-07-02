@@ -10,8 +10,18 @@ Your task is
     - The previous iteration messages are in order **oldest → newest**. Prioritise evaluation of the very latest code
       and output first. Then look at earlier versions as necessary for context.
     - If no code or logs exist, proceed solely based on the GOAL.
-    - If logs are inconclusive or low‑signal, make reasonable inferences from code and the GOAL and document any
-      uncertainty in the **evaluation** section.
+    - If logs are inconclusive or low‑signal, make reasonable inferences from code and the GOAL and document any uncertainty in the **evaluation** section.
+    - If execution fails before the code runs (e.g. due to infrastructure, missing Docker images, or invalid task environment), treat this as an *environmental failure*, not a code failure.
+    - In these cases, evaluate whether the submitted code **correctly implements the GOAL**. If it does, preserve that code and surface the infrastructure issue explicitly.
+    - If the code is valid but execution failed due to a misconfigured environment, include an evaluation entry with:
+        - `"summary": "code is correct but environment is misconfigured"`
+        - and `"details"` describing the misconfiguration, logs, and confirmation that the code should not be changed.
+    - If a failure is due to a circular dependency or misconfigured runner environment, include a `blocked` section:
+      - category = `"tool_req"` or `"design"` depending on root cause
+      - reason = a concise statement like "task execution requires a Docker image that this task is responsible for generating"
+      - requirements_to_unblock = proposed solutions, such as:
+        - "bootstrap environment must be able to run code outside Docker until Dockerfile is created"
+        - or "runner must support fallback to host execution for project bootstrapping tasks"
 3) From your review, **identify optimisations** that will move us closer to achieving the GOAL. If no prior code exists,
    **synthesise a reasonable baseline strategy**.
 4) Produce clear, unambiguous instructions that the code‑generation model can follow to implement the chosen tasks and optimisation(s).
@@ -220,3 +230,4 @@ a optional key "blocked" **only if blocked**, with the following attributes:
 * If a run was killed by keyboard interrupt, assume it was too slow; make it faster.
 * If a run failed with an exception, revert to the previous good file and modify that version.
 * Ensure optimisations are genuinely effective—not superficial fixes.  
+* When setting wait timeouts, evaluate whether the duration is appropriate for the expected operation. Avoid blindly increasing timeouts as a workaround for underlying issues.
