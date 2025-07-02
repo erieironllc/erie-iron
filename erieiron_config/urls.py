@@ -18,6 +18,8 @@ urlpatterns = [
     path("task/resolve/<str:task_id>", views.action_resolve_task, name="action_resolve_task"),
     path("task/retry/<str:task_id>", views.action_retry_task, name="action_retry_task"),
     path("task/restart/<str:task_id>", views.action_restart_task, name="action_restart_task"),
+    path("task/delete/<str:task_id>", views.action_delete_task, name="action_delete_task"),
+    path("task/guidance/<str:task_id>", views.action_update_task_guidance, name="action_update_task_guidance"),
     path("task/<str:task_id>", views.view_task, name="view_task"),
 
     path("self_driver_iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),

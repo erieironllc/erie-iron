@@ -62,12 +62,14 @@ def execute(iteration_id: uuid.UUID, env: str = "dev", logfile=None) -> Optional
 
         output = None
         te = task.create_execution(task_input)
+
+        includes_boostrap = "agent_tools.clone_template_project_to_sandbox(" in config.main_code_file.get_latest_version().code
         try:
             MAX_RETRIES = 3
             DELAY_SECONDS = 30
             for attempt in range(MAX_RETRIES):
                 try:
-                    if TaskExecutionMode.HOST.eq(task.execution_mode):
+                    if includes_boostrap or TaskExecutionMode.HOST.eq(task.execution_mode):
                         output = run_module_locally(
                             iteration,
                             config.main_code_file,

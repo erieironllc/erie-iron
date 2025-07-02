@@ -3,7 +3,30 @@
     <td>
         <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
     </td>
+    <td>
+        {% if task.first_iteration_time %}
+            {{ task.first_iteration_time|date:"m/d/Y h:i:s a" }}
+        {% else %}
+            -
+        {% endif %}
+    </td>
+    <td>
+        {% if task.last_execution_time %}
+            {{ task.last_execution_time|date:"m/d/Y h:i:s a" }}
+        {% else %}
+            -
+        {% endif %}
+    </td>
     <td>{{ task.role_assignee|label }}</td>
     <td><a href="{% url "view_task" task.id %}">{{ task.id }}</a></td>
     <td>{{ task.description }}</td>
+    <td>
+        <form method="post" action="{% url 'action_delete_task' task.id %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger btn-sm" 
+                    onclick="return confirm('Are you sure you want to delete this task? This action cannot be undone.')">
+                Delete
+            </button>
+        </form>
+    </td>
 </tr>

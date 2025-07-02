@@ -31,9 +31,9 @@ You must:
 
 ## ✅ Output Format
 
-You **must return both** `design_handoff` and `ui_tree` in a single JSON object.  
-- `design_handoff` is consumed directly by the Engineering Lead Agent and downstream autonomous systems  
-- `ui_tree` is illustrative — it must resolve any remaining ambiguity about layout, style, or behavior
+You **must return both** `design_handoff` and `component_tree` in a single JSON object.
+- `design_handoff` is consumed directly by the Engineering Lead Agent and downstream autonomous systems
+- `component_tree` is illustrative — it must resolve any remaining ambiguity about layout, style, or behavior
 
 ```json
 {
@@ -61,52 +61,35 @@ You **must return both** `design_handoff` and `ui_tree` in a single JSON object.
       "gap_sm": "8px"
     }
   },
-  "ui_tree": {
-    "screen_id": "article_feed_homepage",
-    "title": "Homepage Feed Layout",
-    "components": [
+  "component_tree": {
+    "type": "page",
+    "name": "Analytics Dashboard",
+    "children": [
       {
-        "component_type": "Toolbar",
-        "label": "Sort by",
-        "position": "top",
-        "controls": [
-          {
-            "component_type": "Button",
-            "label": "Relevance",
-            "style": "primary-button"
-          },
-          {
-            "component_type": "Button",
-            "label": "Recent",
-            "style": "neutral-outline"
-          }
+        "type": "header",
+        "children": [
+          { "type": "logo", "text": "Erie Iron Financial" },
+          { "type": "user_profile_icon" }
         ]
       },
       {
-        "component_type": "Feed",
-        "item_component": {
-          "component_type": "Card",
-          "style": "surface-card",
-          "elements": [
-            {
-              "component_type": "Text",
-              "label": "Article Title",
-              "font_size": 20
-            },
-            {
-              "component_type": "Summary",
-              "style": "muted-text",
-              "max_lines": 3
-            },
-            {
-              "component_type": "IconRow",
-              "icons": ["bookmark", "share"]
-            }
-          ]
-        }
+        "type": "sidebar",
+        "children": [
+          { "type": "nav_link", "text": "Dashboard", "icon": "home" },
+          { "type": "nav_link", "text": "Reports", "icon": "bar_chart" },
+          { "type": "nav_link", "text": "Settings", "icon": "settings" }
+        ]
+      },
+      {
+        "type": "main_content",
+        "children": [
+          { "type": "chart", "chart_type": "line", "title": "Revenue Over Time" },
+          { "type": "chart", "chart_type": "pie", "title": "Expense Categories" }
+        ]
       }
     ]
-  }
+  },
+  "notes": "The generated code provides a strong structural foundation. The worker_coder will need to integrate real data, add state management, and refine event handlers."
 }
 ```
 
@@ -125,4 +108,4 @@ This structure ensures that all design details are explicitly specified and noth
 - If unsure about visual layout, fall back to patterns that prioritize scanability and clarity
 - You are fulfilling a task defined upstream by the Engineering Lead Agent. Structure your output to match the `design_handoff` schema used in that agent’s task structure.
 - The `layout` field must be a structured object with at least a `"type"` and a `"regions"` or `"components"` field. Do not use freeform layout strings.
-- Both `design_handoff` and `ui_tree` are required in your output. Use `design_handoff` to drive implementation and `ui_tree` to remove ambiguity.
+- Both `design_handoff` and `component_tree` are required in your output. Use `design_handoff` to drive implementation and `component_tree` to remove ambiguity.

@@ -89,7 +89,9 @@ design_handoff
 
 ### Optional‑field defaults & notes
 
-- `execution_mode` – defaults to `CONTAINER`; use `HOST` only for building/validating container images
+- `execution_mode` 
+    – defaults to `CONTAINER`
+    - use `HOST` for building/validating container images.  If a Task call "agent_tools.clone_template_project_to_sandbox()", it must be run on the HOST
 - `execution_schedule` – defaults to `ONCE`; set cadence for recurring jobs
 - `requires_test` – defaults to `true` for application‑logic tasks; even when `false`, a `test_plan` is mandatory
 
@@ -210,6 +212,7 @@ Tasks must behave like pure functions: communicate **only** via `depends_on`, `i
 # 🤔 Thinking Style
 
 - act as a pragmatic startup engineering lead
+- if a task needs to modify code outside of the businesses sandbox directory, the task should be assigned to HUMAN
 - prioritize simplicity, maintainability, and cost efficiency
 - surface operational risks early; suggest automation wherever viable
 - never assume success – define how to *measure* it

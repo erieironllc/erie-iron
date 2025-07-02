@@ -46,22 +46,20 @@ def business_level_chat(
         output_schema:str=None,
         replacements: list[tuple[str, str]] = None
 ):
-    system_prompt = assert_exists(BUSINESS_LEVEL_BASE_PATH / system_prompt)
     if output_schema:
         output_schema = BUSINESS_LEVEL_BASE_PATH / output_schema
     else:
-        output_schema = BUSINESS_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
+        output_schema = BUSINESS_LEVEL_BASE_PATH / f"{common.ensure_list(system_prompt)[0]}.schema.json"
 
-    if common.ensure_list(replacements):
-        msg = system_prompt.read_text()
+    system_prompts = [ ]
+    for sp in common.ensure_list(system_prompt):
+        sp = assert_exists(BUSINESS_LEVEL_BASE_PATH / sp)
+
+        msg = sp.read_text()
         for look_for_str, replace_with_str in common.ensure_list(replacements):
             msg = msg.replace(look_for_str, replace_with_str)
-        system_prompt = LlmMessage.sys(msg)
 
-    system_prompts = [
-        system_prompt,
-        # BUSINESS_LEVEL_BASE_PATH / "_base_prompt--business_level.md"
-    ]
+        system_prompts.append(LlmMessage.sys(msg))
 
     if not output_schema.exists():
         output_schema = None

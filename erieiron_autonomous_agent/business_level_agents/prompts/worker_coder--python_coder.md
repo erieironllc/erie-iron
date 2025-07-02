@@ -19,6 +19,9 @@ Execution Entrypoint
   * the return value is a dict containing method output, or None if this is not applicable
   * Any raised exceptions must include enough structured information for autonomous error resolution. Prefer custom exceptions with attributes like `.hint`, `.retryable`, or `.required_inputs`.
 
+Validation
+ • Before returning the generated Python code, validate it using `compile(source_code, "<generated>", "exec")`. Raise a clear exception if compilation fails, including the syntax error message.
+
 Permission Handling
  • If execution fails with an AWS AccessDeniedException (or similar):
    • Parse the missing IAM action and resource from the exception message.
@@ -59,6 +62,7 @@ Code Quality
      • Use snake_case for variable and function names
      • Comments should be lowercase and only used for non-obvious logic
  • If a test or example is generated, use fixtures or mocks to simulate input/output and avoid any real data dependency.
+ • All generated code must be valid Python 3. Ensure it is free from syntax errors. The code must compile successfully using `compile()` before it is output.
 
 Caching
  • Cache any external fetches or computed artifacts that are stable across runs.

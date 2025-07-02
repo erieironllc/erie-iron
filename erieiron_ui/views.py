@@ -10,7 +10,7 @@ from django.urls import reverse
 from erieiron_common import common
 from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, ProductRequirement
+from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution
 from erieiron_ui.view_utils import send_response, redirect, rget
 
 
@@ -54,8 +54,41 @@ def view_initiative(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
     business = initiative.business
 
+    tasks = list(initiative.tasks.all())
+
+    sdt_dict = {
+        sdt.id: sdt
+        for sdt in SelfDrivingTask.objects.filter(related_task__in=tasks).order_by("created_at")
+    }
+
+    task_sdti_dict = defaultdict(list)
+    for sdti in SelfDrivingTaskIteration.objects.filter(task__related_task__in=tasks).order_by("timestamp"):
+        sdt: SelfDrivingTask = sdt_dict.get(sdti.task_id)
+        task_sdti_dict[sdt.related_task_id].append(sdti)
+
+    task_execution_dict= defaultdict(list)
+    for te in TaskExecution.objects.filter(task__in=tasks).order_by("executed_time"):
+        task_execution_dict[te.task_id].append(te)
+
     task_type_tasks = defaultdict(list)
-    for task in initiative.tasks.all():
+    for task in tasks:
+        # Add iteration and execution data to each task
+        first_iteration = common.first(task_sdti_dict[task.id])
+        last_execution = common.last(task_execution_dict[task.id])
+        last_execution_time = None
+        if last_execution:
+            last_execution_time = last_execution.executed_time
+
+        if not last_execution_time:
+            last_iteration = common.last(task_sdti_dict[task.id])
+            if last_iteration:
+                last_execution_time = last_iteration.timestamp
+            else:
+                last_execution_time = None
+
+        task.first_iteration_time = first_iteration.timestamp if first_iteration else None
+        task.last_execution_time = last_execution_time
+
         task_type_tasks[TaskStatus(task.status)].append(task)
 
     task_datas = []
@@ -79,6 +112,26 @@ def view_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
     initiative = task.initiative
     business = initiative.business
+
+    # Add iteration and execution data for related tasks
+    def add_task_metadata(t):
+        self_driving_task = SelfDrivingTask.objects.filter(related_task_id=t.id).first()
+        if self_driving_task:
+            first_iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
+            t.first_iteration_time = first_iteration.timestamp if first_iteration else None
+        else:
+            t.first_iteration_time = None
+
+        last_execution = t.taskexecution_set.order_by("-executed_time").first()
+        t.last_execution_time = last_execution.executed_time if last_execution else None
+        return t
+
+    # Add metadata to dependent tasks
+    for dependent_task in task.depends_on.all():
+        add_task_metadata(dependent_task)
+
+    for blocking_task in task.dependent_tasks.all():
+        add_task_metadata(blocking_task)
 
     self_driving_task = SelfDrivingTask.objects.filter(related_task_id=task_id).first()
     if self_driving_task:
@@ -167,10 +220,7 @@ def action_restart_task(request, task_id):
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.NOT_STARTED
     )
-    
-    # Clear any existing executions to truly restart
-    task.taskexecution_set.all().delete()
-    
+
     PubSubManager.publish_id(
         PubSubMessageType.TASK_UPDATED,
         task_id
@@ -178,6 +228,27 @@ def action_restart_task(request, task_id):
 
     messages.success(request, f'Task {task_id} restarted successfully!')
     return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_delete_task(request, task_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        task = get_object_or_404(Task, pk=task_id)
+        initiative_id = task.initiative.id
+
+        task.update_dependent_tasks()
+        task.delete()
+
+        messages.success(request, f'Task {task_id} deleted successfully!')
+        return redirect(reverse('view_initiative', args=[initiative_id]))
+    except Task.DoesNotExist:
+        messages.error(request, 'Task not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error deleting task: {str(e)}')
+        return redirect(reverse('view_businesses'))
 
 
 def action_add_business(request):
@@ -326,3 +397,23 @@ def action_find_business(request):
     )
 
     return redirect(reverse('view_businesses'))
+
+
+def action_update_task_guidance(request, task_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        task = get_object_or_404(Task, pk=task_id)
+        guidance = rget(request, 'guidance', '').strip()
+        
+        Task.objects.filter(id=task_id).update(guidance=guidance)
+        
+        messages.success(request, 'Task guidance updated successfully!')
+        return redirect(reverse('view_task', args=[task_id]) + '#guidance')
+    except Task.DoesNotExist:
+        messages.error(request, 'Task not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error updating guidance: {str(e)}')
+        return redirect(reverse('view_task', args=[task_id]))

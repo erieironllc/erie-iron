@@ -3,7 +3,7 @@ from pathlib import Path
 
 from erieiron_common import common
 from erieiron_common.enums import LlmModel, TaskExecutionMode
-from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER
+from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER, LlmMessage
 from erieiron_common.models import CodeFile, SelfDrivingTask, SelfDrivingTaskIteration, Business, Task
 
 ARTIFACTS = "artifacts"
@@ -101,7 +101,13 @@ class SelfDriverConfig:
         config_file = artifacts_root / f"{base_file_name}.config.json"
         main_code_path = code_root / f"{base_file_name}.py"
 
+        guidance = task.guidance
+        Task.objects.filter(id=task.id).update(
+            guidance=None
+        )
+
         return SelfDriverConfig({
+            "iteration_guidance": guidance,
             "sandbox_root_dir": business_sandbox_dir,
             "code_directory": code_root,
             "artifacts_dir": artifacts_root,
@@ -115,6 +121,7 @@ class SelfDriverConfig:
         self.debug = False
         self.self_driving_task: SelfDrivingTask = config.get("self_driving_task")
         self.supress_eval = config.get("supress_eval", True)
+        self.guidance = LlmMessage.sys(config.get("iteration_guidance")) if config.get("iteration_guidance") else None
 
         self.code_directory = config.get("code_directory")
         self.code_basename = self.self_driving_task.main_name

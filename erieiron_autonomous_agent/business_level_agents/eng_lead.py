@@ -19,8 +19,31 @@ def on_task_blocked(payload):
 
     payload["GOAL"] = "unblock this task"
 
+    # --- Add existing tasks
+    payload["existing_tasks"] = [
+        {
+            "task_id": t.id,
+            "description": t.description,
+            "status": t.status,
+            "phase": t.phase,
+            "type": t.task_type,
+        }
+        for t in initiative.tasks.all()
+    ]
+
+    # --- Add outputs from executed tasks (if tracked)
+    payload["executed_tasks"] = [
+        {
+            "task_id": t.id,
+            "output": t.get_last_execution().output,
+            "status": t.status,
+        }
+        for t in initiative.tasks.filter(status=TaskStatus.COMPLETE)
+        if hasattr(t, "execution_output")
+    ]
+
     eng_lead_response = business_level_chat(
-        "eng_lead--unblocker.md",
+        ["eng_lead--unblocker.md", "eng_lead.md"],
         payload,
         output_schema="eng_lead.md.schema.json",
         replacements=[

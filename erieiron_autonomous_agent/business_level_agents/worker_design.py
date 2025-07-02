@@ -72,4 +72,16 @@ def process_response(task, designer_resp):
         raise ValueError(f"Expected style_tokens to be a dictionary for task {task.id}")
     handoff_obj.style_tokens = style_tokens
 
+    # Component Tree
+    component_tree = designer_resp.get("component_tree", {})
+    if not isinstance(component_tree, dict):
+        raise ValueError(f"Expected component_tree to be a dictionary for task {task.id}")
+    handoff_obj.component_tree = component_tree
+
+    # Notes
+    notes = designer_resp.get("notes", "")
+    if not isinstance(notes, str):
+        raise ValueError(f"Expected notes to be a string for task {task.id}")
+    handoff_obj.notes = notes
+
     handoff_obj.save()
