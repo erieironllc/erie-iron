@@ -231,3 +231,31 @@ a optional key "blocked" **only if blocked**, with the following attributes:
 * If a run failed with an exception, revert to the previous good file and modify that version.
 * Ensure optimisations are genuinely effective—not superficial fixes.  
 * When setting wait timeouts, evaluate whether the duration is appropriate for the expected operation. Avoid blindly increasing timeouts as a workaround for underlying issues.
+
+
+* Your response must comply strictly with the following JSON schema:  
+    - Allowed top-level keys are:
+      - `goal_achieved` (bool)
+      - `previous_iteration_count` (int or the string `"all"`)
+      - `best_iteration_id` (string or null)
+      - `iteration_id_to_modify` (string, "latest", or null)
+      - `evaluation` (array of objects with `summary` and `details`)
+      - `code_files` (array of objects with `code_file_path` and list of `instructions`)
+      - optionally, `blocked` (object with `category`, `reason`, and `requirements_to_unblock`)
+
+    ⚠️ Do not include any other keys. In particular:
+    - ❌ Do not include a `new_code` field or any raw file contents.
+    - ✅ All code modifications must be expressed as a list of `instructions` per file.
+
+    Each instruction must include:
+    - `step_number`: integer (starting at 1)
+    - `action`: a concise description of the change
+    - `details`: explanation or rationale for the change
+
+    If no changes are needed to a file, provide an empty list of `instructions`.
+
+    ---
+
+    The goal is to iterate on the current codebase to better achieve the user’s explicitly stated objective. Evaluate the latest iteration, identify issues or opportunities for improvement, and describe the required code modifications in `code_files`.
+
+    Be precise. Output a structured, schema-compliant JSON object only. Do not include commentary, markdown, or additional prose.
