@@ -130,6 +130,10 @@
             "type": "string",
             "format": "date-time",
             "description": "Optional ISO 8601 datetime string specifying when the task should first run. Used to anchor recurring schedules."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "description": "Optional. Maximum execution time in seconds. Task fails if exceeded."
           }
         },
         "allOf": [

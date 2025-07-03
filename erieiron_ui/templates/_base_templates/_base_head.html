@@ -11,6 +11,11 @@
     <title>{{ page_title|default_if_none:"Erie Iron, LLC" }}</title>
     {% block extrahead %}{% endblock %}
 
+    <style>
+        {{ pygments_css}}
+    </style>
+
+
     <link rel="icon" type="image/png" href="{% static 'img/favicon/favicon-32x32.png' %}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <link href="{% timestamp_static 'style.css' %}" rel="stylesheet">

@@ -82,8 +82,10 @@
                 <button class="nav-link" id="processes-tab" data-bs-toggle="tab" data-bs-target="#processes"
                         type="button"
                         role="tab">
-                    Running Processes
-                    <span class="badge bg-danger ms-1">{{ running_processes|length }}</span>
+                    Processes
+                    {% if running_processes_count %}
+                        <span class="badge bg-danger ms-1">{{ running_processes_count }}</span>
+                    {% endif %}
                 </button>
             </li>
         {% endif %}
@@ -94,9 +96,9 @@
             </button>
         </li>
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details"
+            <button class="nav-link" id="edit-tab" data-bs-toggle="tab" data-bs-target="#edit"
                     type="button" role="tab">
-                Details
+                Edit
             </button>
         </li>
     </ul>
@@ -122,6 +124,7 @@
         <div class="tab-pane " id="resolve" role="tabpanel" aria-labelledby="resolve-tab">
             <h3>Task Output</h3>
             <form action="{% url "action_resolve_task" task.id %}" method=post>
+                {% csrf_token %}
                 <textarea name="output" style="width: 100%; height: 8rem;"></textarea>
                 <input type="submit" value="Resolve"/>
             </form>
@@ -182,9 +185,10 @@
                             </a>
                             </span>
                         </small>
-                        <form method="post" action="{% url 'action_delete_iteration' iteration.id %}" class="d-inline ms-2">
+                        <form method="post" action="{% url 'action_delete_iteration' iteration.id %}"
+                              class="d-inline ms-2">
                             {% csrf_token %}
-                            <button type="submit" class="btn btn-danger btn-sm" 
+                            <button type="submit" class="btn btn-danger btn-sm"
                                     onclick="return confirm('Are you sure you want to delete this iteration? This action cannot be undone.')">
                                 Delete
                             </button>
@@ -196,7 +200,7 @@
                                 <dt class="mt-2 col-sm-12">Evaluation</dt>
                                 <dd class="col-sm-12">
                                     <ul>
-                                        {% for eval in iteration.evaluation_json %}
+                                        {% for eval in iteration.evaluation_json.evaluation %}
                                             <li>
                                                 {{ eval.summary }} {{ eval.details }}
                                             </li>
@@ -218,7 +222,7 @@
         </div>
 
         <div class="tab-pane  " id="executions" role="tabpanel" aria-labelledby="executions-tab">
-            {% for te in task.taskexecution_set.all|dictsortreversed:"executed_time" %}
+            {% for te in task.taskexecution_set.all|dictsortreversed:"created_time" %}
                 <div class="card my-4">
                     <div class="card-header">
                         <small class="text-muted">
@@ -228,7 +232,7 @@
                                 <span class="badge bg-danger">Execution Failed</span>
                             {% endif %}
                             <span class="ms-3">
-                                {{ te.executed_time }}
+                                created: {{ te.created_time }}&nbsp;|&nbsp;completed: {{ te.executed_time|default_if_none:"never completed" }}
                             </span>
                         </small>
                     </div>
@@ -252,6 +256,12 @@
                                     <pre>{{ te.error_msg|safe }}</pre>
                                 </dd>
                             {% endif %}
+                            {% if te.process.log_tail %}
+                                <dt class="col-sm-3">Recent Output</dt>
+                                <dd class="col-sm-9">
+                                    <pre class="pre_log_output bg-dark text-light p-2">{{ process.log_tail }}</pre>
+                                </dd>
+                            {% endif %}
                         </dl>
                     </div>
                 </div>
@@ -260,51 +270,8 @@
 
         <div class="tab-pane  " id="processes" role="tabpanel" aria-labelledby="processes-tab">
             {% if running_processes %}
-                <div class="alert alert-info">
-                    <strong>{{ running_processes|length }}</strong> process{{ running_processes|length|pluralize:"es" }} currently running for this task.
-                </div>
-                {% for process in running_processes %}
-                    <div class="card my-3">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <div>
-                                <span class="badge bg-success">Running</span>
-                                <strong>{{ process.execution_type|title }} Process</strong>
-                                {% if not process.task_execution %}
-                                    <span class="badge bg-info ms-2">SDA Execute</span>
-                                {% endif %}
-                                <small class="text-muted">Started: {{ process.started_at|date:"M j, Y H:i:s" }}</small>
-                            </div>
-                            <form method="post" action="{% url 'action_kill_process' process.id %}" style="display: inline;">
-                                {% csrf_token %}
-                                <button type="submit" class="btn btn-danger btn-sm" 
-                                        onclick="return confirm('Are you sure you want to kill this process?')">
-                                    Kill Process
-                                </button>
-                            </form>
-                        </div>
-                        <div class="card-body">
-                            <dl class="row">
-                                {% if process.process_id %}
-                                    <dt class="col-sm-3">Process ID</dt>
-                                    <dd class="col-sm-9">{{ process.process_id }}</dd>
-                                {% endif %}
-                                {% if process.container_id %}
-                                    <dt class="col-sm-3">Container ID</dt>
-                                    <dd class="col-sm-9">{{ process.container_id }}</dd>
-                                {% endif %}
-                                {% if process.log_file_path %}
-                                    <dt class="col-sm-3">Log File</dt>
-                                    <dd class="col-sm-9"><code>{{ process.log_file_path }}</code></dd>
-                                {% endif %}
-                                {% if process.log_tail %}
-                                    <dt class="col-sm-3">Recent Output</dt>
-                                    <dd class="col-sm-9">
-                                        <pre class="bg-dark text-light p-2" style="max-height: 200px; overflow-y: auto;">{{ process.log_tail }}</pre>
-                                    </dd>
-                                {% endif %}
-                            </dl>
-                        </div>
-                    </div>
+                {% for process in running_processes|dictsortreversed:"started_at" %}
+                    {% include "_process_card.html" %}
                 {% endfor %}
             {% else %}
                 <div class="alert alert-secondary">
@@ -317,64 +284,116 @@
             <h5>Guidance for next iteration</h5>
             <form action="{% url 'action_update_task_guidance' task.id %}" method="post">
                 {% csrf_token %}
-                <textarea name="guidance" class="form-control" rows="8" placeholder="Enter guidance for the next iteration...">{{ task.guidance|default:"" }}</textarea>
+                <textarea name="guidance" class="form-control" rows="8"
+                          placeholder="Enter guidance for the next iteration...">{{ task.guidance|default:"" }}</textarea>
                 <button type="submit" class="btn btn-primary mt-2">Save Guidance</button>
             </form>
         </div>
 
-        <div class="tab-pane  " id="details" role="tabpanel" aria-labelledby="details-tab">
-            <table class="table table-striped">
-                <tr>
-                    <th>Created</th>
-                    <td>{{ task.created_timestamp }}</td>
-                </tr>
-
-                <tr>
-                    <th>Phase</th>
-                    <td>{{ task.phase|label }}</td>
-                </tr>
-                <tr>
-                    <th>Task Type</th>
-                    <td>{{ task.task_type|label }}</td>
-                </tr>
-                <tr>
-                    <th>Execution Mode</th>
-                    <td>{{ task.execution_mode|label }}</td>
-                </tr>
-                <tr>
-                    <th>Requires Test</th>
-                    <td>{{ task.requires_test }}</td>
-                </tr>
-                <tr>
-                    <th>Execution Schedule</th>
-                    <td>{{ task.execution_schedule|label }}</td>
-                </tr>
-                <tr>
-                    <th>Execution Start Time</th>
-                    <td>{{ task.execution_start_time }}</td>
-                </tr>
-                <tr>
-                    <th>Max Budget (USD)</th>
-                    <td>{{ task.max_budget_usd }}</td>
-                </tr>
-                <tr>
-                    <th>Current Spend</th>
-                    <td>{{ task.current_spend }}</td>
-                </tr>
-                <tr>
-                    <th>Created By</th>
-                    <td>{{ task.created_by }}</td>
-                </tr>
-                <tr>
-                    <th>Comment Requests</th>
-                    <td>{{ task.comment_requests }}</td>
-                </tr>
-                <tr>
-                    <th>Attachments</th>
-                    <td>{{ task.attachments }}</td>
-                </tr>
-            </table>
-
+        <div class="tab-pane  " id="edit" role="tabpanel" aria-labelledby="edit-tab">
+            <h5>Edit Task Fields</h5>
+            <form action="{% url 'action_update_task' task.id %}" method="post">
+                {% csrf_token %}
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="description" class="form-label">Description</label>
+                            <textarea name="description" id="description" class="form-control" rows="3">{{ task.description }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="risk_notes" class="form-label">Risk Notes</label>
+                            <textarea name="risk_notes" id="risk_notes" class="form-control" rows="3">{{ task.risk_notes }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="test_plan" class="form-label">Test Plan</label>
+                            <textarea name="test_plan" id="test_plan" class="form-control" rows="3">{{ task.test_plan }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
+                            <input type="number" name="timeout_seconds" id="timeout_seconds" class="form-control" value="{{ task.timeout_seconds|default:'' }}">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="max_budget_usd" class="form-label">Max Budget (USD)</label>
+                            <input type="number" step="0.01" name="max_budget_usd" id="max_budget_usd" class="form-control" value="{{ task.max_budget_usd|default:'' }}">
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="status" class="form-label">Status</label>
+                            <select name="status" id="status" class="form-select">
+                                {% for value, label in task_status_choices %}
+                                    <option value="{{ value }}" {% if task.status == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="role_assignee" class="form-label">Role Assignee</label>
+                            <select name="role_assignee" id="role_assignee" class="form-select">
+                                {% for value, label in task_assignee_choices %}
+                                    <option value="{{ value }}" {% if task.role_assignee == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="phase" class="form-label">Phase</label>
+                            <select name="phase" id="phase" class="form-select">
+                                {% for value, label in task_phase_choices %}
+                                    <option value="{{ value }}" {% if task.phase == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="task_type" class="form-label">Task Type</label>
+                            <select name="task_type" id="task_type" class="form-select">
+                                <option value="">-- Select Task Type --</option>
+                                {% for value, label in task_execution_type_choices %}
+                                    <option value="{{ value }}" {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="execution_mode" class="form-label">Execution Mode</label>
+                            <select name="execution_mode" id="execution_mode" class="form-select">
+                                {% for value, label in task_execution_mode_choices %}
+                                    <option value="{{ value }}" {% if task.execution_mode == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="execution_schedule" class="form-label">Execution Schedule</label>
+                            <select name="execution_schedule" id="execution_schedule" class="form-select">
+                                {% for value, label in task_execution_schedule_choices %}
+                                    <option value="{{ value }}" {% if task.execution_schedule == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="execution_start_time" class="form-label">Execution Start Time</label>
+                            <input type="datetime-local" name="execution_start_time" id="execution_start_time" class="form-control" 
+                                   value="{% if task.execution_start_time %}{{ task.execution_start_time|date:'Y-m-d\TH:i' }}{% endif %}">
+                        </div>
+                        
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" name="requires_test" id="requires_test" class="form-check-input" {% if task.requires_test %}checked{% endif %}>
+                            <label for="requires_test" class="form-check-label">Requires Test</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <a href="{% url 'view_task' task.id %}" class="btn btn-secondary ms-2">Cancel</a>
+            </form>
         </div>
     </div>
 {% endblock %}

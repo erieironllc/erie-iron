@@ -26,7 +26,8 @@ CHAT_MODELS_IN_ORDER = [
     LlmModel.DEEPSEEK_CHAT,
 ]
 
-CODE_MODELS_IN_ORDER = [
+CODE_PLANNING_MODELS_IN_ORDER = [
+    # LlmModel.OPENAI_O3,
     LlmModel.GEMINI_2_5_PRO,
     # LlmModel.OPENAI_GPT_4o,
     # LlmModel.DEEPSEEK_CODER,
@@ -74,7 +75,7 @@ MODEL_TO_MAX_TOKENS = {
     LlmModel.OPENAI_GPT_4_5: 128_000,
     LlmModel.OPENAI_O1: 128_000,
     LlmModel.OPENAI_O1_MINI: 128_000,
-    LlmModel.OPENAI_O3: 200_000,
+    LlmModel.OPENAI_O3: 30_000, #200_000,
     LlmModel.OPENAI_O4: 1_000_000,
     LlmModel.OPENAI_O4_MINI: 1_000_000,
 

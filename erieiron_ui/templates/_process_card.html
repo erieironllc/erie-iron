@@ -1,0 +1,56 @@
+<div class="card my-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div class="d-flex justify-content-start align-items-center">
+            {% if process.is_running %}
+                <span class="badge bg-success">Running</span>
+            {% else %}
+                <span class="badge bg-info">Not Running</span>
+            {% endif %}
+
+
+            <div class="ms-2 me-2" style="max-width: 250px; overflow-x: hidden; white-space: nowrap">
+                {% if process.task_execution.iteration_id %}
+                    <a href="{% url "view_self_driver_iteration" process.task_execution.iteration_id %}#processes">
+                        {{ process.task_execution.task.description }}
+                    </a>
+                {% else %}
+                    <label class=w-50>{{ process.task_execution.task.description }}</label>
+                {% endif %}
+            </div>
+
+            <small class="text-muted me-2">{{ process.execution_type|title }} Process</small>
+
+            <small class="text-muted">Started: {{ process.started_at|date:"M j, Y H:i:s" }}</small>
+        </div>
+        <form method="post" action="{% url 'action_kill_process' process.id %}"
+              style="display: inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger btn-sm"
+                    onclick="return confirm('Are you sure you want to kill this process?')">
+                Kill Process
+            </button>
+        </form>
+    </div>
+    <div class="card-body">
+        <dl class="row">
+            {% if process.process_id %}
+                <dt class="col-sm-3">Process ID</dt>
+                <dd class="col-sm-9">{{ process.process_id }}</dd>
+            {% endif %}
+            {% if process.container_id %}
+                <dt class="col-sm-3">Container ID</dt>
+                <dd class="col-sm-9">{{ process.container_id }}</dd>
+            {% endif %}
+            {% if process.log_file_path %}
+                <dt class="col-sm-3">Log File</dt>
+                <dd class="col-sm-9"><code>{{ process.log_file_path }}</code></dd>
+            {% endif %}
+            {% if process.log_tail %}
+                <dt class="col-sm-3">Recent Output</dt>
+                <dd class="col-sm-9">
+                    <pre class="pre_log_output bg-dark text-light p-2">{{ process.log_tail }}</pre>
+                </dd>
+            {% endif %}
+        </dl>
+    </div>
+</div>

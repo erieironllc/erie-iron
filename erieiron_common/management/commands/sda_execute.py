@@ -6,12 +6,12 @@ from erieiron_autonomous_agent.business_level_agents.self_driving_coder import s
 class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
-            '--iteration_id',
+            '--execution_id',
             type=str,
             required=False
         )
 
     def handle(self, *args, **options):
         self_driving_coder_runner.execute(
-            options.get("iteration_id")
+            options.get("execution_id")
         )

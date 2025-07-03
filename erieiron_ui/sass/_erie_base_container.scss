@@ -6,6 +6,28 @@ body{
     color: $link-hover-color !important;
   }
 
+  .pre_log_output{
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  pre{
+    .highlight{
+      background: transparent;
+      margin-top: 1rem;
+      .s1, .s2{
+        color: darkcyan;
+      }
+      .nn{
+        color:burlywood;
+      }
+      .nf{
+        font-weight: bold;
+        color: cornflowerblue;
+      }
+    }
+  }
+
   #top_nav{
     padding-left: 2rem;
     padding-right: 2rem;

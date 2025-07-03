@@ -1,6 +1,6 @@
+import difflib
 import json
 import logging
-import os
 import subprocess
 import sys
 import threading
@@ -13,6 +13,8 @@ from typing import Tuple, Optional
 from django.contrib.postgres.search import SearchVectorField, SearchVector
 from django.db import models, connection, transaction
 from django.db.models import QuerySet, Sum
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 from django.utils import timezone
 
 import settings
@@ -1428,20 +1430,21 @@ class Task(BaseErieIronModel):
     requires_test = models.BooleanField(default=True)
     execution_schedule = models.TextField(choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE)
     execution_start_time = models.DateTimeField(null=True, blank=True)
+    timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.description} - {self.id}"
-
 
     def to_dict(self):
         d = self.__dict__
 
         return d
 
-    def create_execution(self, input_data=None) -> 'TaskExecution':
+    def create_execution(self, input_data=None, iteration=None) -> 'TaskExecution':
         return TaskExecution.objects.create(
             task=self,
+            iteration=iteration,
             status=TaskStatus.NOT_STARTED,
             input=input_data or {}
         )
@@ -1487,6 +1490,7 @@ class DesignComponent(BaseErieIronModel):
 
 class TaskExecution(BaseErieIronModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE)
+    iteration = models.ForeignKey("SelfDrivingTaskIteration", on_delete=models.CASCADE, null=True)
     status = models.TextField(default=TaskStatus.NOT_STARTED, null=False, choices=TaskStatus.choices())
     created_time = models.DateTimeField(auto_now_add=True)
     executed_time = models.DateTimeField(null=True)
@@ -1506,6 +1510,7 @@ class TaskExecution(BaseErieIronModel):
         self.refresh_from_db()
         return self
 
+
 class TaskDesignRequirements(BaseErieIronModel):
     task = models.OneToOneField("Task", on_delete=models.CASCADE, related_name="design_handoff")
     component_ids = models.ManyToManyField(DesignComponent, blank=True)
@@ -1518,7 +1523,7 @@ class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     main_name = models.TextField(null=False)
     goal = models.TextField(null=False)
-    related_task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
+    task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -1564,7 +1569,7 @@ class SelfDrivingTask(BaseErieIronModel):
 
     def get_cost(self) -> float:
         result = LlmRequest.objects.filter(
-            task_iteration__task=self
+            task_iteration__self_driving_task=self
         ).aggregate(
             total=Sum("price")
         )
@@ -1572,24 +1577,23 @@ class SelfDrivingTask(BaseErieIronModel):
 
     def iterate(self) -> 'SelfDrivingTaskIteration':
         max_version = SelfDrivingTaskIteration.objects.filter(
-            task=self
+            self_driving_task=self
         ).aggregate(
             models.Max("version_number")
         )["version_number__max"] or 0
 
         with transaction.atomic():
             return SelfDrivingTaskIteration.objects.create(
-                task=self,
+                self_driving_task=self,
                 version_number=max_version + 1
             )
 
     def get_require_tests(self) -> bool:
-        return self.related_task and self.related_task.requires_test
-
+        return self.task and self.task.requires_test
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
-    task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
+    self_driving_task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
     achieved_goal = models.BooleanField(null=False, default=False)
     version_number = models.IntegerField(null=False, default=0)
     planning_model = models.TextField()
@@ -1597,6 +1601,14 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content = models.TextField()
     evaluation_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
+
+    def get_latest_execution(self) -> TaskExecution:
+        te = self.taskexecution_set.last()
+
+        if te:
+            return te
+        else:
+            return self.self_driving_task.task.create_execution(iteration=self)
 
     def get_llm_cost(self) -> Tuple[float, int]:
         totals = self.llmrequest_set.aggregate(
@@ -1606,7 +1618,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         return totals['total_price'] or 0, totals['total_tokens'] or 0
 
     def write_to_disk(self):
-        sandbox_root_dir = self.task.business.get_sandbox_dir()
+        sandbox_root_dir = self.self_driving_task.business.get_sandbox_dir()
         for cv in self.codeversion_set.all():
             cv.write_to_disk(sandbox_root_dir)
 
@@ -1626,6 +1638,10 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
 
         return code_version_to_modify
 
+    def get_previous_iteration(self):
+        self.get_previous_by_timestamp()
+        pass
+
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):
     task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
@@ -1634,7 +1650,7 @@ class SelfDrivingTaskBestIteration(BaseErieIronModel):
 
 
 class RunningProcess(BaseErieIronModel):
-    iteration = models.OneToOneField(SelfDrivingTaskIteration, on_delete=models.CASCADE, related_name="self_driving_task", null=True, blank=True)
+    task_execution = models.OneToOneField(TaskExecution, on_delete=models.CASCADE, related_name="process", null=True, blank=True)
     process_id = models.IntegerField(null=True, blank=True)
     container_id = models.TextField(null=True, blank=True)  # For docker processes
     execution_type = models.TextField(max_length=20, choices=[('local', 'Local'), ('docker', 'Docker')])
@@ -1644,7 +1660,7 @@ class RunningProcess(BaseErieIronModel):
     is_running = models.BooleanField(default=True)
     terminated_at = models.DateTimeField(null=True, blank=True)
 
-    def update_log_tail(self, max_chars=1000):
+    def update_log_tail(self, max_chars=100000):
         """Update the log_tail field with the latest log content"""
         if self.log_file_path and Path(self.log_file_path).exists():
             try:
@@ -1663,6 +1679,10 @@ class RunningProcess(BaseErieIronModel):
         if not self.is_running:
             return False
 
+        self.is_running = False
+        self.terminated_at = common.get_now()
+        self.save(update_fields=['is_running', 'terminated_at'])
+
         try:
             if self.execution_type == 'docker' and self.container_id:
                 # Kill docker container
@@ -1671,13 +1691,11 @@ class RunningProcess(BaseErieIronModel):
                 # Kill local process
                 os.kill(self.process_id, signal.SIGTERM)
 
-            self.is_running = False
-            self.terminated_at = common.get_now()
-            self.save(update_fields=['is_running', 'terminated_at'])
             return True
         except Exception as e:
             logging.warning(f"Failed to kill process {self.id}: {e}")
             return False
+
 
 class LlmRequest(BaseErieIronModel):
     task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
@@ -1753,7 +1771,7 @@ class CodeFile(BaseErieIronModel):
         )
 
         file_path = common.assert_in_sandbox(
-            task_iteration.task.business.get_sandbox_dir(),
+            task_iteration.self_driving_task.business.get_sandbox_dir(),
             self.file_path
         )
 
@@ -1786,9 +1804,23 @@ class CodeVersion(BaseErieIronModel):
     code = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def get_diff(self) -> str:
+        try:
+            previous_version = self.get_previous_by_created_at()
+            diff_lines = difflib.unified_diff(
+                common.default_str(previous_version.code).splitlines(),
+                common.default_str(self.code).splitlines(),
+                fromfile="old.py",
+                tofile="new.py",
+                lineterm=""
+            )
+            return "\n".join(diff_lines)
+        except:
+            return ""
+
     def write_to_disk(self, sandbox_root_dir=None) -> Path:
         if not sandbox_root_dir:
-            sandbox_root_dir = self.task_iteration.task.business.get_sandbox_dir()
+            sandbox_root_dir = self.task_iteration.self_driving_task.business.get_sandbox_dir()
 
         file_path = common.assert_in_sandbox(
             sandbox_root_dir,
@@ -1799,3 +1831,21 @@ class CodeVersion(BaseErieIronModel):
         file_path.write_text(self.code)
 
         return file_path
+
+
+@receiver(pre_delete, sender=SelfDrivingTaskIteration)
+def kill_running_processes_on_iteration_delete(sender, instance, **kwargs):
+    """
+    Kill any running processes associated with this iteration before deletion.
+    """
+    running_processes = RunningProcess.objects.filter(
+        task_execution__iteration=instance,
+        is_running=True
+    )
+    
+    for process in running_processes:
+        try:
+            process.kill_process()
+            logging.info(f"Killed running process {process.id} for iteration {instance.id}")
+        except Exception as e:
+            logging.warning(f"Failed to kill process {process.id} for iteration {instance.id}: {e}")

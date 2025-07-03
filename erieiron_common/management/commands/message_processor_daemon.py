@@ -1,16 +1,18 @@
 import faulthandler
 import os
 import time
-from datetime import datetime, timezone
+from datetime import timedelta
+from datetime import timezone
 
 import openai
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
 from erieiron_common import common
 from erieiron_common.common import parse_bool
 from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, PubSubMessageStatus, PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
-from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage
+from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage, RunningProcess
 
 
 @pubsub_workflow
@@ -158,6 +160,9 @@ class Command(BaseCommand):
 
                 publish_timing_messages()
 
+                # Check for timed-out running processes
+                check_timed_out_processes()
+
                 if not process:
                     common.log_info(f"""
                     ----------------------------------------------------------------------
@@ -225,7 +230,7 @@ def publish_timing_messages(enable_every_minute=False):
     from erieiron_common.message_queue.pubsub_manager import PubSubManager
     from django.db import transaction
 
-    now = datetime.now(timezone.utc)
+    now = common.get_now()
 
     # EVERY_MINUTE: check if current minute's message exists
     minute_namespace = f"timing_minute_{now.strftime('%Y%m%d_%H%M')}"
@@ -322,6 +327,38 @@ def publish_timing_messages(enable_every_minute=False):
         except Exception as e:
             # Another daemon already published this timing message
             pass
+
+
+def check_timed_out_processes():
+    """
+    Check for running processes that have exceeded their task's timeout and kill them.
+    """
+
+    # Get all running processes that have an associated task with a timeout
+    running_processes = RunningProcess.objects.filter(
+        is_running=True,
+        task_execution__task__timeout_seconds__isnull=False
+    ).select_related('task_execution__task')
+
+    for process in running_processes:
+        task = process.task_execution.task
+        timeout_seconds = task.timeout_seconds
+
+        if timeout_seconds and timeout_seconds > 0:
+            # Calculate how long the process has been running
+            runtime = timezone.now() - process.started_at
+            timeout_threshold = timedelta(seconds=timeout_seconds)
+
+            if runtime > timeout_threshold:
+                try:
+                    process.kill_process()
+
+                    common.log_info(
+                        f"Killed timed-out process {process.id} for task {task.id} "
+                        f"(timeout: {timeout_seconds}s, runtime: {int(runtime.total_seconds())}s)"
+                    )
+                except Exception as e:
+                    common.log_error(f"Failed to kill timed-out process {process.id}: {e}")
 
 
 def log(msg, prefix, suffix):

@@ -12,7 +12,7 @@ from erieiron_common.models import (
 )
 
 
-def on_task_blocked(payload):
+def on_task_blocked(payload, msg):
     task = Task.objects.get(id=payload['task_id'])
     initiative = task.initiative
     business = initiative.business
@@ -51,7 +51,7 @@ def on_task_blocked(payload):
         ]
     )
 
-    new_task_ids = process_response(initiative, eng_lead_response)
+    new_task_ids = process_response(msg, initiative, eng_lead_response)
     with transaction.atomic():
         Task.objects.filter(id=task.id).update(
             status=TaskStatus.BLOCKED
@@ -66,7 +66,7 @@ def on_task_blocked(payload):
     return new_task_ids
 
 
-def define_tasks_for_initiative(initiative_id):
+def define_tasks_for_initiative(initiative_id, msg):
     initiative = Initiative.objects.get(id=initiative_id)
     business = initiative.business
 
@@ -80,7 +80,7 @@ def define_tasks_for_initiative(initiative_id):
         ]
     )
 
-    return process_response(initiative, eng_lead_response)
+    return process_response(msg, initiative, eng_lead_response)
 
 
 def build_chat_data(business, initiative):
@@ -130,7 +130,7 @@ def build_chat_data(business, initiative):
 
 
 @transaction.atomic
-def process_response(initiative, eng_lead_response):
+def process_response(msg, initiative, eng_lead_response):
     updated_or_created_task_ids = []
 
     for task_data in eng_lead_response.get("tasks", []):
@@ -182,10 +182,11 @@ def process_response(initiative, eng_lead_response):
                 "completion_criteria": task_data.get("completion_criteria"),
                 "phase": TaskPhase(phase),
                 "task_type": TaskExecutionType.valid_or(task_type),
-                "execution_mode": TaskExecutionMode(task_data.get("execution_mode", TaskExecutionMode.CONTAINER)),
+                "execution_mode": TaskExecutionMode(task_data.get("execution_mode", TaskExecutionMode.HOST)),
                 "requires_test": initiative.requires_unit_tests and common.parse_bool(task_data.get("requires_test", True)),
                 "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule", TaskExecutionSchedule.ONCE)),
                 "execution_start_time": task_data.get("execution_start_time", None),
+                "timeout_seconds": task_data.get("timeout_seconds"),
             }
         )
 

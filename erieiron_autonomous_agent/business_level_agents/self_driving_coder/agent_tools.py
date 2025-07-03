@@ -221,7 +221,7 @@ def get_boto3_client(
         raise RuntimeError(f"Failed to create boto3 client for {service}: {e}")
 
 
-def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None = None) -> str:
+def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None = None, role_arn_to_assume: str | None = None) -> str:
     """
     Executes an AWS CLI command within the business's sandbox context.
 
@@ -233,6 +233,7 @@ def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None =
         business_id (uuid.UUID): Unique ID of the business issuing the command.
         command (list[str]): AWS CLI command and arguments (e.g., ["s3", "ls"]).
         input_data (str | None): Optional string to pass to stdin.
+        role_arn_to_assume (str | None): Optional IAM role ARN to assume for the command execution.
 
     Returns:
         str: Trimmed stdout output from the command.
@@ -241,14 +242,34 @@ def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None =
         CommandExecutionError: If the command fails or violates sandbox constraints.
     """
     full_cmd = ["aws"] + command
-    return run_shell_command(business_id, full_cmd, input_data=input_data)
+    
+    # If role assumption is requested, set up the environment variable
+    env_backup = None
+    if role_arn_to_assume:
+        env_backup = os.environ.get("AWS_ROLE_ARN")
+        os.environ["AWS_ROLE_ARN"] = role_arn_to_assume
+    
+    try:
+        return run_shell_command(business_id, full_cmd, input_data=input_data)
+    finally:
+        # Restore original environment state
+        if role_arn_to_assume:
+            if env_backup is not None:
+                os.environ["AWS_ROLE_ARN"] = env_backup
+            else:
+                os.environ.pop("AWS_ROLE_ARN", None)
 
 
-def aws_ecr_login(business_id: uuid.UUID, aws_region: str, aws_account_id: str) -> None:
+def aws_ecr_login(
+    business_id: uuid.UUID,
+    aws_region: str,
+    aws_account_id: str,
+    role_arn_to_assume: Optional[str] = None
+) -> None:
     """
     Authenticates Docker with AWS Elastic Container Registry (ECR).
 
-    This function first retrieves an ECR login password using the AWS CLI,
+    This function retrieves an ECR authorization token using boto3 with optional role assumption,
     then logs Docker into the ECR registry for the specified AWS account and region.
     All shell commands are sandboxed using the business's designated directory.
 
@@ -256,11 +277,19 @@ def aws_ecr_login(business_id: uuid.UUID, aws_region: str, aws_account_id: str) 
         business_id (uuid.UUID): Unique ID of the business performing the login.
         aws_region (str): AWS region for the ECR registry (e.g., "us-west-2").
         aws_account_id (str): AWS account ID hosting the ECR registry.
+        role_arn_to_assume (Optional[str]): Optional IAM role ARN to assume for authentication.
 
     Raises:
         CommandExecutionError: If retrieving the ECR login password or the Docker login fails.
     """
-    password = aws_cli(business_id, ["ecr", "get-login-password", "--region", aws_region])
+    # Get ECR client with optional role assumption
+    ecr_client = get_boto3_client('ecr', region=aws_region, role_arn_to_assume=role_arn_to_assume)
+    
+    # Get authorization token
+    auth_data = ecr_client.get_authorization_token()["authorizationData"][0]
+    token = base64.b64decode(auth_data["authorizationToken"]).decode("utf-8")
+    username, password = token.split(":", 1)
+    
     print("retrieved aws ecr login password")
 
     docker_login_cmd = [
@@ -301,11 +330,26 @@ def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Op
 
     try:
         print("executing command:", " ".join(command))
+        
+        # Handle input data - keep as string for text mode
+        stdin_input = None
+        use_text_mode = True
+        if input_data is not None:
+            if isinstance(input_data, str):
+                stdin_input = input_data
+                use_text_mode = True
+            elif isinstance(input_data, bytes):
+                stdin_input = input_data.decode("utf-8")
+                use_text_mode = True
+            else:
+                stdin_input = str(input_data)
+                use_text_mode = True
+        
         result = subprocess.run(
             command,
-            input=input_data.encode("utf-8") if input_data is not None else None,
+            input=stdin_input,
             capture_output=True,
-            text=True,
+            text=use_text_mode,
             check=False,
         )
         if result.returncode != 0:
@@ -592,7 +636,7 @@ def build_and_push_dev_container(
         token = base64.b64decode(auth_data["authorizationToken"]).decode("utf-8")
         username, password = token.split(":", 1)
         proxy_endpoint = auth_data["proxyEndpoint"]
-        run_shell_command(business_id, ["docker", "login", "-u", username, "-p", password, proxy_endpoint])
+        run_shell_command(business_id, ["docker", "login", "-u", username, "--password-stdin", proxy_endpoint], input_data=password)
     except Exception as ce:
         if "AccessDenied" in str(ce):
             iam_propose_policy_patch(
