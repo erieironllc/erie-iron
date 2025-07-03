@@ -12,6 +12,7 @@ from django.middleware import csrf
 from django.shortcuts import render
 from django.urls import reverse
 from jwt import PyJWKClient
+from pygments.formatters.html import HtmlFormatter
 
 import settings
 from erieiron_common import common, models, runtime_config
@@ -287,6 +288,7 @@ def send_response(request, template, context=None, validate=False, status_code=2
     context['user_data'] = common.get(request, "user_data")
     context['authenticated'] = context['user_data'] is not None
     context['is_internal_user'] = user_email.endswith("erieiron.ai") or user_email.endswith("collaya.com")
+    context['pygments_css'] = HtmlFormatter().get_style_defs('.highlight')
 
     current_user = None
     try:

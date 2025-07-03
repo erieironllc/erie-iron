@@ -47,10 +47,11 @@ Permission Handling
 Output Format
  • Your response must contain only raw, valid Python code. No explanations, no markdown formatting.
  • Include a final summary print with any key metrics, totals, or decisions made.
+ • The output code **shall not** declare a __main__ method 
 
 Iteration & Logging
  • You are part of an iterative code loop. Each version builds toward a defined GOAL.
- • Include helpful print() logs and metrics to track success and support future improvement.
+ • Include many print() logs and metrics to track success and support future improvement.
  • Logs should mark major phases, key variable values, and errors. Avoid overly verbose output.
  • Use tqdm to show progress in long-running loops.
  • Cache any API or asset fetches that will remain constant between runs.

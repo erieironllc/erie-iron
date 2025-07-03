@@ -3,7 +3,7 @@ from pathlib import Path
 
 from erieiron_common import common
 from erieiron_common.enums import LlmModel, TaskExecutionMode
-from erieiron_common.llm_apis.llm_interface import CODE_MODELS_IN_ORDER, LlmMessage
+from erieiron_common.llm_apis.llm_interface import CODE_PLANNING_MODELS_IN_ORDER, LlmMessage
 from erieiron_common.models import CodeFile, SelfDrivingTask, SelfDrivingTaskIteration, Business, Task
 
 ARTIFACTS = "artifacts"
@@ -79,7 +79,7 @@ class SelfDriverConfig:
         base_file_name = common.safe_filename(task_id)
 
         self_driving_task, _ = SelfDrivingTask.objects.get_or_create(
-            related_task_id=task_id,
+            task_id=task_id,
             defaults={
                 "main_name": base_file_name,
                 "goal": task.get_work_desc(),
@@ -102,9 +102,9 @@ class SelfDriverConfig:
         main_code_path = code_root / f"{base_file_name}.py"
 
         guidance = task.guidance
-        Task.objects.filter(id=task.id).update(
-            guidance=None
-        )
+        # Task.objects.filter(id=task.id).update(
+        #     guidance=None
+        # )
 
         return SelfDriverConfig({
             "iteration_guidance": guidance,
@@ -155,11 +155,11 @@ class SelfDriverConfig:
         self.never_done = common.parse_bool(config.get("never_done", False))
         self.max_budget_usd = float(config.get("max_budget_usd", 20))
 
-        model_str = config.get("model")
+        model_str = config.get("planning_model")
         if model_str:
-            self.model = random.choice(LlmModel.to_list(model_str.split(",")))
+            self.planning_model = random.choice(LlmModel.to_list(model_str.split(",")))
         else:
-            self.model = random.choice(CODE_MODELS_IN_ORDER)
+            self.planning_model = random.choice(CODE_PLANNING_MODELS_IN_ORDER)
 
     def initialize_new_iteration(self) -> SelfDrivingTaskIteration:
         self.current_iteration = self.self_driving_task.iterate()

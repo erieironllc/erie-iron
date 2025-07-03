@@ -20,5 +20,5 @@ class Command(BaseCommand):
 
         self_driving_coder_agent.execute_eval(
             config_file=self_driving_task.config_path,
-            task_id=self_driving_task.related_task_id
+            task_id=self_driving_task.task_id
         )

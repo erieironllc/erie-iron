@@ -12,7 +12,7 @@ from jsonschema import validate as jsonschema_validate
 from erieiron_common import common
 from erieiron_common.enums import LlmModel, LlmMessageType
 from erieiron_common.json_encoder import ErieIronJSONEncoder
-from erieiron_common.llm_apis.llm_constants import CODE_MODELS_IN_ORDER, CHAT_MODELS_IN_ORDER, MODEL_TO_IMPL, MODEL_PRICE_USD_PER_MILLION_TOKENS, MODEL_TO_MAX_TOKENS
+from erieiron_common.llm_apis.llm_constants import CODE_PLANNING_MODELS_IN_ORDER, CHAT_MODELS_IN_ORDER, MODEL_TO_IMPL, MODEL_PRICE_USD_PER_MILLION_TOKENS, MODEL_TO_MAX_TOKENS
 
 
 def chat(
@@ -23,7 +23,7 @@ def chat(
         debug=False
 ) -> 'LlmResponse':
     if not model:
-        models = CODE_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
+        models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
     else:
         models = common.ensure_list(model)
 
@@ -195,8 +195,9 @@ class LlmMessage:
         usd_per_million_input_token = MODEL_PRICE_USD_PER_MILLION_TOKENS[model]['input']
         usd_per_million_output_token = MODEL_PRICE_USD_PER_MILLION_TOKENS[model]['output']
 
-        price_input = LlmMessage.get_total_token_count(model, input_messages) * usd_per_million_input_token / 1000000
-        price_output = LlmMessage._get_token_count(model, response_text) / 1000000
+        price_input = LlmMessage.get_total_token_count(model, input_messages) * usd_per_million_input_token / 1_000_000
+        price_output = LlmMessage._get_token_count(model, response_text) * usd_per_million_output_token / 1_000_000
+
         return price_input + price_output, price_input, price_output
 
     def get_message_json(self, model: LlmModel) -> dict:

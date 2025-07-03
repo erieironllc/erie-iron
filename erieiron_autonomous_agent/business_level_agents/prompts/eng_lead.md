@@ -18,6 +18,8 @@
 6. over‑engineer: prefer simplest viable architecture
 7. Defining a new Dockerfile - instead of defining a new dockerfile it should call agent_tools.clone_template_project_to_sandbox()
 8. Defining a task that runs in a container before the container exists.  if the container does not exist, the task that runs in the container must depend on a task that calls agent_tools.clone_template_project_to_sandbox() 
+9. If a task requires changes to `agent_tools` or any other code outside the sandbox, it must be assigned to `HUMAN`. No automated agent may modify shared modules or infrastructure code.
+10. Do not define standalone tasks solely for writing unit or automated tests. If a task requires a test, set `requires_test: true` and define how success will be verified in the `test_plan`. All testing needs must be captured via `requires_test`, never by creating separate test-only tasks.
 
 ---
 
@@ -30,6 +32,7 @@
 | `role_assignee`      | `ENGINEERING`, `DESIGN`, `HUMAN`                        |
 | `execution_mode`     | `CONTAINER` (default), `HOST`                           |
 | `execution_schedule` | `ONCE` (default), `DAEMON`, `HOURLY`, `DAILY`, `WEEKLY` |
+| `timeout_seconds`      | integer (optional) – maximum execution time in seconds. Task fails if exceeded. |
 
 ---
 
@@ -48,11 +51,10 @@
       validation check, or manual review process). This is strictly required for every task.
     - `role_assignee` (string): who performs the task. Valid values: `"ENGINEERING"`, `"DESIGN"`, or `"HUMAN"`.
     - `phase` (string): `"BUILD"` for build-time, `"EXECUTE"` for run-time. Required for all engineering tasks.
-    - `execution_mode` (string): Optional. One of `"HOST"` or `"CONTAINER"`. Defaults to `"CONTAINER"` if omitted.
+    - `execution_mode` (string): Optional. One of `"HOST"` or `"CONTAINER"`. Defaults to `"HOST"` if omitted.
         - Use `"HOST"` for tasks that generate, build, or validate Docker containers or runtime environments.
         - Use `"CONTAINER"` for tasks that execute within a previously built containerized environment.
-    - `requires_test` (boolean): Optional. Indicates whether this task must be accompanied by an automated test or
-      validation script.
+    - `requires_test` (boolean): Optional. Indicates whether this task must be accompanied by an automated test or validation script.
         - Defaults to `true` for most `"ENGINEERING"` tasks involving application logic.
         - Set to `false` for infra/setup tasks like building containers, pushing to ECR, or creating environments.
         - Even when `false`, a `test_plan` is still required to describe success verification.
@@ -63,6 +65,7 @@
       and are not valid `task_type` values.
     - `execution_schedule` (string): Optional. One of `"ONCE"` (default), `"DAEMON"`, `"HOURLY"`, `"DAILY"`, `"WEEKLY"`.
       Specifies how often this task should run if it is an execution task.
+    timeout_seconds          # optional; max duration (in seconds) before task is killed & marked failed
     - `execution_start_time` (string): Optional. ISO 8601 datetime string indicating when the task should first run. For
       recurring tasks (`hourly`, `daily`, `weekly`), this defines the starting point for the cadence.
     - Optionally: `validated_requirements` (array): requirement IDs this task validates.
@@ -80,6 +83,7 @@ phase
 task_type          # required when phase == EXECUTE
 execution_mode     # optional, default CONTAINER
 execution_schedule # optional, default ONCE
+timeout_seconds          # optional; max duration (in seconds) before task is killed & marked failed
 execution_start_time
 requires_test
 completion_criteria
@@ -94,6 +98,9 @@ design_handoff
     - use `HOST` for building/validating container images.  If a Task call "agent_tools.clone_template_project_to_sandbox()", it must be run on the HOST
 - `execution_schedule` – defaults to `ONCE`; set cadence for recurring jobs
 - `requires_test` – defaults to `true` for application‑logic tasks; even when `false`, a `test_plan` is mandatory
+- `timeout_seconds` – optional; defines the maximum allowed run time (in seconds) for this task.
+    - If execution exceeds this duration, the task is killed and marked as failed with a `TIMEOUT` result.
+    - Not recommended for `"DAEMON"` or `"WEEKLY"` tasks.
 
 Tasks must behave like pure functions: communicate **only** via `depends_on`, `inputs`, and `output`.
 
@@ -176,6 +183,7 @@ Tasks must behave like pure functions: communicate **only** via `depends_on`, `i
       "role_assignee": "ENGINEERING",
       "phase": "BUILD",
       "requires_test": false,
+      "timeout_seconds": 600,
       "completion_criteria": [
         "image appears in ECR",
         "pytest passes"
@@ -218,3 +226,5 @@ Tasks must behave like pure functions: communicate **only** via `depends_on`, `i
 - never assume success – define how to *measure* it
 - keep language precise; use en‑dashes, bullet lists, and one‑line rules
 - Use `iam_propose_policy_patch()` to add least‑privilege statements when a task needs new AWS permissions.
+- Always define a `timeout_seconds` for bounded execution tasks unless it is explicitly meant to run indefinitely (e.g., daemon).
+- Choose timeouts conservatively—long enough to allow normal completion, short enough to detect hangs.

@@ -103,7 +103,7 @@ Raises:
     RuntimeError: If no valid AWS credentials are found or the client initialization fails."""
     pass
 
-def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None=None) -> str:
+def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None=None, role_arn_to_assume: str | None=None) -> str:
     """Executes an AWS CLI command within the business's sandbox context.
 
 The command is validated to ensure all filesystem-related arguments stay within
@@ -114,6 +114,7 @@ Args:
     business_id (uuid.UUID): Unique ID of the business issuing the command.
     command (list[str]): AWS CLI command and arguments (e.g., ["s3", "ls"]).
     input_data (str | None): Optional string to pass to stdin.
+    role_arn_to_assume (str | None): Optional IAM role ARN to assume for the command execution.
 
 Returns:
     str: Trimmed stdout output from the command.
@@ -122,10 +123,10 @@ Raises:
     CommandExecutionError: If the command fails or violates sandbox constraints."""
     pass
 
-def aws_ecr_login(business_id: uuid.UUID, aws_region: str, aws_account_id: str) -> None:
+def aws_ecr_login(business_id: uuid.UUID, aws_region: str, aws_account_id: str, role_arn_to_assume: Optional[str]=None) -> None:
     """Authenticates Docker with AWS Elastic Container Registry (ECR).
 
-This function first retrieves an ECR login password using the AWS CLI,
+This function retrieves an ECR authorization token using boto3 with optional role assumption,
 then logs Docker into the ECR registry for the specified AWS account and region.
 All shell commands are sandboxed using the business's designated directory.
 
@@ -133,6 +134,7 @@ Args:
     business_id (uuid.UUID): Unique ID of the business performing the login.
     aws_region (str): AWS region for the ECR registry (e.g., "us-west-2").
     aws_account_id (str): AWS account ID hosting the ECR registry.
+    role_arn_to_assume (Optional[str]): Optional IAM role ARN to assume for authentication.
 
 Raises:
     CommandExecutionError: If retrieving the ECR login password or the Docker login fails."""

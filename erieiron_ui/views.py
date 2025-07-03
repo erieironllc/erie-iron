@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
 from erieiron_common import common
-from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants
+from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionMode, TaskExecutionSchedule
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_ui.view_utils import send_response, redirect, rget
@@ -60,15 +60,16 @@ def view_initiative(request, initiative_id):
 
     tasks = list(initiative.tasks.all())
 
+
     sdt_dict = {
         sdt.id: sdt
-        for sdt in SelfDrivingTask.objects.filter(related_task__in=tasks).order_by("created_at")
+        for sdt in SelfDrivingTask.objects.filter(task__in=tasks).order_by("created_at")
     }
 
     task_sdti_dict = defaultdict(list)
-    for sdti in SelfDrivingTaskIteration.objects.filter(task__related_task__in=tasks).order_by("timestamp"):
-        sdt: SelfDrivingTask = sdt_dict.get(sdti.task_id)
-        task_sdti_dict[sdt.related_task_id].append(sdti)
+    for sdti in SelfDrivingTaskIteration.objects.filter(self_driving_task__task=tasks).order_by("timestamp"):
+        sdt: SelfDrivingTask = sdt_dict.get(sdti.self_driving_task_id)
+        task_sdti_dict[sdt.task_id].append(sdti)
 
     task_execution_dict = defaultdict(list)
     for te in TaskExecution.objects.filter(task__in=tasks).order_by("executed_time"):
@@ -100,11 +101,19 @@ def view_initiative(request, initiative_id):
         for task in task_type_tasks[status]:
             task_datas.append(task)
 
+    # Get all running processes for tasks in this initiative
+    running_processes = list(RunningProcess.objects.filter(
+        task_execution__task__initiative=initiative
+    ).order_by('-started_at'))
+    running_processes_count = RunningProcess.objects.filter(task_execution__task__initiative=initiative, is_running=True).count()
+
     return send_response(
         request, "initiative.html",
         {
             "tasks": task_datas,
-            "initiative": initiative
+            "initiative": initiative,
+            "running_processes_count": running_processes_count,
+            "running_processes": running_processes
         },
         breadcrumbs=[
             (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name)
@@ -119,7 +128,7 @@ def view_task(request, task_id):
 
     # Add iteration and execution data for related tasks
     def add_task_metadata(t):
-        self_driving_task = SelfDrivingTask.objects.filter(related_task_id=t.id).first()
+        self_driving_task = SelfDrivingTask.objects.filter(task_id=t.id).first()
         if self_driving_task:
             first_iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
             t.first_iteration_time = first_iteration.timestamp if first_iteration else None
@@ -137,7 +146,7 @@ def view_task(request, task_id):
     for blocking_task in task.dependent_tasks.all():
         add_task_metadata(blocking_task)
 
-    self_driving_task = SelfDrivingTask.objects.filter(related_task_id=task_id).first()
+    self_driving_task = SelfDrivingTask.objects.filter(task_id=task_id).first()
     if self_driving_task:
         iterations = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")
     else:
@@ -146,9 +155,12 @@ def view_task(request, task_id):
     task_executions = list(task.taskexecution_set.order_by("-executed_time"))
 
     running_processes = list(RunningProcess.objects.filter(
-        iteration__task__related_task=task,
-        is_running=True
+        task_execution__task=task
     ))
+    running_processes_count = RunningProcess.objects.filter(
+        task_execution__task=task,
+        is_running=True
+    ).count()
 
     return send_response(
         request, "task.html",
@@ -157,7 +169,14 @@ def view_task(request, task_id):
             "iterations": iterations,
             "self_driving_task": self_driving_task,
             "task": task,
-            "running_processes": running_processes
+            "running_processes": running_processes,
+            "running_processes_count": running_processes_count,
+            "task_status_choices": TaskStatus.choices(),
+            "task_assignee_choices": TaskAssigneeType.choices(),
+            "task_phase_choices": TaskPhase.choices(),
+            "task_execution_type_choices": TaskExecutionType.choices(),
+            "task_execution_mode_choices": TaskExecutionMode.choices(),
+            "task_execution_schedule_choices": TaskExecutionSchedule.choices()
         },
         breadcrumbs=[
             (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
@@ -169,28 +188,51 @@ def view_task(request, task_id):
 def view_self_driver_iteration(request, iteration_id):
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
 
-    task = iteration.task.related_task
+    task = iteration.self_driving_task.task
     initiative = task.initiative
     business = initiative.business
 
     total_price, total_tokens = iteration.get_llm_cost()
-    
+
     # Get running processes for this specific iteration
     running_processes = RunningProcess.objects.filter(
-        iteration=iteration,
-        is_running=True
-    )
+        task_execution__iteration=iteration
+    ).order_by("-started_at")
+
+    running_processes_count = RunningProcess.objects.filter(task_execution__iteration=iteration, is_running=True).count()
+
+    previous_evaluations = []
+
+    try:
+        previous_iteration: SelfDrivingTaskIteration = iteration.get_previous_by_timestamp()
+        test = previous_iteration.self_driving_task.task.initiative_id
+        previous_evaluations = previous_iteration.evaluation_json
+        if isinstance(previous_evaluations, dict):
+            previous_evaluations = previous_evaluations.get("evaluation")
+    except:
+        previous_iteration = None
+
+    try:
+        next_iteration: SelfDrivingTaskIteration = iteration.get_next_by_timestamp()
+        test = next_iteration.self_driving_task.task.initiative_id
+    except:
+        next_iteration = None
 
     return send_response(
         request, "iteration.html",
         {
+            "iteration": iteration,
+            "previous_iteration": previous_iteration,
+            "next_iteration": next_iteration,
+            "previous_evaluations": previous_evaluations,
+            "running_processes_count": running_processes_count,
+
             "task": task,
             "initiative": initiative,
             "business": business,
 
             "total_price": total_price,
             "total_tokens": total_tokens,
-            "iteration": iteration,
             "running_processes": running_processes
         },
         breadcrumbs=[
@@ -204,8 +246,15 @@ def view_self_driver_iteration(request, iteration_id):
 def action_resolve_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
 
+    try:
+        resolve_data = json.loads(rget(request, "output"))
+    except:
+        resolve_data = {
+            'resolve_data': rget(request, "output")
+        }
+
     task.create_execution().resolve(
-        json.loads(rget(request, "output"))
+        resolve_data
     )
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.COMPLETE
@@ -438,6 +487,88 @@ def action_update_task_guidance(request, task_id):
         return redirect(reverse('view_task', args=[task_id]))
 
 
+def action_update_task(request, task_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        task = get_object_or_404(Task, pk=task_id)
+
+        # Get form data
+        description = rget(request, 'description', '').strip()
+        risk_notes = rget(request, 'risk_notes', '').strip()
+        test_plan = rget(request, 'test_plan', '').strip()
+        timeout_seconds = rget(request, 'timeout_seconds', '').strip()
+        max_budget_usd = rget(request, 'max_budget_usd', '').strip()
+        status = rget(request, 'status', '').strip()
+        role_assignee = rget(request, 'role_assignee', '').strip()
+        phase = rget(request, 'phase', '').strip()
+        task_type = rget(request, 'task_type', '').strip()
+        execution_mode = rget(request, 'execution_mode', '').strip()
+        execution_schedule = rget(request, 'execution_schedule', '').strip()
+        execution_start_time = rget(request, 'execution_start_time', '').strip()
+        requires_test = request.POST.get('requires_test') == 'on'
+
+        # Prepare update data
+        update_data = {
+            'description': description,
+            'risk_notes': risk_notes,
+            'test_plan': test_plan,
+            'status': status,
+            'role_assignee': role_assignee,
+            'phase': phase,
+            'execution_mode': execution_mode,
+            'execution_schedule': execution_schedule,
+            'requires_test': requires_test
+        }
+
+        # Handle optional fields
+        if timeout_seconds:
+            try:
+                update_data['timeout_seconds'] = int(timeout_seconds or 0)
+            except ValueError:
+                messages.error(request, 'Invalid timeout value.')
+                return redirect(reverse('view_task', args=[task_id]) + '#edit')
+        else:
+            update_data['timeout_seconds'] = None
+
+        if max_budget_usd:
+            try:
+                update_data['max_budget_usd'] = float(max_budget_usd)
+            except ValueError:
+                messages.error(request, 'Invalid budget value.')
+                return redirect(reverse('view_task', args=[task_id]) + '#edit')
+        else:
+            update_data['max_budget_usd'] = None
+
+        if task_type:
+            update_data['task_type'] = task_type
+        else:
+            update_data['task_type'] = None
+
+        if execution_start_time:
+            from django.utils import timezone
+            try:
+                update_data['execution_start_time'] = timezone.datetime.fromisoformat(execution_start_time.replace('T', ' '))
+            except ValueError:
+                messages.error(request, 'Invalid execution start time format.')
+                return redirect(reverse('view_task', args=[task_id]) + '#edit')
+        else:
+            update_data['execution_start_time'] = None
+
+        # Update the task
+        Task.objects.filter(id=task_id).update(**update_data)
+
+        messages.success(request, 'Task updated successfully!')
+        return redirect(reverse('view_task', args=[task_id]) + '#edit')
+    except Task.DoesNotExist:
+        messages.error(request, 'Task not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error updating task: {str(e)}')
+        return redirect(reverse('view_task', args=[task_id]))
+
+
 def action_kill_process(request, process_id):
     if request.method != 'POST':
         raise Exception()
@@ -446,11 +577,11 @@ def action_kill_process(request, process_id):
         running_process = get_object_or_404(RunningProcess, pk=process_id)
 
         # Determine redirect target based on whether process has an iteration or TaskExecution
-        if running_process.iteration:
+        if running_process.task_execution.iteration:
             # Redirect back to the iteration page
-            redirect_url = reverse('view_self_driver_iteration', args=[running_process.iteration.id]) + '#processes'
-        elif common.get(running_process, ["iteration", "task", "related_task_id"]):
-            task_id = running_process.iteration.task.related_task_id
+            redirect_url = reverse('view_self_driver_iteration', args=[running_process.task_execution.iteration_id]) + '#processes'
+        elif running_process.task_execution.task:
+            task_id = running_process.task_execution.task.id
             redirect_url = reverse('view_task', args=[task_id]) + '#processes'
         else:
             redirect_url = reverse('view_businesses')
@@ -475,7 +606,7 @@ def action_delete_iteration(request, iteration_id):
 
     try:
         iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
-        task_id = iteration.task.related_task.id
+        task_id = iteration.self_driving_task.task.id
 
         iteration.delete()
 

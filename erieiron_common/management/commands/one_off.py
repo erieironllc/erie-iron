@@ -55,9 +55,9 @@ class Command(BaseCommand):
             status=TaskStatus.COMPLETE
         )
 
-        CodeFile.objects.filter(codeversion__task_iteration__task__related_task__id=task_id).delete()
-        SelfDrivingTask.objects.filter(selfdrivingtaskbestiteration__iteration__task__related_task__id=task_id).delete()
-        SelfDrivingTaskIteration.objects.filter(task__related_task_id=task_id).delete()
-        SelfDrivingTaskBestIteration.objects.filter(task__related_task_id=task_id).delete()
+        CodeFile.objects.filter(codeversion__task_iteration__task__task__id=task_id).delete()
+        SelfDrivingTask.objects.filter(selfdrivingtaskbestiteration__iteration__task__task__id=task_id).delete()
+        SelfDrivingTaskIteration.objects.filter(task__task_id=task_id).delete()
+        SelfDrivingTaskBestIteration.objects.filter(task__task_id=task_id).delete()
 
         self_driving_coder_agent.execute(task_id=task_id)

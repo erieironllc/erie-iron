@@ -51,6 +51,7 @@ tiktoken
 torch<2.1.2
 torchvggish
 transformers
+Pygments
 
 cfn-lint
 

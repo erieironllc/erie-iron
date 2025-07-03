@@ -10,11 +10,24 @@ from django import template
 from django.db import models
 from django.utils.html import strip_tags
 from django.utils.safestring import mark_safe
+from pygments import highlight
+from pygments.formatters.html import HtmlFormatter
+from pygments.lexers import get_lexer_by_name
 
 from erieiron_common import common, date_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 
 register = template.Library()
+
+
+@register.filter(name='highlight')
+def highlight_code(code, lang='python'):
+    try:
+        lexer = get_lexer_by_name(lang, stripall=True)
+        formatter = HtmlFormatter(linenos=True, cssclass="highlight")
+        return mark_safe(highlight(code, lexer, formatter))
+    except Exception as e:
+        return code
 
 
 @register.filter(name='markdown')
