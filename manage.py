@@ -3,7 +3,7 @@
 import os
 import sys
 
-import settings
+from erieiron_common import settings_common
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     argv = [a for a in argv if "erieiron-env" not in a]
 
     from erieiron_common.aws_utils import assert_account_name
-    assert_account_name(settings.REQUIRED_ACCOUNT_NAME)
+    assert_account_name(settings_common.REQUIRED_ACCOUNT_NAME)
 
     try:
         from django.core.management import execute_from_command_line
