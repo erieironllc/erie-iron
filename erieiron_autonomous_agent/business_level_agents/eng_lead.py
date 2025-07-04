@@ -2,8 +2,9 @@ from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_common import common
-from erieiron_common.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionSchedule, InitiativeType
-from erieiron_common.models import (
+from erieiron_common.enums import TaskPhase, TaskExecutionType, TaskExecutionSchedule, InitiativeType
+from erieiron_autonomous_agent.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType
+from erieiron_autonomous_agent.models import (
     Initiative,
     Task,
     ProductRequirement,

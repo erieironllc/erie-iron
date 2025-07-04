@@ -1,6 +1,7 @@
+from erieiron_autonomous_agent.models import Business
+from erieiron_autonomous_agent.models import BusinessAnalysis, BusinessLegalAnalysis
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
-from erieiron_common.models import Business, BusinessAnalysis, BusinessLegalAnalysis
 
 
 def on_analysis_requested(business_id):

@@ -2,9 +2,11 @@ from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType, BusinessGuidanceRating, BusinessStatus, TrafficLight
+from erieiron_common.enums import PubSubMessageType
+from erieiron_autonomous_agent.enums import BusinessGuidanceRating, BusinessStatus, TrafficLight
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Business, BusinessGuidance
+from erieiron_autonomous_agent.models import Business
+from erieiron_autonomous_agent.models import BusinessGuidance
 
 
 def exec_board_chair_tasks():

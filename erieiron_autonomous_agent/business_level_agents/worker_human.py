@@ -1,6 +1,6 @@
 import settings
 from erieiron_common import aws_utils
-from erieiron_common.models import Task
+from erieiron_autonomous_agent.models import Task
 
 
 def do_work(task_id):

@@ -1,4 +1,3 @@
-import json
 import logging
 
 from django.db import transaction
@@ -6,10 +5,11 @@ from django.db.models import F, Value
 from django.db.models.functions import Coalesce
 
 import settings
+from erieiron_autonomous_agent.enums import TaskAssigneeType, TaskStatus
+from erieiron_autonomous_agent.models import Task
 from erieiron_common import aws_utils
-from erieiron_common.enums import TaskAssigneeType, PubSubMessageType, TaskStatus
+from erieiron_common.enums import PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Task
 
 ASSIGNEE_TO_MSGTYPE = {
     TaskAssigneeType.DESIGN: PubSubMessageType.DESIGN_WORK_REQUESTED,

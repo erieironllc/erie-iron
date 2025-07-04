@@ -205,15 +205,24 @@ class PubSubMessageType(ErieEnum):
     CHAT_INTERACTION_INITIATED = auto()
     CHAT_CHANNEL_LLM = auto()
 
-    PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
-    PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     BUSINESS_IDEA_SUBMITTED = auto()
-    RESOURCE_PLANNING_REQUESTED = auto()
+
+    # Autonomous agent message types
     ANALYSIS_REQUESTED = auto()
+    ANALYSIS_COMPLETED = auto()
     ANALYSIS_ADDED = auto()
     BOARD_GUIDANCE_REQUESTED = auto()
     BOARD_GUIDANCE_UPDATED = auto()
-
+    BUSINESS_GUIDANCE_UPDATED = auto()
+    PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
+    PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
+    RESOURCE_PLANNING_REQUESTED = auto()
+    TASK_ASSIGNED = auto()
+    TASK_UPDATED = auto()
+    TASK_BLOCKED = auto()
+    TASK_COMPLETED = auto()
+    TASK_FAILED = auto()
+    TASK_SPEND = auto()
     CEO_DIRECTIVES_ISSUED = auto()
     PRODUCT_INITIATIVES_REQUESTED = auto()
     INITIATIVE_DEFINITION_REQUESTED = auto()
@@ -221,12 +230,14 @@ class PubSubMessageType(ErieEnum):
     CODING_WORK_REQUESTED = auto()
     DESIGN_WORK_REQUESTED = auto()
     HUMAN_WORK_REQUESTED = auto()
-
-    TASK_UPDATED = auto()
-    TASK_BLOCKED = auto()
-    TASK_COMPLETED = auto()
-    TASK_FAILED = auto()
-    TASK_SPEND = auto()
+    ENGINEERING_PLANNING_REQUESTED = auto()
+    PRODUCT_PLANNING_REQUESTED = auto()
+    INITIATIVE_PLANNING_REQUESTED = auto()
+    ITERATION_PLANNING_REQUESTED = auto()
+    ITERATION_WORK_REQUESTED = auto()
+    SELF_DRIVING_CODER_REQUESTED = auto()
+    SELF_DRIVING_CODER_UPDATED = auto()
+    SELF_DRIVING_CODER_COMPLETED = auto()
 
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
@@ -370,41 +381,10 @@ class BusinessIdeaSource(ErieEnum):
     BUSINESS_FINDER_AGENT = auto()
 
 
-class TaskAssigneeType(ErieEnum):
-    HUMAN = auto()
-    ENGINEERING = auto()
-    DESIGN = auto()
-
-
-class BusinessStatus(ErieEnum):
-    IDEA = auto()
-    ACTIVE = auto()
-    PAUSED = auto()
-    SHUTDOWN = auto()
-
-
-class BusinessGuidanceRating(ErieEnum):
-    MAINTAIN = auto()
-    INCREASE_BUDGET = auto()
-    DECREASE_BUDGET = auto()
-    SHUTDOWN = auto()
-
-
-class TrafficLight(ErieEnum):
-    GREEN = auto()
-    YELLOW = auto()
-    RED = auto()
-
-
 class CapabilityStatus(ErieEnum):
     # obsolete
     PENDING = auto()
     pass
-
-
-class TaskExecutionMode(ErieEnum):
-    HOST = auto()
-    CONTAINER = auto()
 
 
 class TaskExecutionType(ErieEnum):
@@ -425,24 +405,6 @@ class TaskExecutionSchedule(ErieEnum):
 class TaskPhase(ErieEnum):
     EXECUTE = auto()
     BUILD = auto()
-
-
-class TaskStatus(ErieEnum):
-    BLOCKED = auto()
-    NOT_STARTED = auto()
-    IN_PROGRESS = auto()
-    COMPLETE = auto()
-    FAILED = auto()
-
-    @staticmethod
-    def get_sorted_status():
-        return [
-            TaskStatus.IN_PROGRESS,
-            TaskStatus.BLOCKED,
-            TaskStatus.NOT_STARTED,
-            TaskStatus.COMPLETE,
-            TaskStatus.FAILED
-        ]
 
 
 class LlcStructure(ErieEnum):

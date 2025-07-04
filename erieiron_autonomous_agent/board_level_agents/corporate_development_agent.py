@@ -4,7 +4,7 @@ from pathlib import Path
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
 from erieiron_common.enums import Constants, BusinessIdeaSource
-from erieiron_common.models import Business
+from erieiron_autonomous_agent.models import Business
 
 
 def find_new_business_opportunity(payload):
