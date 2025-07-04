@@ -1,0 +1,46 @@
+# Include documentation and metadata files
+include README.md
+include LICENSE
+include requirements-common.txt
+include setup.py
+include pyproject.toml
+
+# Include all Python files in the erieiron_common package
+recursive-include erieiron_common *.py
+
+# Include Django migrations
+recursive-include erieiron_common/migrations *.py
+
+# Include JSON files (message type configurations, etc.)
+recursive-include erieiron_common *.json
+
+# Include package data and configuration files
+recursive-include erieiron_common/message_queue *.json
+
+# Exclude test files and development artifacts
+recursive-exclude * __pycache__
+recursive-exclude * *.pyc
+recursive-exclude * *.pyo
+recursive-exclude * *.orig
+recursive-exclude * *.rej
+recursive-exclude * .DS_Store
+recursive-exclude * .git*
+recursive-exclude * *.egg-info
+
+# Exclude IDE and editor files
+exclude .vscode
+exclude .idea
+recursive-exclude * .vscode
+recursive-exclude * .idea
+
+# Exclude development and testing files
+exclude pytest.ini
+exclude tox.ini
+exclude .coverage
+exclude coverage.xml
+
+# Exclude build artifacts
+exclude build
+exclude dist
+recursive-exclude build *
+recursive-exclude dist *
