@@ -1,9 +1,8 @@
 from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common.models import Business, BusinessCapacityAnalysis
-from erieiron_common.models import BusinessKPI, BusinessGoal, BusinessCeoDirective
-from erieiron_common.models import Initiative, ProductRequirement
+from erieiron_autonomous_agent.models import Business
+from erieiron_autonomous_agent.models import BusinessCapacityAnalysis, BusinessKPI, BusinessGoal, BusinessCeoDirective, Initiative, ProductRequirement
 
 
 def define_initiatives(business_id):
@@ -98,6 +97,7 @@ def process_response(business, product_lead_response):
 
 
 def ingest_initiative_data(business, initiative_data, initiative_id=None):
+    updated_or_created_initiative_ids = []
     initiative_token = initiative_data["initiative_token"]
     initiative, created = Initiative.objects.update_or_create(
         id=initiative_id or initiative_token,
@@ -116,6 +116,7 @@ def ingest_initiative_data(business, initiative_data, initiative_id=None):
         "expected_kpi_lift": initiative_data.get("expected_kpi_lift", {})
     }.items()):
         updated_or_created_initiative_ids.append(initiative.id)
+
     initiative.linked_kpis.set(
         list(BusinessKPI.objects.filter(kpi_id__in=initiative_data.get("linked_kpis", [])))
     )

@@ -79,6 +79,7 @@ def get_logging(debug_sql_statements=False):
 
     return conf
 
+
 def get_secret_key(config):
     try:
         return get_secret("DJANGO_SECRET_KEY")["DJANGO_SECRET_KEY"]

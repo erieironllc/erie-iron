@@ -1,9 +1,9 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
 from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, task_manager, worker_human
 from erieiron_common.enums import PubSubMessageType as T
-from erieiron_common.enums import TaskStatus
+from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
-from erieiron_common.models import Task
+from erieiron_autonomous_agent.models import Task
 
 
 @pubsub_workflow
@@ -12,10 +12,10 @@ def board_workflow(pubsub_manager: PubSubManager):
     pubsub_manager.on(
         # T.EVERY_WEEK,
         # board_chair.exec_board_chair_tasks
-    # ).on(
-    #     T.EVERY_DAY,
-    #     board_chair.exec_business_analysis
-    # ).on(
+        # ).on(
+        #     T.EVERY_DAY,
+        #     board_chair.exec_business_analysis
+        # ).on(
         [T.ANALYSIS_ADDED, T.BOARD_GUIDANCE_REQUESTED],
         board_chair.on_board_guidance_requested,
         T.BOARD_GUIDANCE_UPDATED

@@ -7,10 +7,12 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
+from erieiron_autonomous_agent.enums import TaskStatus, TaskAssigneeType, TaskExecutionMode
+from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_common import common
-from erieiron_common.enums import TaskStatus, PubSubMessageType, BusinessIdeaSource, Constants, TaskAssigneeType, TaskPhase, TaskExecutionType, TaskExecutionMode, TaskExecutionSchedule
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskPhase, TaskExecutionType, TaskExecutionSchedule
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import Task, Initiative, Business, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
+from erieiron_autonomous_agent.models import Business
 from erieiron_ui.view_utils import send_response, redirect, rget
 
 
@@ -59,7 +61,6 @@ def view_initiative(request, initiative_id):
     business = initiative.business
 
     tasks = list(initiative.tasks.all())
-
 
     sdt_dict = {
         sdt.id: sdt
@@ -525,6 +526,7 @@ def action_update_task(request, task_id):
         # Handle optional fields
         if timeout_seconds:
             try:
+                # noinspection PyTypedDict
                 update_data['timeout_seconds'] = int(timeout_seconds or 0)
             except ValueError:
                 messages.error(request, 'Invalid timeout value.')
@@ -534,6 +536,7 @@ def action_update_task(request, task_id):
 
         if max_budget_usd:
             try:
+                # noinspection PyTypedDict
                 update_data['max_budget_usd'] = float(max_budget_usd)
             except ValueError:
                 messages.error(request, 'Invalid budget value.')

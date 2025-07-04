@@ -1,8 +1,7 @@
 from django.db import transaction
 
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common.models import Task
-from erieiron_common.models import TaskDesignRequirements, DesignComponent
+from erieiron_autonomous_agent.models import Task, TaskDesignRequirements, DesignComponent
 
 
 def do_work(task_id):

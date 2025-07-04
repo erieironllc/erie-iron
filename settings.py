@@ -48,7 +48,8 @@ BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
 ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
-    'erieiron_common',
+    'erieiron_common.apps.ErieironCommonConfig',
+    'erieiron_autonomous_agent.apps.ErieironAutonomousAgentConfig',
     'erieiron_ui',
     "django.contrib.admin",
     "django.contrib.auth",

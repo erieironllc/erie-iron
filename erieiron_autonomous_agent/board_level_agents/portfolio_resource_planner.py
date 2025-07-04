@@ -2,9 +2,10 @@ import json
 
 from django.db import transaction
 
+from erieiron_autonomous_agent.models import BusinessBankBalanceSnapshot, BusinessBankBalanceSnapshotAccount, BusinessCapacityAnalysis
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
-from erieiron_common import bank_utils
-from erieiron_common.models import Business, BusinessCapacityAnalysis, BusinessBankBalanceSnapshot, BusinessBankBalanceSnapshotAccount
+from erieiron_autonomous_agent.utils import bank_utils
+from erieiron_autonomous_agent.models import Business
 
 
 def on_resource_planning_requested(business_id):

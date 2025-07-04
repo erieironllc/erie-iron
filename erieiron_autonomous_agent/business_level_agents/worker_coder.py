@@ -1,5 +1,5 @@
+from erieiron_autonomous_agent.models import Task
 from erieiron_common import common
-from erieiron_common.models import Task, SelfDrivingTask
 
 
 def do_work(task_id):

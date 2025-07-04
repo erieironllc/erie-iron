@@ -1,115 +1,140 @@
-# About Erie Iron
-Erie Iron is an experimental platform for building long-running autonomous AI agents with real-world objectives, starting with monetization. 
+# Erie Iron Common
 
-It serves as both a proving ground for technical innovation in agent orchestration and a personal path toward financial independence through applied AI.
-# Erie Iron
+A comprehensive utilities package providing common infrastructure, utilities, and shared functionality for Erie Iron applications.
 
-Erie Iron is an experimental platform for building long-running autonomous AI agents with real-world objectives—starting with monetization.
+## Features
 
-## 🎯 Mission
+- **Django Integration**: Models, utilities, and infrastructure for Django applications
+- **AWS Integration**: Comprehensive AWS utilities including S3, DynamoDB, CloudWatch, and more
+- **LLM APIs**: Unified interfaces for OpenAI, Anthropic Claude, Google Gemini, and other language models
+- **Message Queue**: PubSub messaging system for distributed application architecture
+- **Chat Engine**: Conversational AI infrastructure and chat management
+- **Common Utilities**: Shared functions for JSON encoding, date handling, caching, and more
 
-Erie Iron exists to:
-- Generate profit legally and ethically
-- Run as autonomously as possible
-- Keep JJ (the human stakeholder) informed with daily updates and insights
+## Installation
 
-It is both a proving ground for technical innovation in agent-based systems and a personal path toward financial independence through applied AI.
+Install from PyPI:
 
----
+```bash
+pip install erieiron-common
+```
 
-## 🏗️ System Architecture
+Or install with optional dependencies:
 
-Erie Iron is composed of three key components:
+```bash
+# Install with all AWS features
+pip install erieiron-common[aws]
 
-### 1. System Agent
-- Oversees the entire Erie Iron system, acting as the CEO.
-- Identifies and initiates business opportunities.
-- Evaluates ongoing business health and shuts down underperforming or high-risk ventures.
-- Sends JJ a daily 7am email summary.
+# Install with machine learning features
+pip install erieiron-common[ml]
 
-### 2. Business Manager
-- Manages the lifecycle of each business.
-- Develops business plans, tracks KPIs, and executes feedback loops.
-- Interfaces with the Capability Manager to request and consume capabilities.
-- Initiates shutdowns when plans fail or risk is unacceptable.
+# Install with LLM API features
+pip install erieiron-common[llm]
 
-### 3. Capability Manager
-- Provides reusable tools (“capabilities”) that businesses use.
-- Builds capabilities autonomously or escalates to JJ when needed.
-- Tracks performance, cost, and escalation states for each capability.
+# Install with Google Cloud Platform features
+pip install erieiron-common[gcp]
 
----
+# Install with development tools
+pip install erieiron-common[dev]
 
-## 🔁 Execution Loop
+# Install everything
+pip install erieiron-common[all]
+```
 
-1. System Agent identifies a business opportunity.
-2. Business Manager creates and launches the business.
-3. Business requests capabilities from the Capability Manager.
-4. Capability Manager responds, builds, or escalates.
-5. Business evaluates results, adjusts plans, or shuts down.
-6. System Agent reports daily status to JJ.
+Install from source:
 
----
+```bash
+git clone https://github.com/erieiron/erieiron-common.git
+cd erieiron-common
+pip install -e .
+```
 
-## 📬 Daily Report
+## Quick Start
 
-Each morning, the System Agent emails JJ with:
-- Current profit outlook
-- Health and status of each business
-- Blocked tasks requiring JJ’s input
-- Learning materials related to active ventures
+### Basic Usage
 
----
+```python
+from erieiron_common import get_now, log_info
+from erieiron_common.enums import ErieEnum
 
-## 🧱 Current Focus
+# Use common utilities
+current_time = get_now()
+log_info("Application started")
 
-- Building autonomous capability management
-- Launching the first end-to-end business loop
-- Laying the groundwork for a scalable portfolio of money-making agents
+# Use enum base class
+class MyEnum(ErieEnum):
+    OPTION_A = "OPTION_A"
+    OPTION_B = "OPTION_B"
+```
 
----
+### Django Integration
 
-## ✅ Current Capabilities
+Add to your Django `INSTALLED_APPS`:
 
-- Identify required capabilities for a task
-- Search the web for related strategies or examples
-- Generate working Python code and scaffolding
-- Commit and push changes to GitHub
+```python
+INSTALLED_APPS = [
+    # ... your apps
+    'erieiron_common',
+]
+```
 
----
+Use common models:
 
-## 🧪 In Progress
+```python
+from erieiron_common.models import BaseErieIronModel
 
-- Task queue and execution log
-- Capability registry and memory
-- Retry and self-assessment loops
+class MyModel(BaseErieIronModel):
+    name = models.CharField(max_length=100)
+    # Automatically gets 'erieiron_mymodel' as table name
+```
 
----
+### AWS Utilities
 
-## 🧭 Roadmap: Future Goals
+```python
+from erieiron_common.aws_utils import get_aws_interface
 
-- Financial scoring of ideas
-- Fully autonomous end-to-end workflows
-- Agent memory & strategy refinement
-- Incorporate performance feedback loops (e.g., earnings, engagement)
-- Extend into non-code tasks (e.g., launching ads, forming LLCs)
+aws = get_aws_interface()
+aws.send_email(
+    subject="Test Email",
+    recipient="user@example.com",
+    body="Hello from Erie Iron!"
+)
+```
 
----
+### LLM APIs
 
-## 🔁 Execution Flow
+```python
+from erieiron_common.llm_apis import llm_interface
+from erieiron_common.llm_apis.llm_interface import LlmMessage
+from erieiron_common.enums import LlmMessageType
 
-1. Define a problem or goal.
-2. Run `identify_required_capabilities.py` to list needed tools.
-3. Check if the capability already exists.
-4. If missing, invoke `codegen_capability.py` to build it.
-5. Test and log the result.
-6. Push completed components to GitHub for transparency and reuse.
+messages = [
+    LlmMessage(LlmMessageType.USER, "Hello, how are you?")
+]
 
----
+response = llm_interface.chat(messages)
+print(response.text)
+```
 
-## 👁️‍🗨️ Notes for Future JJ
+### Message Queue
 
-- If something feels stuck, check the logs before debugging the code.
-- Don’t get fancy too fast—small, repeatable actions win.
-- If a task takes more than an hour, ask: *should Erie Iron be doing this instead of me?*
+```python
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
+from erieiron_common.enums import PubSubMessageType
 
+# Publish a message
+PubSubManager.publish(
+    PubSubMessageType.ANALYSIS_REQUESTED,
+    "business_123",
+    {"task": "analyze_business"}
+)
+```
+
+## License
+
+This project is licensed under the MIT License.
+
+## Support
+
+- Issues: https://github.com/erieiron/erieiron-common/issues
+- Email: tech@erieiron.com

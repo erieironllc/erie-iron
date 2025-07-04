@@ -43,7 +43,7 @@ def business_level_chat(
         user_messages: list[LlmMessage],
         text_output=False,
         debug=False,
-        output_schema:str=None,
+        output_schema: str = None,
         replacements: list[tuple[str, str]] = None
 ):
     if output_schema:
@@ -51,7 +51,7 @@ def business_level_chat(
     else:
         output_schema = BUSINESS_LEVEL_BASE_PATH / f"{common.ensure_list(system_prompt)[0]}.schema.json"
 
-    system_prompts = [ ]
+    system_prompts = []
     for sp in common.ensure_list(system_prompt):
         sp = assert_exists(BUSINESS_LEVEL_BASE_PATH / sp)
 
