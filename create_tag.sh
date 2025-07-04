@@ -13,3 +13,5 @@ TAG="v$VERSION"
 echo "Creating tag $TAG"
 git tag "$TAG"
 git push origin "$TAG"
+
+git tag -l
