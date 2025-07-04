@@ -7,6 +7,7 @@ config = settings_utils.get_config()
 DEBUG = config.get("DEBUG", True)
 
 BASE_URL = config.get("BASE_URL", "http://localhost:8000")
+STATIC_COMPILED_DIR = config('STATIC_COMPILED_DIR')
 REQUIRED_ACCOUNT_NAME = config('REQUIRED_ACCOUNT_NAME', default="Erie Iron LLC", cast=str)
 ALLOW_MPS_DEVICE = config('ALLOW_MPS_DEVICE', default=False, cast=bool)
 AWS_ACCOUNT_ID = config("AWS_ACCOUNT_ID")

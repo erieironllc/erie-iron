@@ -14,7 +14,7 @@ from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 
-from erieiron_common import common, date_utils
+from erieiron_common import common, date_utils, settings_common
 from erieiron_common.aws_utils import get_cloudwatch_url
 
 register = template.Library()
@@ -45,8 +45,7 @@ def dictsort_case_insensitive(value, arg):
 
 @register.simple_tag
 def timestamp_static(orig_filename):
-    static_url_root = "/static/compiled"
-    static_dir_root = f"{Path.cwd()}/erieiron_ui{static_url_root}"
+    static_dir_root = Path.cwd() / settings_common.STATIC_COMPILED_DIR
     filename, ext = common.get_filename_and_extension(f"{static_dir_root}/{orig_filename}")
 
     files_with_time = []
@@ -67,7 +66,7 @@ def timestamp_static(orig_filename):
         else:
             common.quietly_delete(file)
 
-    return f"{static_url_root}/{latest_matching_file}"
+    return f"./static/{static_dir_root.name}/{latest_matching_file}"
 
 
 @register.filter
