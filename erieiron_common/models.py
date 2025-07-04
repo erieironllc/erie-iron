@@ -11,8 +11,7 @@ from django.db import models, connection, transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 
-import settings
-from erieiron_common import common
+from erieiron_common import common, settings_common
 from erieiron_common import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
@@ -67,7 +66,7 @@ class Person(BaseErieIronModel):
         with transaction.atomic():
             return Person.objects.get_or_create(
                 name="System Account",
-                email=settings.SYSTEM_ACCOUNT_EMAIL,
+                email=settings_common.SYSTEM_ACCOUNT_EMAIL,
                 role=Role.SYSTEM
             )[0]
 
@@ -637,7 +636,7 @@ class PubSubEnvironment(BaseErieIronModel):
 class PubSubHanderInstance(BaseErieIronModel):
     id = models.TextField(primary_key=True, editable=False)
     environment = models.ForeignKey(PubSubEnvironment, null=False, on_delete=models.PROTECT)
-    env = models.TextField(null=False, db_index=True, default=settings.MESSAGE_QUEUE_ENV)
+    env = models.TextField(null=False, db_index=True, default=settings_common.MESSAGE_QUEUE_ENV)
     instance_status = models.TextField(null=False, default=PubSubHandlerInstanceStatus.NOT_AVAILABLE)
     max_db_connections = models.IntegerField(null=False, default=0)
     used_db_connections = models.IntegerField(null=False, default=0)

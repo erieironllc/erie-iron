@@ -4,8 +4,7 @@ from google.analytics.data_v1beta import BetaAnalyticsDataClient, RunReportReque
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
-import settings
-from erieiron_common import common
+from erieiron_common import common, settings_common
 
 
 def get_ga_client():
@@ -80,7 +79,7 @@ def get_ga4_rows(
 
 
 def get_property_path():
-    return f"properties/{settings.GOOGLE_ANALYTICS_PROPERTY_ID}"
+    return f"properties/{settings_common.GOOGLE_ANALYTICS_PROPERTY_ID}"
 
 
 def exec_biquery(sql: str):

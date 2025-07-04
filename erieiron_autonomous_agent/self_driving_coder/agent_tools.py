@@ -11,9 +11,8 @@ from typing import Optional, List
 import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError
 
-import settings
 from erieiron_autonomous_agent.models import Business
-from erieiron_common import common
+from erieiron_common import common, settings_common
 from erieiron_common.enums import LlmMessageType, PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -241,13 +240,13 @@ def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None =
         CommandExecutionError: If the command fails or violates sandbox constraints.
     """
     full_cmd = ["aws"] + command
-    
+
     # If role assumption is requested, set up the environment variable
     env_backup = None
     if role_arn_to_assume:
         env_backup = os.environ.get("AWS_ROLE_ARN")
         os.environ["AWS_ROLE_ARN"] = role_arn_to_assume
-    
+
     try:
         return run_shell_command(business_id, full_cmd, input_data=input_data)
     finally:
@@ -260,10 +259,10 @@ def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None =
 
 
 def aws_ecr_login(
-    business_id: uuid.UUID,
-    aws_region: str,
-    aws_account_id: str,
-    role_arn_to_assume: Optional[str] = None
+        business_id: uuid.UUID,
+        aws_region: str,
+        aws_account_id: str,
+        role_arn_to_assume: Optional[str] = None
 ) -> None:
     """
     Authenticates Docker with AWS Elastic Container Registry (ECR).
@@ -283,12 +282,12 @@ def aws_ecr_login(
     """
     # Get ECR client with optional role assumption
     ecr_client = get_boto3_client('ecr', region=aws_region, role_arn_to_assume=role_arn_to_assume)
-    
+
     # Get authorization token
     auth_data = ecr_client.get_authorization_token()["authorizationData"][0]
     token = base64.b64decode(auth_data["authorizationToken"]).decode("utf-8")
     username, password = token.split(":", 1)
-    
+
     print("retrieved aws ecr login password")
 
     docker_login_cmd = [
@@ -329,7 +328,7 @@ def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Op
 
     try:
         print("executing command:", " ".join(command))
-        
+
         # Handle input data - keep as string for text mode
         stdin_input = None
         use_text_mode = True
@@ -343,7 +342,7 @@ def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Op
             else:
                 stdin_input = str(input_data)
                 use_text_mode = True
-        
+
         result = subprocess.run(
             command,
             input=stdin_input,
@@ -376,8 +375,8 @@ def get_aws_metadata() -> dict:
         {'aws_account_id': '123456789012', 'aws_region': 'us-west-2'}
     """
     return {
-        "aws_account_id": settings.AWS_ACCOUNT_ID,
-        "aws_region": settings.AWS_DEFAULT_REGION_NAME
+        "aws_account_id": settings_common.AWS_ACCOUNT_ID,
+        "aws_region": settings_common.AWS_DEFAULT_REGION_NAME
     }
 
 
@@ -714,4 +713,3 @@ def clone_template_project_to_sandbox(business_id: uuid.UUID) -> Path:
     common.copy_missing_files(template_dir, destination_dir)
 
     return destination_dir
-

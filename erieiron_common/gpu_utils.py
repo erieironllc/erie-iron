@@ -5,7 +5,7 @@ from functools import lru_cache
 
 import torch
 
-import settings
+from erieiron_common import settings_common
 from erieiron_common.enums import ErieEnum
 
 
@@ -86,7 +86,7 @@ def get_free_gpu_memory():
 
 @lru_cache
 def supported_device() -> ComputeDevice:
-    if torch.backends.mps.is_available() and settings.ALLOW_MPS_DEVICE:
+    if torch.backends.mps.is_available() and settings_common.ALLOW_MPS_DEVICE:
         return ComputeDevice.MPS
     elif torch.cuda.is_available():
         return ComputeDevice.CUDA

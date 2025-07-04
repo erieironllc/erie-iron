@@ -14,8 +14,7 @@ from django.urls import reverse
 from jwt import PyJWKClient
 from pygments.formatters.html import HtmlFormatter
 
-import settings
-from erieiron_common import common, models, runtime_config
+from erieiron_common import common, models, runtime_config, settings_common
 from erieiron_common.common import build_absolute_uri
 from erieiron_common.enums import PersonAuthStatus, Role
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -183,7 +182,7 @@ def json_endpoint(function):
                     cookie_value,
                     max_age=COOKIE_AGE,
                     httponly=True,
-                    secure=not settings.DEBUG
+                    secure=not settings_common.DEBUG
                 )
 
             return response
@@ -294,10 +293,10 @@ def send_response(request, template, context=None, validate=False, status_code=2
     try:
         current_user = get_current_user(request)
         context['current_user'] = current_user
-        context['websocket_url'] = f"wss://{settings.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}?uid={current_user.pk}"
+        context['websocket_url'] = f"wss://{settings_common.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}?uid={current_user.pk}"
         context['consent_to_cookies'] = current_user.cookie_consent == 'accepted'
         context['current_user_id'] = current_user.id
-        context['is_dev_view'] = current_user.has_role(Role.DEVELOPER) and settings.DEBUG
+        context['is_dev_view'] = current_user.has_role(Role.DEVELOPER) and settings_common.DEBUG
     except:
         pass
 
@@ -320,14 +319,14 @@ def redirect(redirect_url, cookies=None):
                 cookie_value,
                 max_age=COOKIE_AGE,
                 httponly=True,
-                secure=not settings.DEBUG
+                secure=not settings_common.DEBUG
             )
 
     return response
 
 
 def get_cognito_domain():
-    return settings.COGNITO_DOMAIN
+    return settings_common.COGNITO_DOMAIN
 
 
 def get_cognito_tokens_from_authcode(code):
@@ -338,7 +337,7 @@ def get_cognito_tokens_from_authcode(code):
         },
         data={
             'grant_type': 'authorization_code',
-            'client_id': settings.COGNITO_CLIENT_ID,
+            'client_id': settings_common.COGNITO_CLIENT_ID,
             'code': code,
             'redirect_uri': build_absolute_uri("cognito_auth_callback")
         }
@@ -355,7 +354,7 @@ def get_cognito_tokens_from_authcode(code):
 def refresh_cognito_tokens(refresh_token):
     data = {
         'grant_type': 'refresh_token',
-        'client_id': settings.COGNITO_CLIENT_ID,
+        'client_id': settings_common.COGNITO_CLIENT_ID,
         'refresh_token': refresh_token
     }
 
@@ -379,10 +378,10 @@ def parse_session_token(id_token):
     if common.is_empty(id_token):
         return None
 
-    if settings.DEBUG or runtime_config.RuntimeConfig.instance().get_bool("TEMP_USE_JWT_DECODER"):
+    if settings_common.DEBUG or runtime_config.RuntimeConfig.instance().get_bool("TEMP_USE_JWT_DECODER"):
         issuer = (
-            f"https://cognito-idp.{settings.AWS_DEFAULT_REGION_NAME}.amazonaws.com/"
-            f"{settings.COGNITO_USER_POOL_ID}"
+            f"https://cognito-idp.{settings_common.AWS_DEFAULT_REGION_NAME}.amazonaws.com/"
+            f"{settings_common.COGNITO_USER_POOL_ID}"
         )
 
         jwks_client = PyJWKClient(f"{issuer}/.well-known/jwks.json")
@@ -391,7 +390,7 @@ def parse_session_token(id_token):
             id_token,
             signing_key,
             algorithms=["RS256"],
-            audience=settings.COGNITO_CLIENT_ID,
+            audience=settings_common.COGNITO_CLIENT_ID,
             issuer=issuer,
         )
     else:

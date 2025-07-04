@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
@@ -167,7 +168,7 @@ def get_buckets(config):
     }
 
 
-def get_config(base_dir):
+def get_config():
     import decouple
 
     # Get the path from the ERIEIRON_ENV environment variable
@@ -179,12 +180,9 @@ def get_config(base_dir):
     if erieiron_env is None:
         raise Exception("ERIEIRON_ENV is not defined")
 
-    try:
-        config = decouple.Config(decouple.RepositoryEnv(os.path.join(base_dir, './conf/.env.%s' % erieiron_env)))
-        logging.debug(" ".join(["ERIEIRON_ENV", erieiron_env, os.path.join(base_dir, './conf/.env.%s' % erieiron_env)]))
-    except:
-        config = decouple.Config(decouple.RepositoryEnv(os.path.join(base_dir, './.env.%s' % erieiron_env)))
-        logging.debug(" ".join(["ERIEIRON_ENV", erieiron_env, os.path.join(base_dir, './.env.%s' % erieiron_env)]))
+    conf_file = Path(os.getcwd()) / 'conf' / f'./.env.{erieiron_env}'
+    config = decouple.Config(decouple.RepositoryEnv(conf_file))
+    print("config file", conf_file)
 
     return config
 

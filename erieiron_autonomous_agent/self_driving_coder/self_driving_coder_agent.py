@@ -11,10 +11,9 @@ from typing import List, Optional
 from django.db import transaction
 from django.utils import timezone
 
-import settings
 from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_runner
 from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
-from erieiron_common import common
+from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType
@@ -1029,18 +1028,18 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         for file in checkpoint_files:
             get_aws_interface().upload_file(
                 file,
-                settings.BUCKETS[S3Bucket.MODELS],
+                settings_common.BUCKETS[S3Bucket.MODELS],
                 f"{s3_dir}/{file.name}"
             )
 
-        print(f"model checkpoints uploaded to s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")
+        print(f"model checkpoints uploaded to s3://{settings_common.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")
 
         txt_output = f"""
 # Best iteration
 Iteration #{best_version_num} {planning_model}
 Code:  {main_file_name}
 ### Checkpoints:
-s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}
+s3://{settings_common.BUCKETS[S3Bucket.MODELS]}/{s3_dir}
 
 # Summary
 {common.get(eval_data, 'summary')}
@@ -1073,7 +1072,7 @@ Code:  {main_file_name}
 {curriculum}
             """
 
-    archive_path = Path(settings.BASE_DIR) / f"task_{config.code_basename}_v{best_version_num}.zip"
+    archive_path = Path(settings_common.BASE_DIR) / f"task_{config.code_basename}_v{best_version_num}.zip"
     with tempfile.TemporaryDirectory() as tmpdirname:
         with zipfile.ZipFile(archive_path, 'w') as zipf:
             tmpdirname = Path(tmpdirname)
