@@ -18,22 +18,24 @@ __version__ = '0.1.0'
 __author__ = 'Erie Iron LLC'
 __email__ = 'tech@erieiron.com'
 
+from .common import get_now, log_info, log_error
 # Import commonly used components for easier access
 from .enums import ErieEnum
-from .common import get_now, log_info, log_error
 from .json_encoder import ErieIronJSONEncoder
 
 # Version info
 VERSION = (0, 1, 0)
 
+
 def get_version():
     """Return the version string."""
     return '.'.join(str(x) for x in VERSION)
 
+
 # Package metadata
 __all__ = [
     'ErieEnum',
-    'get_now', 
+    'get_now',
     'log_info',
     'log_error',
     'ErieIronJSONEncoder',

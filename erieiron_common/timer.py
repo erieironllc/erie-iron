@@ -1,8 +1,7 @@
 import time
 from collections import defaultdict
 
-import settings
-from erieiron_common import common, cache
+from erieiron_common import common, cache, settings_common
 
 
 class Timer:
@@ -16,7 +15,7 @@ class Timer:
         self.dict_mark_times = defaultdict(list)
 
     def mark(self, mark_name, printit=False):
-        if not settings.SHOW_TIMERS:
+        if not settings_common.SHOW_TIMERS:
             return
         if mark_name not in self.mark_names:
             self.mark_names.append(mark_name)
@@ -34,7 +33,7 @@ class Timer:
         common.log_info("timer total time %s\t%s" % (self.name, self.get_total_time()))
 
     def get_total_time(self):
-        if not settings.SHOW_TIMERS:
+        if not settings_common.SHOW_TIMERS:
             return 0
 
         earliest_time = None
@@ -54,7 +53,7 @@ class Timer:
             return float(latest_time) - float(earliest_time)
 
     def dump(self, sort_by_longest=False, floor_time=None):
-        if not settings.SHOW_TIMERS:
+        if not settings_common.SHOW_TIMERS:
             return
 
         if len(self.dict_mark_times) == 0:
@@ -102,7 +101,7 @@ def reset():
 
 
 def dump(timer_name=None, sort_by_longest=True, floor_time=None):
-    if not settings.SHOW_TIMERS:
+    if not settings_common.SHOW_TIMERS:
         return
 
     timers = cache.tl_get("timers", {})
@@ -117,7 +116,7 @@ def dump(timer_name=None, sort_by_longest=True, floor_time=None):
 
 
 def mark(timer_name, mark_name, printit=False):
-    if not settings.SHOW_TIMERS:
+    if not settings_common.SHOW_TIMERS:
         return
 
     timers = cache.tl_get("timers", {})

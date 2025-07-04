@@ -1,6 +1,7 @@
 import json
 import uuid
 from collections import defaultdict
+from datetime import datetime
 
 from django.contrib import messages
 from django.http import HttpResponse
@@ -550,9 +551,9 @@ def action_update_task(request, task_id):
             update_data['task_type'] = None
 
         if execution_start_time:
-            from django.utils import timezone
             try:
-                update_data['execution_start_time'] = timezone.datetime.fromisoformat(execution_start_time.replace('T', ' '))
+                # noinspection PyTypedDict
+                update_data['execution_start_time'] = datetime.fromisoformat(execution_start_time.replace('T', ' '))
             except ValueError:
                 messages.error(request, 'Invalid execution start time format.')
                 return redirect(reverse('view_task', args=[task_id]) + '#edit')

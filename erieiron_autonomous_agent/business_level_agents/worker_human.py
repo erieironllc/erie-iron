@@ -1,5 +1,4 @@
-import settings
-from erieiron_common import aws_utils
+from erieiron_common import aws_utils, settings_common
 from erieiron_autonomous_agent.models import Task
 
 
@@ -13,7 +12,7 @@ def do_work(task_id):
         recipient="jj@jjschultz.com",
         body=f"""
 A task requires your input
-{settings.BASE_URL}/task/{task.id}
+{settings_common.BASE_URL}/task/{task.id}
 
 {task.description}
 

@@ -18,7 +18,7 @@ import rsa
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-import settings
+from erieiron_common import settings_common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
@@ -38,7 +38,7 @@ def assert_account_name(required_account_name):
 def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
     response = boto3.client(
         "autoscaling",
-        region_name=settings.AWS_DEFAULT_REGION_NAME
+        region_name=settings_common.AWS_DEFAULT_REGION_NAME
     ).describe_auto_scaling_groups(
         AutoScalingGroupNames=[auto_scaling_group.value]
     )
@@ -62,7 +62,7 @@ def set_asg_desired_capacity(auto_scaling_group, count: int):
     common.log_info(f"UPDATING ASG Capacity {auto_scaling_group.value} to {count}")
     response = boto3.client(
         'autoscaling',
-        region_name=settings.AWS_DEFAULT_REGION_NAME
+        region_name=settings_common.AWS_DEFAULT_REGION_NAME
     ).update_auto_scaling_group(
         AutoScalingGroupName=auto_scaling_group.value,
         DesiredCapacity=count
@@ -72,7 +72,7 @@ def set_asg_desired_capacity(auto_scaling_group, count: int):
 def set_ecs_service_tasks(cluster_name, service_name, desired_count):
     boto3.client(
         'ecs',
-        region_name=settings.AWS_DEFAULT_REGION_NAME
+        region_name=settings_common.AWS_DEFAULT_REGION_NAME
     ).update_service(
         cluster=cluster_name,
         service=service_name,
@@ -126,7 +126,7 @@ def get_cloudfron_url_signing_private_key():
         "secretsmanager",
         region_name=os.getenv("AWS_REGION", "us-west-2")
     ).get_secret_value(
-        SecretId=settings.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
+        SecretId=settings_common.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
     )
 
     return rsa.PrivateKey.load_pkcs1(response["SecretString"].encode("utf-8"))
@@ -142,7 +142,7 @@ def generate_signed_cloudfront_url(cloudfront_domain, s3_key, expires_in_seconds
     signature = rsa.sign(policy.encode(), private_key, 'SHA-1')
     encoded_sig = quote_plus(base64.b64encode(signature).decode("utf-8"))
 
-    url = f"{url}?Expires={expires}&Signature={encoded_sig}&Key-Pair-Id={settings.CLOUDFRONT_KEY_PAIR_ID}"
+    url = f"{url}?Expires={expires}&Signature={encoded_sig}&Key-Pair-Id={settings_common.CLOUDFRONT_KEY_PAIR_ID}"
 
     return url
 
@@ -199,7 +199,7 @@ class AwsInterface:
     def transcribe_audio(self, bucket, key):
         transcribe = boto3.client(
             'transcribe',
-            region_name=settings.AWS_DEFAULT_REGION_NAME
+            region_name=settings_common.AWS_DEFAULT_REGION_NAME
         )
 
         job_name = f"{key}_{uuid.uuid4()}"
@@ -262,7 +262,7 @@ class AwsInterface:
 
         page_iterator = boto3.client(
             'logs',
-            region_name=settings.AWS_DEFAULT_REGION_NAME
+            region_name=settings_common.AWS_DEFAULT_REGION_NAME
         ).get_paginator(
             'filter_log_events'
         ).paginate(**kwargs)
@@ -286,8 +286,8 @@ class AwsInterface:
         from erieiron_common import common
         common.log_info(f"sending email: {subject} to {recipient}")
 
-        sender = common.default_str(sender, settings.FEEDBACK_EMAIL)
-        ses_client = boto3.client('ses', region_name=settings.AWS_DEFAULT_REGION_NAME)
+        sender = common.default_str(sender, settings_common.FEEDBACK_EMAIL)
+        ses_client = boto3.client('ses', region_name=settings_common.AWS_DEFAULT_REGION_NAME)
 
         # if recipient.lower() != "erieironllc@gmail.com":
         #     self.send_email(f"ccme: {subject} ({recipient})", "erieironllc@gmail.com", body)
@@ -305,7 +305,7 @@ class AwsInterface:
 </html>
 """
 
-        if settings.DISABLE_EMAIL_SEND:
+        if settings_common.DISABLE_EMAIL_SEND:
             logging.info(f"""
 NOT SENDING THIS EMAIL (settings.DISABLE_EMAIL_SEND=False)
 
@@ -402,15 +402,15 @@ BODY:
 
         apigateway_client = boto3.client(
             'apigatewaymanagementapi',
-            region_name=settings.AWS_DEFAULT_REGION_NAME,
-            endpoint_url=f"https://{settings.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}"
+            region_name=settings_common.AWS_DEFAULT_REGION_NAME,
+            endpoint_url=f"https://{settings_common.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}"
         )
 
         table = boto3.resource(
             'dynamodb',
-            region_name=settings.AWS_DEFAULT_REGION_NAME
+            region_name=settings_common.AWS_DEFAULT_REGION_NAME
         ).Table(
-            settings.CLIENT_MESSAGE_DYNAMO_TABLE
+            settings_common.CLIENT_MESSAGE_DYNAMO_TABLE
         )
 
         # query for all connections open for this person
