@@ -14,7 +14,7 @@ from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskPhase, TaskExecutionType, TaskExecutionSchedule
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_autonomous_agent.models import Business
-from erieiron_ui.view_utils import send_response, redirect, rget
+from erieiron_common.view_utils import send_response, redirect, rget
 
 
 def hello(request):
