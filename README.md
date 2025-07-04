@@ -44,7 +44,7 @@ pip install erieiron-common[all]
 Install from source:
 
 ```bash
-git clone https://github.com/erieiron/erieiron-common.git
+git clone https://github.com/erieironllc/erieiron.git
 cd erieiron-common
 pip install -e .
 ```
@@ -136,5 +136,5 @@ This project is licensed under the MIT License.
 
 ## Support
 
-- Issues: https://github.com/erieiron/erieiron-common/issues
+- Issues: https://github.com/erieironllc/erieiron/issues
 - Email: tech@erieiron.com
