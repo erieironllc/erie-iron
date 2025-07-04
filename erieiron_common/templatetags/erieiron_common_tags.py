@@ -66,7 +66,7 @@ def timestamp_static(orig_filename):
         else:
             common.quietly_delete(file)
 
-    return f"./static/{static_dir_root.name}/{latest_matching_file}"
+    return f"/static/{static_dir_root.name}/{latest_matching_file}"
 
 
 @register.filter
