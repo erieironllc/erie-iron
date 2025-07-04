@@ -12,6 +12,7 @@ google-generativeai>=0.3.0
 gunicorn>=23.0.0
 jsonschema>=4.0.0
 markdown
+pygments
 nltk>=3.6.0
 numpy<2.0.0
 openai>=0.27.0
