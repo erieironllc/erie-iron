@@ -486,11 +486,16 @@ class PubSubManager:
         if payload is None:
             payload = {}
 
+        try:
+            namespace = message_type.get_namespace(namespace_context)
+        except:
+            namespace = PubSubMessageType.name
+
         message = PubSubMessage.create(
             env=instance.environment_id,
             message_type=message_type,
             priority=priority,
-            namespace=message_type.get_namespace(namespace_context),
+            namespace=namespace,
             payload=payload,
             batch_idx=batch_idx
         )

@@ -1,4 +1,6 @@
 Django>=5.1.0
+PyJWT
+PyJWT[crypto]>=2.0.0
 anthropic>=0.20.0
 boto3>=1.26.0
 botocore>=1.29.0
