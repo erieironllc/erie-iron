@@ -489,7 +489,7 @@ class PubSubManager:
         try:
             namespace = message_type.get_namespace(namespace_context)
         except:
-            namespace = PubSubMessageType.name
+            namespace = PubSubMessageType.value
 
         message = PubSubMessage.create(
             env=instance.environment_id,
