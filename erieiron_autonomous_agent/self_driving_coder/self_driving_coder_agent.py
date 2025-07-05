@@ -11,17 +11,18 @@ from typing import List, Optional
 from django.db import transaction
 from django.utils import timezone
 
+import settings
+from erieiron_autonomous_agent.enums import TaskStatus
+from erieiron_autonomous_agent.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
 from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_runner
 from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
+from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
-from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType
-from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_autonomous_agent.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
 
 ARTIFACTS = "artifacts"
 PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
@@ -1072,7 +1073,7 @@ Code:  {main_file_name}
 {curriculum}
             """
 
-    archive_path = Path(settings_common.BASE_DIR) / f"task_{config.code_basename}_v{best_version_num}.zip"
+    archive_path = Path(settings.BASE_DIR) / f"task_{config.code_basename}_v{best_version_num}.zip"
     with tempfile.TemporaryDirectory() as tmpdirname:
         with zipfile.ZipFile(archive_path, 'w') as zipf:
             tmpdirname = Path(tmpdirname)

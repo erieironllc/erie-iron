@@ -353,18 +353,8 @@
                         <div class="mb-3">
                             <label for="task_type" class="form-label">Task Type</label>
                             <select name="task_type" id="task_type" class="form-select">
-                                <option value="">-- Select Task Type --</option>
-                                {% for value, label in task_execution_type_choices %}
+                                {% for value, label in task_type_choices %}
                                     <option value="{{ value }}" {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="execution_mode" class="form-label">Execution Mode</label>
-                            <select name="execution_mode" id="execution_mode" class="form-select">
-                                {% for value, label in task_execution_mode_choices %}
-                                    <option value="{{ value }}" {% if task.execution_mode == value %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                         </div>

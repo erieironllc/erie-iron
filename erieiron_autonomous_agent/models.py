@@ -11,9 +11,9 @@ from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
 import settings
-from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskAssigneeType, TaskStatus, TaskExecutionMode
+from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
 from erieiron_common import common
-from erieiron_common.enums import Level, LlcStructure, TaskExecutionType, TaskPhase, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource
+from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.models import BaseErieIronModel
 
@@ -408,7 +408,9 @@ class Task(BaseErieIronModel):
     created_timestamp = models.DateTimeField(auto_now_add=True)
     initiative = models.ForeignKey(Initiative, on_delete=models.CASCADE, related_name="tasks")
     product_initiative = models.TextField(null=True)
+    task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_NON_UI_TASK, null=False)
     status = models.TextField(null=False, choices=TaskStatus.choices())
+
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
     description = models.TextField()
     depends_on = models.ManyToManyField(
@@ -419,7 +421,6 @@ class Task(BaseErieIronModel):
     )
     risk_notes = models.TextField()
     test_plan = models.TextField()
-    role_assignee = models.TextField(choices=TaskAssigneeType.choices())
     completion_criteria = models.JSONField(default=list)
     comment_requests = models.JSONField(default=list)
     current_spend = models.FloatField(null=True)
@@ -427,9 +428,9 @@ class Task(BaseErieIronModel):
     attachments = models.JSONField(default=list)
     created_by = models.TextField(null=True)
 
-    phase = models.TextField(choices=TaskPhase.choices(), null=False)
-    task_type = models.TextField(choices=TaskExecutionType.choices(), null=True, blank=True)
-    execution_mode = models.TextField(choices=TaskExecutionMode.choices(), default=TaskExecutionMode.CONTAINER, null=False)
+    input_fields = models.JSONField(default=dict)
+    output_fields = models.JSONField(default=list)
+
     requires_test = models.BooleanField(default=True)
     execution_schedule = models.TextField(choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE)
     execution_start_time = models.DateTimeField(null=True, blank=True)

@@ -395,6 +395,7 @@ class TaskExecutionType(ErieEnum):
 
 
 class TaskExecutionSchedule(ErieEnum):
+    NOT_APPLICABLE = auto()
     ONCE = auto()
     DAEMON = auto()
     HOURLY = auto()
@@ -402,9 +403,13 @@ class TaskExecutionSchedule(ErieEnum):
     WEEKLY = auto()
 
 
-class TaskPhase(ErieEnum):
-    EXECUTE = auto()
-    BUILD = auto()
+class TaskType(ErieEnum):
+    CODING_WEB_APPLICATION = auto()
+    CODING_NON_UI_TASK = auto()
+    CODING_ML = auto()
+    TASK_EXECUTION = auto()
+    DESIGN_WEB_APPLICATION = auto()
+    HUMAN_WORK = auto()
 
 
 class LlcStructure(ErieEnum):

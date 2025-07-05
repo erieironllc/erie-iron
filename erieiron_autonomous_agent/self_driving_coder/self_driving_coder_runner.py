@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from erieiron_autonomous_agent.enums import TaskExecutionMode, TaskStatus
+from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import TaskExecution, SelfDrivingTaskIteration, CodeFile
 from erieiron_autonomous_agent.self_driving_coder import agent_tools
 from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config import SelfDriverConfig
@@ -42,22 +42,12 @@ def execute(task_execution_id: uuid.UUID, env: str = "dev", logfile=None) -> Opt
         for attempt in range(MAX_RETRIES):
             try:
                 includes_boostrap = "agent_tools.clone_template_project_to_sandbox(" in config.main_code_file.get_latest_version().code
-                if True or includes_boostrap or TaskExecutionMode.HOST.eq(task.execution_mode):
-                    output = run_module_locally(
-                        iteration,
-                        config.main_code_file,
-                        task_execution.input
-                    )
-                elif TaskExecutionMode.CONTAINER.eq(task.execution_mode):
-                    output = run_module_in_docker(
-                        env,
-                        iteration,
-                        config.main_code_file,
-                        task_execution.input,
-                        logfile
-                    )
-                else:
-                    raise ValueError(f"unsupported execution_mode for {task.id}: {task.execution_mode}")
+                output = run_module_locally(
+                    iteration,
+                    config.main_code_file,
+                    task_execution.input
+                )
+
                 break  # successful execution, exit retry loop
             except agent_tools.PermissionEscalationRequired as e:
                 if attempt < MAX_RETRIES - 1:

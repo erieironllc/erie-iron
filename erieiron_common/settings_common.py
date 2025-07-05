@@ -1,5 +1,4 @@
 import tempfile
-from pathlib import Path
 
 from erieiron_common import settings_utils
 
