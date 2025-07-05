@@ -376,7 +376,6 @@ class BusinessCeoDirective(BaseErieIronModel):
     directive_summary = models.TextField()
     goal_alignment = models.JSONField(default=list)
     kpi_targets = models.JSONField(default=dict)
-    initiative_reference = models.TextField(default="")
 
 
 class Initiative(BaseErieIronModel):

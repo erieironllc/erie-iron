@@ -52,7 +52,7 @@ def build_chat_data(business):
     directives = list(BusinessCeoDirective.objects.filter(
         business=business, target_agent="ProductAgent"
     ).values(
-        "directive_summary", "goal_alignment", "kpi_targets", "initiative_reference"
+        "directive_summary", "goal_alignment", "kpi_targets"
     ))
 
     capacity = BusinessCapacityAnalysis.objects.filter(business=business).last()

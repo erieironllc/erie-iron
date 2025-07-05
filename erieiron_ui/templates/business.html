@@ -407,11 +407,6 @@
                                     <em class="text-muted">None specified</em>
                                 {% endif %}
                             </dd>
-
-                            <dt class="mt-3 col-sm-12">Initiative Reference</dt>
-                            <dd class="col-sm-12">
-                                {{ business_ceo_directive.initiative_reference|default:"—"|linebreaksbr }}
-                            </dd>
                         </dl>
                     </div>
                 </div>
@@ -482,15 +477,15 @@
             <table class="table table-striped">
                 <thead>
                 <tr>
-                    <th>Priority</th>
+                    <th>Sequence</th>
                     <th>Title</th>
                     <th>Description</th>
                     <th>Predicted KPI Lift</th>
                 </tr>
                 </thead>
-                {% for initiative in business.initiative_set.all|dictsort:"title" %}
+                {% for initiative in business.initiative_set.all|dictsort:"created_timestamp" %}
                     <tr>
-                        <td>{{ initiative.priority|label }}</td>
+                        <td>{{ forloop.counter }}</td>
                         <td><a href="{% url "view_initiative" initiative.id %}">{{ initiative.title }}</a></td>
                         <td>{{ initiative.description }}</td>
                         <td>
