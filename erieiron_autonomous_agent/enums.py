@@ -21,12 +21,6 @@ class TaskStatus(ErieEnum):
         ]
 
 
-class TaskAssigneeType(ErieEnum):
-    HUMAN = auto()
-    ENGINEERING = auto()
-    DESIGN = auto()
-
-
 class TaskExecutionMode(ErieEnum):
     HOST = auto()
     CONTAINER = auto()

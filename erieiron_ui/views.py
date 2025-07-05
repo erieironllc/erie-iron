@@ -8,12 +8,12 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
-from erieiron_autonomous_agent.enums import TaskStatus, TaskAssigneeType, TaskExecutionMode
+from erieiron_autonomous_agent.enums import TaskStatus
+from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskPhase, TaskExecutionType, TaskExecutionSchedule
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_autonomous_agent.models import Business
 from erieiron_common.view_utils import send_response, redirect, rget
 
 
@@ -174,11 +174,8 @@ def view_task(request, task_id):
             "running_processes": running_processes,
             "running_processes_count": running_processes_count,
             "task_status_choices": TaskStatus.choices(),
-            "task_assignee_choices": TaskAssigneeType.choices(),
-            "task_phase_choices": TaskPhase.choices(),
-            "task_execution_type_choices": TaskExecutionType.choices(),
-            "task_execution_mode_choices": TaskExecutionMode.choices(),
-            "task_execution_schedule_choices": TaskExecutionSchedule.choices()
+            "task_execution_schedule_choices": TaskExecutionSchedule.choices(),
+            "task_type_choices": TaskType.choices()
         },
         breadcrumbs=[
             (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
@@ -352,7 +349,7 @@ def action_add_business(request):
     )
 
     messages.success(request, 'Business idea submitted successfully! It will be reviewed and processed.')
-    return redirect(reverse('view_businesses'))
+    return redirect(reverse('view_business', args=[business.id]))
 
 
 def action_delete_business(request, business_id):
@@ -503,10 +500,7 @@ def action_update_task(request, task_id):
         timeout_seconds = rget(request, 'timeout_seconds', '').strip()
         max_budget_usd = rget(request, 'max_budget_usd', '').strip()
         status = rget(request, 'status', '').strip()
-        role_assignee = rget(request, 'role_assignee', '').strip()
-        phase = rget(request, 'phase', '').strip()
         task_type = rget(request, 'task_type', '').strip()
-        execution_mode = rget(request, 'execution_mode', '').strip()
         execution_schedule = rget(request, 'execution_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         requires_test = request.POST.get('requires_test') == 'on'
@@ -517,9 +511,7 @@ def action_update_task(request, task_id):
             'risk_notes': risk_notes,
             'test_plan': test_plan,
             'status': status,
-            'role_assignee': role_assignee,
-            'phase': phase,
-            'execution_mode': execution_mode,
+            'task_type': task_type,
             'execution_schedule': execution_schedule,
             'requires_test': requires_test
         }

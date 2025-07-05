@@ -4,16 +4,19 @@ from django.db import transaction
 from django.db.models import F, Value
 from django.db.models.functions import Coalesce
 
-from erieiron_autonomous_agent.enums import TaskAssigneeType, TaskStatus
+from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Task
 from erieiron_common import aws_utils, settings_common
-from erieiron_common.enums import PubSubMessageType
+from erieiron_common.enums import PubSubMessageType, TaskType
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
-ASSIGNEE_TO_MSGTYPE = {
-    TaskAssigneeType.DESIGN: PubSubMessageType.DESIGN_WORK_REQUESTED,
-    TaskAssigneeType.ENGINEERING: PubSubMessageType.CODING_WORK_REQUESTED,
-    TaskAssigneeType.HUMAN: PubSubMessageType.HUMAN_WORK_REQUESTED,
+TASKTYPE_TO_MSGTYPE = {
+    TaskType.HUMAN_WORK: PubSubMessageType.HUMAN_WORK_REQUESTED,
+    TaskType.DESIGN_WEB_APPLICATION: PubSubMessageType.DESIGN_WORK_REQUESTED,
+    TaskType.CODING_NON_UI_TASK: PubSubMessageType.CODING_WORK_REQUESTED,
+    TaskType.CODING_ML: PubSubMessageType.CODING_WORK_REQUESTED,
+    TaskType.CODING_WEB_APPLICATION: PubSubMessageType.CODING_WORK_REQUESTED,
+    TaskType.TASK_EXECUTION: PubSubMessageType.CODING_WORK_REQUESTED,
 }
 
 
@@ -33,8 +36,8 @@ def on_task_updated(task_id):
                 status=TaskStatus.IN_PROGRESS
             )
 
-            msg_type = ASSIGNEE_TO_MSGTYPE.get(
-                TaskAssigneeType(task.role_assignee)
+            msg_type = TASKTYPE_TO_MSGTYPE.get(
+                TaskType(task.task_type)
             )
 
             PubSubManager.publish_id(msg_type, task.id)

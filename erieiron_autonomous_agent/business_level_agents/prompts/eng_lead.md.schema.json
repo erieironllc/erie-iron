@@ -22,132 +22,90 @@
           "task_id",
           "depends_on",
           "task_description",
+          "input_fields",
+          "output_fields",
           "risk_notes",
           "test_plan",
-          "role_assignee",
+          "requires_test",
           "completion_criteria",
-          "phase"
+          "execution_schedule",
+          "timeout_seconds",
+          "validated_requirements",
+          "task_type"
         ],
         "properties": {
           "task_id": {
             "type": "string",
-            "description": "Required. If the task is new, provide a unique ID. If the task already exists and needs to be updated, reuse the same ID."
+            "pattern": "^task_[a-z0-9_]+$",
+            "description": "Unique lowercase snake_case ID matching ^task_[a-z0-9_]+$"
           },
           "depends_on": {
             "type": "array",
-            "description": "List of task IDs that must be completed before this task can begin. These may reference existing or newly defined tasks.",
-            "items": {
-              "type": "string"
-            }
+            "items": { "type": "string" },
+            "description": "List of task_ids that must complete first"
           },
           "task_description": {
-            "type": "string"
-          },
-          "risk_notes": {
-            "type": "string"
-          },
-          "test_plan": {
-            "type": "string"
-          },
-          "validated_requirements": {
-            "type": "array",
-            "description": "List of requirement IDs this task satisfies. Must be included if the task fulfills any product requirement’s acceptance criteria.",
-            "items": {
-              "type": "string"
-            }
-          },
-          "completion_criteria": {
-            "type": "array",
-            "description": "List of natural language statements describing when the task can be considered successfully complete.",
-            "items": {
-              "type": "string"
-            }
-          },
-          "role_assignee": {
             "type": "string",
-            "enum": ["ENGINEERING", "DESIGN", "HUMAN"],
-            "description": "Which agent or actor is responsible for executing this task."
+            "description": "Clear description of the work"
           },
-          "design_handoff": {
+          "input_fields": {
             "type": "object",
-            "description": "Structured output from a DESIGN task, used for handoff to engineering tasks. May include component IDs, layout guidance, and design tokens.",
-            "properties": {
-              "component_ids": {
-                "type": "array",
-                "items": { "type": "string" }
-              },
-              "layout": {
-                "type": "object",
-                "required": ["type"],
-                "properties": {
-                  "type": { "type": "string" },
-                  "regions": {
-                    "type": "object",
-                    "additionalProperties": {
-                      "type": "array",
-                      "items": { "type": "string" }
-                    }
-                  },
-                  "components": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                  }
-                },
-                "additionalProperties": false
-              },
-              "design_tokens": {
+            "patternProperties": {
+              "^task_[a-z0-9_]+$": {
                 "type": "array",
                 "items": { "type": "string" }
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "description": "Dict mapping upstream task_ids to arrays of field names from their outputs"
           },
-          "phase": {
-            "type": "string",
-            "enum": ["BUILD", "EXECUTE"],
-            "description": "Determines whether the task represents a build-time activity or a runtime execution. Required for ENGINEERING tasks."
+          "output_fields": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of output field names this task produces"
           },
-          "execution_mode": {
+          "risk_notes": {
             "type": "string",
-            "enum": ["HOST", "CONTAINER"],
-            "description": "Optional. One of 'HOST' or 'CONTAINER'. Defaults to 'CONTAINER'. Use 'HOST' for tasks that create or build Docker containers or environments. Use 'CONTAINER' for all workload execution tasks."
+            "description": "Operational or automation risk notes"
+          },
+          "test_plan": {
+            "type": "string",
+            "description": "How success and failure are autonomously verified"
           },
           "requires_test": {
             "type": "boolean",
-            "description": "Indicates whether this task must be accompanied by an automated test. Defaults to true for application logic tasks. Set to false for infra/setup tasks (e.g., Dockerfile generation or container push)."
+            "description": "Whether an automated test is required (test_plan still mandatory)"
           },
-          "task_type": {
-            "type": "string",
-            "enum": ["RUN", "DEPLOY", "VALIDATE", "MONITOR"],
-            "description": "Optional semantic subtype for EXECUTE-phase tasks to support tracking, filtering, and specialized handling. Defaults to RUN if omitted."
+          "completion_criteria": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Acceptance criteria for successful completion"
           },
           "execution_schedule": {
             "type": "string",
-            "enum": ["ONCE", "DAEMON", "HOURLY", "DAILY", "WEEKLY"],
-            "description": "Optional. Specifies how often this task should run. Defaults to 'ONCE'. Use 'DAEMON' for background tasks and 'HOURLY'/'DAILY'/'WEEKLY' for recurring execution."
+            "enum": ["NOT_APPLICABLE", "ONCE", "HOURLY", "DAILY", "WEEKLY", "DAEMON"],
+            "description": "Schedule: NOT_APPLICABLE, ONCE, HOURLY, DAILY, WEEKLY, or DAEMON"
           },
           "execution_start_time": {
             "type": "string",
             "format": "date-time",
-            "description": "Optional ISO 8601 datetime string specifying when the task should first run. Used to anchor recurring schedules."
+            "description": "ISO 8601 UTC datetime ending with Z for first run"
           },
           "timeout_seconds": {
             "type": "integer",
-            "description": "Optional. Maximum execution time in seconds. Task fails if exceeded."
+            "description": "Max run time in seconds (e.g. 3×p99 or ≤7200 for non-DAEMON)"
+          },
+          "validated_requirements": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of requirement IDs this task validates (can be empty)"
+          },
+          "task_type": {
+            "type": "string",
+            "enum": ["CODING_WEB_APPLICATION", "CODING_NON_UI_TASK", "CODING_ML", "DESIGN_WEB_APPLICATION", "HUMAN_WORK"],
+            "description": "High-level nature of the task"
           }
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "phase": { "const": "EXECUTE" }
-              }
-            },
-            "then": {
-              "required": ["task_type"]
-            }
-          }
-        ]
+        }
       }
     }
   }

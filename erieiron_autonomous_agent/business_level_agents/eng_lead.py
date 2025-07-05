@@ -1,16 +1,14 @@
 from django.db import transaction
 
-from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
-from erieiron_common import common
-from erieiron_common.enums import TaskPhase, TaskExecutionType, TaskExecutionSchedule, InitiativeType
-from erieiron_autonomous_agent.enums import TaskStatus, TaskExecutionMode, TaskAssigneeType
+from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
     Initiative,
     Task,
-    ProductRequirement,
-    TaskDesignRequirements,
-    DesignComponent
+    ProductRequirement
 )
+from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
+from erieiron_common import common
+from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType
 
 
 def on_task_blocked(payload, msg):
@@ -26,7 +24,6 @@ def on_task_blocked(payload, msg):
             "task_id": t.id,
             "description": t.description,
             "status": t.status,
-            "phase": t.phase,
             "type": t.task_type,
         }
         for t in initiative.tasks.all()
@@ -76,6 +73,7 @@ def define_tasks_for_initiative(initiative_id, msg):
     eng_lead_response = business_level_chat(
         "eng_lead.md",
         chat_data,
+        output_schema="eng_lead.md.schema.json",
         replacements=[
             ("<iam_role_name>", business.get_iam_role_name())
         ]
@@ -137,81 +135,37 @@ def process_response(msg, initiative, eng_lead_response):
     for task_data in eng_lead_response.get("tasks", []):
         task_id = task_data.get("task_id")
 
-        base_required_fields = [
-            "task_id",
-            "depends_on",
-            "task_description",
-            "risk_notes",
-            "test_plan",
-            "role_assignee",
-            "completion_criteria",
-        ]
-
-        for field in base_required_fields:
-            if field not in task_data:
-                raise ValueError(f"Missing required task field '{field}': {task_data}")
-
-        if "completion_criteria" not in task_data or not isinstance(task_data["completion_criteria"], list) or not task_data["completion_criteria"]:
-            raise ValueError(f"'completion_criteria' is required and must be a non-empty list: {task_data}")
-
         validated_ids = set(task_data.get("validated_requirements", []))
         initiative_req_ids = set(str(req.id) for req in initiative.requirements.all())
         invalid_ids = validated_ids - initiative_req_ids
-
         if invalid_ids:
             raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
 
-        phase = task_data.get("phase")
-        TaskPhase.valid(phase)
-        if not TaskPhase.valid(phase):
-            raise ValueError(f"Invalid or missing phase for task {task_id}: {phase}")
+        defaults = {
+            "initiative": initiative,
+            "status": TaskStatus.NOT_STARTED,
+            "description": task_data.get("task_description", ""),
+            "risk_notes": task_data.get("risk_notes", ""),
+            "test_plan": task_data.get("test_plan", ""),
+            "completion_criteria": task_data.get("completion_criteria"),
+            "requires_test": common.parse_bool(task_data.get("requires_test")),
+            "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule")),
+            "timeout_seconds": task_data.get("timeout_seconds"),
+            "task_type": TaskType(task_data.get("task_type")),
+            "input_fields": task_data.get("input_fields", {}),
+            "output_fields": task_data.get("output_fields", [])
+        }
 
-        task_type = task_data.get("task_type")
-        if TaskPhase.EXECUTE.eq(phase):
-            if not TaskExecutionType.valid(task_type):
-                raise ValueError(f"Invalid task_type for task {task_id}: {task_type}")
+        execution_start_time = task_data.get("execution_start_time")
+        if execution_start_time:
+            defaults["execution_start_time"] = task_data["execution_start_time"]
 
         eng_task, created = Task.objects.update_or_create(
             id=task_id if task_id else None,
-            defaults={
-                "initiative": initiative,
-                "status": TaskStatus.NOT_STARTED,
-                "description": task_data.get("task_description", ""),
-                "risk_notes": task_data.get("risk_notes", ""),
-                "test_plan": task_data.get("test_plan", ""),
-                "role_assignee": TaskAssigneeType(task_data.get("role_assignee", TaskAssigneeType.ENGINEERING)),
-                "completion_criteria": task_data.get("completion_criteria"),
-                "phase": TaskPhase(phase),
-                "task_type": TaskExecutionType.valid_or(task_type),
-                "execution_mode": TaskExecutionMode(task_data.get("execution_mode", TaskExecutionMode.HOST)),
-                "requires_test": initiative.requires_unit_tests and common.parse_bool(task_data.get("requires_test", True)),
-                "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule", TaskExecutionSchedule.ONCE)),
-                "execution_start_time": task_data.get("execution_start_time", None),
-                "timeout_seconds": task_data.get("timeout_seconds"),
-            }
+            defaults=defaults
         )
 
-        # Handle design_handoff for DESIGN tasks
-        if TaskAssigneeType.DESIGN.eq(eng_task.role_assignee) and "design_handoff" in task_data:
-            handoff_data = task_data["design_handoff"]
-            handoff_obj, _ = TaskDesignRequirements.objects.get_or_create(task=eng_task)
-
-            # Components
-            component_ids = handoff_data.get("component_ids", [])
-            components = []
-            for comp_id in component_ids:
-                component, _ = DesignComponent.objects.get_or_create(id=comp_id, defaults={"name": comp_id})
-                components.append(component)
-            handoff_obj.component_ids.set(components)
-
-            # Layout
-            layout = handoff_data.get("layout")
-            if isinstance(layout, dict):
-                handoff_obj.layout = layout
-            elif layout is not None:
-                raise ValueError(f"Invalid layout structure in design_handoff for task {eng_task.id}")
-
-            handoff_obj.save()
+        # Note: design_handoff handling removed as it's not in the schema
 
         # Set depends_on M2M relationship after update_or_create
         dependency_ids = task_data.get("depends_on", [])
@@ -228,12 +182,18 @@ def process_response(msg, initiative, eng_lead_response):
             list(ProductRequirement.objects.filter(id__in=task_data.get("validated_requirements", [])))
         )
 
+        # Only compare schema-defined fields
         fields_to_compare = {
             "description": task_data.get("task_description", ""),
             "risk_notes": task_data.get("risk_notes", ""),
             "test_plan": task_data.get("test_plan", ""),
-            "role_assignee": task_data.get("role_assignee"),
             "completion_criteria": task_data.get("completion_criteria"),
+            "requires_test": common.parse_bool(task_data.get("requires_test")),
+            "execution_schedule": task_data.get("execution_schedule"),
+            "timeout_seconds": task_data.get("timeout_seconds"),
+            "task_type": task_data.get("task_type"),
+            "input_fields": task_data.get("input_fields", {}),
+            "output_fields": task_data.get("output_fields", []),
         }
 
         was_updated = any(
