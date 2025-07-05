@@ -83,7 +83,6 @@ def process_response(business, ceo_analysis):
             directive_summary=directive["directive_summary"],
             defaults={
                 "goal_alignment": directive.get("goal_alignment", []),
-                "kpi_targets": directive.get("kpi_targets", {}),
-                "initiative_reference": directive.get("initiative_reference", "")
+                "kpi_targets": directive.get("kpi_targets", {})
             }
         )

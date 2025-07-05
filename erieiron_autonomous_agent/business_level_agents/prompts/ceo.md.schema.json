@@ -127,8 +127,7 @@
           "target_agent",
           "directive_summary",
           "goal_alignment",
-          "kpi_targets",
-          "initiative_reference"
+          "kpi_targets"
         ],
         "properties": {
           "target_agent": {
@@ -148,9 +147,6 @@
             "additionalProperties": {
               "type": "number"
             }
-          },
-          "initiative_reference": {
-            "type": "string"
           }
         }
       }
