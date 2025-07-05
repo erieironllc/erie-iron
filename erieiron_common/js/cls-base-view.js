@@ -11,7 +11,6 @@ ErieView = Backbone.View.extend({
 
     delegateEvents: function (events) {
         this.undelegateEvents();
-
         events = events || _.result(this, 'events');
         if (!events) return this;
 
