@@ -14,14 +14,12 @@ google-generativeai>=0.3.0
 gunicorn>=23.0.0
 jsonschema>=4.0.0
 markdown
-pygments
 nltk>=3.6.0
 numpy<2.0.0
 openai>=0.27.0
 psutil>=5.8.0
 psycopg2-binary>=2.8.0
+pygments
 python-dateutil>=2.8.0
 requests>=2.25.0
-scikit-learn>=1.0.0
 tiktoken>=0.5.0
-torch>=1.9.0,<2.1.2

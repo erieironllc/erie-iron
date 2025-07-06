@@ -29,7 +29,6 @@ from urllib.parse import urlparse
 import numpy as np
 import psutil
 import requests
-import torch
 from django.core.files.uploadedfile import UploadedFile, TemporaryUploadedFile, InMemoryUploadedFile
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Model, ForeignKey, OneToOneField, QuerySet
@@ -193,9 +192,6 @@ def get_weighted_random_choice(items_ranked_descending_priority):
 def ensure_list(v):
     if v is None:
         return []
-
-    if isinstance(v, torch.Tensor):
-        return ensure_list(v.cpu().numpy().tolist())
 
     if isinstance(v, np.ndarray):
         return ensure_list(v.tolist())
@@ -1052,36 +1048,6 @@ def log_error(*args):
     return msg
 
 
-def plot_tensor(y: torch.Tensor, title="untitled"):
-    import matplotlib.pyplot as plt
-    plt.plot(tensor_to_numpy(y))
-    plt.title(title)
-    plt.show()
-
-
-def tensor_to_numpy(t: torch.Tensor) -> np.ndarray:
-    if t.requires_grad:
-        t = t.detach()
-
-    t = t.contiguous()
-    n = t.cpu().numpy()
-
-    if t.dtype != torch.float64:
-        n = n.astype(np.float64)
-
-    return n.copy()
-
-
-def ensure_dims(tensor: torch.Tensor, dims):
-    while tensor.ndim > dims:
-        tensor = tensor.squeeze(0)
-
-    while tensor.ndim < dims:
-        tensor = tensor.unsqueeze(0)
-
-    return tensor
-
-
 def dict_to_vars(the_dict, *args):
     vals = [get(the_dict, a) for a in args]
     return vals
@@ -1109,28 +1075,6 @@ def wrap_log_message_in_contenxt(args):
 
 def get_current_thread_name():
     return threading.current_thread().name.split("-")[-1]
-
-
-def get_gpu_used_percent() -> int:
-    from erieiron_common.gpu_utils import ComputeDevice, get_device
-
-    RETURN_VAL_NO_GPU = 100
-
-    device = get_device()
-
-    if ComputeDevice.CUDA.eq(device):
-        free_mem, total_mem = torch.cuda.mem_get_info()
-    elif ComputeDevice.MPS.eq(device):
-        vm = psutil.virtual_memory()
-        total_mem = vm.total
-        free_mem = vm.available
-
-    else:
-        return RETURN_VAL_NO_GPU
-
-    mem_used = total_mem - free_mem
-    return (mem_used * 100) // total_mem if total_mem else RETURN_VAL_NO_GPU
-
 
 def get_cpu_used_percent() -> int:
     cpu_percentages = psutil.cpu_percent(interval=1, percpu=True)

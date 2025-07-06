@@ -21,11 +21,11 @@ from django.db.models import QuerySet
 from django.utils import timezone
 
 from erieiron_common import common, settings_common
-from erieiron_common import gpu_utils
+from erieiron_ml import gpu_utils
 from erieiron_common.common import get_now, get_methods_with_decorator
 from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, PubSubHandlerInstanceStatus, PubSubMessagePriority
 from erieiron_common.enums import SystemCapacity
-from erieiron_common.gpu_utils import ComputeDevice
+from erieiron_ml.gpu_utils import ComputeDevice
 from erieiron_common.models import PubSubMessage, PubSubHanderInstance, PubSubHanderInstanceProcess, PubSubEnvironment
 
 MIN_THREADS = 1
