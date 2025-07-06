@@ -8,6 +8,9 @@ include pyproject.toml
 # Include all Python files in the erieiron_common package
 recursive-include erieiron_common *.py
 
+# Include all javascripts files in the erieiron_common package
+recursive-include erieiron_common *.js
+
 # Include Django migrations
 recursive-include erieiron_common/migrations *.py
 
