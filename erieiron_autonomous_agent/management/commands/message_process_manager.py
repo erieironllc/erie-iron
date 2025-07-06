@@ -9,7 +9,8 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.db.models import QuerySet
 
-from erieiron_common import common, aws_utils, gpu_utils, models
+from erieiron_common import common, aws_utils, models
+from erieiron_ml import gpu_utils
 from erieiron_common.common import parse_bool, get_now
 from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, SystemCapacity, AutoScalingGroup, ScaleAction, PubSubMessageStatus
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, MESSAGE_HANDLER_MAX_RETRIES

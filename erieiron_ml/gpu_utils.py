@@ -3,6 +3,8 @@ import time
 from contextlib import contextmanager
 from functools import lru_cache
 
+import numpy as np
+import psutil
 import torch
 
 from erieiron_common import settings_common
@@ -143,6 +145,55 @@ class CudaHealthChecker:
             self._last_result = False
 
         return self._last_result
+
+
+def plot_tensor(y: torch.Tensor, title="untitled"):
+    import matplotlib.pyplot as plt
+    plt.plot(tensor_to_numpy(y))
+    plt.title(title)
+    plt.show()
+
+
+def tensor_to_numpy(t: torch.Tensor) -> np.ndarray:
+    if t.requires_grad:
+        t = t.detach()
+
+    t = t.contiguous()
+    n = t.cpu().numpy()
+
+    if t.dtype != torch.float64:
+        n = n.astype(np.float64)
+
+    return n.copy()
+
+
+def ensure_dims(tensor: torch.Tensor, dims):
+    while tensor.ndim > dims:
+        tensor = tensor.squeeze(0)
+
+    while tensor.ndim < dims:
+        tensor = tensor.unsqueeze(0)
+
+    return tensor
+
+
+def get_gpu_used_percent() -> int:
+    RETURN_VAL_NO_GPU = 100
+
+    device = get_device()
+
+    if ComputeDevice.CUDA.eq(device):
+        free_mem, total_mem = torch.cuda.mem_get_info()
+    elif ComputeDevice.MPS.eq(device):
+        vm = psutil.virtual_memory()
+        total_mem = vm.total
+        free_mem = vm.available
+
+    else:
+        return RETURN_VAL_NO_GPU
+
+    mem_used = total_mem - free_mem
+    return (mem_used * 100) // total_mem if total_mem else RETURN_VAL_NO_GPU
 
 
 # global singleton
