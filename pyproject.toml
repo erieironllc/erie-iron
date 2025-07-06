@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "erieiron-common"
-version = "0.2.17"
+version = "0.2.18"
 description = "Common utilities and infrastructure for Erie Iron applications"
 readme = "README.md"
 license = {text = "MIT"}
@@ -38,6 +38,7 @@ dependencies = [
     "psycopg2-binary>=2.8.0",
     "requests>=2.25.0",
     "numpy<2.0.0",
+    "scikit-learn>=1.0.0",
     "anthropic>=0.20.0",
     "openai>=0.27.0",
     "google-generativeai>=0.3.0",
