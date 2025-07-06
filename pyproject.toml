@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "erieiron-common"
-version = "0.2.14"
+version = "0.2.15"
 description = "Common utilities and infrastructure for Erie Iron applications"
 readme = "README.md"
 license = {text = "MIT"}
@@ -110,6 +110,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 erieiron_common = [
+    "js/*.js",
     "message_queue/*.json",
     "migrations/*.py",
     "chat_engine/chat_channels/llm_chat_context_makers/*.py",
