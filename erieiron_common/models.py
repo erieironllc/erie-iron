@@ -12,11 +12,9 @@ from django.db.models import QuerySet
 from django.utils import timezone
 
 from erieiron_common import common, settings_common
-from erieiron_ml import gpu_utils
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
-from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, PersonAuthStatus
-from erieiron_ml.gpu_utils import ComputeDevice
+from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, PersonAuthStatus, ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 
@@ -709,7 +707,7 @@ class PubSubHanderInstance(BaseErieIronModel):
             self.instance_status = PubSubHandlerInstanceStatus(status).value
             instance = PubSubHanderInstance.objects.select_for_update().get(id=self.id)
             instance.instance_status = PubSubHandlerInstanceStatus(status).value
-            instance.compute_device = gpu_utils.get_compute_device()
+            instance.compute_device = ComputeDevice.CPU  # gpu_utils.get_compute_device()
             instance.save(update_fields=["instance_status", "compute_device"])
         return self
 
@@ -724,7 +722,7 @@ class PubSubHanderInstance(BaseErieIronModel):
                 last_heard_from=get_now(),
                 system_capacity=system_capacity,
                 system_capacity_explanation=system_capacity_explanation,
-                gpu_percent=common.get_gpu_used_percent(),
+                gpu_percent=0,  # common.get_gpu_used_percent(),
                 cpu_percent=common.get_cpu_used_percent(),
                 mem_percent=common.get_memory_used_percent()
             )
@@ -772,7 +770,7 @@ class PubSubHanderInstance(BaseErieIronModel):
                         id=instance_id,
                         environment=env,
                         env=env.id,
-                        compute_device=gpu_utils.get_compute_device(),
+                        compute_device=ComputeDevice.CPU,  # gpu_utils.get_compute_device(),
                         first_heard_from=get_now(),
                         last_heard_from=get_now()
                     )
@@ -780,7 +778,7 @@ class PubSubHanderInstance(BaseErieIronModel):
                     PubSubHanderInstance.objects.filter(id=instance_id).update(
                         environment=env,
                         env=env.id,
-                        compute_device=gpu_utils.get_compute_device(),
+                        compute_device=ComputeDevice.CPU,  # gpu_utils.get_compute_device(),
                         last_heard_from=get_now()
                     )
 

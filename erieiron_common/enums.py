@@ -80,6 +80,19 @@ class SystemCapacity(ErieEnum):
     OVERLOAD = auto()
 
 
+class ComputeDevice(ErieEnum):
+    CPU = "cpu"
+    MPS = "mps"
+    CUDA = "cuda"
+
+    def __str__(self):
+        return self.value
+
+    @classmethod
+    def has_gpu(cls, device: 'ComputeDevice'):
+        return ComputeDevice.MPS.eq(device) or ComputeDevice.CUDA.eq(device)
+
+
 class PromptIntent(ErieEnum):
     UNKNOWN = auto()
     CONTINUE_PREVIOUS_CONVERSATION = auto()

@@ -21,11 +21,9 @@ from django.db.models import QuerySet
 from django.utils import timezone
 
 from erieiron_common import common, settings_common
-from erieiron_ml import gpu_utils
 from erieiron_common.common import get_now, get_methods_with_decorator
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, PubSubHandlerInstanceStatus, PubSubMessagePriority
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, PubSubHandlerInstanceStatus, PubSubMessagePriority, ComputeDevice
 from erieiron_common.enums import SystemCapacity
-from erieiron_ml.gpu_utils import ComputeDevice
 from erieiron_common.models import PubSubMessage, PubSubHanderInstance, PubSubHanderInstanceProcess, PubSubEnvironment
 
 MIN_THREADS = 1
@@ -308,7 +306,7 @@ class PubSubManager:
         return PubSubHanderInstance.objects.get_or_create(
             id=self.handler_instance_id,
             defaults={
-                "compute_device": gpu_utils.get_compute_device()
+                "compute_device": ComputeDevice.CPU # gpu_utils.get_compute_device()
             }
         )[0]
 

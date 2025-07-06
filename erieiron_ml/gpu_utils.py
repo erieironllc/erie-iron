@@ -8,20 +8,7 @@ import psutil
 import torch
 
 from erieiron_common import settings_common
-from erieiron_common.enums import ErieEnum
-
-
-class ComputeDevice(ErieEnum):
-    CPU = "cpu"
-    MPS = "mps"
-    CUDA = "cuda"
-
-    def __str__(self):
-        return self.value
-
-    @classmethod
-    def has_gpu(cls, device: 'ComputeDevice'):
-        return ComputeDevice.MPS.eq(device) or ComputeDevice.CUDA.eq(device)
+from erieiron_common.enums import ComputeDevice
 
 
 @contextmanager
