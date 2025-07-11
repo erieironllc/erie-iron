@@ -4,11 +4,9 @@ from erieiron_common import common
 
 def do_work(task_id):
     task = Task.objects.get(id=task_id)
-    if not task.allow_execution():
-        return
-
+    
     print(f"python manage.py sda_code --task_id={task_id}")
-
+    
     # common.execute_management_cmd(
     #     f"sda_code --task_id={task_id}"
     # )

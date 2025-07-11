@@ -81,12 +81,12 @@ def comment_out_line(file_path_or_ext, line_str):
     comment_start_char = COMMENT_CHAR_START_MAP.get(ext)
     if not comment_start_char:
         return line_str
-
+    
     line_str = line_str or ""
-
+    
     match = re.match(r'^(\s*)(.*)', line_str)
     leading_whitespace, stripped_text = match.groups()
-
+    
     return f"{leading_whitespace}{comment_start_char} {stripped_text}{COMMENT_CHAR_END_MAP.get(ext, '')}"
 
 
@@ -113,11 +113,11 @@ def strip_non_alpha(s, replacement=""):
 def contains_any(val: str, test_vals: List[str], ignore_case=False) -> bool:
     val = default_str(val)
     test_vals = [default_str(v) for v in ensure_list(test_vals)]
-
+    
     if ignore_case:
         val = val.lower()
         test_vals = [v.lower() for v in test_vals]
-
+    
     return any(v in val for v in test_vals)
 
 
@@ -131,27 +131,27 @@ def get(o, key, default_val=None, check_attr=True):
     else:
         if o is None:
             return default_val
-
+        
         try:
             if has(o, key):
                 return o[key]
         except:
             pass
-
+        
         if check_attr:
             try:
                 if hasattr(o, key):
                     return getattr(o, key, default_val)
             except:
                 pass
-
+        
         return default_val
 
 
 def has(d, key):
     if d is None:
         return None
-
+    
     return key in d and d[key] is not None
 
 
@@ -171,17 +171,17 @@ def get_size_in_mb(file):
 
 def get_weighted_random_choice(items_ranked_descending_priority):
     items_ranked_descending_priority = ensure_list(items_ranked_descending_priority)
-
+    
     if len(items_ranked_descending_priority) == 0:
         return None
-
+    
     if len(items_ranked_descending_priority) == 1:
         return items_ranked_descending_priority[0]
-
+    
     weights = []
     for idx, item in enumerate(items_ranked_descending_priority):
         weights.append((100 * len(items_ranked_descending_priority)) // (idx + 1))
-
+    
     return random.choices(
         items_ranked_descending_priority,
         k=1,
@@ -192,29 +192,29 @@ def get_weighted_random_choice(items_ranked_descending_priority):
 def ensure_list(v):
     if v is None:
         return []
-
+    
     if isinstance(v, np.ndarray):
         return ensure_list(v.tolist())
-
+    
     if isinstance(v, zip):
         return list(v)
-
+    
     if is_list_like(v):
         return list(v)
-
+    
     return [v]
 
 
 def is_list_like(v):
     if isinstance(v, QuerySet):
         return True
-
+    
     if isinstance(v, List):
         return True
-
+    
     if isinstance(v, set):
         return True
-
+    
     return False
 
 
@@ -246,21 +246,21 @@ def percent_difference(x, y):
 def find_repeating_patterns(sequence, pattern_length):
     if pattern_length < 2 or pattern_length > len(sequence) // 2:
         raise Exception("Pattern length must be at least 2 and no more than half the length of the sequence.")
-
+    
     # Dictionary to store patterns and their starting indices
     patterns = {}
-
+    
     # Loop through the sequence to extract possible patterns
     for i in range(len(sequence) - pattern_length + 1):
         # Create a subsequence (pattern candidate)
         pattern = tuple(sequence[i:i + pattern_length])
-
+        
         # Check if this pattern has occurred before
         if pattern in patterns:
             patterns[pattern].append(i)
         else:
             patterns[pattern] = [i]
-
+    
     # Filter and return patterns that occur more than once
     return {pat: idxs for pat, idxs in patterns.items() if len(idxs) > 1}
 
@@ -287,23 +287,23 @@ def get_basename(file_path: str) -> str:
 def get_filename_and_extension(file_path: str) -> Tuple[str, str]:
     path_basename = os.path.basename(file_path)
     parts = path_basename.split(".")
-
+    
     extension = parts[-1].lower()
     name = path_basename[0:len(path_basename) - (len(extension) + 1)]
-
+    
     return name, extension
 
 
 def remove_questions(paragraph):
     # Split the paragraph into sentences using regex
     sentences = re.split(r'(?<=[.!?]) +', paragraph)
-
+    
     # Filter out sentences that end with a question mark
     sentences_without_questions = [sentence for sentence in sentences if not sentence.strip().endswith('?')]
-
+    
     # Join the remaining sentences back into a single paragraph
     modified_paragraph = ' '.join(sentences_without_questions)
-
+    
     return modified_paragraph
 
 
@@ -326,23 +326,23 @@ def format_millis_to_bars_short(time_ms, bpm, beats_per_measure):
     total_beats = bpm * total_minutes
     total_bars = 1 + int(total_beats // beats_per_measure)
     remainder_beats = 1 + int(total_beats % beats_per_measure)
-
+    
     return f"{total_bars}:{remainder_beats}"
 
 
 def format_millis_to_bars(time_ms, bpm, beats_per_measure):
     duration_per_beat = 60000 / bpm
-
+    
     duration_per_measure = duration_per_beat * beats_per_measure
     bar_number = int(time_ms // duration_per_measure)
     time_into_measure = time_ms % duration_per_measure
-
+    
     beat_number = int(round(time_into_measure / duration_per_beat, ndigits=0))
-
+    
     if beat_number == beats_per_measure:
         bar_number += 1
         beat_number = 0
-
+    
     if beat_number == 0:
         if bar_number == 1:
             return f"{bar_number} bar"
@@ -357,7 +357,7 @@ def format_millis_to_hr_min_sec(millis, decimal_places=0):
     seconds = f"{float((millis / 1000) % 60):.{decimal_places}f}"
     minutes = int((millis // (1000 * 60)) % 60)
     hours = int((millis // (1000 * 60 * 60)) % 24)
-
+    
     if millis < 60 * 1000:
         return f"{seconds} sec"
     elif millis < 60 * 60 * 1000:
@@ -377,25 +377,25 @@ def millis_to_hhmmss(millis):
 def parse_int(v, min_max: Tuple[int, int] = None, default_val=None) -> int:
     if not is_numeric(v):
         return default_val
-
+    
     i = int(float(v))
-
+    
     if min_max:
         i = max(min_max[0], min(min_max[1], i))
-
+    
     return i
 
 
 def parse_bool(v) -> bool:
     if v is None:
         return False
-
+    
     if isinstance(v, bool):
         return v
-
+    
     if is_list_like(v) and len(v) == 0:
         return False
-
+    
     s = str(v)
     if s.lower() in ['true', '1', 't', 'y', 'yes']:
         return True
@@ -411,7 +411,7 @@ def ensure_open_file(file):
             for chunk in file.chunks():
                 output_file.write(chunk)
         return open(output_path, 'rb')
-
+    
     if isinstance(file, str):
         return open(file, 'rb')
     elif file.closed:
@@ -419,7 +419,7 @@ def ensure_open_file(file):
             return open(file.temporary_file_path(), 'rb')
         else:
             return open(file.name, 'rb')
-
+    
     return file
 
 
@@ -433,12 +433,12 @@ def get_filename(file):
 def quietly_delete(file):
     if not file:
         return
-
+    
     if is_list_like(file):
         for f in file:
             quietly_delete(f)
         return
-
+    
     if isinstance(file, str) or isinstance(file, Path):
         file_path = file
     else:
@@ -447,7 +447,7 @@ def quietly_delete(file):
         except:
             pass
         file_path = file.name
-
+    
     if os.path.exists(file_path):
         try:
             os.remove(file_path)
@@ -472,7 +472,7 @@ def print_working_dir_files():
     for root, dirs, files in os.walk(start_path):
         levels_deep = len(root.split(os.sep))
         basename = os.path.basename(root)
-
+        
         if len(basename) == 0 or basename == "conf" or basename == "erieiron_common":
             print((levels_deep - 1) * '---', basename)
             for file in files:
@@ -482,7 +482,7 @@ def print_working_dir_files():
 def filter_empty(data_list, to_none=False):
     if data_list is None:
         return None
-
+    
     l2 = [li for li in ensure_list(data_list) if is_not_empty(li)]
     if to_none and len(l2) == 0:
         return None
@@ -506,7 +506,7 @@ def default(obj, default_val=None):
 def default_str(s, default_val=""):
     if s is None:
         return default_val
-
+    
     s = str(s)
     if is_empty(s):
         return default_val
@@ -648,23 +648,23 @@ def struct_add(struct, path_keys, leaf_value, max_value=None):
 def safe_sum(vals, default_value=0):
     if vals is None:
         return default_value
-
+    
     vals = filter_none([ensure_numeric(v) for v in vals])
     if len(vals) == 0:
         return default_value
-
+    
     return sum(vals)
 
 
 def safe_divide(top, bottom, min_val=0):
     if top is None or bottom is None:
         return min_val
-
+    
     if bottom == 0:
         v = 0
     else:
         v = float(top) / float(bottom)
-
+    
     if min_val:
         return max(min_val, v)
     else:
@@ -677,10 +677,10 @@ def safe_split(s, delimeter: str = ",", strip=True, lower=False):
         for d in delimeter:
             s = replace_case_insensitive(s, d, ",")
         return safe_split(s, ",", strip)
-
+    
     if is_empty(s):
         return []
-
+    
     vals = []
     for s1 in s.split(delimeter):
         s1 = default_str(s1)
@@ -710,10 +710,10 @@ def is_numeric(s):
 def replace_case_insensitive(look_in, look_for, replace_with):
     if look_in is None:
         return None
-
+    
     if look_for is None or replace_with is None:
         return look_in
-
+    
     return re.compile(re.escape(look_for), re.IGNORECASE).sub(replace_with, look_in)
 
 
@@ -724,7 +724,7 @@ def replace_nonalpha(s, replace_with):
 def split_camel_case(s):
     if s is None:
         return []
-
+    
     return re.sub('([a-z])([A-Z])', r'\1 \2', s).split()
 
 
@@ -739,12 +739,12 @@ def diff_dict(dict1, dict2):
 def hours_diff(d1, d2=None):
     if d2 is None:
         d2 = datetime.now()
-
+    
     diff = d2 - d1
-
+    
     days, seconds = diff.days, diff.seconds
     hours = days * 24 + seconds // 3600
-
+    
     return math.ceil(hours)
 
 
@@ -759,7 +759,7 @@ def get_checksum(fname):
 def get_recent_vals(vals, count):
     if len(vals) < count:
         return vals
-
+    
     out = []
     rl = list(vals)
     rl.reverse()
@@ -768,7 +768,7 @@ def get_recent_vals(vals, count):
         out.append(w)
         if len(out) == count:
             break
-
+    
     return out
 
 
@@ -787,27 +787,27 @@ def is_json_serializable(value):
 def model_to_dict(instance):
     if not isinstance(instance, Model):
         raise ValueError("Expected a Django model instance")
-
+    
     data = {
         "cls_name": instance.__class__.__name__
     }
-
+    
     for field in instance._meta.get_fields():
         field_name = field.name
-
+        
         if not hasattr(instance, field_name):
             continue
-
+        
         field_value = getattr(instance, field_name)
         if isinstance(field_value, FieldFile):
             continue
-
+        
         if isinstance(field, (ForeignKey, OneToOneField)):
             field_value = field_value.pk if field_value else None
-
+        
         if is_json_serializable(field_value):
             data[field_name] = field_value
-
+    
     return data
 
 
@@ -833,29 +833,29 @@ def sanitize_filename(filename):
 def copy_to_temp_file(source_file_path):
     if not os.path.isfile(source_file_path):
         raise FileNotFoundError(f"Source file '{source_file_path}' does not exist")
-
+    
     if not os.access(source_file_path, os.R_OK):
         raise PermissionError(f"No read permission for source file: {source_file_path}")
-
+    
     try:
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
             temp_file_path = temp_file.name
-
+        
         with open(source_file_path, 'rb') as src_file:
             data = src_file.read()
-
+        
         with open(temp_file_path, 'wb') as dst_file:
             dst_file.write(data)
-
+        
         return Path(temp_file_path)
-
+    
     except Exception as e:
         try:
             if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
         except:
             pass
-
+        
         raise IOError(f"Error copying file: {e}")
 
 
@@ -865,22 +865,22 @@ def move_with_overwrite(source_file, dest_file):
     except:
         pass
     shutil.move(source_file, dest_file)
-
+    
     return dest_file
 
 
 def get_dict(obj):
     if obj is None:
         return None
-
+    
     if is_list_like(obj):
         return [get_dict(obj2) for obj2 in obj]
-
+    
     d = None
-
+    
     if isinstance(obj, dict):
         d = obj
-
+    
     if d is None and hasattr(obj, 'to_dict'):
         d = obj.to_dict()
     elif d is None:
@@ -888,9 +888,9 @@ def get_dict(obj):
             k: v for k, v in obj.__dict__.items()
             if not k.startswith("_")
         }
-
+    
     d["cls_name"] = obj.__class__.__name__
-
+    
     return d
 
 
@@ -909,20 +909,20 @@ def string_to_number(s):
 def read_file(file_path, max_lines=None):
     with open(file_path, 'r', encoding="utf-8", errors="ignore") as file:
         filtered_lines = file.readlines()
-
+        
         if max_lines:
             filtered_lines = filtered_lines[-max_lines:]
-
+        
         return "\n".join(filtered_lines)
 
 
 def read_json(file_name, default=None):
     if not file_name:
         return default
-
+    
     if not os.path.exists(file_name):
         return default
-
+    
     with open(file_name, "r") as f:
         return json.load(f)
 
@@ -963,11 +963,11 @@ def date_to_epoch_ms(target_date):
     from datetime import time
     start_datetime = datetime.combine(target_date, time.min).replace(tzinfo=timezone.utc)
     start_epoch_ms = int(start_datetime.timestamp() * 1000)
-
+    
     # End of the day (23:59:59.999999)
     end_datetime = datetime.combine(target_date, time.max).replace(tzinfo=timezone.utc)
     end_epoch_ms = int(end_datetime.timestamp() * 1000)
-
+    
     return start_epoch_ms, end_epoch_ms
 
 
@@ -976,58 +976,58 @@ def get_page_pathname(url_str, count_parts=1):
     interesting_parts = []
     for path_part in parsed_url.path.split('/'):
         path_part_stripped = path_part.strip()
-
+        
         if not path_part_stripped:
             continue
-
+        
         try:
             person_uuid = uuid.UUID(path_part_stripped)
             continue
         except:
             pass
-
+        
         if is_numeric(path_part_stripped):
             continue
-
+        
         interesting_parts.append(path_part_stripped)
-
+    
     if len(interesting_parts) > 0:
         path = "/".join(interesting_parts[-1 * count_parts:])
     else:
         # root is the project view
         path = "project"
-
+    
     return path
 
 
 def get_path(path_str) -> Path:
     if isinstance(path_str, Path):
         return path_str
-
+    
     if "~" in path_str:
         path_str = os.path.expanduser(path_str)
-
+    
     path_str = Path(path_str)
     if not path_str.exists():
         raise Exception(f"{path_str} does not exist")
-
+    
     return path_str
 
 
 def log_debug(*args):
     s = None
-
+    
     if len(args) == 0:
         return None
     elif len(args) == 1:
         s = args[0]
     elif len(args) > 1:
         s = "\t".join([str(a) for a in args])
-
+    
     if s is None or s == "None":
         logging.debug("log_info called with None")
         logging.error(traceback.format_exc())
-
+    
     logging.debug(s)
     return s
 
@@ -1055,26 +1055,27 @@ def dict_to_vars(the_dict, *args):
 
 def wrap_log_message_in_contenxt(args):
     s = None
-
+    
     if len(args) == 0:
         return None
     elif len(args) == 1:
         s = args[0]
     elif len(args) > 1:
         s = "\t".join([str(a) for a in args])
-
+    
     if s is None or s == "None":
         print("log_info called with None")
         logging.error(traceback.format_exc())
-
+    
     thread_name = get_current_thread_name()
-
+    
     # return f"{get_memory_used_percent()}m {get_cpu_used_percent()}c {thread_name} {s}"
     return f"{thread_name} {get_memory_used_percent()}% {s}"
 
 
 def get_current_thread_name():
     return threading.current_thread().name.split("-")[-1]
+
 
 def get_cpu_used_percent() -> int:
     cpu_percentages = psutil.cpu_percent(interval=1, percpu=True)
@@ -1103,13 +1104,13 @@ def get_machine_name():
 def is_valid_uuid(s):
     if not s:
         return False
-
+    
     if str(s) == str(UUID_NULL_OBJECT):
         return False
-
+    
     if isinstance(s, uuid.UUID):
         return True
-
+    
     try:
         uuid_s = uuid.UUID(s)
         return str(uuid_s) == str(s)
@@ -1132,13 +1133,13 @@ def download_file(url) -> Path:
     response = requests.get(url, stream=True)
     if response.status_code != 200:
         raise Exception(f"Failed to download {url}. HTTP Status Code: {response.status_code}")
-
+    
     total_size = int(response.headers.get('Content-Length', 0))
     chunk_size = 8192
     num_chunks = total_size // chunk_size + (1 if total_size % chunk_size != 0 else 0)
-
+    
     downloaded = 0
-
+    
     with tempfile.NamedTemporaryFile(mode="wb", suffix=f".{url.split('.')[-1]}", delete=False) as file:
         output_file = Path(file.name)
         log_info(f"Starting download... Total size: {bytes_to_megabytes(total_size)} bytes ({num_chunks} chunks) to {output_file}")
@@ -1148,7 +1149,7 @@ def download_file(url) -> Path:
                 downloaded += len(chunk)
                 progress = (downloaded / total_size) * 100
                 log_info(f"Progress: {progress:.2f}% {url} to {output_file}")
-
+    
     log_info(f"\nFile downloaded successfully and saved to {output_file}")
     return output_file
 
@@ -1160,17 +1161,17 @@ def bytes_to_megabytes(bytes_value):
 def find_closest_number(numbers, target, default_val=0):
     if not numbers:
         return default_val
-
+    
     return min(numbers, key=lambda num: abs(num - target))
 
 
 def percent_iterator(item_count: float):
     percent_per_item = 100 / item_count
-
+    
     running_total = 0
     for i in range(int(item_count * 2)):
         running_total += percent_per_item
-
+        
         if running_total < 100:
             yield percent_per_item
         else:
@@ -1238,7 +1239,7 @@ def kill_pid(pid, wait=None):
 def create_temp_file(prefix: str, extension: str = None) -> Path:
     prefix = default_str(prefix)
     extension = default_str(extension)
-
+    
     if extension:
         if not extension.startswith('.'):
             extension = '.' + extension
@@ -1247,17 +1248,17 @@ def create_temp_file(prefix: str, extension: str = None) -> Path:
         prefix = ".".join(prefix.split(".")[:-1])
     else:
         extension = ""
-
+    
     temp_file = tempfile.NamedTemporaryFile(prefix=prefix, suffix=extension, delete=False)
     temp_file_path = temp_file.name
     temp_file.close()
-
+    
     return Path(temp_file_path)
 
 
 def get_disk_used_percent():
     disk_usage = psutil.disk_usage('/')
-
+    
     return 100 * disk_usage.free // disk_usage.total
 
 
@@ -1268,13 +1269,13 @@ def get_pids_by_command(command):
             cmdline = proc.info['cmdline']
             if not cmdline:
                 continue
-
+            
             if command in " ".join(cmdline):
                 pids.append(proc.info['pid'])
-
+        
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-
+    
     return pids
 
 
@@ -1310,13 +1311,13 @@ def create_tgz(source_dir: Path, output_filename: Path = None) -> Path:
     source_dir = Path(source_dir)
     assert source_dir.exists()
     source_dir = str(source_dir)
-
+    
     if output_filename is None:
         output_filename = create_temp_file(os.path.basename(source_dir), "tgz")
-
+    
     with tarfile.open(output_filename, "w:gz") as tar:
         tar.add(source_dir, arcname=os.path.basename(source_dir))
-
+    
     return Path(output_filename)
 
 
@@ -1324,17 +1325,17 @@ def import_module_from_path(module_file_path):
     base_module = get_base_module(module_file_path)
     module_file_path = os.path.abspath(module_file_path)
     module_name = f"{base_module}.{os.path.splitext(os.path.basename(module_file_path))[0]}"
-
+    
     # noinspection PyUnresolvedReferences
     spec = importlib.util.spec_from_file_location(module_name, module_file_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load module from {module_file_path}")
-
+    
     # noinspection PyUnresolvedReferences
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-
+    
     return module
 
 
@@ -1359,51 +1360,51 @@ def get_base_module(module_file_path):
     module_file_path = str(module_file_path)
     while module_file_path[0] in [".", "/"]:
         module_file_path = module_file_path[1:]
-
+    
     return ".".join(module_file_path.split("/")[:-1])
 
 
 def get_methods_with_decorator(decorator_name):
     decorator_name = decorator_name.replace("@", "")
     methods_to_call = []
-
+    
     directory = os.getcwd()
-
+    
     for root, dirs, files in os.walk(directory):
         # Skip virtual environment directories
         dirs[:] = [d for d in dirs if d not in ("env", "venv", "__pycache__")]
-
+        
         for file in files:
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)
                 module_name = os.path.splitext(os.path.relpath(file_path, directory))[0].replace(os.path.sep, ".")
-
+                
                 with open(file_path, "r", encoding="utf-8") as f:
                     try:
                         tree = ast.parse(f.read(), filename=file_path)
                     except SyntaxError as e:
                         print(f"Skipping {file_path} due to syntax error: {e}")
                         continue
-
+                
                 for node in ast.walk(tree):
                     if isinstance(node, ast.FunctionDef):  # Check for function definitions
                         for decorator in node.decorator_list:
                             if isinstance(decorator, ast.Name) and decorator.id == decorator_name:
                                 methods_to_call.append((module_name, node.name))
-
+    
     methods = []
     for module_name, method_name in methods_to_call:
         try:
             module_path = os.path.join(os.getcwd(), module_name.replace(".", os.path.sep) + ".py")
-
+            
             # noinspection PyUnresolvedReferences
             spec = importlib.util.spec_from_file_location(module_name, module_path)
-
+            
             # noinspection PyUnresolvedReferences
             module = importlib.util.module_from_spec(spec)
-
+            
             spec.loader.exec_module(module)
-
+            
             # Get the method and call it
             if hasattr(module, method_name):
                 method = getattr(module, method_name)
@@ -1412,7 +1413,7 @@ def get_methods_with_decorator(decorator_name):
                 logging.error(f"Method {method_name} not found in {module_name}")
         except Exception as e:
             logging.exception(f"Error calling {method_name} in {module_name}: {e}")
-
+    
     return methods
 
 
@@ -1424,12 +1425,12 @@ def simulate_crash(wait_secs=0):
     if not settings_common.DEBUG:
         logging.error("attempting to simulate a crash in non DEBUG mode.  skipping it")
         return
-
+    
     def delayed_exit():
         time.sleep(wait_secs)
         # noinspection PyUnresolvedReferences,PyProtectedMember
         os._exit(1)
-
+    
     threading.Thread(target=delayed_exit, daemon=True).start()
 
 
@@ -1438,23 +1439,23 @@ def scp_from_host(username: str, host: str, source: str) -> Path:
         f"training_results{datetime.now().strftime('%Y%m%d%M%S')}",
         "log"
     )
-
+    
     command = ['scp', f'{username}@{host}:{source}', str(f)]
-
+    
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         raise Exception(f"Error transferring file: {result.stderr}")
-
+    
     return f
 
 
 def render_template(template_name, context_dict):
     from django.template import Engine
     from django.template import Context
-
+    
     engine = Engine.get_default()
     template = engine.get_template(template_name)
-
+    
     return template.render(Context(context_dict))
 
 
@@ -1467,17 +1468,108 @@ def cosine_sim(mel1, mel2):
 def assert_exists(path: Path) -> Path:
     if path is None:
         raise Exception(f"path {path} is None")
-
+    
     p = Path(path).expanduser()
     if not p.exists():
         raise Exception(f"{path} does not exist")
     return p
 
 
+def iterate_files_deep(
+        root_directory: Path,
+        respect_git_ignore=True,
+        file_extensions: list[str] = None,
+        gitignore_patterns: list[str] = None
+):
+    root_directory = assert_exists(root_directory)
+    
+    if not root_directory.is_dir():
+        raise Exception(f"Path is not a directory: {root_directory}")
+    
+    gitignore_patterns = ensure_list(gitignore_patterns)
+    gitignore_patterns.append(".git/")
+    
+    if respect_git_ignore:
+        gitignore_file = root_directory / ".gitignore"
+        if gitignore_file.exists():
+            with open(gitignore_file, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip empty lines and comments
+                    if line and not line.startswith('#'):
+                        # Convert gitignore pattern to regex pattern
+                        pattern = _gitignore_to_regex(line)
+                        gitignore_patterns.append(pattern)
+    
+    for file_path in root_directory.rglob("*"):
+        if file_path.is_file():
+            relative_path = file_path.relative_to(root_directory)
+            relative_path_str = str(relative_path).replace('\\', '/')
+            
+            # Check if file matches any gitignore pattern
+            if respect_git_ignore and gitignore_patterns:
+                if str(relative_path) == ".gitignore":
+                    continue
+                
+                if any(re.match(pattern, relative_path_str) or
+                       re.match(pattern, relative_path_str + '/') for pattern in gitignore_patterns):
+                    continue
+            
+            # Filter by file extensions if specified
+            if file_extensions is not None:
+                file_extension = relative_path.suffix.lower()
+                file_name = relative_path.name
+                
+                # Check if file matches any of the specified extensions or patterns
+                matches = False
+                
+                for ext in file_extensions:
+                    # Special case for Dockerfile pattern
+                    if ext == "Dockerfile" and file_name.startswith("Dockerfile"):
+                        matches = True
+                        break
+                    # Regular extension matching
+                    else:
+                        normalized_ext = ext if ext.startswith('.') else f'.{ext}'
+                        if file_extension == normalized_ext.lower():
+                            matches = True
+                            break
+                
+                if not matches:
+                    continue
+            
+            yield relative_path
+
+
+def _gitignore_to_regex(gitignore_pattern):
+    """Convert a gitignore pattern to a regex pattern."""
+    # Escape special regex characters except for *, ?, and []
+    pattern = re.escape(gitignore_pattern)
+    
+    # Replace escaped wildcards with regex equivalents
+    pattern = pattern.replace(r'\*\*', '.*')  # ** matches any number of directories
+    pattern = pattern.replace(r'\*', '[^/]*')  # * matches anything except /
+    pattern = pattern.replace(r'\?', '[^/]')  # ? matches any single character except /
+    
+    # Handle directory patterns (ending with /)
+    if gitignore_pattern.endswith('/'):
+        pattern = pattern[:-1] + '(/.*)?$'  # Remove escaped / and add directory match
+    else:
+        pattern = pattern + '(/.*)?$'  # Match file or directory
+    
+    # Handle patterns starting with /
+    if gitignore_pattern.startswith('/'):
+        pattern = '^' + pattern[2:]  # Remove escaped / and anchor to start
+    else:
+        pattern = '(^|.*/)' + pattern  # Match anywhere in path
+    
+    return pattern
+
+
 def xml_to_json(xml_string):
     import xml.etree.ElementTree as ET
     import json
-
+    
     def recurse(node):
         result = {}
         # add attributes
@@ -1499,7 +1591,7 @@ def xml_to_json(xml_string):
         if text:
             result['text'] = text
         return result
-
+    
     root = ET.fromstring(xml_string)
     return json.dumps({root.tag: recurse(root)}, indent=2)
 
@@ -1507,7 +1599,7 @@ def xml_to_json(xml_string):
 def execute_management_cmd(command, output_file: Path = None) -> int:
     python_executable = os.path.join("env", "bin", "python")
     full_command = f"{python_executable} manage.py {command}"
-
+    
     return exec_cmd(full_command, output_file)
 
 
@@ -1522,7 +1614,7 @@ def exec_cmd(full_command, output_file=None) -> int:
                 libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
             except Exception as e:
                 logging.error("Failed to set death signal: %s", e)
-
+    
     if output_file:
         print(f'''about to execute "{full_command}". sending log to: 
 tail -f {os.path.abspath(output_file)}
@@ -1557,7 +1649,7 @@ def assert_in_sandbox(sandbox_root_dir, file_path) -> Path:
     if is_running_in_container():
         # if we are running in the container, we are by default running in the sandbox
         return file_path
-
+    
     file_path = Path(file_path).resolve()
     sandbox_root_dir = Path(sandbox_root_dir).resolve()
     if not os.path.abspath(file_path).startswith(os.path.abspath(sandbox_root_dir)):
@@ -1589,7 +1681,7 @@ def copy_missing_files(src_dir, destination_dir):
     # Create destination directory if it doesn't exist
     destination_dir.mkdir(parents=True, exist_ok=True)
     # Copy files that don't exist, preserving existing files
-
+    
     copied_files = []
     skipped_files = []
     for source_file in src_dir.rglob('*'):
@@ -1597,7 +1689,7 @@ def copy_missing_files(src_dir, destination_dir):
             # Calculate relative path from template root
             relative_path = source_file.relative_to(src_dir)
             dest_file = destination_dir / relative_path
-
+            
             # Only copy if destination file doesn't exist
             if not dest_file.exists():
                 # Create parent directories if needed
@@ -1615,3 +1707,14 @@ def copy_missing_files(src_dir, destination_dir):
             print(f"    └── ... and {len(copied_files) - 5} more files")
     if skipped_files:
         print(f"[⏭️] Skipped {len(skipped_files)} existing files (preserved)")
+
+
+def replace_in_file(the_file: Path, replacements: list[tuple[str, str]]):
+    the_file = assert_exists(the_file)
+    text = the_file.read_text()
+    
+    for look_for, replace_with in replacements:
+        text = text.replace(look_for, replace_with)
+    
+    the_file.write_text(text)
+    return the_file

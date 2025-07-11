@@ -15,7 +15,7 @@ This exception is used to signal that a task must pause and request additional p
 Attributes:
     action (str): The AWS action that was attempted (e.g., 'ecr:CreateRepository').
     resource (str): The ARN or wildcard of the resource involved in the attempted action."""
-
+    
     def __init__(self, action: str, resource: str):
         pass
 
@@ -30,7 +30,7 @@ by the underlying `subprocess` module.
 Attributes:
     message (str): A description of the error or failed command.
     original_exception (Optional[Exception]): The exception that was raised, if available."""
-
+    
     def __init__(self, message: str, original_exception: Optional[Exception] = None):
         pass
 
@@ -152,11 +152,8 @@ Returns:
 
 Raises:
     CommandExecutionError: If the command exits with a non-zero status or if a subprocess error occurs.
+    """
 
-If `sandbox_path` is provided, any command argument that appears to be a path will be checked
-to ensure it remains within the sandbox directory. If a path is detected outside the sandbox,
-the command will be blocked and a CommandExecutionError raised."""
-    pass
 
 
 def get_aws_metadata() -> dict:
@@ -260,21 +257,4 @@ Raises:
     CommandExecutionError: If a shell command for Docker or AWS CLI fails.
     RuntimeError: For unrecoverable errors with AWS API calls or IAM operations.
     Exception: For any other unexpected errors encountered during the process."""
-    pass
-
-
-def clone_template_project_to_sandbox(business_id: uuid.UUID) -> Path:
-    """Clones the template project into the business's sandbox directory.
-
-This is used to bootstrap a new web service or containerized project environment for a business.
-
-Args:
-    business_id (uuid.UUID): The UUID of the business for which the project should be cloned.
-
-Returns:
-    Path: The path to the newly created project directory inside the business sandbox.
-
-Raises:
-    FileNotFoundError: If the template source directory does not exist.
-    Exception: If the copy operation fails for any reason."""
     pass

@@ -79,10 +79,16 @@
                 </button>
             </li>
         {% endif %}
+{#        <li class="nav-item" role="presentation">#}
+{#            <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button"#}
+{#                    role="tab">#}
+{#                Details#}
+{#            </button>#}
+{#        </li>#}
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button"
+            <button class="nav-link" id="edit-tab" data-bs-toggle="tab" data-bs-target="#edit" type="button"
                     role="tab">
-                Details
+                Edit
             </button>
         </li>
     </ul>
@@ -122,10 +128,6 @@
                 <tr>
                     <th>Status</th>
                     <td>{{ business.status|label }}</td>
-                </tr>
-                <tr>
-                    <th>Sandbox Directory</th>
-                    <td>{{ business.sandbox_dir_name }}</td>
                 </tr>
                 <tr>
                     <th>Service Token</th>
@@ -513,6 +515,114 @@
                     {% include "_task_row.html" with task=task %}
                 {% endfor %}
             </table>
+        </div>
+        
+        <div class="tab-pane" id="edit" role="tabpanel" aria-labelledby="edit-tab">
+            <h5>Edit Business Fields</h5>
+            <form action="{% url 'action_update_business' business.id %}" method="post">
+                {% csrf_token %}
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Business Name</label>
+                            <input type="text" name="name" id="name" class="form-control" value="{{ business.name }}">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="summary" class="form-label">Summary</label>
+                            <textarea name="summary" id="summary" class="form-control" rows="3">{{ business.summary|default:"" }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="raw_idea" class="form-label">Raw Idea</label>
+                            <textarea name="raw_idea" id="raw_idea" class="form-control" rows="3">{{ business.raw_idea|default:"" }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="value_prop" class="form-label">Value Proposition</label>
+                            <textarea name="value_prop" id="value_prop" class="form-control" rows="3">{{ business.value_prop|default:"" }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="revenue_model" class="form-label">Revenue Model</label>
+                            <textarea name="revenue_model" id="revenue_model" class="form-control" rows="3">{{ business.revenue_model|default:"" }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="audience" class="form-label">Audience</label>
+                            <textarea name="audience" id="audience" class="form-control" rows="3">{{ business.audience|default:"" }}</textarea>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="mb-3">
+                            <label for="status" class="form-label">Status</label>
+                            <select name="status" id="status" class="form-select">
+                                {% for value, label in business_status_choices %}
+                                    <option value="{{ value }}" {% if business.status == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="source" class="form-label">Source</label>
+                            <select name="source" id="source" class="form-select">
+                                {% for value, label in business_source_choices %}
+                                    <option value="{{ value }}" {% if business.source == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="autonomy_level" class="form-label">Autonomy Level</label>
+                            <select name="autonomy_level" id="autonomy_level" class="form-select">
+                                <option value="">-- Select Autonomy Level --</option>
+                                {% for value, label in autonomy_level_choices %}
+                                    <option value="{{ value }}" {% if business.autonomy_level == value %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="service_token" class="form-label">Service Token</label>
+                            <input type="text" name="service_token" id="service_token" class="form-control" value="{{ business.service_token|default:"" }}">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="bank_account_id" class="form-label">Bank Account ID</label>
+                            <input type="text" name="bank_account_id" id="bank_account_id" class="form-control" value="{{ business.bank_account_id|default:"" }}">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="github_repo_url" class="form-label">GitHub Repository URL</label>
+                            <input type="url" name="github_repo_url" id="github_repo_url" class="form-control" value="{{ business.github_repo_url|default:"" }}" placeholder="https://github.com/username/repo">
+                        </div>
+                        
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" name="allow_autonomous_shutdown" id="allow_autonomous_shutdown" class="form-check-input" {% if business.allow_autonomous_shutdown %}checked{% endif %}>
+                            <label for="allow_autonomous_shutdown" class="form-check-label">Allow Autonomous Shutdown</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="business_plan" class="form-label">Business Plan</label>
+                    <textarea name="business_plan" id="business_plan" class="form-control" rows="5">{{ business.business_plan|default:"" }}</textarea>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <a href="{% url 'view_business' business.id %}" class="btn btn-secondary ms-2">Cancel</a>
+            </form>
+            
+            <div class="mt-4">
+                <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-warning" 
+                            onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
+                        Bootstrap
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 {% endblock %}

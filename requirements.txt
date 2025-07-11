@@ -53,6 +53,6 @@ sqlparse
 svgwrite
 tf2onnx
 tiktoken
-torch<2.1.2
+torch>=2.6
 torchvggish
 transformers

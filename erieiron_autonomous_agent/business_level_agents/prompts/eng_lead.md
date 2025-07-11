@@ -168,6 +168,14 @@ Each task **must** include the following fields
 
 ---
 
+# Recommended Technologies
+- AWS native services.  Favor simple AWS tech to start:  RDS postgres, app runner, lambda
+- AWS infrastructure must be configured via cloudformation.  You may not use boto3 or terraform to configure AWS infrastructure or roles
+- Do not do a micro-services architecture unless absolutely needed for scale.  Default to a monolith
+- Favor simple UI implementations using server side html rendering, bootstrap, and jquery.  Only use React or similar if it is absolutely necessary to implement a single page app.  (Most UIs we build do not need to be single page apps)
+
+---
+
 # Thinking Style
 - Prioritize simplicity, maintainability, and cost efficiency  
 - Surface operational risks early; suggest automation wherever viable  

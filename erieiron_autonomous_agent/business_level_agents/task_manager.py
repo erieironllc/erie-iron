@@ -16,7 +16,7 @@ TASKTYPE_TO_MSGTYPE = {
     TaskType.CODING_NON_UI_TASK: PubSubMessageType.CODING_WORK_REQUESTED,
     TaskType.CODING_ML: PubSubMessageType.CODING_WORK_REQUESTED,
     TaskType.CODING_WEB_APPLICATION: PubSubMessageType.CODING_WORK_REQUESTED,
-    TaskType.TASK_EXECUTION: PubSubMessageType.CODING_WORK_REQUESTED,
+    TaskType.TASK_EXECUTION: PubSubMessageType.CODING_WORK_REQUESTED
 }
 
 
@@ -30,7 +30,7 @@ def on_task_updated(task_id):
             Task.objects.filter(id=task_id).update(
                 status=TaskStatus.BLOCKED
             )
-        else:
+        elif task.allow_execution():
             # not started, not blocked.  do it to it!
             Task.objects.filter(id=task_id).update(
                 status=TaskStatus.IN_PROGRESS

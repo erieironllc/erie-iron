@@ -320,11 +320,11 @@ def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Op
     the command will be blocked and a CommandExecutionError raised.
     """
 
-    if not (command[0] == "docker" or command[0] == "aws"):
-        sandbox_path = Business.objects.get(id=business_id).get_sandbox_dir()
-        for arg in command[1:]:
-            if os.path.isabs(arg) or os.path.exists(arg) or "/" in arg:
-                common.assert_in_sandbox(sandbox_path, arg)
+    # if not (command[0] == "docker" or command[0] == "aws"):
+        # sandbox_path = Business.objects.get(id=business_id).get_sandbox_dir()
+        # for arg in command[1:]:
+        #     if os.path.isabs(arg) or os.path.exists(arg) or "/" in arg:
+        #         common.assert_in_sandbox(sandbox_path, arg)
 
     try:
         print("executing command:", " ".join(command))
@@ -685,31 +685,3 @@ def build_and_push_dev_container(
 
     return image_uri
 
-
-def clone_template_project_to_sandbox(business_id: uuid.UUID) -> Path:
-    """
-    Clones the template project into the business's sandbox directory.
-
-    This is used to bootstrap a new web service or containerized project environment for a business.
-
-    Args:
-        business_id (uuid.UUID): The UUID of the business for which the project should be cloned.
-
-    Returns:
-        Path: The path to the newly created project directory inside the business sandbox.
-
-    Raises:
-        FileNotFoundError: If the template source directory does not exist.
-        Exception: If the copy operation fails for any reason.
-    """
-    template_dir = Path(__file__).parent / "bootstrap_webservice_container"
-    if not template_dir.exists():
-        raise FileNotFoundError(f"Template directory not found at {template_dir}")
-
-    business = Business.objects.get(id=business_id)
-    sandbox_dir = Path(business.get_sandbox_dir())
-    destination_dir = sandbox_dir / "webservice"
-
-    common.copy_missing_files(template_dir, destination_dir)
-
-    return destination_dir

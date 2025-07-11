@@ -3,8 +3,9 @@ from pathlib import Path
 
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
-from erieiron_common.enums import Constants, BusinessIdeaSource
+from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType
 from erieiron_autonomous_agent.models import Business
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
 def find_new_business_opportunity(payload):
@@ -81,11 +82,16 @@ def submit_business_opportunity(payload):
         id=existing_business_id,
         defaults={
             "name": name,
-            "sandbox_dir_name": token,
             "service_token": token,
             "source": source,
             "raw_idea": idea_content
         }
+    )
+    
+    # this might be better at the "GREEN LIGHT BUSINESS" - whenever we implement "GREEN LIGHT BUSINESS"
+    PubSubManager.publish_id(
+        PubSubMessageType.BUSINESS_BOOTSTRAP_REQUESTED,
+        business.id
     )
 
     business_structure = board_level_chat(
@@ -108,7 +114,6 @@ def submit_business_opportunity(payload):
 
     Business.objects.filter(id=business.id).update(
         summary=business_structure.get("summary"),
-        sandbox_dir_name=common.strip_non_alpha(business_structure.get("business_name")).lower(),
         business_plan=business_structure.get("business_plan"),
         value_prop=business_structure.get("value_proposition"),
         revenue_model=business_structure.get("monetization"),

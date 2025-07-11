@@ -68,6 +68,7 @@ def chat(
             )
 
             if output_schema:
+                output_schema = common.assert_exists(output_schema)
                 with open(output_schema, "r") as schema_file:
                     schema = json.load(schema_file)
 

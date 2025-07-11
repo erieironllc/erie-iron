@@ -52,11 +52,6 @@ def board_workflow(pubsub_manager: PubSubManager):
 
 @pubsub_workflow
 def business_workflow(pubsub_manager: PubSubManager):
-    for t in Task.objects.filter(status=TaskStatus.IN_PROGRESS):
-        t.status = TaskStatus.NOT_STARTED
-        t.save()
-        PubSubManager.publish_id(T.TASK_UPDATED, t.id)
-
     # CEO
     pubsub_manager.on(
         T.BOARD_GUIDANCE_UPDATED,
@@ -84,6 +79,9 @@ def business_workflow(pubsub_manager: PubSubManager):
         T.INITIATIVE_DEFINED,
         eng_lead.define_tasks_for_initiative,
         T.TASK_UPDATED
+    ).on(
+        T.BUSINESS_BOOTSTRAP_REQUESTED,
+        eng_lead.bootstrap_buiness
     ).on(
         T.TASK_BLOCKED,
         eng_lead.on_task_blocked,
@@ -117,6 +115,7 @@ def business_workflow(pubsub_manager: PubSubManager):
         T.CODING_WORK_REQUESTED,
         worker_coder.do_work
     )
+
 
     # Human
     pubsub_manager.on(

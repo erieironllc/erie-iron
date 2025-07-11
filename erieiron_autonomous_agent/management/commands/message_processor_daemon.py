@@ -33,6 +33,13 @@ def add_noop_handlers(pubsub_manager: PubSubManager):
 class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
+            '--suppress_timing_messages',
+            type=parse_bool,
+            required=False,
+            default=False
+        )
+
+        parser.add_argument(
             '--reset_host',
             help='start with a fresh instance metadata',
             type=parse_bool,
@@ -159,7 +166,8 @@ class Command(BaseCommand):
             while True:
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
 
-                publish_timing_messages()
+                if not common.parse_bool(options.get("suppress_timing_messages")):
+                    publish_timing_messages()
 
                 # Check for timed-out running processes
                 check_timed_out_processes()

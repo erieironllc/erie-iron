@@ -58,7 +58,6 @@ Your task is
 12) If DB interaction is required, the RDS psql database shall be named "<db_name>"
 13) Treat Dockerfile and requirements.txt files as first-class code files.
     - If a task involves modifying or using a Docker image, the Dockerfile lives in its own file named `Dockerfile` (or `Dockerfile.<context>` if multiple exist) and treat it the same as any other source file in your `code_files` output.
-    - Never define a new Dockerfile - instead of defining a new dockerfile,  call agent_tools.clone_template_project_to_sandbox() to bootstrap the environment (and create the Dockerfile)
     - If a task involves managing python dependencies, manage them in a file named requirements.txt and treat it the same as any other source file in your `code_files` output.
     - All modifications to Dockerfile and requirements.txt files must be tracked and explained in the same way as Python or shell files.
     - These files shall live in the directory <sandbox_dir>
