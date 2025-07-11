@@ -1,19 +1,22 @@
 import difflib
 import logging
+import os
 import subprocess
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 from typing import Tuple, Optional
 
 from django.db import models, transaction
 from django.db.models import Sum
-from django.db.models.signals import pre_delete
+from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
+from pgvector.django import VectorField
 
-import settings
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
 from erieiron_common import common
 from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType
+from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.models import BaseErieIronModel
 
@@ -22,8 +25,7 @@ class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
     source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
     status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
-
-    sandbox_dir_name = models.TextField(null=False)
+    
     service_token = models.TextField(null=True)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
@@ -38,53 +40,47 @@ class Business(BaseErieIronModel):
     personalization_options = models.JSONField(default=list)
     allow_autonomous_shutdown = models.BooleanField(default=True)
     autonomy_level = models.TextField(null=True, choices=Level.choices())
+    github_repo_url = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
+    
     def get_iam_role_name(self):
         return f"erieiron-{self.service_token}-role"
-
-    def get_sandbox_dir(self) -> Path:
-        p = settings.BUSINESS_SANDBOX_ROOTDIR / self.sandbox_dir_name
-        p.mkdir(parents=True, exist_ok=True)
-
-        return p
-
+    
     def get_latest_board_guidance(self):
         return BusinessGuidance.objects.filter(business=self).order_by("created_timestamp").last()
-
+    
     def get_latest_capacity(self):
         return BusinessCapacityAnalysis.objects.filter(business=self).order_by("created_timestamp").last()
-
+    
     def get_latest_analysist(self):
         return (BusinessAnalysis.objects.filter(business=self).order_by("created_timestamp").last(),
                 BusinessLegalAnalysis.objects.filter(business=self).order_by("created_timestamp").last())
-
+    
     @staticmethod
     def get_erie_iron_business() -> 'Business':
         return Business.objects.get_or_create(
             name="Erie Iron, LLC",
             defaults={
-                "source": BusinessIdeaSource.HUMAN,
-                "sandbox_dir_name": "erieiron"
+                "source": BusinessIdeaSource.HUMAN
             }
         )[0]
-
+    
     def needs_bank_balance_update(self):
         return not BusinessBankBalanceSnapshot.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(days=1)).exists()
-
+    
     def needs_capacity_analysis(self):
         """
         Returns True if no BusinessCapacityAnalysis has been created in the past 1 hours.
         """
         return not BusinessCapacityAnalysis.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(hours=1)).exists()
-
+    
     def needs_analysis(self):
         """
         Returns True if no BusinessAnalysis has been created in the past 14 days.
         """
         return not BusinessAnalysis.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(days=14)).exists()
-
+    
     def get_human_capacity(self):
         # TODO make this real
         return {
@@ -103,7 +99,7 @@ class Business(BaseErieIronModel):
             "total_pending_task_hours": 0,
             "capacity_utilization_percent": 0
         }
-
+    
     def get_new_business_budget_capacity(self):
         bank_balance = BusinessBankBalanceSnapshot.objects.filter(business=self).order_by("created_timestamp").last()
         if not bank_balance:
@@ -112,7 +108,7 @@ class Business(BaseErieIronModel):
             }
         else:
             return bank_balance.get_aggregate_balance_data(.5)
-
+    
     def get_budget_capacity(self):
         bank_balance = BusinessBankBalanceSnapshot.objects.filter(business=self).order_by("created_timestamp").last()
         if not bank_balance:
@@ -121,7 +117,7 @@ class Business(BaseErieIronModel):
             }
         else:
             return bank_balance.get_aggregate_balance_data()
-
+        
         # todo make this real
         # return {
         #     "timestamp": "2025-06-11T18:00:00Z",
@@ -140,16 +136,16 @@ class Business(BaseErieIronModel):
         #     },
         #     "available_budget_for_new_investments_usd": 2000.00
         # }
-
+    
     def get_aws_capacity(self, fake_aws=False):
         # TODO make this real
-
+        
         if not fake_aws:
             return {
                 "compute": "virtually unlimited",
                 "storage": "virtually unlimited",
             }
-
+        
         return {
             "timestamp": "2025-06-10T18:00:00Z",
             "region": "us-west-2",
@@ -223,7 +219,7 @@ class Business(BaseErieIronModel):
                 "S3 nearing 90% of cost allocation warning threshold"
             ]
         }
-
+    
     def get_kpis_status(self):
         kpis = BusinessKPI.objects.filter(business=self).order_by("created_timestamp")
         if not kpis.exists():
@@ -235,9 +231,9 @@ class Business(BaseErieIronModel):
                     for k in kpis
                 )
             }
-
+        
         return kpis_status
-
+    
     def get_goals_status(self):
         goals = BusinessGoal.objects.filter(business=self).order_by("created_timestamp")
         if not goals.exists():
@@ -249,8 +245,32 @@ class Business(BaseErieIronModel):
                     for g in goals
                 )
             }
-
+        
         return goals_status
+    
+    def snapshot_code(self, self_driving_task_iteration: 'SelfDrivingTaskIteration'):
+        instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
+        
+        for relative_file_path in common.iterate_files_deep(
+                self_driving_task_iteration.self_driving_task.sandbox_path,
+                file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh", ".txt", "Dockerfile"],
+                gitignore_patterns=["core/migrations/"]
+        ):
+            code_file = CodeFile.get(self, relative_file_path)
+            version = code_file.get_latest_version()
+            
+            if not version:
+                version = code_file.init_from_codefile(
+                    self_driving_task_iteration,
+                    relative_file_path
+                )
+            
+            if relative_file_path.read_text() != version.code:
+                CodeFile.update_from_path(
+                    self_driving_task_iteration,
+                    relative_file_path,
+                    instructions
+                )
 
 
 class BusinessAnalysis(BaseErieIronModel):
@@ -261,17 +281,17 @@ class BusinessAnalysis(BaseErieIronModel):
     time_to_profit_estimate_months = models.IntegerField(null=True)
     potential_mode = models.TextField(null=True)
     summary = models.TextField(null=True)
-
+    
     final_recommendation_justification = models.TextField(null=True)
     final_recommendation_score_1_to_10 = models.IntegerField(null=True)
-
+    
     estimated_operating_total_cost_per_month_usd = models.FloatField(null=True)
-
+    
     upfront_investment_estimated_amount_usd = models.FloatField(null=True)
-
+    
     total_addressable_market_estimate_usd_per_year = models.FloatField(null=True)
     total_addressable_market_source_or_rationale = models.TextField(null=True)
-
+    
     macro_trends_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     risks_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     monthly_expenses_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
@@ -289,7 +309,7 @@ class BusinessGuidance(BaseErieIronModel):
 class BusinessLegalAnalysis(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     created_timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     approved = models.BooleanField()
     justification = models.TextField(null=True)
     required_disclaimers_or_terms = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
@@ -301,7 +321,7 @@ class BusinessLegalAnalysis(BaseErieIronModel):
 class BusinessBankBalanceSnapshot(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     created_timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     def get_aggregate_balance_data(self, reserve_percent=0):
         available_balance = []
         current_balance = []
@@ -310,7 +330,7 @@ class BusinessBankBalanceSnapshot(BaseErieIronModel):
             available_balance.append(account.available_balance)
             current_balance.append(account.current_balance)
             status.append(account.status)
-
+        
         return {
             "available_balance": common.safe_sum(available_balance) * (1 - reserve_percent),
             "current_balance": common.safe_sum(current_balance) * (1 - reserve_percent),
@@ -330,12 +350,12 @@ class BusinessBankBalanceSnapshotAccount(BaseErieIronModel):
 class BusinessCapacityAnalysis(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     created_timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     cash_capacity_status = models.TextField(choices=TrafficLight.choices())
     compute_capacity_status = models.TextField(choices=TrafficLight.choices())
     human_capacity_status = models.TextField(choices=TrafficLight.choices())
     recommendation = models.TextField(choices=TrafficLight.choices())
-
+    
     justification = models.TextField(null=True)
 
 
@@ -409,7 +429,7 @@ class Task(BaseErieIronModel):
     product_initiative = models.TextField(null=True)
     task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_NON_UI_TASK, null=False)
     status = models.TextField(null=False, choices=TaskStatus.choices())
-
+    
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
     description = models.TextField()
     depends_on = models.ManyToManyField(
@@ -426,24 +446,24 @@ class Task(BaseErieIronModel):
     max_budget_usd = models.FloatField(null=True)
     attachments = models.JSONField(default=list)
     created_by = models.TextField(null=True)
-
+    
     input_fields = models.JSONField(default=dict)
     output_fields = models.JSONField(default=list)
-
+    
     requires_test = models.BooleanField(default=True)
     execution_schedule = models.TextField(choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE)
     execution_start_time = models.DateTimeField(null=True, blank=True)
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
-
+    
     def __str__(self):
         return f"{self.description} - {self.id}"
-
+    
     def to_dict(self):
         d = self.__dict__
-
+        
         return d
-
+    
     def create_execution(self, input_data=None, iteration=None) -> 'TaskExecution':
         return TaskExecution.objects.create(
             task=self,
@@ -451,16 +471,16 @@ class Task(BaseErieIronModel):
             status=TaskStatus.NOT_STARTED,
             input=input_data or {}
         )
-
+    
     def get_last_execution(self) -> Optional['TaskExecution']:
         return self.taskexecution_set.filter(executed_time__isnull=False).order_by("executed_time").last()
-
+    
     def are_dependencies_complete(self):
         return all(dep.status == TaskStatus.COMPLETE for dep in self.depends_on.all())
-
+    
     def get_work_desc(self):
         completion_criteria = "\n".join(common.ensure_list(self.completion_criteria))
-
+        
         return f"""
 ## GOAL
 {self.description}
@@ -468,7 +488,7 @@ class Task(BaseErieIronModel):
 ## Completion Criteria
 {self.completion_criteria}
         """
-
+    
     def update_dependent_tasks(self):
         from erieiron_common.message_queue.pubsub_manager import PubSubManager
         from erieiron_common.enums import PubSubMessageType
@@ -476,13 +496,30 @@ class Task(BaseErieIronModel):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
         for t in self.dependent_tasks.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
-
+    
     def allow_execution(self):
         b = self.initiative.business
         if Business.get_erie_iron_business().id == b.id:
             return True
-
+        
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
+    
+    def create_self_driving_env(self):
+        business = self.initiative.business
+        
+        temp_dir = tempfile.TemporaryDirectory()
+        
+        self_driving_task, _ = SelfDrivingTask.objects.get_or_create(
+            task_id=self.id,
+            defaults={
+                "sandbox_path": os.path.abspath(temp_dir),
+                "main_name": common.safe_filename(self.id),
+                "goal": self.get_work_desc(),
+                "business": business
+            }
+        )
+        
+        return self_driving_task
 
 
 # Design system and handoff models
@@ -501,7 +538,7 @@ class TaskExecution(BaseErieIronModel):
     input = models.JSONField(default=dict, null=True)
     output = models.JSONField(default=dict, null=True)
     error_msg = models.TextField(null=True)
-
+    
     def resolve(self, output=None, status=TaskStatus.COMPLETE, error_msg=None):
         with transaction.atomic():
             TaskExecution.objects.filter(id=self.id).update(
@@ -510,7 +547,7 @@ class TaskExecution(BaseErieIronModel):
                 output=output or {},
                 executed_time=common.get_now()
             )
-
+        
         self.refresh_from_db()
         return self
 
@@ -526,51 +563,55 @@ class TaskDesignRequirements(BaseErieIronModel):
 class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     main_name = models.TextField(null=False)
+    sandbox_path = models.TextField(null=False)
     goal = models.TextField(null=False)
     task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
+    
+    def get_git(self) -> GitWrapper:
+        return GitWrapper(self.sandbox_path)
+    
     def rollback_to(self, iteraton: 'SelfDrivingTaskIteration'):
         # we don't want any files created in future iterations hanging around, so delete everything
         # there's prob a more efficient way to do this, but this is fine for now
         for cf in CodeFile.objects.filter(codeversion__task_iteration__task=self):
             common.quietly_delete(
                 common.assert_in_sandbox(
-                    self.business.get_sandbox_dir(),
+                    self.sandbox_path,
                     cf.file_path
                 )
             )
-
+        
         for i in self.selfdrivingtaskiteration_set.order_by("timestamp"):
             i.write_to_disk()
             if i.id == iteraton.id:
                 break
-
+    
     def get_best_iteration(self) -> 'SelfDrivingTaskIteration':
         best = self.selfdrivingtaskbestiteration_set.order_by("timestamp").last()
-
+        
         return best.iteration if best else self.get_most_recent_iteration()
-
+    
     def get_most_recent_iteration(self) -> 'SelfDrivingTaskIteration':
         return self.selfdrivingtaskiteration_set.order_by("timestamp").last()
-
+    
     def get_most_recent_code_version(self) -> Optional['CodeVersion']:
         last_iteration = self.get_most_recent_iteration()
         if last_iteration:
             last_code_version: CodeVersion = last_iteration.codeversion_set.first()
             if last_code_version:
                 return last_code_version
-
+        
         return None
-
+    
     def get_most_recent_log_contents(self) -> Optional[str]:
         last_iteration = self.get_most_recent_iteration()
         if last_iteration:
             return last_iteration.log_content
         else:
             return None
-
+    
     def get_cost(self) -> float:
         result = LlmRequest.objects.filter(
             task_iteration__self_driving_task=self
@@ -578,20 +619,20 @@ class SelfDrivingTask(BaseErieIronModel):
             total=Sum("price")
         )
         return result["total"] or 0.0
-
+    
     def iterate(self) -> 'SelfDrivingTaskIteration':
         max_version = SelfDrivingTaskIteration.objects.filter(
             self_driving_task=self
         ).aggregate(
             models.Max("version_number")
         )["version_number__max"] or 0
-
+        
         with transaction.atomic():
             return SelfDrivingTaskIteration.objects.create(
                 self_driving_task=self,
                 version_number=max_version + 1
             )
-
+    
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
 
@@ -605,43 +646,41 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content = models.TextField()
     evaluation_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     def get_latest_execution(self) -> TaskExecution:
         te = self.taskexecution_set.last()
-
+        
         if te:
             return te
         else:
             return self.self_driving_task.task.create_execution(iteration=self)
-
+    
     def get_llm_cost(self) -> Tuple[float, int]:
         totals = self.llmrequest_set.aggregate(
             total_price=Sum('price'),
             total_tokens=Sum('token_count')
         )
         return totals['total_price'] or 0, totals['total_tokens'] or 0
-
+    
     def write_to_disk(self):
-        sandbox_root_dir = self.self_driving_task.business.get_sandbox_dir()
+        sandbox_path = self.self_driving_task.sandbox_path
         for cv in self.codeversion_set.all():
-            cv.write_to_disk(sandbox_root_dir)
-
-    def get_code_version(self, code_file):
-        code_file = CodeFile.coerce_to_codefile(code_file)
-
+            cv.write_to_disk(sandbox_path)
+    
+    def get_code_version(self, code_file: 'CodeFile'):
         code_version_to_modify = code_file.get_version(self)
-
+        
         if not code_version_to_modify:
             code_version_to_modify = code_file.get_latest_version()
-
+        
         if not code_version_to_modify:
             code_version_to_modify = code_file.init_from_codefile(
                 self,
                 code_file.file_path
             )
-
+        
         return code_version_to_modify
-
+    
     def get_previous_iteration(self):
         self.get_previous_by_timestamp()
         pass
@@ -663,7 +702,7 @@ class RunningProcess(BaseErieIronModel):
     started_at = models.DateTimeField(auto_now_add=True)
     is_running = models.BooleanField(default=True)
     terminated_at = models.DateTimeField(null=True, blank=True)
-
+    
     def update_log_tail(self, max_chars=100000):
         """Update the log_tail field with the latest log content"""
         if self.log_file_path and Path(self.log_file_path).exists():
@@ -674,19 +713,19 @@ class RunningProcess(BaseErieIronModel):
                     self.save(update_fields=['log_tail'])
             except Exception as e:
                 logging.warning(f"Failed to update log tail for process {self.id}: {e}")
-
+    
     def kill_process(self):
         """Kill the running process"""
         import signal
         import os
-
+        
         if not self.is_running:
             return False
-
+        
         self.is_running = False
         self.terminated_at = common.get_now()
         self.save(update_fields=['is_running', 'terminated_at'])
-
+        
         try:
             if self.execution_type == 'docker' and self.container_id:
                 # Kill docker container
@@ -694,7 +733,7 @@ class RunningProcess(BaseErieIronModel):
             elif self.execution_type == 'local' and self.process_id:
                 # Kill local process
                 os.kill(self.process_id, signal.SIGTERM)
-
+            
             return True
         except Exception as e:
             logging.warning(f"Failed to kill process {self.id}: {e}")
@@ -709,91 +748,93 @@ class LlmRequest(BaseErieIronModel):
 
 
 class CodeFile(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    
     # file_path is not the primary key because code file paths change as we refactor
     # gotta be unique tho
     file_path = models.TextField(unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
-    @staticmethod
-    def coerce_to_codefile(code_file) -> 'CodeFile':
-        if isinstance(code_file, Path):
-            return CodeFile.get(code_file)
-        elif isinstance(code_file, CodeFile):
-            return code_file
-        else:
-            raise ValueError(f"{code_file} must either be a path or a CodeFile instance")
-
+    
     def get_path(self) -> Path:
         return Path(self.file_path)
-
+    
     def get_base_name(self) -> Path:
         return common.get_basename(self.get_path())
-
+    
     def get_dir(self) -> Path:
         return self.get_path().parent
-
+    
     def get_latest_version(self) -> 'CodeVersion':
         return self.codeversion_set.order_by("created_at").last()
-
+    
     def get_version(self, iteration: SelfDrivingTaskIteration) -> 'CodeVersion':
         return self.codeversion_set.filter(
             task_iteration=iteration
         ).order_by("created_at").last()
-
+    
     @staticmethod
-    def get(code_file_path: Path) -> 'CodeFile':
+    def get(business: Business, code_file_path: Path) -> 'CodeFile':
         code_file_path = Path(code_file_path)
+        
         if not code_file_path.exists():
             code_file_path.parent.mkdir(parents=True, exist_ok=True)
             code_file_path.touch()
-        return CodeFile.objects.get_or_create(file_path=code_file_path)[0]
-
+        
+        code_file = CodeFile.objects.get_or_create(
+            business=business,
+            file_path=code_file_path
+        )[0]
+        
+        return code_file
+    
     @staticmethod
     def init_from_codefile(
             task_iteration: SelfDrivingTaskIteration,
-            file_path: Path
+            relative_file_path: Path
     ) -> 'CodeVersion':
+        sandbox_path = Path(task_iteration.self_driving_task.sandbox_path)
+        file_path = sandbox_path / relative_file_path
         file_path = common.assert_exists(file_path)
         return CodeFile.update_from_path(
             task_iteration,
             file_path,
-            code=file_path.read_text(),
             code_instructions=f"initial code from existing file"
         )
-
+    
     def update(
             self,
             task_iteration: SelfDrivingTaskIteration,
             code: str,
             code_instructions=None
     ):
+        if code is None:
+            asdfasdf = 1
+        
         cv = CodeVersion.objects.create(
             task_iteration=task_iteration,
             code_file=self,
             code_instructions=code_instructions,
             code=code
         )
-
-        file_path = common.assert_in_sandbox(
-            task_iteration.self_driving_task.business.get_sandbox_dir(),
-            self.file_path
-        )
-
+        
         file_path = Path(self.file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(code)
-
+        
         return cv
-
+    
     @staticmethod
     def update_from_path(
             task_iteration: SelfDrivingTaskIteration,
             file_path: Path,
-            code: str,
             code_instructions=None
     ) -> 'CodeVersion':
+        business = task_iteration.self_driving_task.business
+        
+        code = file_path.read_text()
+        
         with transaction.atomic():
-            code_file = CodeFile.coerce_to_codefile(file_path)
+            code_file = CodeFile.get(business, file_path)
             return code_file.update(
                 task_iteration=task_iteration,
                 code=code,
@@ -807,7 +848,8 @@ class CodeVersion(BaseErieIronModel):
     code_instructions = models.JSONField(null=True)
     code = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
-
+    codebert_embedding = VectorField(dimensions=768, null=True)
+    
     def get_diff(self) -> str:
         try:
             previous_version = self.get_previous_by_created_at()
@@ -821,20 +863,51 @@ class CodeVersion(BaseErieIronModel):
             return "\n".join(diff_lines)
         except:
             return ""
-
+    
     def write_to_disk(self, sandbox_root_dir=None) -> Path:
         if not sandbox_root_dir:
-            sandbox_root_dir = self.task_iteration.self_driving_task.business.get_sandbox_dir()
-
+            sandbox_root_dir = self.task_iteration.self_driving_task.sandbox_path
+        
         file_path = common.assert_in_sandbox(
             sandbox_root_dir,
             self.code_file.file_path
         )
-
+        
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(self.code)
-
+        
         return file_path
+    
+    def update_codebert_embedding(self):
+        from erieiron_autonomous_agent.utils.codegen_utils import embed_code
+        
+        logging.info(f"about to update embedding for {self.code_file.file_path}")
+        
+        CodeVersion.objects.filter(id=self.id).update(
+            codebert_embedding=embed_code(self.code)
+        )
+        
+        self.refresh_from_db(fields=["codebert_embedding"])
+
+
+@receiver(post_save, sender=CodeVersion)
+def update_codebert_embedding_on_save(sender, instance, created, update_fields, **kwargs):
+    """
+    Automatically update CodeBERT embeddings when a CodeVersion is created or when the code field changes.
+    """
+    # Always update embeddings for new instances
+    if created:
+        instance.update_codebert_embedding()
+        return
+    
+    # For existing instances, check if the code field was updated
+    if update_fields is None:
+        # update_fields is None means all fields were potentially updated
+        # In this case, we'll update the embedding to be safe
+        instance.update_codebert_embedding()
+    elif 'code' in update_fields:
+        # The code field was explicitly updated
+        instance.update_codebert_embedding()
 
 
 @receiver(pre_delete, sender=SelfDrivingTaskIteration)
@@ -846,7 +919,7 @@ def kill_running_processes_on_iteration_delete(sender, instance, **kwargs):
         task_execution__iteration=instance,
         is_running=True
     )
-
+    
     for process in running_processes:
         try:
             process.kill_process()

@@ -8,11 +8,11 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
-from erieiron_autonomous_agent.enums import TaskStatus
+from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget
 
@@ -49,7 +49,10 @@ def view_business(request, business_id):
         request,
         "business.html", {
             "tasks": tasks,
-            "business": business
+            "business": business,
+            "business_status_choices": BusinessStatus.choices(),
+            "business_source_choices": BusinessIdeaSource.choices(),
+            "autonomy_level_choices": Level.choices()
         },
         breadcrumbs=[
             (reverse(view_businesses), Business.get_erie_iron_business().name)
@@ -563,6 +566,87 @@ def action_update_task(request, task_id):
     except Exception as e:
         messages.error(request, f'Error updating task: {str(e)}')
         return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_update_business(request, business_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        business = get_object_or_404(Business, pk=business_id)
+
+        # Get form data
+        name = rget(request, 'name', '').strip()
+        summary = rget(request, 'summary', '').strip()
+        raw_idea = rget(request, 'raw_idea', '').strip()
+        value_prop = rget(request, 'value_prop', '').strip()
+        revenue_model = rget(request, 'revenue_model', '').strip()
+        audience = rget(request, 'audience', '').strip()
+        status = rget(request, 'status', '').strip()
+        source = rget(request, 'source', '').strip()
+        autonomy_level = rget(request, 'autonomy_level', '').strip()
+        service_token = rget(request, 'service_token', '').strip()
+        bank_account_id = rget(request, 'bank_account_id', '').strip()
+        github_repo_url = rget(request, 'github_repo_url', '').strip()
+        business_plan = rget(request, 'business_plan', '').strip()
+        allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
+
+        # Prepare update data
+        update_data = {
+            'name': name,
+            'summary': summary or None,
+            'raw_idea': raw_idea or None,
+            'value_prop': value_prop or None,
+            'revenue_model': revenue_model or None,
+            'audience': audience or None,
+            'status': status,
+            'source': source,
+            'service_token': service_token or None,
+            'bank_account_id': bank_account_id or None,
+            'github_repo_url': github_repo_url or None,
+            'business_plan': business_plan or None,
+            'allow_autonomous_shutdown': allow_autonomous_shutdown
+        }
+
+        # Handle optional autonomy_level
+        if autonomy_level:
+            update_data['autonomy_level'] = autonomy_level
+        else:
+            update_data['autonomy_level'] = None
+
+        # Update the business
+        Business.objects.filter(id=business_id).update(**update_data)
+
+        messages.success(request, 'Business updated successfully!')
+        return redirect(reverse('view_business', args=[business_id]) + '#edit')
+    except Business.DoesNotExist:
+        messages.error(request, 'Business not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error updating business: {str(e)}')
+        return redirect(reverse('view_business', args=[business_id]))
+
+
+def action_bootstrap_business(request, business_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        business = get_object_or_404(Business, pk=business_id)
+
+        PubSubManager.publish_id(
+            PubSubMessageType.BUSINESS_BOOTSTRAP_REQUESTED,
+            business_id
+        )
+
+        messages.success(request, f'Business "{business.name}" has been bootstrapped successfully!')
+        return redirect(reverse('view_business', args=[business_id]) + '#edit')
+    except Business.DoesNotExist:
+        messages.error(request, 'Business not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error bootstrapping business: {str(e)}')
+        return redirect(reverse('view_business', args=[business_id]))
 
 
 def action_kill_process(request, process_id):

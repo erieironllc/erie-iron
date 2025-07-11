@@ -41,7 +41,6 @@ def execute(task_execution_id: uuid.UUID, env: str = "dev", logfile=None) -> Opt
         DELAY_SECONDS = 30
         for attempt in range(MAX_RETRIES):
             try:
-                includes_boostrap = "agent_tools.clone_template_project_to_sandbox(" in config.main_code_file.get_latest_version().code
                 output = run_module_locally(
                     iteration,
                     config.main_code_file,

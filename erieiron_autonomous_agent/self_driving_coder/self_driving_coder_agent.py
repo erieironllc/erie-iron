@@ -31,27 +31,34 @@ COUNT_FULL_LOGS_IN_CONTEXT = 2
 
 
 def execute(config_file: Path = None, task_id: str = None):
+    if task_id:
+        task = Task.objects.get(id=task_id)
+        git = task.create_self_driving_env().get_git()
+    else:
+        task = None
+        git = None
+    
     config = None
     stop_reason = ""
     supress_eval = False
     try:
         for i in range(100):
             config = SelfDriverConfig.get(config_file, task_id)
-
+            
             if i == 0:
                 print(f"tail -f {os.path.abspath(config.log_path)}")
-
+            
             total_spend = config.self_driving_task.get_cost()
-
+            
             if total_spend > config.max_budget_usd:
                 stop_reason = f"Stopping - hit the max budget ${config.max_budget_usd:.2f}"
                 break
-
+            
             if (config.code_directory / "restart").exists():
                 supress_eval = True
                 stop_reason = f"Stopping for restart"
                 common.quietly_delete((config.code_directory / "restart"))
-
+                
                 if config_file:
                     common.execute_management_cmd(
                         f"sda_code --config={config_file}"
@@ -62,28 +69,28 @@ def execute(config_file: Path = None, task_id: str = None):
                     )
                 else:
                     raise Exception("either config_file or task_id must be supplied")
-
+                
                 break
-
+            
             if (config.code_directory / "stop").exists():
                 stop_reason = f"Stopping - stop file found"
                 common.quietly_delete((config.code_directory / "stop"))
                 break
-
+            
             iteration = None
             log_output = ""
             try:
                 iteration = config.initialize_new_iteration()
-
+                
                 iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-
+                
                 headline = f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
 Self-driving {config.code_basename} 
 iteration id {config.current_iteration.id} (v{iteration_count})
-sandbox root dir: {config.sandbox_root_dir}  
+sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
 total spend: ${config.self_driving_task.get_cost() :.2f}/${config.max_budget_usd:.2f}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
@@ -91,12 +98,12 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                                     """
                 print(headline)
                 log(config, headline)
-
+                
                 iterate_on_code(
                     config,
                     iteration
                 )
-
+                
                 log_output = execute_iteration(
                     config,
                     iteration
@@ -109,7 +116,7 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                         Task.objects.filter(id=config.self_driving_task.task_id).update(
                             status=TaskStatus.BLOCKED
                         )
-
+                    
                     PubSubManager.publish(
                         PubSubMessageType.TASK_BLOCKED,
                         payload={
@@ -117,16 +124,17 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                             "task_id": config.self_driving_task.task_id
                         }
                     )
-
+                
                 break
             except GoalAchieved as goal_achieved:
+                git.add_commit_push(f"task {task.id}: {task.description}")
                 stop_reason = "Goal Achieved"
                 if config.self_driving_task.task_id:
                     PubSubManager.publish_id(
                         PubSubMessageType.TASK_COMPLETED,
                         config.self_driving_task.task_id
                     )
-
+                
                 break
             except Exception as e:
                 logging.exception(e)
@@ -139,7 +147,7 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                             "error": traceback.format_exc()
                         }
                     )
-
+                
                 break
             finally:
                 if iteration:
@@ -148,10 +156,13 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                         iteration,
                         log_output
                     )
-
+    
     except SelfDriverConfigException as config_exception:
         print(f"unable to load config file {config_file}:  {config_exception}")
     finally:
+        if git:
+            git.cleanup()
+        
         print("STOP REASON", stop_reason)
         # if not supress_eval:
         #     wrap_up(config)
@@ -178,7 +189,7 @@ def iterate_on_code(config: SelfDriverConfig, iteration: SelfDrivingTaskIteratio
         if config.comment_requests:
             comment_requests_str = "\n\t\t*".join(config.comment_requests)
             user_msg += f"\n\n Please include the following your evaluation comments: {comment_requests_str}"
-
+        
         generate_code(
             config=config,
             iteration=iteration,
@@ -190,13 +201,13 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
     import subprocess
     import time
     import os
-
+    
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
     running_process = None
-
+    
     task = iteration.self_driving_task.task
     task_execution = init_task_execution(iteration)
-
+    
     try:
         if config.debug:
             # In debug mode, call the runner directly
@@ -209,14 +220,14 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
             # Execute sda_execute as a managed subprocess with process tracking
             python_executable = os.path.join("env", "bin", "python")
             cmd = [python_executable, "-u", "manage.py", "sda_execute", f"--execution_id={task_execution.id}"]
-
+            
             # Create RunningProcess record for tracking
             running_process, _ = RunningProcess.objects.update_or_create(
                 task_execution=task_execution,
                 execution_type='local',
                 log_file_path=str(logfile)
             )
-
+            
             # Start the subprocess
             with open(logfile, "w") as log_f:
                 process = subprocess.Popen(
@@ -225,26 +236,26 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                     stderr=subprocess.STDOUT,
                     text=True
                 )
-
+                
                 # Update running process with PID
                 running_process.process_id = process.pid
                 running_process.save(update_fields=['process_id'])
-
+                
                 print(f"sda_execute started with PID {process.pid}, log: {logfile}, iteration_id: {iteration.id}")
-
+                
                 # Wait for completion while periodically updating log tail
                 while process.poll() is None:
                     running_process.update_log_tail()
                     time.sleep(2)  # Check every 2 seconds
-
+                
                 print(f"sda_execute finished for PID {process.pid}, log: {logfile}, iteration_id: {iteration.id}")
-
+                
                 # Final log tail update
                 running_process.update_log_tail()
                 running_process.is_running = False
                 running_process.terminated_at = common.get_now()
                 running_process.save(update_fields=['is_running', 'terminated_at'])
-
+                
                 # Check return code
                 if process.returncode != 0:
                     with open(logfile, "r") as log_read:
@@ -252,10 +263,10 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                     task_execution.error_msg = error_output
                     task_execution.save()
                     raise Exception(f"sda_execute failed with return code {process.returncode}: {error_output}")
-
+        
         log_output = logfile.read_text()
         log(config, log_output, f"iteration-{iteration.id}")
-
+        
         return log_output
     except Exception as e:
         # Mark process as failed if it exists
@@ -263,7 +274,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
             running_process.is_running = False
             running_process.terminated_at = common.get_now()
             running_process.save(update_fields=['is_running', 'terminated_at'])
-
+        
         log_output = logfile.read_text()
         log_output = f"{log_output}\n\n\nthrew:\n{traceback.format_exc()}"
         log(config, log_output, f"iteration-{iteration.id}")
@@ -273,20 +284,20 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
 
 def init_task_execution(iteration):
     task = iteration.self_driving_task.task
-
+    
     task_input = {}
     for upstream_task in task.depends_on.all():
         if not TaskStatus.COMPLETE.eq(upstream_task.status):
             raise AgentBlocked(f"task {task.id} depends on task {upstream_task.id}, but the upstream task's status is {upstream_task.status}")
-
+        
         previous_task_execution = upstream_task.get_last_execution()
         if not previous_task_execution:
             raise AgentBlocked({
                 "desc": f"task {task.id} depends on upstream task {upstream_task.id}, but the upstream task has not executed"
             })
-
+        
         task_input[upstream_task.id] = previous_task_execution.output
-
+    
     return task.create_execution(
         input_data=task_input,
         iteration=iteration
@@ -301,15 +312,15 @@ def post_process_iteration_execution(
     # if artifacts dir is empty, delete it
     artifacts_dir = Path(config.artifacts_dir)
     artifacts_parent_dir = artifacts_dir.parent
-
+    
     assert artifacts_parent_dir.name == ARTIFACTS
-
+    
     if artifacts_dir.exists() and not any(artifacts_dir.iterdir()):
         artifacts_dir.rmdir()
-
+    
     if artifacts_parent_dir.exists() and not any(artifacts_parent_dir.iterdir()):
         artifacts_parent_dir.rmdir()
-
+    
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             log_content=log_output or "no log output"
@@ -320,7 +331,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
     messages = [
         get_goal_msg(config)
     ]
-
+    
     eval_json = common.get(config, ["previous_iteration", "evaluation_json"], {})
     if isinstance(eval_json, dict):
         previous_iteration_count = eval_json.get("previous_iteration_count", 1)
@@ -328,14 +339,14 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
             previous_iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
     else:
         previous_iteration_count = 1
-
+    
     previous_iteration_count = min(5, previous_iteration_count)
-
+    
     previous_iterations = list(reversed(config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:previous_iteration_count]))
     for task_iteration in previous_iterations:
         if task_iteration == config.current_iteration:
             continue
-
+        
         for code_version in task_iteration.codeversion_set.all():
             if Path(code_version.code_file.file_path).exists():
                 messages.append(
@@ -344,7 +355,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
                         code_version.code_file.file_path
                     )
                 )
-
+        
         eval_json = task_iteration.evaluation_json or {}
         evaluation = None
         instructions = None
@@ -356,7 +367,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
                 pass
         elif isinstance(eval_json, list):
             evaluation = eval_json
-
+        
         if evaluation:
             messages.append(
                 LlmMessage.user(
@@ -366,7 +377,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
                     """
                 )
             )
-
+        
         if instructions:
             messages.append(
                 LlmMessage.assistant(
@@ -376,7 +387,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
                     """
                 )
             )
-
+        
         if not (evaluation or instructions):
             messages.append(
                 LlmMessage.user(
@@ -386,7 +397,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
                     """
                 )
             )
-
+    
     return messages
 
 
@@ -400,12 +411,12 @@ def get_sys_prompt(file_name: str, replacements: tuple[str, str] = None) -> LlmM
 def build_system_message_planning(config: SelfDriverConfig):
     business = config.self_driving_task.business
     main_file_name = config.main_code_file.get_path().name
-
+    
     if config.main_code_file_test:
         test_file_name = config.main_code_file_test.get_path().name
     else:
         test_file_name = None
-
+    
     if config.generate_single_file:
         if config.self_driving_task.get_require_tests():
             files_strategy = " ".join([
@@ -433,7 +444,7 @@ def build_system_message_planning(config: SelfDriverConfig):
                 f"You may keep all code in '{main_file_name}', but if appropriate you may define new code files.",
                 "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
             ])
-
+    
     messages = [
         get_sys_prompt(
             "worker_coder--planning.md",
@@ -447,22 +458,22 @@ def build_system_message_planning(config: SelfDriverConfig):
             ]
         )
     ]
-
+    
     if config.guidance:
         messages.append(config.guidance)
-
+    
     if config.self_driving_task.get_require_tests():
         messages.append(
             get_sys_prompt("worker_coder--automated_tests.md")
         )
-
+    
     messages.append(
         get_helper_methods_msg(config),
     )
     messages.append(
         get_dependencies_msg()
     )
-
+    
     if config.is_model_trainer:
         messages.append(get_sys_prompt(
             "worker_coder--ml_coder.md",
@@ -471,7 +482,7 @@ def build_system_message_planning(config: SelfDriverConfig):
                 ("<execute_module>", config.code_basename)
             ]
         ))
-
+    
     return messages
 
 
@@ -485,69 +496,69 @@ def generate_code(
         *build_iteration_context_messages(config),
         *[LlmMessage.user(s) for s in common.ensure_list(iteration_instructions)]
     ]
-
+    
     price = 0
-
+    
     llm_response_planning = get_planning_llm_response(
         config,
         messages
     )
     price += llm_response_planning.price_total
-
+    
     planning_data, post_process_price = ensure_parsable_json(
         config,
         llm_response_planning.text
     )
     pprint.pprint(planning_data)
     price += post_process_price
-
+    
     planning_data['planning_model'] = str(config.planning_model)
     evaluation_of_previous_code = planning_data.get("evaluation", [])
     goal_achieved = common.parse_bool(planning_data.get('goal_achieved'))
-
+    
     if config.previous_iteration:
         with transaction.atomic():
             SelfDrivingTaskIteration.objects.filter(id=config.previous_iteration.id).update(
                 achieved_goal=goal_achieved,
                 evaluation_json=planning_data
             )
-
+    
     blocked_data = planning_data.get('blocked')
     if blocked_data:
         raise AgentBlocked(blocked_data)
-
+    
     iteration_id_to_modify = planning_data.get("iteration_id_to_modify", "latest")
     try:
         iteration_to_modify = config.self_driving_task.selfdrivingtaskiteration_set.get(id=iteration_id_to_modify)
     except:
         iteration_to_modify = config.previous_iteration
-
+    
     print(f"\n{json.dumps(planning_data, indent=4)}\n")
-
+    
     if not config.never_done and goal_achieved:
         raise GoalAchieved(planning_data)
-
+    
     if not iteration_to_modify:
         iteration_to_modify = iteration
-
+    
     code_file_instructions = planning_data.get("code_files", [])
     if not code_file_instructions:
         raise Exception("no code files found")
-
+    
     for cfi in code_file_instructions:
         code_file_path_str: str = cfi.get("code_file_path")
         if code_file_path_str.startswith(str(config.sandbox_root_dir)):
             code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
-
+        
         code_file_path = config.sandbox_root_dir / code_file_path_str
         if not code_file_path:
             raise Exception(f"missing code file name: {json.dumps(cfi)}")
-
+        
         code_version_to_modify = iteration_to_modify.get_code_version(
             code_file_path
         )
         code_file = code_version_to_modify.code_file
-
+        
         instructions = cfi.get("instructions", [])
         if not instructions:
             print(f"no modifications for {code_file_path}")
@@ -569,24 +580,24 @@ def generate_code(
                         previous_exception=previous_exception
                     )
                     price += llm_response_codegen.price_total
-
+                    
                     code_str = llm_response_codegen.text
-
+                    
                     break
                 except CodeCompilationError as e:
                     previous_exception = e
-
+            
             print(f"Iteration total cost: ${price:.4f}")
             if previous_exception:
                 raise previous_exception
-
+            
             if code_str:
                 code_file.update(
                     config.current_iteration,
                     code_str,
                     code_instructions=instructions
                 )
-
+    
     return iteration
 
 
@@ -597,22 +608,22 @@ def ensure_parsable_json(config, json_text: str) -> dict:
     for i in range(5):
         if not json_text:
             raise Exception(f"json_text is empty")
-
+        
         while len(json_text) > 0 and json_text[0] != "{":
             json_text = json_text[1:]
-
+        
         while len(json_text) > 0 and json_text[-1] != "}":
             json_text = json_text[:-1]
-
+        
         if common.is_empty(json_text):
             raise Exception(f"unable to parse json\n{orig_json_text}")
-
+        
         try:
             parsed_text = json.loads(json_text)
             return parsed_text, price
         except Exception as e:
             # print(f"----------\n{json_text}\n\n{e}\n--------------")
-
+            
             last_e = e
             llm_response_reformat = llm_interface.chat(
                 f"""
@@ -634,7 +645,7 @@ resond only with parsable json.  do not include any comments, explanations, or n
             price += llm_response_reformat.price_total
             log_llm_response(config, llm_response_reformat, suppress_log=True)
             json_text = llm_response_reformat.text
-
+    
     raise last_e
 
 
@@ -643,9 +654,9 @@ def get_planning_llm_response(
         messages: List[LlmMessage]
 ) -> LlmResponse:
     model = config.planning_model
-
+    
     messages_with_file = [m for m in messages if m.file]
-
+    
     files = common.filter_none([m.file for m in messages_with_file])
     if files:
         print("FILES IN THE CONTEXT")
@@ -653,15 +664,15 @@ def get_planning_llm_response(
             print(f"cat {os.path.abspath(f)}")
         print(" ")
         print(" ")
-
+    
     token_count = LlmMessage.get_total_token_count(model, messages)
     max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-
+    
     if max_tokens:
         print(f"about to call out to {model} to plan optimizations.  {token_count:,}/{max_tokens:,} tokens used")
     else:
         print(f"about to call out to {model} to plan optimizations.  {token_count:,} tokens used")
-
+    
     log_llm_request(config, messages)
     llm_response_planning = llm_interface.chat(
         messages,
@@ -670,9 +681,9 @@ def get_planning_llm_response(
         code_response=True
     )
     log_llm_response(config, llm_response_planning)
-
+    
     print(f"\t\tcost of planning: total ${llm_response_planning.price_total:.4f}; input ${llm_response_planning.price_input:.4f}; output ${llm_response_planning.price_output:.4f}")
-
+    
     return llm_response_planning
 
 
@@ -684,7 +695,7 @@ def get_coding_llm_response(
         previous_exception: Optional[CodeCompilationError]
 ) -> LlmResponse:
     model = LlmModel.OPENAI_O3_MINI
-
+    
     code_file_name = code_version_to_modify.code_file.get_path().name
     if code_file_name.endswith(".py"):
         prompt = "worker_coder--python_coder.md"
@@ -694,7 +705,7 @@ def get_coding_llm_response(
         prompt = "worker_coder--dockerfile_coder.md"
     else:
         raise Exception(f"no coder implemented for {code_file_name}")
-
+    
     messages: list[LlmMessage] = [
         get_sys_prompt(
             prompt,
@@ -703,10 +714,10 @@ def get_coding_llm_response(
         get_helper_methods_msg(config),
         get_dependencies_msg()
     ]
-
+    
     if code_file_name == "requirements.txt":
         messages.append(LlmMessage.sys("requirements.txt files are always plain text - they shall never contain python code"))
-
+    
     if config.is_model_trainer:
         messages.append(get_sys_prompt(
             "worker_coder--ml_coder.md",
@@ -715,7 +726,7 @@ def get_coding_llm_response(
                 ("<execute_module>", config.code_basename)
             ]
         ))
-
+    
     if previous_exception:
         messages.append(
             LlmMessage.user(
@@ -740,18 +751,18 @@ Your evaluation of the previous iteration's (iteration id={str(config.previous_i
                 """
             )
         )
-
+    
     code_file_path = code_version_to_modify.code_file.file_path
     if code_version_to_modify.code:
         print("modifying", code_file_path)
-
+        
         messages.append(
             LlmMessage.user(
                 f"iteration id={str(code_version_to_modify.task_iteration.id)} code_file_path {code_file_path}",
                 code_version_to_modify.code_file.file_path
             )
         )
-
+        
         messages.append(
             LlmMessage.user(
                 f"""
@@ -764,7 +775,7 @@ Never use the self-modification approach. Only return the final version of the P
     """
             )
         )
-
+    
     else:
         messages.append(
             LlmMessage.user(
@@ -775,26 +786,26 @@ please write the initial version of {code_file_path}, following each of these in
         """
             )
         )
-
+    
     token_count = LlmMessage.get_total_token_count(model, messages)
     max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-
+    
     if max_tokens:
         print(f"about to call out to {model} to generate code.  {token_count:,}/{max_tokens:,} tokens used")
     else:
         print(f"about to call out to {model} to generate code.  {token_count:,} tokens used")
-
+    
     log_llm_request(config, messages)
     llm_response_codegen = llm_interface.chat(
         messages,
         model,
         code_response=True
     )
-
+    
     log_llm_response(config, llm_response_codegen)
-
+    
     print(f"\t\tcost of code gen: total ${llm_response_codegen.price_total:.4f}; input ${llm_response_codegen.price_input:.4f}; output ${llm_response_codegen.price_output:.4f}")
-
+    
     return llm_response_codegen
 
 
@@ -846,7 +857,7 @@ def log_llm_response(config, llm_response: LlmResponse, suppress_log=False):
         token_count=llm_response.token_count,
         price=llm_response.price_total
     )
-
+    
     if not suppress_log:
         config.log_path.touch(exist_ok=True)
         log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
@@ -867,20 +878,20 @@ def log(config: SelfDriverConfig, s: str, prefix: str = None):
 def wrap_up(config: SelfDriverConfig):
     if not config:
         return
-
+    
     messages = []
-
+    
     messages.append(get_goal_msg(config))
-
+    
     aval_iterations = []
     for best_iteration in config.self_driving_task.selfdrivingtaskbestiteration_set.filter(iteration__evaluation_json__isnull=False).order_by("timestamp"):
         aval_iterations.append(best_iteration.iteration_id)
-
+    
     if not aval_iterations:
         aval_iterations = [
             i.id for i in config.self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).order_by("timestamp")
         ]
-
+    
     for iteration in SelfDrivingTaskIteration.objects.filter(id__in=aval_iterations).order_by("timestamp"):
         messages.append(
             LlmMessage.assistant(
@@ -892,9 +903,9 @@ NOTE: Iteration id={str(iteration.id)} {'successfully achieved the user''s GOAL'
                 """
             )
         )
-
+    
     aval_iteration_ids_str = ", ".join([str(s) for s in aval_iterations])
-
+    
     if config.is_model_trainer:
         messages.append(
             LlmMessage.sys(
@@ -942,9 +953,9 @@ YOUR TASKS:
 RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
             """
             ))
-
+    
     print(f"reviewing the {len(aval_iterations)} iterations and generating a final evaluation...")
-
+    
     log_llm_request(config, messages)
     llm_response = llm_interface.chat(
         messages,
@@ -952,17 +963,17 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         code_response=True
     )
     log_llm_response(config, llm_response)
-
+    
     print(f"got llm response len: {len(llm_response.text)}")
     eval_data, _ = ensure_parsable_json(config, llm_response.text)
-
+    
     best_iteration = SelfDrivingTaskIteration.objects.get(id=common.get(eval_data, 'best_iteration_id'))
     best_version_num = best_iteration.version_number
-
+    
     code_versions: list[CodeVersion] = \
         list(best_iteration.codeversion_set.filter(code_file=config.main_code_file)) \
         + list(best_iteration.codeversion_set.exclude(code_file=config.main_code_file))
-
+    
     best_iteration_code = []
     for cv in code_versions:
         best_iteration_code.append(f"""
@@ -972,7 +983,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         """
                                    )
     best_iteration_code = "\n".join(best_iteration_code)
-
+    
     main_file_name = config.main_code_file.get_base_name()
     if config.is_model_trainer:
         messages = LlmMessage.user(f"""
@@ -984,7 +995,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         - the audience for this is a mid-level ML research scientist.  If there are things you'd like to teach to a mid-level ML research scientist, please add this content as well
         - DO NOT include the string "```markdown" anywhere in the response
     """)
-
+        
         log_llm_request(config, messages)
         arch_llm_response = llm_interface.chat(messages, LlmModel.GEMINI_2_5_PRO)
         log_llm_response(config, arch_llm_response)
@@ -998,43 +1009,43 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
             - the audience for this is a mid-level engineer.  If there are things you'd like to teach to a mid-level engineer, please add this content as well
             - DO NOT include the string "```markdown" anywhere in the response
         """)
-
+        
         log_llm_request(config, messages)
         arch_llm_response = llm_interface.chat(messages, LlmModel.GEMINI_2_5_PRO)
         log_llm_response(config, arch_llm_response)
-
+    
     planning_model = best_iteration.planning_model
     if planning_model:
         planning_model = f"({planning_model})"
     else:
         planning_model = ""
-
+    
     curriculum = common.get(eval_data, 'curriculum', "")
     if curriculum:
         curriculum_lines = curriculum.split("\n")
         if common.default_str(curriculum_lines[0]).lower().startswith("### "):
             curriculum_lines = curriculum_lines[1:]
             curriculum = "\n".join(curriculum_lines)
-
+    
     if config.is_model_trainer:
         checkpoints_dir = config.artifacts_dir
-
+        
         if checkpoints_dir:
             checkpoint_files = [f for f in Path(checkpoints_dir).iterdir() if f.is_file()]
             s3_dir = f"{config.code_basename}/{config.code_basename}_v{best_version_num}"
         else:
             checkpoint_files = []
             s3_dir = None
-
+        
         for file in checkpoint_files:
             get_aws_interface().upload_file(
                 file,
                 settings_common.BUCKETS[S3Bucket.MODELS],
                 f"{s3_dir}/{file.name}"
             )
-
+        
         print(f"model checkpoints uploaded to s3://{settings_common.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")
-
+        
         txt_output = f"""
 # Best iteration
 Iteration #{best_version_num} {planning_model}
@@ -1072,25 +1083,25 @@ Code:  {main_file_name}
 # Notes
 {curriculum}
             """
-
+    
     archive_path = Path(settings.BASE_DIR) / f"task_{config.code_basename}_v{best_version_num}.zip"
     with tempfile.TemporaryDirectory() as tmpdirname:
         with zipfile.ZipFile(archive_path, 'w') as zipf:
             tmpdirname = Path(tmpdirname)
             print(f"created temporary directory at {tmpdirname}")
-
+            
             eval_text_path = tmpdirname / f"{config.code_basename}.full-eval.md"
             eval_text_path.write_text(txt_output)
             zipf.write(
                 eval_text_path,
                 arcname=os.path.relpath(eval_text_path, tmpdirname)
             )
-
+            
             zipf.write(
                 config.log_path,
                 arcname=config.log_path.name
             )
-
+            
             for cv in best_iteration.codeversion_set.all():
                 tmp_code_file = tmpdirname / cv.code_file.file_path
                 tmp_code_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1099,14 +1110,14 @@ Code:  {main_file_name}
                     tmp_code_file,
                     arcname=os.path.relpath(tmp_code_file, tmpdirname)
                 )
-
+    
     common.quietly_delete(tmpdirname)
     print(txt_output)
-
+    
     print(f"""grab artifacts from
 scpc "{os.path.abspath(archive_path)}"
     """)
-
+    
     config.self_driving_task.rollback_to(best_iteration)
     print(f"code updated to iteration v{best_version_num}")
 

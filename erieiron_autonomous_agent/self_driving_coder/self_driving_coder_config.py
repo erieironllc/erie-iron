@@ -1,3 +1,4 @@
+import os
 import random
 from pathlib import Path
 
@@ -57,6 +58,7 @@ class SelfDriverConfig:
         self_driving_task, _ = SelfDrivingTask.objects.get_or_create(
             config_file=str(config_file),
             defaults={
+                "sandbox_path": os.path.abspath(main_code_path),
                 "main_name": config_base_name,
                 "goal": config.get("goal"),
                 "business": business
@@ -78,49 +80,36 @@ class SelfDriverConfig:
         business = Business.objects.get(initiative__tasks__id=task_id)
         task = Task.objects.get(id=task_id)
         base_file_name = common.safe_filename(task_id)
-
-        self_driving_task, _ = SelfDrivingTask.objects.get_or_create(
-            task_id=task_id,
-            defaults={
-                "main_name": base_file_name,
-                "goal": task.get_work_desc(),
-                "business": business
-            }
-        )
-
-        business_sandbox_dir = business.get_sandbox_dir()
+        
+        sandbox_dir = Path(task.selfdrivingtask.sandbox_path)
 
         initiative_dir_name = common.safe_filename(task.initiative_id)
 
-        artifacts_root = business_sandbox_dir / ARTIFACTS / initiative_dir_name
+        artifacts_root = sandbox_dir / ARTIFACTS / initiative_dir_name
         artifacts_root.mkdir(parents=True, exist_ok=True)
 
-        code_root = business_sandbox_dir / initiative_dir_name
+        code_root = sandbox_dir / initiative_dir_name
         code_root.mkdir(parents=True, exist_ok=True)
 
         log_file = artifacts_root / f"{base_file_name}.output.log"
         config_file = artifacts_root / f"{base_file_name}.config.json"
         main_code_path = code_root / f"{base_file_name}.py"
 
-        guidance = task.guidance
-        # Task.objects.filter(id=task.id).update(
-        #     guidance=None
-        # )
-
         return SelfDriverConfig({
-            "iteration_guidance": guidance,
-            "sandbox_root_dir": business_sandbox_dir,
+            "iteration_guidance": task.guidance,
+            "sandbox_root_dir": sandbox_dir,
             "code_directory": code_root,
             "artifacts_dir": artifacts_root,
             "generate_single_file": True,
             "log_path": log_file,
             "supress_eval": True,
-            "self_driving_task": self_driving_task,
+            "self_driving_task": task.selfdrivingtask,
         })
 
     def __init__(self, config):
         self.debug = False
         self.self_driving_task: SelfDrivingTask = config.get("self_driving_task")
+        self.business = self.self_driving_task.business
         self.supress_eval = config.get("supress_eval", True)
         self.guidance = LlmMessage.sys(config.get("iteration_guidance")) if config.get("iteration_guidance") else None
 
@@ -128,11 +117,13 @@ class SelfDriverConfig:
         self.code_basename = self.self_driving_task.main_name
 
         self.main_code_file = CodeFile.get(
+            self.business,
             self.code_directory / f"{self.code_basename}.py"
         )
 
         if self.self_driving_task.get_require_tests():
             self.main_code_file_test = CodeFile.get(
+                self.business,
                 self.code_directory / f"{self.code_basename}_test.py"
             )
         else:

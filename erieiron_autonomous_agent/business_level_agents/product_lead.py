@@ -88,8 +88,7 @@ def process_response(business, product_lead_response):
     for initiative_data in product_lead_response.get("initiatives", []):
         initiative = ingest_initiative_data(
             business,
-            initiative_data,
-            updated_or_created_initiative_ids
+            initiative_data
         )
         updated_or_created_initiative_ids.append(initiative.id)
 
@@ -99,6 +98,7 @@ def process_response(business, product_lead_response):
 def ingest_initiative_data(business, initiative_data, initiative_id=None):
     updated_or_created_initiative_ids = []
     initiative_token = initiative_data["initiative_token"]
+    
     initiative, created = Initiative.objects.update_or_create(
         id=initiative_id or initiative_token,
         defaults={
@@ -109,6 +109,7 @@ def ingest_initiative_data(business, initiative_data, initiative_id=None):
             "expected_kpi_lift": initiative_data.get("expected_kpi_lift", {}),
         }
     )
+    
     if created or any(getattr(initiative, k) != v for k, v in {
         "title": initiative_data["title"],
         "description": initiative_data["description"],

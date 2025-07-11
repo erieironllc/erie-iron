@@ -227,6 +227,9 @@ class PubSubMessageType(ErieEnum):
     BOARD_GUIDANCE_REQUESTED = auto()
     BOARD_GUIDANCE_UPDATED = auto()
     BUSINESS_GUIDANCE_UPDATED = auto()
+
+    BUSINESS_BOOTSTRAP_REQUESTED = auto()
+
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     RESOURCE_PLANNING_REQUESTED = auto()
@@ -417,6 +420,7 @@ class TaskExecutionSchedule(ErieEnum):
 
 
 class TaskType(ErieEnum):
+    BOOTSRAP_CLONE_REPO = auto()
     CODING_WEB_APPLICATION = auto()
     CODING_NON_UI_TASK = auto()
     CODING_ML = auto()
@@ -434,3 +438,8 @@ class InitiativeType(ErieEnum):
     PRODUCT = auto()
     ENGINEERING = auto()
     SALES = auto()
+
+
+class AwsEng(ErieEnum):
+    DEV = "dev"
+    PRODUCTION = "production"
