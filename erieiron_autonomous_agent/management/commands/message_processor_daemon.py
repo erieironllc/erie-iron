@@ -219,7 +219,7 @@ class Command(BaseCommand):
                     process.ping()
 
                     if idx % 10 == 0 and print_debug_info:
-                        log(f'message_queue_processor running for env {env} ', log_prefix, log_suffix)
+                        # log(f'message_queue_processor running for env {env} ', log_prefix, log_suffix)
                         pubsub_manager.print_pending()
 
                 idx += 1

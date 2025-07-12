@@ -15,10 +15,11 @@ class GitWrapper:
         if not source_root:
             source_root = Path(tempfile.TemporaryDirectory().name)
             source_root.mkdir(parents=True, exist_ok=False)
-        
-        self.source_root = common.assert_exists(source_root)
-        # self.exec("config", "--global", "user.email", "jerodjschultz@gmail.com")
-        # self.exec("config", "--global", "user.name", "JJ Schultz")
+        else:
+            source_root = Path(source_root)
+            source_root.mkdir(parents=True, exist_ok=True)
+
+        self.source_root = source_root
     
     def exec(self, *commands) -> 'GitWrapper':
         cmd = ["git"] + list(commands)
