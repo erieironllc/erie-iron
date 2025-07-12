@@ -19,7 +19,7 @@ from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config impo
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
-from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType
+from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -30,14 +30,32 @@ PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 
 
+def get_likely_code_files(config:SelfDriverConfig):
+    work_description = config.self_driving_task.task.get_work_desc()
+    
+    messages = []
+    
+    llm_response_planning = llm_interface.chat(
+        messages,
+        LlmModel.CLAUDE_3_5,
+        output_schema=PROMPTS_DIR / "worker_coder--planning.md.schema.json",
+        code_response=True
+    )
+
+
 def execute(config_file: Path = None, task_id: str = None):
     if task_id:
         task = Task.objects.get(id=task_id)
-        git = task.create_self_driving_env().get_git()
+        self_driving_task = task.create_self_driving_env()
+        git = self_driving_task
+        
+        config = SelfDriverConfig.get(config_file, task_id)
+        likely_code_files = get_likely_code_files(config)
     else:
         task = None
         git = None
-    
+        likely_code_files = []
+
     config = None
     stop_reason = ""
     supress_eval = False
@@ -333,7 +351,7 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
     ]
     
     eval_json = common.get(config, ["previous_iteration", "evaluation_json"], {})
-    if isinstance(eval_json, dict):
+    if TaskType.CODING_ML.eq(config.self_driving_task.task.task_type) and isinstance(eval_json, dict):
         previous_iteration_count = eval_json.get("previous_iteration_count", 1)
         if previous_iteration_count == "all":
             previous_iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()

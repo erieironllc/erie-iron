@@ -504,7 +504,7 @@ class Task(BaseErieIronModel):
         
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
     
-    def create_self_driving_env(self):
+    def create_self_driving_env(self) -> 'SelfDrivingTask':
         business = self.initiative.business
         
         temp_dir = tempfile.TemporaryDirectory()
@@ -512,12 +512,14 @@ class Task(BaseErieIronModel):
         self_driving_task, _ = SelfDrivingTask.objects.get_or_create(
             task_id=self.id,
             defaults={
-                "sandbox_path": os.path.abspath(temp_dir),
+                "sandbox_path": os.path.abspath(temp_dir.name),
                 "main_name": common.safe_filename(self.id),
                 "goal": self.get_work_desc(),
                 "business": business
             }
         )
+        
+        self_driving_task.get_git().clone(business.github_repo_url)
         
         return self_driving_task
 
