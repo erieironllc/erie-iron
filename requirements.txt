@@ -1,5 +1,3 @@
-git+https://github.com/pgvector/pgvector.git@HEAD#subdirectory=bindings/python/django
-
 Django==5.1.6
 PyJWT
 PyJWT[crypto]>=2.0.0
@@ -57,3 +55,4 @@ tiktoken
 torch>=2.6
 torchvggish
 transformers
+tree-sitter<=0.20

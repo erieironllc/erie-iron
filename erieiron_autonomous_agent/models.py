@@ -14,6 +14,8 @@ from django.dispatch import receiver
 from pgvector.django import VectorField
 
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
+from erieiron_autonomous_agent.utils import codegen_utils
+from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
 from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType
 from erieiron_common.git_utils import GitWrapper
@@ -525,7 +527,7 @@ class Task(BaseErieIronModel):
             git.pull()
         else:
             git.clone(business.github_repo_url)
-
+        
         return self_driving_task
 
 
@@ -888,13 +890,35 @@ class CodeVersion(BaseErieIronModel):
     def update_codebert_embedding(self):
         from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
         
-        logging.info(f"about to update embedding for {self.code_file.file_path}")
+        path = self.code_file.file_path
+        logging.info(f"about to update embedding for {path}")
         
         CodeVersion.objects.filter(id=self.id).update(
             codebert_embedding=get_codebert_embedding(self.code)
         )
         
         self.refresh_from_db(fields=["codebert_embedding"])
+        self.codemethod_set.all().delete()
+        
+        ext = os.path.splitext(path)[1]
+        if ext in codegen_utils.LANGUAGES:
+            for method_data in extract_methods(ext, self.code):
+                CodeMethod.objects.create(
+                    code_version=self,
+                    name=method_data["name"],
+                    parameters=method_data["parameters"],
+                    code=method_data["code"],
+                    codebert_embedding=get_codebert_embedding(method_data["code"])
+                )
+
+
+class CodeMethod(BaseErieIronModel):
+    code_version = models.ForeignKey(CodeVersion, on_delete=models.CASCADE)
+    name = models.TextField()
+    parameters = models.JSONField(default={})
+    code = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    codebert_embedding = VectorField(dimensions=768, null=True)
 
 
 @receiver(post_save, sender=CodeVersion)
