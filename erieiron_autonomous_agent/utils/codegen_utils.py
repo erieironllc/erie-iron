@@ -26,7 +26,7 @@ def lint_and_format(code_str: str) -> str:
     return code_str
 
 
-def embed_code(code_snippet: str) -> ndarray:
+def get_codebert_embedding(code_snippet: str) -> ndarray:
     tokens = tokenizer(code_snippet, return_tensors='pt', truncation=True, max_length=512)
     with torch.no_grad():
         output = model(**tokens)

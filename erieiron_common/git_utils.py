@@ -1,3 +1,4 @@
+import glob
 import logging
 import os
 import shutil
@@ -18,7 +19,7 @@ class GitWrapper:
         else:
             source_root = Path(source_root)
             source_root.mkdir(parents=True, exist_ok=True)
-
+        
         self.source_root = source_root
     
     def exec(self, *commands) -> 'GitWrapper':
@@ -41,7 +42,7 @@ class GitWrapper:
             logging.error(f"stdout:\n{e.stdout.strip()}")
             logging.error(f"stderr:\n{e.stderr.strip()}")
             raise Exception(
-                f"Command failed: {' '.join(cmd)}\n"
+                f"Command failed: {common.safe_join(cmd)}\n"
                 f"stdout:\n{e.stdout.strip()}\n"
                 f"stderr:\n{e.stderr.strip()}"
             )
@@ -59,6 +60,9 @@ class GitWrapper:
     
     def clone(self, source_repo) -> 'GitWrapper':
         return self.exec("clone", self.wrap_url_with_token(source_repo), self.source_root)
+    
+    def pull(self) -> 'GitWrapper':
+        return self.exec("pull")
     
     def exists(self, repo_url):
         try:
@@ -122,3 +126,6 @@ class GitWrapper:
         if not token:
             raise Exception("GITHUB_TOKEN not set in environment")
         return repo_url.replace("https://", f"https://{token}@")
+    
+    def source_exists(self) -> bool:
+        return len(glob.glob(os.path.join(self.source_root, f"*.py"))) > 0

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from django.db import transaction
+from django.db.models.expressions import RawSQL
 from django.utils import timezone
 
 import settings
@@ -16,7 +17,8 @@ from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
 from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_runner
 from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
-from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
+from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
+from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType
@@ -30,17 +32,25 @@ PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 
 
-def get_likely_code_files(config:SelfDriverConfig):
-    work_description = config.self_driving_task.task.get_work_desc()
-    
-    messages = []
-    
-    llm_response_planning = llm_interface.chat(
-        messages,
-        LlmModel.CLAUDE_3_5,
-        output_schema=PROMPTS_DIR / "worker_coder--planning.md.schema.json",
-        code_response=True
+def get_likely_code_files(config: SelfDriverConfig) -> list[CodeVersion]:
+    # Step 1: Get the structured retrieval cues from the LLM
+    cues = business_level_chat(
+        "worker_code--source_code_finder.md",
+        config.self_driving_task.task.get_work_desc(),
+        model=LlmModel.OPENAI_GPT_3_5_TURBO
     )
+    
+    semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
+    prompt_embedding = get_codebert_embedding(semantic_query).tolist()
+    
+    qs = (
+        CodeVersion.objects
+        .annotate(
+            similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
+        )
+        .order_by("similarity")[:10]
+    )
+    return list(qs)
 
 
 def execute(config_file: Path = None, task_id: str = None):
@@ -55,7 +65,7 @@ def execute(config_file: Path = None, task_id: str = None):
         task = None
         git = None
         likely_code_files = []
-
+    
     config = None
     stop_reason = ""
     supress_eval = False
