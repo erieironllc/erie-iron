@@ -1,3 +1,4 @@
+git+https://github.com/pgvector/pgvector.git@HEAD#subdirectory=bindings/python/django
 
 Django==5.1.6
 PyJWT

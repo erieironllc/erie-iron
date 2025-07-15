@@ -519,8 +519,13 @@ class Task(BaseErieIronModel):
             }
         )
         
-        self_driving_task.get_git().clone(business.github_repo_url)
+        git = self_driving_task.get_git()
         
+        if git.source_exists():
+            git.pull()
+        else:
+            git.clone(business.github_repo_url)
+
         return self_driving_task
 
 
@@ -881,12 +886,12 @@ class CodeVersion(BaseErieIronModel):
         return file_path
     
     def update_codebert_embedding(self):
-        from erieiron_autonomous_agent.utils.codegen_utils import embed_code
+        from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
         
         logging.info(f"about to update embedding for {self.code_file.file_path}")
         
         CodeVersion.objects.filter(id=self.id).update(
-            codebert_embedding=embed_code(self.code)
+            codebert_embedding=get_codebert_embedding(self.code)
         )
         
         self.refresh_from_db(fields=["codebert_embedding"])

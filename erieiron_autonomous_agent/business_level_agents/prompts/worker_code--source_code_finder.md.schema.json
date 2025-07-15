@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SourceCodeFinderResponse",
+  "type": "object",
+  "properties": {
+    "semantic_query_sentence": {
+      "type": "string",
+      "description": "A single, precise sentence that restates the task in technical terms for embedding-based semantic search."
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Words or phrases likely to appear in the relevant code."
+    },
+    "likely_filenames": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "\\.py$"
+      },
+      "description": "Code files likely to contain relevant logic."
+    },
+    "likely_function_or_class_names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Functions or classes that might implement the task."
+    },
+    "likely_models_or_schemas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "ORM models or data structures involved."
+    },
+    "system_components": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional subsystems in the architecture this task touches."
+    }
+  },
+  "required": [
+    "semantic_query_sentence",
+    "keywords",
+    "likely_filenames",
+    "likely_function_or_class_names",
+    "likely_models_or_schemas"
+  ],
+  "additionalProperties": false
+}

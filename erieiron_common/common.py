@@ -1718,3 +1718,7 @@ def replace_in_file(the_file: Path, replacements: list[tuple[str, str]]):
     
     the_file.write_text(text)
     return the_file
+
+
+def safe_join(string_list, delim=" "):
+    return str(delim).join([str(s) for s in ensure_list(string_list)])
