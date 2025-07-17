@@ -1507,7 +1507,7 @@ def iterate_files_deep(
             relative_path_str = str(relative_path).replace('\\', '/')
             
             # Check if file matches any gitignore pattern
-            if respect_git_ignore and gitignore_patterns:
+            if gitignore_patterns:
                 if str(relative_path) == ".gitignore":
                     continue
                 
@@ -1722,3 +1722,36 @@ def replace_in_file(the_file: Path, replacements: list[tuple[str, str]]):
 
 def safe_join(string_list, delim=" "):
     return str(delim).join([str(s) for s in ensure_list(string_list)])
+
+
+def run_cmd(cwd: Path, cmd: list[str]) -> subprocess.CompletedProcess:
+    result = None
+    
+    try:
+        env = os.environ.copy()
+        result = subprocess.run(
+            ensure_list(cmd),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"stdout:\n{e.stdout.strip()}")
+        print(f"stderr:\n{e.stderr.strip()}\n\ncwd:\n{cwd}\ncmd:\n{safe_join(cmd)}")
+        raise Exception(
+            f"Command failed: {safe_join(cmd)}\n"
+            f"stdout:\n{e.stdout.strip()}\n"
+            f"stderr:\n{e.stderr.strip()}"
+        )
+    except Exception as e:
+        logging.info(result.stdout)
+        logging.info(result.stderr)
+        raise e
+    else:
+        logging.info(result.stdout)
+        logging.info(result.stderr)
+    
+    return result

@@ -6,5 +6,5 @@ from erieiron_autonomous_agent.models import CodeFile
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
-        CodeFile.objects.all().delete()
+        # CodeFile.objects.all().delete()
         bootstrap_buiness("09fc9301-f50f-492a-9d9d-93a3b3bf1fad")
