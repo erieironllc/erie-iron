@@ -48,7 +48,7 @@ def build_chat_data(business):
     goals = list(BusinessGoal.objects.filter(business=business).values(
         "goal_id", "kpi_id", "description", "target_value", "unit", "due_date", "priority", "status"
     ))
-
+    
     directives = list(BusinessCeoDirective.objects.filter(
         business=business, target_agent="ProductAgent"
     ).values(

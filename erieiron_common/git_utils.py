@@ -4,11 +4,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import requests
 
 from erieiron_common import common
+from erieiron_common.common import run_cmd
 
 
 class GitWrapper:
@@ -21,7 +23,7 @@ class GitWrapper:
             source_root.mkdir(parents=True, exist_ok=True)
         
         self.source_root = source_root
-    
+
     def exec(self, *commands) -> 'GitWrapper':
         cmd = ["git"] + list(commands)
         
@@ -129,3 +131,24 @@ class GitWrapper:
     
     def source_exists(self) -> bool:
         return len(glob.glob(os.path.join(self.source_root, f"*.py"))) > 0
+    
+    def mk_venv(self) -> Path:
+        venv_path = self.source_root / "venv"
+        time.sleep(1)
+        
+        run_cmd(
+            self.source_root,
+            ["python3.11", "-m", "venv", str(venv_path)]
+        )
+        
+        pip_executable = venv_path / "bin" / "pip" if os.name != "nt" else venv_path / "Scripts" / "pip.exe"
+        cmd = [str(pip_executable), "install", "-r", "requirements.txt"]
+        
+        run_cmd(
+            self.source_root,
+            [str(pip_executable), "install", "-r", "requirements.txt"]
+        )
+        
+        return venv_path
+    
+   

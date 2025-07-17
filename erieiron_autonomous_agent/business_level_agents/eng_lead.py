@@ -229,6 +229,9 @@ def process_response(msg, initiative, eng_lead_response):
 def bootstrap_buiness(business_id):
     business = Business.objects.get(id=business_id)
     
+    if business.id == Business.get_erie_iron_business().id:
+        return
+    
     with transaction.atomic():
         if not business.github_repo_url:
             business.github_repo_url = f"https://github.com/erieironllc/{business.service_token}"
@@ -318,6 +321,7 @@ def bootstrap_buiness(business_id):
         raise e
     finally:
         git.cleanup()
+        pass
 
 
 def bootstrap_repo(business:Business, git:GitWrapper):
@@ -329,7 +333,11 @@ def bootstrap_repo(business:Business, git:GitWrapper):
         clone_path = git.source_root
         
         logging.info(f"Cloning bootstrap repository from {source_repo} to {clone_path} ({target_repo})")
-        git.clone_to_new_repo(source_repo, target_repo)
+        
+        git.clone_to_new_repo(
+            source_repo, 
+            target_repo
+        )
         
         common.replace_in_file(clone_path / "README.md", [
             ("erieiron_bootstrap", business.service_token),
@@ -342,6 +350,8 @@ def bootstrap_repo(business:Business, git:GitWrapper):
         
         git.create_repo(business.github_repo_url)
         git.add_commit_push(f"Initialize repository for {business.name}")
+        
+    git.mk_venv()
 
 
 def get_source_repo_url(business: Business) -> str:

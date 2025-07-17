@@ -14,7 +14,7 @@ from django.utils import timezone
 
 import settings
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
 from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_runner
 from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
@@ -32,27 +32,6 @@ PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 
 
-def get_likely_code_files(config: SelfDriverConfig) -> list[CodeVersion]:
-    # Step 1: Get the structured retrieval cues from the LLM
-    cues = business_level_chat(
-        "worker_code--source_code_finder.md",
-        config.self_driving_task.task.get_work_desc(),
-        model=LlmModel.OPENAI_GPT_3_5_TURBO
-    )
-    
-    semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
-    prompt_embedding = get_codebert_embedding(semantic_query).tolist()
-    
-    qs = (
-        CodeVersion.objects
-        .annotate(
-            similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
-        )
-        .order_by("similarity")[:10]
-    )
-    return list(qs)
-
-
 def execute(config_file: Path = None, task_id: str = None):
     if task_id:
         task = Task.objects.get(id=task_id)
@@ -60,11 +39,9 @@ def execute(config_file: Path = None, task_id: str = None):
         git = self_driving_task
         
         config = SelfDriverConfig.get(config_file, task_id)
-        likely_code_files = get_likely_code_files(config)
     else:
         task = None
         git = None
-        likely_code_files = []
     
     config = None
     stop_reason = ""
@@ -495,9 +472,11 @@ def build_system_message_planning(config: SelfDriverConfig):
             get_sys_prompt("worker_coder--automated_tests.md")
         )
     
-    messages.append(
-        get_helper_methods_msg(config),
-    )
+    messages += get_likely_code_files(config)
+    # messages.append(
+    #     get_helper_methods_msg(config),
+    # )
+    
     messages.append(
         get_dependencies_msg()
     )
@@ -739,10 +718,12 @@ def get_coding_llm_response(
             prompt,
             ("<sandbox_dir>", str(config.sandbox_root_dir))
         ),
-        get_helper_methods_msg(config),
+        # get_helper_methods_msg(config),
         get_dependencies_msg()
     ]
     
+    messages += get_likely_code_files(config)
+
     if code_file_name == "requirements.txt":
         messages.append(LlmMessage.sys("requirements.txt files are always plain text - they shall never contain python code"))
     
@@ -1154,3 +1135,82 @@ def get_goal_msg(config):
     return LlmMessage.user(f"""
 the user's GOAL is:
 {config.self_driving_task.goal}""")
+
+
+def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
+    # Step 1: Get the structured retrieval cues from the LLM
+    cues = business_level_chat(
+        "worker_code--source_code_finder.md",
+        config.self_driving_task.task.get_work_desc(),
+        model=LlmModel.OPENAI_GPT_3_5_TURBO
+    )
+    
+    semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
+    prompt_embedding = get_codebert_embedding(semantic_query).tolist()
+    
+    # Use a similarity threshold instead of top-k results
+    # Lower similarity scores indicate higher similarity (cosine distance)
+    # 0.3 is a reasonable threshold for similar code
+    similarity_threshold = 0.3
+    
+    # For Python and JavaScript files, retrieve CodeMethod models for more granular search
+    # For other file types, retrieve CodeVersion objects at the file level
+    
+    # First get code methods for Python and JavaScript files
+    erie_common_code_methods = (
+        CodeMethod.objects
+        .select_related("code_version", "code_version__code_file")
+        .filter(
+            code_version__code_file__business=config.business,
+            code_version__code_file__file_path__endswith__in=['.py', '.js'],
+            code_version__code_file__file_path__startswith__in=['env/', 'venv/'],
+        )
+        .annotate(
+            similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
+        )
+        .filter(similarity__lte=similarity_threshold)
+        .order_by("similarity")
+    )
+    
+    messages = []
+    erieiron_code_files = []
+    for code_method in erie_common_code_methods:
+        code_file = code_method.code_version.code_file
+        erieiron_code_files.append(code_file)
+        
+        file_path = code_file.file_path
+        relative_path = file_path.split("erieiron_common")
+        
+        messages.append(LlmMessage.user(f"""
+Possibly useful code method: "{code_method.name}"
+You may use "{code_method.name}" but not modify it as it lives in imported package
+"{code_method.name}" lives in the file "{relative_path}"
+
+''' BEGIN {code_method.name} CODE '''''''''''''''''
+{code_method.code}
+''' END {code_method.name} CODE '''''''''''''''''
+"""))
+    
+    # Then get code versions for other file types (excluding Python and JavaScript)
+    code_versions = (
+        CodeVersion.objects
+        .exclude(code_file__in=erieiron_code_files)
+        .filter(code_file__business=config.business)
+        .annotate(
+            similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
+        )
+        .filter(similarity__lte=similarity_threshold)
+        .order_by("similarity")
+    )
+    
+    for code_version in code_versions:
+        messages.append(LlmMessage.user(f"""
+"{code_version.code_file.file_path}" is an existing project code file that you may use and or edit
+
+''' BEGIN {code_version.code_file.file_path} CODE '''''''''''''''''
+{code_version.code}
+''' END {code_version.code_file.file_path} CODE '''''''''''''''''
+        """))
+    
+    return messages
+

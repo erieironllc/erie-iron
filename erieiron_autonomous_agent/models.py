@@ -252,27 +252,43 @@ class Business(BaseErieIronModel):
     
     def snapshot_code(self, self_driving_task_iteration: 'SelfDrivingTaskIteration'):
         instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
+        sandbox_path = Path(self_driving_task_iteration.self_driving_task.sandbox_path)
+        erie_common_path = sandbox_path / "venv/lib/python3.11/site-packages/erieiron_common"
+
+        files_to_index = [sandbox_path / f for f in common.iterate_files_deep(
+            sandbox_path,
+            file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh", ".txt", "Dockerfile"],
+            gitignore_patterns=["core/migrations/"]
+        )]
         
-        for relative_file_path in common.iterate_files_deep(
-                self_driving_task_iteration.self_driving_task.sandbox_path,
-                file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh", ".txt", "Dockerfile"],
-                gitignore_patterns=["core/migrations/"]
-        ):
+        files_to_index += [erie_common_path / f for f in common.iterate_files_deep(
+            erie_common_path,
+            file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh"],
+            respect_git_ignore=False,
+            gitignore_patterns=["migrations/"]
+        )]
+        
+        for file_path in files_to_index:
+            try:
+                relative_file_path = Path(file_path).relative_to(sandbox_path)
+            except:
+                relative_file_path = file_path
+            
             code_file = CodeFile.get(self, relative_file_path)
             version = code_file.get_latest_version()
             
             if not version:
-                version = code_file.init_from_codefile(
+                code_file.init_from_codefile(
                     self_driving_task_iteration,
                     relative_file_path
                 )
-            
-            if relative_file_path.read_text() != version.code:
-                CodeFile.update_from_path(
-                    self_driving_task_iteration,
-                    relative_file_path,
-                    instructions
-                )
+            else:
+                if (sandbox_path / relative_file_path).read_text() != version.code:
+                    CodeFile.update_from_path(
+                        self_driving_task_iteration,
+                        relative_file_path,
+                        instructions
+                    )
 
 
 class BusinessAnalysis(BaseErieIronModel):
@@ -757,11 +773,13 @@ class LlmRequest(BaseErieIronModel):
 
 
 class CodeFile(BaseErieIronModel):
+    class Meta:
+        unique_together = ['business', 'file_path']
+    
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     
     # file_path is not the primary key because code file paths change as we refactor
-    # gotta be unique tho
-    file_path = models.TextField(unique=True)
+    file_path = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     
     def get_path(self) -> Path:
@@ -783,18 +801,10 @@ class CodeFile(BaseErieIronModel):
     
     @staticmethod
     def get(business: Business, code_file_path: Path) -> 'CodeFile':
-        code_file_path = Path(code_file_path)
-        
-        if not code_file_path.exists():
-            code_file_path.parent.mkdir(parents=True, exist_ok=True)
-            code_file_path.touch()
-        
-        code_file = CodeFile.objects.get_or_create(
+        return CodeFile.objects.get_or_create(
             business=business,
             file_path=code_file_path
         )[0]
-        
-        return code_file
     
     @staticmethod
     def init_from_codefile(
@@ -826,7 +836,7 @@ class CodeFile(BaseErieIronModel):
             code=code
         )
         
-        file_path = Path(self.file_path)
+        file_path = Path(task_iteration.self_driving_task.sandbox_path) / self.file_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(code)
         
@@ -838,12 +848,18 @@ class CodeFile(BaseErieIronModel):
             file_path: Path,
             code_instructions=None
     ) -> 'CodeVersion':
-        business = task_iteration.self_driving_task.business
+        self_driving_task = task_iteration.self_driving_task
+        business = self_driving_task.business
         
         code = file_path.read_text()
         
         with transaction.atomic():
-            code_file = CodeFile.get(business, file_path)
+            try:
+                relative_path = file_path.relative_to(self_driving_task.sandbox_path)
+            except:
+                relative_path = file_path
+            
+            code_file = CodeFile.get(business, relative_path)
             return code_file.update(
                 task_iteration=task_iteration,
                 code=code,
@@ -915,7 +931,7 @@ class CodeVersion(BaseErieIronModel):
 class CodeMethod(BaseErieIronModel):
     code_version = models.ForeignKey(CodeVersion, on_delete=models.CASCADE)
     name = models.TextField()
-    parameters = models.JSONField(default={})
+    parameters = models.JSONField(default=dict)
     code = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     codebert_embedding = VectorField(dimensions=768, null=True)
