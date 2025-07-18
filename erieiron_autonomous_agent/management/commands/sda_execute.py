@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_runner
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_runner
 
 
 class Command(BaseCommand):

@@ -9,15 +9,15 @@ from pathlib import Path
 from typing import List, Optional
 
 from django.db import transaction
+from django.db.models import Q
 from django.db.models.expressions import RawSQL
 from django.utils import timezone
 
 import settings
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_runner
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
-from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_runner
-from erieiron_autonomous_agent.self_driving_coder.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
-from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
@@ -27,16 +27,26 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKE
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 ARTIFACTS = "artifacts"
-PROMPTS_DIR = Path("./erieiron_autonomous_agent/business_level_agents/prompts/")
+PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
+
+MAP_TASKTYPE_TO_PLANNING_PROMPT = {
+    TaskType.CODING_ML: "codeplanner--ml_trainer.md",
+    TaskType.CODING_WEB_APPLICATION: "codeplanner--feature_development.md",
+    TaskType.CODING_NON_UI_TASK: "codeplanner--feature_development.md",
+    TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
+}
 
 
 def execute(config_file: Path = None, task_id: str = None):
     if task_id:
         task = Task.objects.get(id=task_id)
         self_driving_task = task.create_self_driving_env()
-        git = self_driving_task
+        git = self_driving_task.get_git()
+        git.pull()
+        git.mk_venv()
+        raise Exception('dude')
         
         config = SelfDriverConfig.get(config_file, task_id)
     else:
@@ -145,13 +155,14 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                 logging.exception(e)
                 config.supress_eval = True
                 if config.self_driving_task.task_id:
-                    PubSubManager.publish(
-                        PubSubMessageType.TASK_FAILED,
-                        payload={
-                            "task_id": config.self_driving_task.task_id,
-                            "error": traceback.format_exc()
-                        }
-                    )
+                    pass
+                    # PubSubManager.publish(
+                    #     PubSubMessageType.TASK_FAILED,
+                    #     payload={
+                    #         "task_id": config.self_driving_task.task_id,
+                    #         "error": traceback.format_exc()
+                    #     }
+                    # )
                 
                 break
             finally:
@@ -166,7 +177,8 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
         print(f"unable to load config file {config_file}:  {config_exception}")
     finally:
         if git:
-            git.cleanup()
+            print("DIR", git.source_root)
+            # git.cleanup()
         
         print("STOP REASON", stop_reason)
         # if not supress_eval:
@@ -217,7 +229,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         if config.debug:
             # In debug mode, call the runner directly
             self_driving_coder_runner.execute(
-                iteration.id,
+                task_execution.id,
                 "dev",
                 logfile
             )
@@ -406,89 +418,57 @@ def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessag
     return messages
 
 
-def get_sys_prompt(file_name: str, replacements: tuple[str, str] = None) -> LlmMessage:
-    msg = (PROMPTS_DIR / file_name).read_text()
-    for look_for_str, replace_with_str in common.ensure_list(replacements):
-        msg = msg.replace(look_for_str, replace_with_str)
-    return LlmMessage.sys(msg)
+def get_sys_prompt(
+        file_name: str,
+        replacements: tuple[str, str] = None
+) -> LlmMessage:
+    return_list = common.is_list_like(file_name)
+    
+    messages = []
+    for f in common.ensure_list(file_name):
+        msg = (PROMPTS_DIR / f).read_text()
+        for look_for_str, replace_with_str in common.ensure_list(replacements):
+            msg = msg.replace(look_for_str, replace_with_str)
+        messages.append(LlmMessage.sys(msg))
+    
+    if return_list:
+        return messages
+    else:
+        return common.first(messages)
 
 
 def build_system_message_planning(config: SelfDriverConfig):
-    business = config.self_driving_task.business
     main_file_name = config.main_code_file.get_path().name
+    business = config.self_driving_task.business
     
-    if config.main_code_file_test:
-        test_file_name = config.main_code_file_test.get_path().name
-    else:
-        test_file_name = None
+    task = config.self_driving_task.task
+    task_type = TaskType(task.task_type)
     
-    if config.generate_single_file:
-        if config.self_driving_task.get_require_tests():
-            files_strategy = " ".join([
-                f"The functional (non-test, non-Dockerfile) code should be contained in a single file named '{main_file_name}' and tested by '{test_file_name}'.",
-                f"You will keep all of the functional code you generate in this single file.",
-                f"Be sure to list '{main_file_name}' and '{test_file_name}' in `code_files` list in the response datastructure with the associated instructions"
-            ])
-        else:
-            files_strategy = " ".join([
-                f"The functional (non-test, non-Dockerfile) code should be contained in a single file named '{main_file_name}'.",
-                f"You will keep all of the functional code you generate in this single file.",
-                f"Be sure to list '{main_file_name}' in `code_files` list in the response datastructure with the associated instructions"
-            ])
-    else:
-        if config.self_driving_task.get_require_tests():
-            files_strategy = " ".join([
-                f"The main entry point for the code should be an 'execute' method in the file named '{main_file_name}' and shall be tested by tests in '{test_file_name}'",
-                f"You may keep all code in '{main_file_name}' and tests in '{test_file_name}'",
-                "but if appropriate you may define new code files.",
-                "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
-            ])
-        else:
-            files_strategy = " ".join([
-                f"The main entry point for the code should be an 'execute' method in the file named '{main_file_name}'.",
-                f"You may keep all code in '{main_file_name}', but if appropriate you may define new code files.",
-                "In any case, list all code files (and related instructions) in the `code_files` list in the response datastructure"
-            ])
-    
-    messages = [
-        get_sys_prompt(
-            "worker_coder--planning.md",
-            [
-                ("<aws_tag>", str(business.service_token)),
-                ("<db_name>", str(business.service_token)),
-                ("<iam_role_name>", str(business.get_iam_role_name())),
-                ("<code_directory>", str(config.code_directory)),
-                ("<sandbox_dir>", str(config.sandbox_root_dir)),
-                ("<files_strategy>", files_strategy)
-            ]
-        )
-    ]
+    messages: list[LlmMessage] = get_sys_prompt(
+        [
+            "codeplanner--base.md",
+            MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type]
+        ],
+        [
+            ("<aws_tag>", str(business.service_token)),
+            ("<db_name>", str(business.service_token)),
+            ("<iam_role_name>", str(business.get_iam_role_name())),
+            ("<code_directory>", str(config.code_directory)),
+            ("<artifacts_directory>", str(config.artifacts_dir)),
+            ("<execute_module>", config.code_basename),
+            ("<sandbox_dir>", str(config.sandbox_root_dir))
+        ]
+    )
     
     if config.guidance:
         messages.append(config.guidance)
     
-    if config.self_driving_task.get_require_tests():
-        messages.append(
-            get_sys_prompt("worker_coder--automated_tests.md")
-        )
-    
+    messages.append(get_dependencies_msg())
     messages += get_likely_code_files(config)
+    
     # messages.append(
     #     get_helper_methods_msg(config),
     # )
-    
-    messages.append(
-        get_dependencies_msg()
-    )
-    
-    if config.is_model_trainer:
-        messages.append(get_sys_prompt(
-            "worker_coder--ml_coder.md",
-            [
-                ("<artifacts_directory>", str(config.artifacts_dir)),
-                ("<execute_module>", config.code_basename)
-            ]
-        ))
     
     return messages
 
@@ -504,24 +484,28 @@ def generate_code(
         *[LlmMessage.user(s) for s in common.ensure_list(iteration_instructions)]
     ]
     
-    price = 0
-    
     llm_response_planning = get_planning_llm_response(
         config,
         messages
     )
-    price += llm_response_planning.price_total
+    price = llm_response_planning.price_total
     
     planning_data, post_process_price = ensure_parsable_json(
         config,
         llm_response_planning.text
     )
-    pprint.pprint(planning_data)
     price += post_process_price
     
     planning_data['planning_model'] = str(config.planning_model)
     evaluation_of_previous_code = planning_data.get("evaluation", [])
     goal_achieved = common.parse_bool(planning_data.get('goal_achieved'))
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            execute_module=planning_data.get('execute_module'),
+            test_module=planning_data.get('test_module')
+        )
+        iteration.refresh_from_db(fields=["execute_module", "test_module"])
     
     if config.previous_iteration:
         with transaction.atomic():
@@ -540,8 +524,6 @@ def generate_code(
     except:
         iteration_to_modify = config.previous_iteration
     
-    print(f"\n{json.dumps(planning_data, indent=4)}\n")
-    
     if not config.never_done and goal_achieved:
         raise GoalAchieved(planning_data)
     
@@ -557,9 +539,12 @@ def generate_code(
         if code_file_path_str.startswith(str(config.sandbox_root_dir)):
             code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
         
-        code_file_path = config.sandbox_root_dir / code_file_path_str
+        code_file_path: Path = config.sandbox_root_dir / code_file_path_str
         if not code_file_path:
             raise Exception(f"missing code file name: {json.dumps(cfi)}")
+        
+        if not code_file_path.exists():
+            code_file_path.touch()
         
         code_version_to_modify = iteration_to_modify.get_code_version(
             code_file_path
@@ -684,8 +669,9 @@ def get_planning_llm_response(
     llm_response_planning = llm_interface.chat(
         messages,
         model,
-        output_schema=PROMPTS_DIR / "worker_coder--planning.md.schema.json",
-        code_response=True
+        output_schema=PROMPTS_DIR / "codeplanner.schema.json",
+        code_response=True,
+        debug=True
     )
     log_llm_response(config, llm_response_planning)
     
@@ -705,11 +691,11 @@ def get_coding_llm_response(
     
     code_file_name = code_version_to_modify.code_file.get_path().name
     if code_file_name.endswith(".py"):
-        prompt = "worker_coder--python_coder.md"
+        prompt = "codewriter--python_coder.md"
     elif code_file_name == "requirements.txt":
-        prompt = "worker_coder--requirements.txt.md"
+        prompt = "codewriter--requirements.txt.md"
     elif code_file_name.startswith("Dockerfile"):
-        prompt = "worker_coder--dockerfile_coder.md"
+        prompt = "codewriter--dockerfile_coder.md"
     else:
         raise Exception(f"no coder implemented for {code_file_name}")
     
@@ -723,13 +709,13 @@ def get_coding_llm_response(
     ]
     
     messages += get_likely_code_files(config)
-
+    
     if code_file_name == "requirements.txt":
         messages.append(LlmMessage.sys("requirements.txt files are always plain text - they shall never contain python code"))
     
     if config.is_model_trainer:
         messages.append(get_sys_prompt(
-            "worker_coder--ml_coder.md",
+            "codewriter--ml_coder.md",
             [
                 ("<artifacts_directory>", str(config.artifacts_dir)),
                 ("<execute_module>", config.code_basename)
@@ -768,7 +754,7 @@ Your evaluation of the previous iteration's (iteration id={str(config.previous_i
         messages.append(
             LlmMessage.user(
                 f"iteration id={str(code_version_to_modify.task_iteration.id)} code_file_path {code_file_path}",
-                code_version_to_modify.code_file.file_path
+                config.sandbox_root_dir / code_version_to_modify.code_file.file_path
             )
         )
         
@@ -818,7 +804,7 @@ please write the initial version of {code_file_path}, following each of these in
     return llm_response_codegen
 
 
-def get_dependencies_msg():
+def get_dependencies_msg() -> LlmMessage:
     return LlmMessage.sys(
         f"""
 Dependencies
@@ -1139,12 +1125,18 @@ the user's GOAL is:
 
 def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
     # Step 1: Get the structured retrieval cues from the LLM
-    cues = business_level_chat(
-        "worker_code--source_code_finder.md",
-        config.self_driving_task.task.get_work_desc(),
-        model=LlmModel.OPENAI_GPT_3_5_TURBO
+    llm_response_cues = llm_interface.chat(
+        [
+            get_sys_prompt("codefinder.md"),
+            LlmMessage.user(config.self_driving_task.task.get_work_desc())
+        ],
+        LlmModel.OPENAI_GPT_3_5_TURBO,
+        output_schema=PROMPTS_DIR / "codefinder.md.schema.json",
+        code_response=True
     )
+    log_llm_response(config, llm_response_cues)
     
+    cues = llm_response_cues.json()
     semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
     prompt_embedding = get_codebert_embedding(semantic_query).tolist()
     
@@ -1162,11 +1154,17 @@ def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
         .select_related("code_version", "code_version__code_file")
         .filter(
             code_version__code_file__business=config.business,
-            code_version__code_file__file_path__endswith__in=['.py', '.js'],
-            code_version__code_file__file_path__startswith__in=['env/', 'venv/'],
+        )
+        .filter(
+            Q(code_version__code_file__file_path__endswith=".py") |
+            Q(code_version__code_file__file_path__endswith=".js")
+        )
+        .exclude(
+            Q(code_version__code_file__file_path__startswith="env/") |
+            Q(code_version__code_file__file_path__startswith="venv/")
         )
         .annotate(
-            similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
+            similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
         )
         .filter(similarity__lte=similarity_threshold)
         .order_by("similarity")
@@ -1186,9 +1184,9 @@ Possibly useful code method: "{code_method.name}"
 You may use "{code_method.name}" but not modify it as it lives in imported package
 "{code_method.name}" lives in the file "{relative_path}"
 
-''' BEGIN {code_method.name} CODE '''''''''''''''''
+============= BEGIN {code_method.name} CODE =============
 {code_method.code}
-''' END {code_method.name} CODE '''''''''''''''''
+============= END {code_method.name} CODE =============
 """))
     
     # Then get code versions for other file types (excluding Python and JavaScript)
@@ -1207,10 +1205,9 @@ You may use "{code_method.name}" but not modify it as it lives in imported packa
         messages.append(LlmMessage.user(f"""
 "{code_version.code_file.file_path}" is an existing project code file that you may use and or edit
 
-''' BEGIN {code_version.code_file.file_path} CODE '''''''''''''''''
+============= BEGIN {code_version.code_file.file_path} CODE =============
 {code_version.code}
-''' END {code_version.code_file.file_path} CODE '''''''''''''''''
+============= END {code_version.code_file.file_path} CODE =============
         """))
     
     return messages
-

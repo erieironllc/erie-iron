@@ -107,7 +107,7 @@ class SelfDriverConfig:
         })
 
     def __init__(self, config):
-        self.debug = False
+        self.debug = True
         self.self_driving_task: SelfDrivingTask = config.get("self_driving_task")
         self.business = self.self_driving_task.business
         self.supress_eval = config.get("supress_eval", True)

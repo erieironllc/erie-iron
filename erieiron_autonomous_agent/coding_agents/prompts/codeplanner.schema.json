@@ -6,11 +6,15 @@
     "previous_iteration_count",
     "best_iteration_id",
     "iteration_id_to_modify",
+    "test_module",
+    "execute_module",
     "evaluation",
     "code_files"
   ],
   "properties": {
     "goal_achieved": { "type": "boolean" },
+    "test_module": { "type": "string" },
+    "execute_module": { "type": "string" },
     "previous_iteration_count": {
       "oneOf": [
         { "type": "string", "enum": ["all"] },
@@ -87,7 +91,14 @@
   "then": {
     "anyOf": [
       { "required": ["blocked"] },
-      { "not": { "required": ["blocked"] } }
+      {
+        "properties": {
+          "code_files": {
+            "type": "array",
+            "minItems": 1
+          }
+        }
+      }
     ]
   }
 }

@@ -1,40 +1,19 @@
 import base64
-import json
 import os
 import pprint
 import subprocess
 import sys
 import uuid
-from pathlib import Path
 from typing import Optional, List
 
 import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError
 
-from erieiron_autonomous_agent.models import Business
-from erieiron_common import common, settings_common
+from erieiron_common import settings_common
 from erieiron_common.enums import LlmMessageType, PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-
-
-class PermissionEscalationRequired(Exception):
-    """
-    Raised when an operation requires elevated IAM permissions that are not currently granted.
-
-    This exception is used to signal that a task must pause and request additional privileges
-    (typically via IAM policy updates or trust policy changes) before proceeding.
-
-    Attributes:
-        action (str): The AWS action that was attempted (e.g., 'ecr:CreateRepository').
-        resource (str): The ARN or wildcard of the resource involved in the attempted action.
-    """
-
-    def __init__(self, action: str, resource: str):
-        super().__init__(f"Permission escalation required: {action} on {resource}")
-        self.action = action
-        self.resource = resource
 
 
 class CommandExecutionError(Exception):
@@ -48,7 +27,7 @@ class CommandExecutionError(Exception):
         message (str): A description of the error or failed command.
         original_exception (Optional[Exception]): The exception that was raised, if available.
     """
-
+    
     def __init__(self, message: str, original_exception: Optional[Exception] = None):
         super().__init__(f"{message}. Original exception: {original_exception}")
         self.message = f"{message}. Original exception: {original_exception}"
@@ -87,20 +66,20 @@ def llm_chat_text_response(task_id: str, messages: list[tuple[str, str]]) -> str
     Raises:
         Exception: If an invalid message_type is encountered.
     """
-
+    
     llm_messages = []
     for message_type, message_text in messages:
         llm_message_type = LlmMessageType.valid_or(message_type.lower())
-
+        
         if not llm_message_type:
             raise Exception(f"{message_type} is not a valid message_type.  must be one of [system | assistant | user]")
-
+        
         llm_messages.append(
             LlmMessage(llm_message_type, message_text or "")
         )
-
+    
     llm_response = llm_interface.chat(llm_messages)
-
+    
     if "pytest" not in sys.modules:
         PubSubManager.publish(
             PubSubMessageType.TASK_SPEND,
@@ -110,7 +89,7 @@ def llm_chat_text_response(task_id: str, messages: list[tuple[str, str]]) -> str
                 "usd_spent": llm_response.price_total
             }
         )
-
+    
     return llm_response.text
 
 
@@ -129,20 +108,20 @@ def llm_chat_json_response(task_id: str, messages: list[tuple[str, str]]) -> dic
     Raises:
         Exception: If an invalid message_type is encountered.
     """
-
+    
     llm_messages = []
     for message_type, message_text in messages:
         llm_message_type = LlmMessageType.valid_or(message_type.lower())
-
+        
         if not llm_message_type:
             raise Exception(f"{message_type} is not a valid message_type.  must be one of [system | assistant | user]")
-
+        
         llm_messages.append(
             LlmMessage(llm_message_type, message_text or "")
         )
-
+    
     llm_response = llm_interface.chat(llm_messages, code_response=True)
-
+    
     if "pytest" not in sys.modules:
         PubSubManager.publish(
             PubSubMessageType.TASK_SPEND,
@@ -152,7 +131,7 @@ def llm_chat_json_response(task_id: str, messages: list[tuple[str, str]]) -> dic
                 "usd_spent": llm_response.price_total
             }
         )
-
+    
     return llm_response.json()
 
 
@@ -186,26 +165,11 @@ def get_boto3_client(
         if role_arn_to_assume:
             import botocore
             sts_client = session.client("sts", region_name=region)
-            try:
-                response = sts_client.assume_role(
-                    RoleArn=role_arn_to_assume,
-                    RoleSessionName=role_session_name,
-                )
-            except botocore.exceptions.ClientError as e:
-                message = str(e)
-                if "not authorized to perform: sts:AssumeRole" in message:
-                    current_arn = aws_iam_get_current_user()
-                    role_name = role_arn_to_assume.split("/")[-1]
-                    print(f"[🔁] Attempting to patch trust policy for role {role_name} to allow {current_arn}")
-                    iam_update_trust_policy(role_name, current_arn)
-                    # retry once
-                    response = sts_client.assume_role(
-                        RoleArn=role_arn_to_assume,
-                        RoleSessionName=role_session_name,
-                    )
-                else:
-                    raise
-
+            response = sts_client.assume_role(
+                RoleArn=role_arn_to_assume,
+                RoleSessionName=role_session_name,
+            )
+            
             assumed_creds = response["Credentials"]
             return boto3.client(
                 service,
@@ -240,13 +204,13 @@ def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None =
         CommandExecutionError: If the command fails or violates sandbox constraints.
     """
     full_cmd = ["aws"] + command
-
+    
     # If role assumption is requested, set up the environment variable
     env_backup = None
     if role_arn_to_assume:
         env_backup = os.environ.get("AWS_ROLE_ARN")
         os.environ["AWS_ROLE_ARN"] = role_arn_to_assume
-
+    
     try:
         return run_shell_command(business_id, full_cmd, input_data=input_data)
     finally:
@@ -282,14 +246,14 @@ def aws_ecr_login(
     """
     # Get ECR client with optional role assumption
     ecr_client = get_boto3_client('ecr', region=aws_region, role_arn_to_assume=role_arn_to_assume)
-
+    
     # Get authorization token
     auth_data = ecr_client.get_authorization_token()["authorizationData"][0]
     token = base64.b64decode(auth_data["authorizationToken"]).decode("utf-8")
     username, password = token.split(":", 1)
-
+    
     print("retrieved aws ecr login password")
-
+    
     docker_login_cmd = [
         "docker", "login",
         "--username", "AWS",
@@ -319,16 +283,16 @@ def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Op
     to ensure it remains within the sandbox directory. If a path is detected outside the sandbox,
     the command will be blocked and a CommandExecutionError raised.
     """
-
+    
     # if not (command[0] == "docker" or command[0] == "aws"):
-        # sandbox_path = Business.objects.get(id=business_id).get_sandbox_dir()
-        # for arg in command[1:]:
-        #     if os.path.isabs(arg) or os.path.exists(arg) or "/" in arg:
-        #         common.assert_in_sandbox(sandbox_path, arg)
-
+    # sandbox_path = Business.objects.get(id=business_id).get_sandbox_dir()
+    # for arg in command[1:]:
+    #     if os.path.isabs(arg) or os.path.exists(arg) or "/" in arg:
+    #         common.assert_in_sandbox(sandbox_path, arg)
+    
     try:
         print("executing command:", " ".join(command))
-
+        
         # Handle input data - keep as string for text mode
         stdin_input = None
         use_text_mode = True
@@ -342,7 +306,7 @@ def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Op
             else:
                 stdin_input = str(input_data)
                 use_text_mode = True
-
+        
         result = subprocess.run(
             command,
             input=stdin_input,
@@ -430,258 +394,3 @@ def aws_iam_get_current_user() -> str:
         return identity["Arn"]
     except Exception as e:
         raise RuntimeError(f"Failed to retrieve IAM caller identity: {e}")
-
-
-def iam_propose_policy_patch(business_id: uuid.UUID, actions: list[str], resources: list[str], reason: str) -> None:
-    """
-    Updates or creates a least-privilege IAM policy inline to the specified IAM role or user.
-    If the policy already exists, it merges the new statement without duplicating.
-
-    Args:
-        business_id (uuid.UUID): Unique ID of the business issuing the command.
-        actions (list[str]): IAM actions to grant.
-        resources (list[str]): Resources these actions apply to.
-        reason (str): Justification for this permission grant.
-
-    Raises:
-        RuntimeError: If the IAM policy application fails.
-    """
-
-    business = Business.objects.get(id=business_id)
-    iam_role_name = business.get_iam_role_name()
-    print("[IAM POLICY PATCH REQUEST]")
-    print(f"IAM Role Name: {iam_role_name}")
-    print(f"Actions: {actions}")
-    print(f"Resources: {resources}")
-    print(f"Reason: {reason}")
-
-    iam_client = get_boto3_client("iam")
-    policy_name = f"{iam_role_name}-inline"
-
-    try:
-        get_policy = lambda: iam_client.get_role_policy(RoleName=iam_role_name, PolicyName=policy_name)
-        put_policy = lambda doc: iam_client.put_role_policy(
-            RoleName=iam_role_name,
-            PolicyName=policy_name,
-            PolicyDocument=doc
-        )
-
-        try:
-            existing_policy = get_policy()
-            policy_document_item = existing_policy["PolicyDocument"]
-            if isinstance(policy_document_item, str):
-                doc = json.loads(policy_document_item)
-            elif isinstance(policy_document_item, dict):
-                doc = policy_document_item
-            else:
-                raise TypeError(f"PolicyDocument has unexpected type: {type(policy_document_item)}")
-            # Merge new statement, avoid duplicates
-            new_statement = {
-                "Effect": "Allow",
-                "Action": actions,
-                "Resource": resources
-            }
-
-            # Check if similar statement exists
-            def actions_equal(a1, a2):
-                if isinstance(a1, list) and isinstance(a2, list):
-                    return set(a1) == set(a2)
-                return a1 == a2
-
-            def resources_equal(r1, r2):
-                if isinstance(r1, list) and isinstance(r2, list):
-                    return set(r1) == set(r2)
-                return r1 == r2
-
-            # Only append if no existing statement has same actions and resources
-            if not any(
-                    s.get("Effect") == "Allow" and
-                    actions_equal(s.get("Action", []), new_statement["Action"]) and
-                    resources_equal(s.get("Resource", []), new_statement["Resource"])
-                    for s in doc.get("Statement", [])
-            ):
-                doc["Statement"].append(new_statement)
-        except iam_client.exceptions.NoSuchEntityException:
-            doc = {
-                "Version": "2012-10-17",
-                "Statement": [{
-                    "Effect": "Allow",
-                    "Action": actions,
-                    "Resource": resources
-                }]
-            }
-
-        put_policy(json.dumps(doc))
-        print(f"[✅] Policy merged/applied to: {iam_role_name}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to update IAM policy patch on '{iam_role_name}': {e}")
-
-
-def iam_update_trust_policy(role_name: str, trusted_principal_arn: str) -> None:
-    """
-    Ensures the specified role's trust policy allows the given principal to assume it.
-
-    Args:
-        role_name (str): The name of the IAM role to update.
-        trusted_principal_arn (str): The ARN of the user or role that should be allowed to assume it.
-
-    Raises:
-        RuntimeError: If the trust policy cannot be updated.
-    """
-    iam_client = get_boto3_client("iam")
-
-    trust_policy = {
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Principal": {"AWS": trusted_principal_arn},
-            "Action": "sts:AssumeRole"
-        }]
-    }
-
-    try:
-        iam_client.update_assume_role_policy(
-            RoleName=role_name,
-            PolicyDocument=json.dumps(trust_policy)
-        )
-        print(f"[✅] Updated trust policy for role: {role_name}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to update trust policy for role '{role_name}': {e}")
-
-
-def build_and_push_dev_container(
-        business_id: uuid.UUID,
-        dockerfile: Path,
-        image_tag: str = "latest"
-) -> str:
-    """
-    Builds a Docker development container image, pushes it to AWS Elastic Container Registry (ECR),
-    and returns the image URI.
-
-    This function performs the following steps:
-      1. Retrieves AWS/ECR metadata and IAM role information for the business.
-      2. Ensures the target ECR repository exists (creating it if necessary).
-      3. Authenticates Docker with ECR using a temporary token.
-      4. Builds the Docker image from the provided Dockerfile content and context directory.
-      5. Tags and pushes the image to ECR.
-      6. Verifies the image is available in ECR, and returns its full URI.
-
-    If permissions are missing at any step, the function attempts to escalate or propose new IAM policies,
-    and raises a PermissionEscalationRequired exception with details.
-
-    Args:
-        business_id (uuid.UUID): The unique identifier of the business context for which the image is being built.
-        dockerfile (Path): The Dockerfile to use for building the image.
-        image_tag (str, optional): The tag to use for the Docker image (default is "latest").
-
-    Returns:
-        str: The full URI of the pushed Docker image in ECR.
-
-    Raises:
-        PermissionEscalationRequired: If the operation requires additional AWS permissions or a trust policy update.
-        CommandExecutionError: If a shell command for Docker or AWS CLI fails.
-        RuntimeError: For unrecoverable errors with AWS API calls or IAM operations.
-        Exception: For any other unexpected errors encountered during the process.
-    """
-    dockerfile = common.assert_exists(dockerfile)
-
-    business = Business.objects.get(id=business_id)
-    iam_role_name = business.get_iam_role_name()
-    repo_name = business.service_token
-
-    aws_metadata = get_aws_metadata()
-    aws_account_id = aws_metadata["aws_account_id"]
-    aws_region = aws_metadata["aws_region"]
-
-    role_arn = f"arn:aws:iam::{aws_account_id}:role/{iam_role_name}"
-    repository_arn = f"arn:aws:ecr:{aws_region}:{aws_account_id}:repository/{repo_name}"
-    image_uri = f"{aws_account_id}.dkr.ecr.{aws_region}.amazonaws.com/{repo_name}:{image_tag}"
-
-    try:
-        ecr_client = get_boto3_client("ecr", region=aws_region, role_arn_to_assume=role_arn)
-    except Exception:
-        current_user_arn = aws_iam_get_current_user()
-        iam_update_trust_policy(role_name=iam_role_name, trusted_principal_arn=current_user_arn)
-        raise PermissionEscalationRequired("sts:AssumeRole", role_arn)
-
-    try:
-        ecr_client.describe_repositories(repositoryNames=[repo_name])
-    except Exception as e:
-        if "RepositoryNotFoundException" in str(e):
-            try:
-                ecr_client.create_repository(
-                    repositoryName=repo_name,
-                    tags=[{"Key": "Service", "Value": repo_name}]
-                )
-            except Exception as ce:
-                if "AccessDenied" in str(ce):
-                    iam_propose_policy_patch(
-                        business_id, ["ecr:CreateRepository"], [repository_arn],
-                        reason=f"To create ECR repository {repo_name}"
-                    )
-                    raise PermissionEscalationRequired("ecr:CreateRepository", repository_arn)
-                raise
-        elif "AccessDenied" in str(e):
-            iam_propose_policy_patch(
-                business_id, ["ecr:DescribeRepositories"], [repository_arn],
-                reason=f"To describe ECR repository {repo_name}"
-            )
-            raise PermissionEscalationRequired("ecr:DescribeRepositories", repository_arn)
-        raise
-
-    try:
-        auth_data = ecr_client.get_authorization_token()["authorizationData"][0]
-        token = base64.b64decode(auth_data["authorizationToken"]).decode("utf-8")
-        username, password = token.split(":", 1)
-        proxy_endpoint = auth_data["proxyEndpoint"]
-        run_shell_command(business_id, ["docker", "login", "-u", username, "--password-stdin", proxy_endpoint], input_data=password)
-    except Exception as ce:
-        if "AccessDenied" in str(ce):
-            iam_propose_policy_patch(
-                business_id, ["ecr:GetAuthorizationToken"], ["*"],
-                reason="To allow Docker login to ECR"
-            )
-            raise PermissionEscalationRequired("ecr:GetAuthorizationToken", "*")
-        raise
-
-    build_context_path_str = str(dockerfile.parent)
-    run_shell_command(
-        business_id,
-        ["docker", "build", "-f", str(dockerfile), "-t", f"{repo_name}:{image_tag}", build_context_path_str]
-    )
-    run_shell_command(
-        business_id,
-        ["docker", "tag", f"{repo_name}:{image_tag}", image_uri]
-    )
-
-    try:
-        run_shell_command(business_id, ["docker", "push", image_uri])
-    except CommandExecutionError as ce:
-        push_actions = [
-            "ecr:BatchCheckLayerAvailability",
-            "ecr:CompleteLayerUpload",
-            "ecr:InitiateLayerUpload",
-            "ecr:PutImage",
-            "ecr:UploadLayerPart",
-        ]
-        iam_propose_policy_patch(
-            business_id, push_actions, [repository_arn],
-            reason="To allow push to ECR repository"
-        )
-        raise PermissionEscalationRequired(", ".join(push_actions), repository_arn)
-
-    try:
-        ecr_client.batch_get_image(
-            repositoryName=repo_name, imageIds=[{"imageTag": image_tag}]
-        )
-    except Exception as e:
-        if "AccessDenied" in str(e):
-            iam_propose_policy_patch(
-                business_id, ["ecr:BatchGetImage"], [repository_arn],
-                reason="To verify image in ECR"
-            )
-            raise PermissionEscalationRequired("ecr:BatchGetImage", repository_arn)
-        raise
-
-    return image_uri
-

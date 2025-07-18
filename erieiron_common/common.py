@@ -77,6 +77,7 @@ class HashableDict(dict):
 
 
 def comment_out_line(file_path_or_ext, line_str):
+    file_path_or_ext = str(file_path_or_ext)
     ext = file_path_or_ext if file_path_or_ext.startswith('.') else Path(file_path_or_ext).suffix
     comment_start_char = COMMENT_CHAR_START_MAP.get(ext)
     if not comment_start_char:
@@ -1603,7 +1604,7 @@ def execute_management_cmd(command, output_file: Path = None) -> int:
     return exec_cmd(full_command, output_file)
 
 
-def exec_cmd(full_command, output_file=None) -> int:
+def exec_cmd(full_command, output_file=None, cwd=None) -> int:
     def set_death_signal():
         if sys.platform.startswith('linux'):
             try:
@@ -1624,6 +1625,7 @@ tail -f {os.path.abspath(output_file)}
             process = subprocess.Popen(
                 full_command,
                 shell=True,
+                cwd=cwd or os.getcwd(),
                 stdout=outfile,
                 stderr=subprocess.STDOUT,
                 text=True,

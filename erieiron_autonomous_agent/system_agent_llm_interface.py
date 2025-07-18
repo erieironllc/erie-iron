@@ -105,7 +105,7 @@ def agent_chat(
     if not model:
         model = SYSTEM_AGENT_MODELS_IN_ORDER
     
-    llm_interface.debug_messages(model, messages)
+    # llm_interface.debug_messages(model, messages)
     resp = llm_interface.chat(
         messages,
         model,

@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand
 
-from erieiron_autonomous_agent.self_driving_coder.generate_stub import generate_stub
+from erieiron_autonomous_agent.coding_agents.generate_stub import generate_stub
 
 
 class Command(BaseCommand):

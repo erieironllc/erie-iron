@@ -483,12 +483,13 @@ class Task(BaseErieIronModel):
         return d
     
     def create_execution(self, input_data=None, iteration=None) -> 'TaskExecution':
-        return TaskExecution.objects.create(
-            task=self,
-            iteration=iteration,
-            status=TaskStatus.NOT_STARTED,
-            input=input_data or {}
-        )
+        with transaction.atomic():
+            return TaskExecution.objects.create(
+                task=self,
+                iteration=iteration,
+                status=TaskStatus.NOT_STARTED,
+                input=input_data or {}
+            )
     
     def get_last_execution(self) -> Optional['TaskExecution']:
         return self.taskexecution_set.filter(executed_time__isnull=False).order_by("executed_time").last()
@@ -666,6 +667,8 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     self_driving_task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
     achieved_goal = models.BooleanField(null=False, default=False)
     version_number = models.IntegerField(null=False, default=0)
+    test_module = models.TextField(null=True)
+    execute_module = models.TextField(null=True)
     planning_model = models.TextField()
     coding_model = models.TextField()
     log_content = models.TextField()
@@ -693,6 +696,12 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             cv.write_to_disk(sandbox_path)
     
     def get_code_version(self, code_file: 'CodeFile'):
+        if isinstance(code_file, Path):
+            code_file = CodeFile.get(
+                self.self_driving_task.business,
+                self.get_relative_path(code_file)
+            )
+            
         code_version_to_modify = code_file.get_version(self)
         
         if not code_version_to_modify:
@@ -705,6 +714,12 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             )
         
         return code_version_to_modify
+    
+    def get_relative_path(self, code_file):
+        try:
+            return Path(code_file).relative_to(self.self_driving_task.sandbox_path)
+        except:
+            return code_file
     
     def get_previous_iteration(self):
         self.get_previous_by_timestamp()
