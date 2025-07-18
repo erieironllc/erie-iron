@@ -61,6 +61,8 @@ class GitWrapper:
         return self
     
     def clone(self, source_repo) -> 'GitWrapper':
+        self.cleanup()
+        self.source_root.mkdir(parents=True)
         return self.exec("clone", self.wrap_url_with_token(source_repo), self.source_root)
     
     def pull(self) -> 'GitWrapper':
@@ -130,19 +132,17 @@ class GitWrapper:
         return repo_url.replace("https://", f"https://{token}@")
     
     def source_exists(self) -> bool:
-        return len(glob.glob(os.path.join(self.source_root, f"*.py"))) > 0
+        return (self.source_root / ".git").exists()
     
     def mk_venv(self) -> Path:
         venv_path = self.source_root / "venv"
-        time.sleep(1)
-        
-        run_cmd(
-            self.source_root,
-            ["python3.11", "-m", "venv", str(venv_path)]
-        )
-        
         pip_executable = venv_path / "bin" / "pip" if os.name != "nt" else venv_path / "Scripts" / "pip.exe"
-        cmd = [str(pip_executable), "install", "-r", "requirements.txt"]
+
+        if not pip_executable.exists():
+            run_cmd(
+                self.source_root,
+                ["python3.11", "-m", "venv", str(venv_path)]
+            )
         
         run_cmd(
             self.source_root,

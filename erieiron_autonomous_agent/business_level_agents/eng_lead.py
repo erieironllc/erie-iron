@@ -324,7 +324,7 @@ def bootstrap_buiness(business_id):
         pass
 
 
-def bootstrap_repo(business:Business, git:GitWrapper):
+def bootstrap_repo(business: Business, git: GitWrapper):
     if git.exists(business.github_repo_url):
         git.clone(business.github_repo_url)
     else:
@@ -335,7 +335,7 @@ def bootstrap_repo(business:Business, git:GitWrapper):
         logging.info(f"Cloning bootstrap repository from {source_repo} to {clone_path} ({target_repo})")
         
         git.clone_to_new_repo(
-            source_repo, 
+            source_repo,
             target_repo
         )
         
@@ -350,8 +350,6 @@ def bootstrap_repo(business:Business, git:GitWrapper):
         
         git.create_repo(business.github_repo_url)
         git.add_commit_push(f"Initialize repository for {business.name}")
-        
-    git.mk_venv()
 
 
 def get_source_repo_url(business: Business) -> str:

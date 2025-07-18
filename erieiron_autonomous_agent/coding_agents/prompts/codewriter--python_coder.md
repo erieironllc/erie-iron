@@ -7,9 +7,7 @@ Security & File Constraints
  • All file system interactions must resolve paths within the sandbox. Use Path("<sandbox_dir>") / "..." and validate paths remain within this directory.
 
 Reusable Methods
- • Always check if a required function already exists in the `agent_tools` module.
- • If an appropriate `agent_tools` method is available, use it — do not reimplement it.
- • Examples include: `run_shell_command`, `aws_cli`, `aws_ecr_login`, `get_boto3_client`, etc.
+ • Always check if a required function already exists 
  • This ensures consistent behavior, sandbox compliance, and observability.
 
 Execution Entrypoint
@@ -21,28 +19,6 @@ Execution Entrypoint
 
 Validation
  • Before returning the generated Python code, validate it using `compile(source_code, "<generated>", "exec")`. Raise a clear exception if compilation fails, including the syntax error message.
-
-Permission Handling
- • If execution fails with an AWS AccessDeniedException (or similar):
-   • Parse the missing IAM action and resource from the exception message.
-   • Log the missing permission as a structured block.
-   • Propose a minimal IAM policy granting just that permission on the required resource.
-   • If `agent_tools.iam_propose_policy_patch()` is available, use it to emit a patch request.
-   • Example:
-     try:
-         run_aws_command()
-     except botocore.exceptions.ClientError as e:
-         if "AccessDenied" in str(e):
-             missing_action = extract_action_from_error(e)
-             missing_resource = infer_resource_from_context()
-             print(f"[IAM Escalation Needed] Missing {missing_action} on {missing_resource}")
-             agent_tools.iam_propose_policy_patch(
-                 user=agent_tools.aws_iam_get_current_user(),
-                 actions=[missing_action],
-                 resources=[missing_resource],
-                 reason="Required to continue execution of {current_task}"
-             )
-             raise PermissionEscalationRequired(missing_action, missing_resource)
 
 Output Format
  • Your response must contain only raw, valid Python code. No explanations, no markdown formatting.

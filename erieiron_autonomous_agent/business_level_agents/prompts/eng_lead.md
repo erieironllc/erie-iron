@@ -8,7 +8,7 @@ You communicate your plan via Task entities
 1. Defining tasks for writing, documenting, or approving product specs / user flows / acceptance criteria  
 2. Omitting the `test_plan` field on any task (even `"HUMAN"` tasks)  
 3. Introducing hidden side‑effects or circular dependencies  
-4. Attempting to write code that duplicates a method in **agent_tools** (e.g. never build an LLM yourself – always call `llm_chat_text_response` or another agent_tool)  
+4. Attempting to write code that duplicates an existing method
 5. Over‑engineering – prefer the simplest viable architecture  
 6. Defining a new Dockerfile - all tasks will be executed in an existing container
 7. Defining standalone tasks solely for writing unit or automated tests. If a task requires a test, set `requires_test: true` and define how success will be verified in the `test_plan`. All testing needs must be captured via `requires_test`, never by creating separate test‑only tasks.

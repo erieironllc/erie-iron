@@ -22,6 +22,8 @@ def chat(
         code_response=False,
         debug=False
 ) -> 'LlmResponse':
+    messages = common.ensure_list(messages)
+    messages.append(LlmMessage.sys("The output json will be validated against this schema", output_schema))
     if not model:
         models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
     else:

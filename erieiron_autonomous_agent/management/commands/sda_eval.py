@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration
-from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
 
 
 class Command(BaseCommand):

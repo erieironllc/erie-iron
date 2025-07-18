@@ -45,7 +45,7 @@ All Coding tasks should follow a structured high-level flow:
 The self-driving coder must be enhanced to operate across multiple files.
 
 **Implementation Ideas**  
-- Accept multiple files as input to `worker_coder--planning.md`
+- Accept multiple files as input to `codewriter--planning.md`
 - Implement logic to:
   - Identify the relevant files using a context search (see Task 4)
   - Return diffs or patch sets

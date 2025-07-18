@@ -7,7 +7,7 @@ from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.business_level_agents.eng_lead import bootstrap_buiness
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeFile, SelfDrivingTask, SelfDrivingTaskIteration, SelfDrivingTaskBestIteration, Task, Business
-from erieiron_autonomous_agent.self_driving_coder import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
 from erieiron_common.enums import PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage
