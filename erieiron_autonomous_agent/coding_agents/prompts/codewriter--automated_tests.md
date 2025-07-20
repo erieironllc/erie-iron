@@ -1,7 +1,0 @@
-- Every 'functional' code_file_path defined in code_files must have a corresponding test file named <functional_code_file_path>_test.py. 
-    - The test file must fully excersise and validate the corresponding functional code file. 
-    - The output of the test file will indicate our progress towards the goal.
-- The test files will implement unit or acceptance tests using pytest-django. 
-    - Tests must follow pytest-style syntax and may use pytest-django features such as database access fixtures (`db`, `client`, etc.) or settings overrides. 
-    - Each test file must be runnable using `pytest`, and must not interact with production data or systems under any circumstances. 
-    - Third-party api or llm interaction is OK

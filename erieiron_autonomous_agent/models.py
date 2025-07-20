@@ -445,7 +445,7 @@ class Task(BaseErieIronModel):
     created_timestamp = models.DateTimeField(auto_now_add=True)
     initiative = models.ForeignKey(Initiative, on_delete=models.CASCADE, related_name="tasks")
     product_initiative = models.TextField(null=True)
-    task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_NON_UI_TASK, null=False)
+    task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_WEB_APPLICATION, null=False)
     status = models.TextField(null=False, choices=TaskStatus.choices())
     
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")

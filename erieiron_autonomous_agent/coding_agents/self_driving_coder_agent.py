@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import pprint
+import subprocess
 import tempfile
+import time
 import traceback
 import zipfile
 from pathlib import Path
@@ -14,14 +16,13 @@ from django.db.models.expressions import RawSQL
 from django.utils import timezone
 
 import settings
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_runner
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, SelfDriverConfigException, AgentBlocked, GoalAchieved
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
-from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType
+from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -34,7 +35,6 @@ COUNT_FULL_LOGS_IN_CONTEXT = 2
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",
     TaskType.CODING_WEB_APPLICATION: "codeplanner--feature_development.md",
-    TaskType.CODING_NON_UI_TASK: "codeplanner--feature_development.md",
     TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
 }
 
@@ -45,9 +45,6 @@ def execute(config_file: Path = None, task_id: str = None):
         self_driving_task = task.create_self_driving_env()
         git = self_driving_task.get_git()
         git.pull()
-        git.mk_venv()
-        raise Exception('dude')
-        
         config = SelfDriverConfig.get(config_file, task_id)
     else:
         task = None
@@ -142,7 +139,9 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
                 
                 break
             except GoalAchieved as goal_achieved:
-                git.add_commit_push(f"task {task.id}: {task.description}")
+                if git:
+                    git.add_commit_push(f"task {task.id}: {task.description}")
+                
                 stop_reason = "Goal Achieved"
                 if config.self_driving_task.task_id:
                     PubSubManager.publish_id(
@@ -214,75 +213,151 @@ def iterate_on_code(config: SelfDriverConfig, iteration: SelfDrivingTaskIteratio
         )
 
 
-def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
-    import subprocess
-    import time
-    import os
+def build_docker_image(self_driving_task: SelfDrivingTask, log_f) -> str:
+    docker_image = f"self_driving_task--{self_driving_task.id}"
+    sandbox_path = self_driving_task.sandbox_path
     
+    log_f.write("=" * 50 + "\n")
+    log_f.write("BUILDING DOCKER IMAGE\n")
+    log_f.write("=" * 50 + "\n")
+    log_f.flush()
+    
+    build_cmd = [
+        "docker",
+        "build",
+        "-t", docker_image,
+        "-f", f"{sandbox_path}/Dockerfile",
+        sandbox_path
+    ]
+    
+    build_process = subprocess.Popen(
+        build_cmd,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+    
+    while build_process.poll() is None:
+        time.sleep(1)
+    
+    if build_process.returncode != 0:
+        raise Exception(f"Docker build failed with return code: {build_process.returncode}")
+    
+    return docker_image
+
+
+def run_docker_command(
+        command_args: list,
+        iteration: SelfDrivingTaskIteration,
+        running_process: RunningProcess,
+        docker_image: str,
+        log_f
+) -> None:
+    task_execution = running_process.task_execution
+    selfdriving_task = iteration.self_driving_task
+    sandbox_path = iteration.self_driving_task.sandbox_path
+    
+    log_f.write("\n" + "=" * 50 + "\n")
+    log_f.write("=" * 50 + "\n")
+    log_f.flush()
+    
+    cmd = [
+              "docker", "run", "--rm",
+              "-v", f"{sandbox_path}:/app",
+              "-w", "/app",
+              docker_image,
+          ] + command_args
+    
+    log_f.write(f"RUNNING {' '.join(cmd)} in {sandbox_path}\n")
+    process = subprocess.Popen(
+        cmd,
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+    
+    # Update running process with PID
+    running_process.process_id = process.pid
+    running_process.save(update_fields=['process_id'])
+    
+    print(f"Docker {command_args[-1]} execution started with PID {process.pid}, iteration_id: {iteration.id}")
+    
+    # Wait for completion
+    while process.poll() is None:
+        running_process.update_log_tail()
+        time.sleep(2)
+    
+    return_code = process.returncode
+    log_f.write(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
+    log_f.flush()
+    
+    running_process.update_log_tail()
+    
+    if return_code != 0:
+        with open(running_process.log_file_path, "r") as log_read:
+            error_output = log_read.read()
+        task_execution.error_msg = error_output
+        task_execution.save()
+        raise Exception(f"Docker execution failed - return code: {return_code}")
+
+
+def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
     running_process = None
     
-    task = iteration.self_driving_task.task
+    self_driving_task = iteration.self_driving_task
+    task = self_driving_task.task
+    task_type = TaskType(task.task_type)
     task_execution = init_task_execution(iteration)
     
     try:
-        if config.debug:
-            # In debug mode, call the runner directly
-            self_driving_coder_runner.execute(
-                task_execution.id,
-                "dev",
-                logfile
-            )
-        else:
-            # Execute sda_execute as a managed subprocess with process tracking
-            python_executable = os.path.join("env", "bin", "python")
-            cmd = [python_executable, "-u", "manage.py", "sda_execute", f"--execution_id={task_execution.id}"]
-            
-            # Create RunningProcess record for tracking
-            running_process, _ = RunningProcess.objects.update_or_create(
-                task_execution=task_execution,
-                execution_type='local',
-                log_file_path=str(logfile)
+        running_process, _ = RunningProcess.objects.update_or_create(
+            task_execution=task_execution,
+            execution_type='docker',
+            log_file_path=str(logfile)
+        )
+        
+        with open(logfile, "w") as log_f:
+            docker_image = build_docker_image(
+                self_driving_task,
+                log_f
             )
             
-            # Start the subprocess
-            with open(logfile, "w") as log_f:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                    text=True
+            if TaskType.CODING_ML.eq(task_type):
+                run_docker_command(
+                    command_args=["python", "manage.py", self_driving_task.main_name],
+                    iteration=iteration,
+                    running_process=running_process,
+                    docker_image=docker_image,
+                    log_f=log_f
                 )
-                
-                # Update running process with PID
-                running_process.process_id = process.pid
-                running_process.save(update_fields=['process_id'])
-                
-                print(f"sda_execute started with PID {process.pid}, log: {logfile}, iteration_id: {iteration.id}")
-                
-                # Wait for completion while periodically updating log tail
-                while process.poll() is None:
-                    running_process.update_log_tail()
-                    time.sleep(2)  # Check every 2 seconds
-                
-                print(f"sda_execute finished for PID {process.pid}, log: {logfile}, iteration_id: {iteration.id}")
-                
-                # Final log tail update
-                running_process.update_log_tail()
-                running_process.is_running = False
-                running_process.terminated_at = common.get_now()
-                running_process.save(update_fields=['is_running', 'terminated_at'])
-                
-                # Check return code
-                if process.returncode != 0:
-                    with open(logfile, "r") as log_read:
-                        error_output = log_read.read()
-                    task_execution.error_msg = error_output
-                    task_execution.save()
-                    raise Exception(f"sda_execute failed with return code {process.returncode}: {error_output}")
+            else:
+                run_docker_command(
+                    command_args=["python", "manage.py", "test"],
+                    iteration=iteration,
+                    running_process=running_process,
+                    docker_image=docker_image,
+                    log_f=log_f
+                )
+            
+                if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
+                    run_docker_command(
+                        command_args=["python", "manage.py", self_driving_task.main_name],
+                        iteration=iteration,
+                        running_process=running_process,
+                        docker_image=docker_image,
+                        log_f=log_f
+                    )
+            
+            running_process.update_log_tail()
+            running_process.is_running = False
+            running_process.terminated_at = common.get_now()
+            running_process.save(update_fields=['is_running', 'terminated_at'])
         
         log_output = logfile.read_text()
         log(config, log_output, f"iteration-{iteration.id}")
+        
+        print(f"Docker execution finished, log: {logfile}, iteration_id: {iteration.id}")
         
         return log_output
     except Exception as e:
@@ -690,12 +765,20 @@ def get_coding_llm_response(
     model = LlmModel.OPENAI_O3_MINI
     
     code_file_name = code_version_to_modify.code_file.get_path().name
-    if code_file_name.endswith(".py"):
-        prompt = "codewriter--python_coder.md"
-    elif code_file_name == "requirements.txt":
+    if code_file_name == "requirements.txt":
         prompt = "codewriter--requirements.txt.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
+    elif code_file_name.endswith(".py"):
+        prompt = "codewriter--python_coder.md"
+    elif code_file_name.endswith(".sql"):
+        prompt = "codewriter--sql_coder.md"
+    elif code_file_name.endswith(".js"):
+        prompt = "codewriter--javascript_coder.md"
+    elif code_file_name.endswith(".html"):
+        prompt = "codewriter--html_coder.md"
+    elif code_file_name.endswith(".css"):
+        prompt = "codewriter--css_coder.md"
     else:
         raise Exception(f"no coder implemented for {code_file_name}")
     
