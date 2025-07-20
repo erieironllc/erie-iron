@@ -21,7 +21,7 @@ Each task **must** include the following fields
 - `task_id` *(string)* – unique id for the task **Format**: must match `^task_[a‑z0‑9_]+$` (lowercase snake_case)  
 - `task_type` *(string)* – determines high‑level nature of the task  
   - Allowed values:  
-    - `CODING_WEB_APPLICATION` – editing the web application (frontend & backend)  
+    - `CODING_APPLICATION` – editing the web application (frontend & backend)  
     - `CODING_NON_UI_TASK` – general‑purpose scripts, scheduled or one‑off  
     - `CODING_ML` – ML training or inference tasks  
     - `DESIGN_WEB_APPLICATION` – design or UX work  

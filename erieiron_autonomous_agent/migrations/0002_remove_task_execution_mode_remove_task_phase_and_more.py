@@ -53,7 +53,7 @@ class Migration(migrations.Migration):
             name="task_type",
             field=models.TextField(
                 choices=[
-                    ("CODING_WEB_APPLICATION", "Coding web application"),
+                    ("CODING_APPLICATION", "Coding web application"),
                     ("CODING_NON_UI_TASK", "Coding non ui task"),
                     ("CODING_ML", "Coding ml"),
                     ("TASK_EXECUTION", "Task execution"),

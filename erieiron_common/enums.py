@@ -421,7 +421,7 @@ class TaskExecutionSchedule(ErieEnum):
 
 class TaskType(ErieEnum):
     BOOTSRAP_CLONE_REPO = auto()
-    CODING_WEB_APPLICATION = auto()
+    CODING_APPLICATION = auto()
     CODING_ML = auto()
     TASK_EXECUTION = auto()
     DESIGN_WEB_APPLICATION = auto()

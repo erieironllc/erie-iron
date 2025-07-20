@@ -516,7 +516,7 @@ def default_str(s, default_val=""):
 
 
 def safe_strs(string_list):
-    return [safe_str(s) for s in string_list]
+    return [safe_str(s) for s in ensure_list(string_list)]
 
 
 def safe_str(s, default_val=None):
