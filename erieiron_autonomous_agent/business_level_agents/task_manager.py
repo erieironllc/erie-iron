@@ -13,7 +13,6 @@ from erieiron_common.message_queue.pubsub_manager import PubSubManager
 TASKTYPE_TO_MSGTYPE = {
     TaskType.HUMAN_WORK: PubSubMessageType.HUMAN_WORK_REQUESTED,
     TaskType.DESIGN_WEB_APPLICATION: PubSubMessageType.DESIGN_WORK_REQUESTED,
-    TaskType.CODING_NON_UI_TASK: PubSubMessageType.CODING_WORK_REQUESTED,
     TaskType.CODING_ML: PubSubMessageType.CODING_WORK_REQUESTED,
     TaskType.CODING_WEB_APPLICATION: PubSubMessageType.CODING_WORK_REQUESTED,
     TaskType.TASK_EXECUTION: PubSubMessageType.CODING_WORK_REQUESTED

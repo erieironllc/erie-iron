@@ -6,6 +6,7 @@ from datetime import timezone
 
 import openai
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.utils import timezone
 
 from erieiron_autonomous_agent.models import RunningProcess
@@ -38,7 +39,7 @@ class Command(BaseCommand):
             required=False,
             default=False
         )
-
+        
         parser.add_argument(
             '--reset_host',
             help='start with a fresh instance metadata',
@@ -46,33 +47,33 @@ class Command(BaseCommand):
             required=False,
             default=False
         )
-
+        
         parser.add_argument(
             '--retry_failed',
             type=parse_bool,
             required=False,
             default=False
         )
-
+        
         parser.add_argument(
             '--instance_id',
             help='name of the instance.  defaults to machine name',
             required=False
         )
-
+        
         parser.add_argument(
             '--max_threads',
             required=False,
             default=None
         )
-
+        
         parser.add_argument(
             '--env',
             help='the environment to pull messages from.  defaults to value in settings',
             required=False,
             default=False
         )
-
+        
         parser.add_argument(
             '--exclusive_priority',
             help='if supplied, this processor will only fetch messages with the specified priority',
@@ -80,7 +81,7 @@ class Command(BaseCommand):
             required=False,
             default=None
         )
-
+        
         parser.add_argument(
             '--run_isolated',
             help='run the message processor in an isolated environment - for testing purposes.  in prod this is False',
@@ -88,7 +89,7 @@ class Command(BaseCommand):
             required=False,
             default=False
         )
-
+        
         parser.add_argument(
             '--kill_on_drain',
             help='kill the process upon drain completion',
@@ -96,7 +97,7 @@ class Command(BaseCommand):
             required=False,
             default=False
         )
-
+        
         parser.add_argument(
             '--debug_output',
             help='print messages debug info',
@@ -104,31 +105,31 @@ class Command(BaseCommand):
             required=False,
             default=False
         )
-
+    
     def handle(self, *args, **options):
         from erieiron_common.llm_apis import openai_chat_api
         openai.api_key = openai_chat_api.get_api_key()
-
+        
         if options.get("retry_failed"):
             PubSubMessage.objects.filter(status__in=[PubSubMessageStatus.FAILED, PubSubMessageStatus.PROCESSING, PubSubMessageStatus.NO_CONSUMER]).update(
                 status=PubSubMessageStatus.PENDING
             )
-
+        
         faulthandler.enable()
-
+        
         print_debug_info = True  # options.get('debug_output')
         kill_on_drain = options.get('kill_on_drain')
         run_isolated = options.get('run_isolated')
         reset_host = options.get('reset_host')
         exclusive_priority = options.get('exclusive_priority')
-
+        
         from erieiron_common.message_queue.pubsub_manager import init_pubsub_from_cmd_options
         pubsub_manager = init_pubsub_from_cmd_options(options)
-
+        
         handler = pubsub_manager.get_handler()
         process = pubsub_manager.get_process()
         process_id = process.id
-
+        
         env = handler.environment
         log_prefix = f"{handler.id} ({os.getpid()})"
         log_suffix = ""  # f"https://localhost/admin/message_handler/{handler.id}"
@@ -155,23 +156,23 @@ class Command(BaseCommand):
 
 
         """)
-
+        
         try:
             os.setsid()
         except:
             pass
-
+        
         try:
             idx = 0
             while True:
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
-
+                
                 if not common.parse_bool(options.get("suppress_timing_messages")):
                     publish_timing_messages()
-
+                
                 # Check for timed-out running processes
                 check_timed_out_processes()
-
+                
                 if not process:
                     common.log_info(f"""
                     ----------------------------------------------------------------------
@@ -180,7 +181,7 @@ class Command(BaseCommand):
                     ----------------------------------------------------------------------
                     """)
                     exit(0)
-
+                
                 if not PubSubHanderInstance.objects.filter(id=handler.id).exists():
                     common.log_info(f"""
                     ----------------------------------------------------------------------
@@ -189,7 +190,7 @@ class Command(BaseCommand):
                     ----------------------------------------------------------------------
                     """)
                     exit(0)
-
+                
                 if process.is_drain_requested():
                     processing_messages = list(process.get_inprogress_messages())
                     if PubSubHandlerInstanceStatus.KILL_REQUESTED.eq(process.process_status):
@@ -217,151 +218,124 @@ class Command(BaseCommand):
                         log(f'message_queue_processor drained for env {env} ', log_prefix, log_suffix)
                 else:
                     process.ping()
-
+                    
                     if idx % 10 == 0 and print_debug_info:
                         # log(f'message_queue_processor running for env {env} ', log_prefix, log_suffix)
                         pubsub_manager.print_pending()
-
+                
                 idx += 1
                 time.sleep(1)
-
+        
         except KeyboardInterrupt:
             log(f'message_queue_processor stopped for env {env} ', log_prefix, log_suffix)
             exit(0)
 
 
-def publish_timing_messages(enable_every_minute=False):
+def _create_timing_message_safe(
+        message_type: PubSubMessageType,
+        namespace,
+        environment_id,
+        success_message
+):
     """
-    Publishes timing messages at intervals with distributed coordination.
-    Robust to daemon delays/restarts - checks for missing messages in current period.
-    Only one daemon across all hosts will publish each timing message.
+    Creates a timing message with proper database-level locking to prevent race conditions.
+    Uses a lock table approach to ensure only one daemon per environment can create timing messages.
     """
-    from erieiron_common.message_queue.pubsub_manager import PubSubManager
-    from django.db import transaction
+    try:
+        with transaction.atomic():
+            # Use row-level locking on handler instance to coordinate timing message creation
+            # This ensures only one daemon per environment can create timing messages at a time
+            handler_instance = PubSubHanderInstance.objects.select_for_update(
+                skip_locked=True
+            ).filter(
+                environment=environment_id
+            ).first()
+            
+            if handler_instance:
+                existing_message = PubSubMessage.objects.filter(
+                    message_type=message_type.value,
+                    namespace=namespace,
+                    env=environment_id
+                ).first()
+                
+                if not existing_message:
+                    message = PubSubMessage.objects.create(
+                        message_type=message_type.value,
+                        namespace=namespace,
+                        env=environment_id,
+                        priority=PubSubMessagePriority.NORMAL.value,
+                        status=PubSubMessageStatus.PENDING.value,
+                        payload={}
+                    )
+    
+    except Exception as e:
+        # Log unexpected errors but don't fail
+        common.log_info(f"Error creating timing message {message_type}/{namespace}: {e}")
 
+
+def publish_timing_messages(enable_every_minute=True):
     now = common.get_now()
-
-    # EVERY_MINUTE: check if current minute's message exists
     minute_namespace = f"timing_minute_{now.strftime('%Y%m%d_%H%M')}"
-    if enable_every_minute and not PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_MINUTE.value,
-            namespace=minute_namespace
-    ).exists():
-        try:
-            with transaction.atomic():
-                message, created = PubSubMessage.objects.get_or_create(
-                    message_type=PubSubMessageType.EVERY_MINUTE.value,
-                    namespace=minute_namespace,
-                    defaults={
-                        'env': PubSubManager.get_instance().environment_id,
-                        'priority': PubSubMessagePriority.NORMAL.value,
-                        'status': PubSubMessageStatus.PENDING.value,
-                        'payload': {}
-                    }
-                )
-                if created:
-                    common.log_info(f"Published EVERY_MINUTE message for {minute_namespace}")
-        except Exception as e:
-            # Another daemon already published this timing message
-            pass
-
-    # EVERY_HOUR: check if current hour's message exists
     hour_namespace = f"timing_hour_{now.strftime('%Y%m%d_%H')}"
-    if not PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_HOUR.value,
-            namespace=hour_namespace
-    ).exists():
-        try:
-            with transaction.atomic():
-                message, created = PubSubMessage.objects.get_or_create(
-                    message_type=PubSubMessageType.EVERY_HOUR.value,
-                    namespace=hour_namespace,
-                    defaults={
-                        'env': PubSubManager.get_instance().environment_id,
-                        'priority': PubSubMessagePriority.NORMAL.value,
-                        'status': PubSubMessageStatus.PENDING.value,
-                        'payload': {}
-                    }
-                )
-                if created:
-                    common.log_info(f"Published EVERY_HOUR message for {hour_namespace}")
-        except Exception as e:
-            # Another daemon already published this timing message
-            pass
-
-    # EVERY_DAY: check if current day's message exists
     day_namespace = f"timing_day_{now.strftime('%Y%m%d')}"
-    if not PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_DAY.value,
-            namespace=day_namespace
-    ).exists():
-        try:
-            with transaction.atomic():
-                message, created = PubSubMessage.objects.get_or_create(
-                    message_type=PubSubMessageType.EVERY_DAY.value,
-                    namespace=day_namespace,
-                    defaults={
-                        'env': PubSubManager.get_instance().environment_id,
-                        'priority': PubSubMessagePriority.NORMAL.value,
-                        'status': PubSubMessageStatus.PENDING.value,
-                        'payload': {}
-                    }
-                )
-                if created:
-                    common.log_info(f"Published EVERY_DAY message for {day_namespace}")
-        except Exception as e:
-            # Another daemon already published this timing message
-            pass
-
-    # EVERY_WEEK: check if current week's message exists (Monday-based weeks)
     week_namespace = f"timing_week_{now.strftime('%Y%U')}"
-    if not PubSubMessage.objects.filter(
-            message_type=PubSubMessageType.EVERY_WEEK.value,
-            namespace=week_namespace
-    ).exists():
-        try:
-            with transaction.atomic():
-                message, created = PubSubMessage.objects.get_or_create(
-                    message_type=PubSubMessageType.EVERY_WEEK.value,
-                    namespace=week_namespace,
-                    defaults={
-                        'env': PubSubManager.get_instance().environment_id,
-                        'priority': PubSubMessagePriority.NORMAL.value,
-                        'status': PubSubMessageStatus.PENDING.value,
-                        'payload': {}
-                    }
-                )
-                if created:
-                    common.log_info(f"Published EVERY_WEEK message for {week_namespace}")
-        except Exception as e:
-            # Another daemon already published this timing message
-            pass
+    
+    environment_id = PubSubManager.get_instance().environment_id
+    
+    if enable_every_minute:
+        _create_timing_message_safe(
+            PubSubMessageType.EVERY_MINUTE,
+            minute_namespace,
+            environment_id,
+            f"Published EVERY_MINUTE message for {minute_namespace}"
+        )
+    
+    _create_timing_message_safe(
+        PubSubMessageType.EVERY_HOUR,
+        hour_namespace,
+        environment_id,
+        f"Published EVERY_HOUR message for {hour_namespace}"
+    )
+    
+    _create_timing_message_safe(
+        PubSubMessageType.EVERY_DAY,
+        day_namespace,
+        environment_id,
+        f"Published EVERY_DAY message for {day_namespace}"
+    )
+    
+    _create_timing_message_safe(
+        PubSubMessageType.EVERY_WEEK,
+        week_namespace,
+        environment_id,
+        f"Published EVERY_WEEK message for {week_namespace}"
+    )
 
 
 def check_timed_out_processes():
     """
     Check for running processes that have exceeded their task's timeout and kill them.
     """
-
+    
     # Get all running processes that have an associated task with a timeout
     running_processes = RunningProcess.objects.filter(
         is_running=True,
         task_execution__task__timeout_seconds__isnull=False
     ).select_related('task_execution__task')
-
+    
     for process in running_processes:
         task = process.task_execution.task
         timeout_seconds = task.timeout_seconds
-
+        
         if timeout_seconds and timeout_seconds > 0:
             # Calculate how long the process has been running
             runtime = timezone.now() - process.started_at
             timeout_threshold = timedelta(seconds=timeout_seconds)
-
+            
             if runtime > timeout_threshold:
                 try:
                     process.kill_process()
-
+                    
                     common.log_info(
                         f"Killed timed-out process {process.id} for task {task.id} "
                         f"(timeout: {timeout_seconds}s, runtime: {int(runtime.total_seconds())}s)"

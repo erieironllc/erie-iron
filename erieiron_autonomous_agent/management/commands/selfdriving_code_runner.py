@@ -12,6 +12,31 @@ from erieiron_autonomous_agent.models import TaskExecution, SelfDrivingTaskItera
 from erieiron_common import common
 from erieiron_common.enums import TaskType
 
+from django.core.management.base import BaseCommand
+
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
+
+
+class Command(BaseCommand):
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--config',
+            type=str,
+            required=False
+        )
+
+        parser.add_argument(
+            '--task_id',
+            type=str,
+            required=False
+        )
+
+    def handle(self, *args, **options):
+        self_driving_coder_agent.execute(
+            config_file=options.get("config"),
+            task_id=options.get("task_id")
+        )
+
 
 def execute(task_execution_id: uuid.UUID, env: str = "dev", logfile=None) -> Optional[TaskExecution]:
     task_execution = TaskExecution.objects.get(id=task_execution_id)
@@ -115,6 +140,6 @@ def run_module_locally(task_execution: TaskExecution) -> dict:
     sdt = task_execution.iteration.self_driving_task
     execute_module_file = common.assert_exists(Path(sdt.sandbox_path) / iteration.execute_module)
     
-    # TODO fig
+    # TODO figure out how to do this from the iteration sandbox dir
     code_module = common.import_module_from_path(execute_module_file)
     return code_module.execute(task_input or {})
