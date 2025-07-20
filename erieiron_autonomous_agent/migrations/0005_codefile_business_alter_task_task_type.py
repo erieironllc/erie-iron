@@ -29,7 +29,7 @@ class Migration(migrations.Migration):
                 choices=[
                     ("BOOTSRAP_CLONE_REPO", "Bootsrap clone repo"),
                     ("BOOTSRAP_DEPLOY_ENVS", "Bootsrap deploy envs"),
-                    ("CODING_WEB_APPLICATION", "Coding web application"),
+                    ("CODING_APPLICATION", "Coding web application"),
                     ("CODING_NON_UI_TASK", "Coding non ui task"),
                     ("CODING_ML", "Coding ml"),
                     ("TASK_EXECUTION", "Task execution"),
