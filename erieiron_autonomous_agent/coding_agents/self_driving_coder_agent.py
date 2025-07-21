@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import pprint
+import random
 import subprocess
 import tempfile
 import time
@@ -23,6 +24,7 @@ from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule
 from erieiron_common.llm_apis import llm_interface
+from erieiron_common.llm_apis.llm_constants import CODE_PLANNING_MODELS_IN_ORDER
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
@@ -38,6 +40,7 @@ MAP_TASKTYPE_TO_PLANNING_PROMPT = {
 
 ARTIFACTS = "artifacts"
 
+# next steps - separate out evaluation from planning.  use evaluation to identify files to bring into the context.  bring all files from all task iterations into the context
 
 class GoalAchieved(Exception):
     def __init__(self, planning_data):
@@ -68,8 +71,8 @@ class SelfDriverConfig:
         self.log_path = artifacts_root / f"{self.self_driving_task.id}.output.log"
         self.git = self.self_driving_task.get_git()
         
-        self.code_planning_model = LlmModel.OPENAI_GPT_4_1_MINI  # random.choice(CODE_PLANNING_MODELS_IN_ORDER)
-        self.code_writing_model = LlmModel.OPENAI_GPT_4_1_MINI  # LlmModel.OPENAI_O3_MINI
+        self.code_planning_model = random.choice(CODE_PLANNING_MODELS_IN_ORDER) # LlmModel.OPENAI_GPT_4_1_MINI  # random.choice(CODE_PLANNING_MODELS_IN_ORDER)
+        self.code_writing_model = LlmModel.OPENAI_O3_MINI # LlmModel.OPENAI_GPT_4_1_MINI  # LlmModel.OPENAI_O3_MINI
     
     def initialize_new_iteration(self) -> SelfDrivingTaskIteration:
         self.current_iteration = self.self_driving_task.iterate()
@@ -97,6 +100,7 @@ def execute(task_id: str):
                 planning_data = evaluate_and_plan_code_changes(
                     config
                 )
+                pprint.pprint(planning_data)
                 
                 generate_code(
                     config,
@@ -105,14 +109,17 @@ def execute(task_id: str):
                 
                 log_output = None
                 try:
+                    # next step is to figure out bootstrap project database 
                     log_output = execute_iteration(
                         config
                     )
                 finally:
+                    print(log_output)
                     post_process_iteration_execution(
                         config,
                         log_output
                     )
+                
             
             except AgentBlocked as agent_blocked:
                 pprint.pprint(agent_blocked.blocked_data)
@@ -757,6 +764,8 @@ def get_coding_llm_response(
     code_file_name = code_version_to_modify.code_file.get_path().name
     if code_file_name == "requirements.txt":
         prompt = "codewriter--requirements.txt.md"
+    elif code_file_name.startswith("cloudformation") and code_file_name.endswith(".yaml"):
+        prompt = "codewriter--aws_cloudformation_coder.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
     elif code_file_name.endswith(".py"):
@@ -855,8 +864,7 @@ Please write the initial version of {code_file_path}, following each of these in
     llm_response_codegen = llm_interface.chat(
         messages,
         model,
-        code_response=True,
-        debug=False
+        code_response=True
     )
     
     log_llm_response(config, llm_response_codegen)
