@@ -23,7 +23,10 @@ def chat(
         debug=False
 ) -> 'LlmResponse':
     messages = common.ensure_list(messages)
-    messages.append(LlmMessage.sys("The output json will be validated against this schema", output_schema))
+    
+    if output_schema and output_schema.exists():
+        messages.append(LlmMessage.sys("The output json will be validated against this schema", output_schema))
+        
     if not model:
         models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
     else:
@@ -273,17 +276,16 @@ class LlmMessage:
             else:
                 raise ValueError(f"invalid message type {m}")
 
-            if code_response:
-                messages_out.append(
-                    LlmMessage(
-                        message_type=LlmMessageType.SYSTEM,
-                        text="""
-    you are an expert code generation assistant. 
-    respond only with valid code. do not include any markdown formatting, such as triple backticks or language tags.
-    if responding with json, the property names must be encosed in "double quotes"
-                        """
-                    )
+        if code_response:
+            messages_out.append(
+                LlmMessage(
+                    message_type=LlmMessageType.SYSTEM,
+                    text="""
+respond only with valid code or JSON. do not include any markdown formatting, such as triple backticks or language tags.
+if responding with JSON, the property names must be encosed in "double quotes"
+                    """
                 )
+            )
 
         token_count = LlmMessage.get_total_token_count(model, messages_out)
         while token_count > MODEL_TO_MAX_TOKENS.get(model, sys.maxsize):
