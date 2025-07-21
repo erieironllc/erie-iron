@@ -27,9 +27,9 @@ CHAT_MODELS_IN_ORDER = [
 ]
 
 CODE_PLANNING_MODELS_IN_ORDER = [
-    # LlmModel.OPENAI_O3,
-    # LlmModel.GEMINI_2_5_PRO,
-    LlmModel.OPENAI_GPT_4o,
+    LlmModel.OPENAI_O3,
+    LlmModel.GEMINI_2_5_PRO,
+    # LlmModel.OPENAI_GPT_4o,
     # LlmModel.DEEPSEEK_CODER,
     # LlmModel.CLAUDE_3_7 # context window too small
 ]
