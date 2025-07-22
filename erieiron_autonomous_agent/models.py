@@ -727,9 +727,8 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         except:
             return code_file
     
-    def get_previous_iteration(self):
-        self.get_previous_by_timestamp()
-        pass
+    def get_previous_iteration(self) -> 'SelfDrivingTaskIteration':
+        return self.get_previous_by_timestamp()
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):

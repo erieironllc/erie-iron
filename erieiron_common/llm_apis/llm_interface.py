@@ -25,6 +25,7 @@ def chat(
     messages = common.ensure_list(messages)
     
     if output_schema and output_schema.exists():
+        code_response = True
         messages.append(LlmMessage.sys("The output json will be validated against this schema", output_schema))
         
     if not model:
@@ -379,7 +380,7 @@ Begin chat with {model}
     """)
 
     for m in common.ensure_list(messages):
-        print(str(m))
+        print(f"\n\n\n{m}\n\n\n")
 
     print("--------------- --------------- --------------- --------------- ---------------")
 

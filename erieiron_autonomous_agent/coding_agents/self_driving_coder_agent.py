@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import pprint
-import random
 import subprocess
 import tempfile
 import time
@@ -18,13 +17,12 @@ from django.utils import timezone
 
 import settings
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile, TaskExecution
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, settings_common
 from erieiron_common.aws_utils import get_aws_interface
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule
 from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_constants import CODE_PLANNING_MODELS_IN_ORDER
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
@@ -40,7 +38,6 @@ MAP_TASKTYPE_TO_PLANNING_PROMPT = {
 
 ARTIFACTS = "artifacts"
 
-# next steps - separate out evaluation from planning.  use evaluation to identify files to bring into the context.  bring all files from all task iterations into the context
 
 class GoalAchieved(Exception):
     def __init__(self, planning_data):
@@ -62,7 +59,6 @@ class SelfDriverConfig:
         self.business = Business.objects.get(initiative__tasks__id=self.task.id)
         self.guidance = LlmMessage.sys(self.task.guidance) if self.task.guidance else None
         self.sandbox_root_dir = Path(self.self_driving_task.sandbox_path)
-        self.previous_iteration = self.self_driving_task.get_most_recent_iteration()
         self.current_iteration = None
         
         artifacts_root = self.sandbox_root_dir / ARTIFACTS
@@ -71,56 +67,65 @@ class SelfDriverConfig:
         self.log_path = artifacts_root / f"{self.self_driving_task.id}.output.log"
         self.git = self.self_driving_task.get_git()
         
-        self.code_planning_model = random.choice(CODE_PLANNING_MODELS_IN_ORDER) # LlmModel.OPENAI_GPT_4_1_MINI  # random.choice(CODE_PLANNING_MODELS_IN_ORDER)
-        self.code_writing_model = LlmModel.OPENAI_O3_MINI # LlmModel.OPENAI_GPT_4_1_MINI  # LlmModel.OPENAI_O3_MINI
-    
-    def initialize_new_iteration(self) -> SelfDrivingTaskIteration:
-        self.current_iteration = self.self_driving_task.iterate()
-        return self.current_iteration
+        self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o
+        self.model_code_planning = LlmModel.OPENAI_GPT_4o
+        self.model_code_writing = LlmModel.OPENAI_O3_MINI
+        
+        # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
+        # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
+        # self.model_code_writing = LlmModel.OPENAI_O3_MINI
 
 
 def execute(task_id: str):
     self_driving_task = bootstrap_selfdriving_agent(task_id)
     
     config = None
+    log_output = None
     stop_reason = ""
     supress_eval = False
     try:
         for i in range(100):
             config = SelfDriverConfig(self_driving_task)
+            
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
                     stop_reason = f"Stopping - hit the max budget ${config.budget :.2f}"
                     break
                 
-                config.initialize_new_iteration()
+                iteration = self_driving_task.iterate()
                 
-                log_iteration_headline(config)
-                
-                planning_data = evaluate_and_plan_code_changes(
-                    config
+                log_iteration_headline(
+                    config,
+                    iteration
                 )
-                pprint.pprint(planning_data)
+                
+                relevant_code_files = get_relevant_code_files(
+                    config,
+                    iteration
+                )
+                
+                planning_data = plan_code_changes(
+                    config,
+                    iteration,
+                    relevant_code_files
+                )
                 
                 generate_code(
                     config,
+                    iteration,
                     planning_data
                 )
                 
-                log_output = None
                 try:
-                    # next step is to figure out bootstrap project database 
-                    log_output = execute_iteration(
-                        config
+                    execute_iteration(
+                        config,
+                        iteration
                     )
                 finally:
-                    print(log_output)
-                    post_process_iteration_execution(
+                    evaluate_iteration_execution(
                         config,
-                        log_output
+                        iteration
                     )
-                
-            
             except AgentBlocked as agent_blocked:
                 pprint.pprint(agent_blocked.blocked_data)
                 stop_reason = "Agent Blocked"
@@ -174,14 +179,14 @@ def execute(task_id: str):
             package_ml_artifacts(config)
 
 
-def log_iteration_headline(config):
+def log_iteration_headline(config, iteration: SelfDrivingTaskIteration):
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
     headline = f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
 Task id {config.task.id} 
-iteration id {config.current_iteration.id} (v{iteration_count})
+iteration id {iteration.id} (v{iteration_count})
 sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
 total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
 tail -f {os.path.abspath(config.log_path)}
@@ -293,8 +298,7 @@ def run_docker_command(
         raise Exception(f"Docker execution failed - return code: {return_code}")
 
 
-def execute_iteration(config: SelfDriverConfig) -> str:
-    iteration = config.current_iteration
+def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
     running_process = None
     
@@ -379,6 +383,11 @@ def execute_iteration(config: SelfDriverConfig) -> str:
         log(config, log_output, f"iteration-{iteration.id}")
         logging.exception(log_output)
     finally:
+        with transaction.atomic():
+            SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+                log_content=logfile.read_text()
+            )
+        
         common.quietly_delete(logfile)
 
 
@@ -404,108 +413,75 @@ def init_task_execution(iteration):
     )
 
 
-def post_process_iteration_execution(config, log_output):
-    iteration = config.current_iteration
+def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration):
+    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=iteration.id)
+    
+    previous_iteration_evals = []
+    for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.exclude(
+            id=iteration.id
+    ).filter(
+        evaluation_json__isnull=False
+    ).order_by("timestamp"):
+        previous_iteration_evals.append(LlmMessage.user(f"""
+**Prior Iteration Evaluation**
+iteration_evaluator output for iteration_id = '{prev_iter.id}'
+iteration timestamp: {prev_iter.timestamp}
+========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
+{json.dumps(prev_iter.evaluation_json, indent=4)}
+========= END iteration_id = '{prev_iter.id}' EVALUATION ======================="""))
+    
+    eval_data = llm_chat(
+        "Evaluate Iteration",
+        config,
+        [
+            get_sys_prompt("iteration_evaluator.md"),
+            *previous_iteration_evals,
+            LlmMessage.user(f"""
+**Execution and Test Logs**
+========= BEGIN LOG OUTPUT =======================
+{iteration.log_content}
+========= END LOG OUTPUT =======================""")
+        ],
+        config.model_iteration_evaluation,
+        output_schema=PROMPTS_DIR / "iteration_evaluator.md.schema.json",
+        debug=True
+    ).json()
+    
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-            log_content=log_output or "no log output"
+            evaluation_json=eval_data
         )
     
-    # if artifacts dir is empty, delete it
-    artifacts_dir = Path(config.artifacts_dir)
-    artifacts_parent_dir = artifacts_dir.parent
+    goal_achieved = common.parse_bool(eval_data.get('goal_achieved'))
+    if goal_achieved:
+        raise GoalAchieved(eval_data)
     
-    assert artifacts_dir.name == ARTIFACTS
-    
-    if artifacts_dir.exists() and not any(artifacts_dir.iterdir()):
-        artifacts_dir.rmdir()
-    
-    if artifacts_parent_dir.exists() and not any(artifacts_parent_dir.iterdir()):
-        artifacts_parent_dir.rmdir()
+    return eval_data
 
 
-def build_iteration_context_messages(config: SelfDriverConfig) -> List[LlmMessage]:
-    messages = [
-        get_goal_msg(config)
+def build_previous_iteration_context_messages(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> List[LlmMessage]:
+    eval_json = config.self_driving_task.get_most_recent_iteration().evaluation_json or {}
+    previous_iteration_count = eval_json.get("previous_iteration_count", 1)
+    if previous_iteration_count == "all":
+        previous_iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
+    
+    return [
+        LlmMessage.user(f"""
+**iteration_evaluator Output**
+iteration_evaluator output for iteration_id = '{prev_iter.id}'
+iteration timestamp: {prev_iter.timestamp}
+========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
+{json.dumps(prev_iter.evaluation_json, indent=4)}
+========= END iteration_id = '{prev_iter.id}' EVALUATION =======================
+        """)
+        for prev_iter in reversed(config.self_driving_task.selfdrivingtaskiteration_set.exclude(
+            id=iteration.id
+        ).filter(
+            evaluation_json__isnull=False
+        ).order_by(
+            "-timestamp"
+        )[0:previous_iteration_count])
     ]
-    
-    eval_json = common.get(config, ["previous_iteration", "evaluation_json"], {})
-    if TaskType.CODING_ML.eq(config.self_driving_task.task.task_type) and isinstance(eval_json, dict):
-        previous_iteration_count = eval_json.get("previous_iteration_count", 1)
-        if previous_iteration_count == "all":
-            previous_iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    else:
-        previous_iteration_count = 2
-    
-    previous_iteration_count = min(5, previous_iteration_count)
-    
-    previous_iterations: list[SelfDrivingTaskIteration] = list(reversed(config.self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")[0:previous_iteration_count]))
-    for task_iteration in previous_iterations:
-        if task_iteration == config.current_iteration:
-            continue
-        
-        for code_version in task_iteration.codeversion_set.all():
-            if Path(code_version.code_file.file_path).exists():
-                messages.append(
-                    LlmMessage.assistant(
-                        f"iteration id={str(task_iteration.id)} code_file_path {code_version.code_file.file_path}",
-                        code_version.code_file.file_path
-                    )
-                )
-        
-        task_execution: TaskExecution = task_iteration.taskexecution_set.last()
-        if task_execution and task_execution.error_msg:
-            messages.append(LlmMessage.user(
-                f"""
-            This is the log output from executing iteration id={str(task_iteration.id)}: 
-            {task_execution.error_msg}
-                    """
-            ))
-        
-        
-        eval_json = task_iteration.evaluation_json or {}
-        evaluation = None
-        instructions = None
-        if isinstance(eval_json, dict):
-            try:
-                evaluation = eval_json['evaluation']
-                instructions = eval_json['instructions']
-            except Exception as e:
-                pass
-        elif isinstance(eval_json, list):
-            evaluation = eval_json
-        
-        if evaluation:
-            messages.append(
-                LlmMessage.user(
-                    f"""
-            These are the results of executing iteration id={str(task_iteration.id)}: 
-            {json.dumps(evaluation, indent=4)}
-                    """
-                )
-            )
-        
-        if instructions:
-            messages.append(
-                LlmMessage.assistant(
-                    f"""
-            I have evaluated the execution results for iteration id={str(task_iteration.id)}.  Please make the following modifications:
-            {json.dumps(instructions, indent=4)}
-                    """
-                )
-            )
-        
-        if not (evaluation or instructions):
-            messages.append(
-                LlmMessage.user(
-                    f"""
-            The output of executing iteration id={str(task_iteration.id)} is as follows:
-            {task_iteration.log_content}
-                    """
-                )
-            )
-    
-    return messages
 
 
 def get_sys_prompt(
@@ -527,14 +503,17 @@ def get_sys_prompt(
         return common.first(messages)
 
 
-def generate_code(config: SelfDriverConfig, planning_data: dict) -> SelfDrivingTaskIteration:
-    iteration = config.current_iteration
-    
+def generate_code(
+        config: SelfDriverConfig,
+        iteration: SelfDrivingTaskIteration,
+        planning_data: dict
+) -> SelfDrivingTaskIteration:
     iteration_id_to_modify = planning_data.get("iteration_id_to_modify", "latest")
+    previous_iteration = iteration.get_previous_iteration()
     try:
         iteration_to_modify = config.self_driving_task.selfdrivingtaskiteration_set.get(id=iteration_id_to_modify)
     except:
-        iteration_to_modify = config.previous_iteration
+        iteration_to_modify = previous_iteration
     
     evaluation_of_previous_code = planning_data.get("evaluation", [])
     if not iteration_to_modify:
@@ -575,13 +554,14 @@ def generate_code(config: SelfDriverConfig, planning_data: dict) -> SelfDrivingT
             for i in range(3):
                 try:
                     previous_exception = None
-                    code_str = get_coding_llm_response(
+                    code_str = write_code(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
+                        previous_iteration=previous_iteration,
                         evaluation_of_previous_code=evaluation_of_previous_code,
                         instructions=instructions,
                         previous_exception=previous_exception
-                    ).text
+                    )
                     
                     break
                 except CodeCompilationError as e:
@@ -601,11 +581,11 @@ def generate_code(config: SelfDriverConfig, planning_data: dict) -> SelfDrivingT
     return iteration
 
 
-def evaluate_and_plan_code_changes(config):
-    iteration = config.current_iteration
-    model = config.code_planning_model
+def plan_code_changes(config, iteration: SelfDrivingTaskIteration, relevant_code_files: list[LlmMessage]):
+    model = config.model_code_planning
     business = config.self_driving_task.business
-    
+    previous_iteration = iteration.get_previous_iteration()
+
     task = config.self_driving_task.task
     task_type = TaskType(task.task_type)
     
@@ -624,16 +604,19 @@ def evaluate_and_plan_code_changes(config):
             ]
         )),
         *common.ensure_list(
-            config.guidance
+            build_previous_iteration_context_messages(config, iteration)
         ),
         *common.ensure_list(
             get_dependencies_msg(config, for_planning=True)
         ),
         *common.ensure_list(
-            get_likely_code_files(config)
+            relevant_code_files
         ),
         *common.ensure_list(
-            build_iteration_context_messages(config)
+            get_goal_msg(config)
+        ),
+        *common.ensure_list(
+            config.guidance
         ),
         *common.ensure_list(
             LlmMessage.user(
@@ -641,125 +624,42 @@ def evaluate_and_plan_code_changes(config):
 This is the first attempt at implementing this task.  Please take your time to think of the best initial architecture.
 Identify an architecture that will allow for efficient code iteration and give us the best start towards achieving the user's GOAL. 
                 """)
-            if not config.previous_iteration else None
+            if not previous_iteration else None
         )
     ]
     
-    files = common.filter_none([m.file for m in messages])
-    if files:
-        print("FILES IN THE CONTEXT")
-        for f in files:
-            print(f"cat {os.path.abspath(f)}")
-        print(" ")
-        print(" ")
-    
-    token_count = LlmMessage.get_total_token_count(model, messages)
-    max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-    
-    if max_tokens:
-        print(f"about to call out to {model} to plan optimizations.  {token_count:,}/{max_tokens:,} tokens used")
-    else:
-        print(f"about to call out to {model} to plan optimizations.  {token_count:,} tokens used")
-    
-    log_llm_request(config, messages)
-    llm_response_planning = llm_interface.chat(
+    planning_data = llm_chat(
+        "Plan code changes",
+        config,
         messages,
         model,
-        output_schema=PROMPTS_DIR / "codeplanner.schema.json",
-        code_response=True
-    )
-    
-    log_llm_response(config, llm_response_planning)
-    print(f"\t\tcost of planning: total ${llm_response_planning.price_total:.4f}; input ${llm_response_planning.price_input:.4f}; output ${llm_response_planning.price_output:.4f}")
-    
-    planning_data, post_process_price = ensure_parsable_json(
-        config,
-        llm_response_planning.text
-    )
-    
-    planning_data['planning_model'] = str(config.code_planning_model)
-    goal_achieved = common.parse_bool(planning_data.get('goal_achieved'))
-    blocked_data = planning_data.get('blocked')
+        output_schema=PROMPTS_DIR / "codeplanner.schema.json"
+    ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            planning_model=model,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
         )
-        iteration.refresh_from_db(fields=["execute_module", "test_module"])
+        iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
     
-    if config.previous_iteration:
-        with transaction.atomic():
-            SelfDrivingTaskIteration.objects.filter(id=config.previous_iteration.id).update(
-                achieved_goal=goal_achieved,
-                evaluation_json=planning_data
-            )
-    
+    blocked_data = planning_data.get('blocked')
     if blocked_data:
         raise AgentBlocked(blocked_data)
-    
-    if goal_achieved:
-        raise GoalAchieved(planning_data)
     
     return planning_data
 
 
-def ensure_parsable_json(config, json_text: str) -> dict:
-    orig_json_text = json_text
-    price = 0
-    last_e = None
-    for i in range(5):
-        if not json_text:
-            raise Exception(f"json_text is empty")
-        
-        while len(json_text) > 0 and json_text[0] != "{":
-            json_text = json_text[1:]
-        
-        while len(json_text) > 0 and json_text[-1] != "}":
-            json_text = json_text[:-1]
-        
-        if common.is_empty(json_text):
-            raise Exception(f"unable to parse json\n{orig_json_text}")
-        
-        try:
-            parsed_text = json.loads(json_text)
-            return parsed_text, price
-        except Exception as e:
-            # print(f"----------\n{json_text}\n\n{e}\n--------------")
-            
-            last_e = e
-            llm_response_reformat = llm_interface.chat(
-                f"""
-please format and return the following json text as valid and parsable json:
-
-========= json text start ================
-{json_text}
-========= json text end ================
-
-
-the previous attempt at parsing this content resulted in this error:  {e}
-
-
-resond only with parsable json.  do not include any comments, explanations, or non-json markdown
-""",
-                LlmModel.OPENAI_O3_MINI,
-                code_response=True
-            )
-            price += llm_response_reformat.price_total
-            log_llm_response(config, llm_response_reformat, suppress_log=True)
-            json_text = llm_response_reformat.text
-    
-    raise last_e
-
-
-def get_coding_llm_response(
+def write_code(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
+        previous_iteration: SelfDrivingTaskIteration,
         evaluation_of_previous_code,
         instructions,
         previous_exception: Optional[CodeCompilationError]
-) -> LlmResponse:
-    model = config.code_writing_model
+) -> str:
+    model = config.model_code_writing
     
     code_file_name = code_version_to_modify.code_file.get_path().name
     if code_file_name == "requirements.txt":
@@ -789,9 +689,6 @@ def get_coding_llm_response(
             )),
         *common.ensure_list(
             get_dependencies_msg(config, for_planning=False)
-        ),
-        *common.ensure_list(
-            get_likely_code_files(config)
         )
     ]
     
@@ -809,11 +706,11 @@ Please try again, avoiding these errors
         """
             )
         )
-    elif evaluation_of_previous_code and config.previous_iteration:
+    elif evaluation_of_previous_code and previous_iteration:
         messages.append(
             LlmMessage.assistant(
                 f"""
-Your evaluation of the previous iteration's (iteration id={str(config.previous_iteration.id)}) performance against the user's GOAL is as follows:
+Your evaluation of the previous iteration's (iteration id={str(previous_iteration.id)}) performance against the user's GOAL is as follows:
 
 {json.dumps(evaluation_of_previous_code, indent=4)}
                 """
@@ -852,26 +749,12 @@ Please write the initial version of {code_file_path}, following each of these in
             )
         )
     
-    token_count = LlmMessage.get_total_token_count(model, messages)
-    max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-    
-    if max_tokens:
-        print(f"about to call out to {model} to generate code for {code_file_path}.  {token_count:,}/{max_tokens:,} tokens used")
-    else:
-        print(f"about to call out to {model} to generate code for {code_file_path}.  {token_count:,} tokens used")
-    
-    log_llm_request(config, messages)
-    llm_response_codegen = llm_interface.chat(
+    return llm_chat(
+        f"Write code for {code_file_name}",
+        config,
         messages,
-        model,
-        code_response=True
-    )
-    
-    log_llm_response(config, llm_response_codegen)
-    
-    print(f"\t\tcost of code gen: total ${llm_response_codegen.price_total:.4f}; input ${llm_response_codegen.price_input:.4f}; output ${llm_response_codegen.price_output:.4f}")
-    
-    return llm_response_codegen
+        model
+    ).text
 
 
 def get_dependencies_msg(config: SelfDriverConfig, for_planning: bool) -> LlmMessage:
@@ -906,40 +789,6 @@ if a helper method has a parameter named 'business_id', use the following value 
 if a helper method has a parameter named 'task_id', use the following value for task_id: "{config.self_driving_task.task_id or None}"
 """
     )
-
-
-def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):
-    config.log_path.touch(exist_ok=True)
-    log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    log(config, f"LlmRequest")
-    for m in common.ensure_list(llm_messages):
-        log(config, m, prefix="\t")
-        log(config, "\n")
-    log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-
-
-def log_llm_response(config, llm_response: LlmResponse, suppress_log=False):
-    LlmRequest.objects.create(
-        task_iteration=config.self_driving_task.get_most_recent_iteration(),
-        token_count=llm_response.token_count,
-        price=llm_response.price_total
-    )
-    
-    if not suppress_log:
-        config.log_path.touch(exist_ok=True)
-        log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
-        log(config, f"Response from {llm_response.model.label()}")
-        log(config, llm_response.text, prefix="\t")
-        log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
-        log(config, "\n")
-
-
-def log(config: SelfDriverConfig, s: str, prefix: str = None):
-    prefix = prefix or ""
-    config.log_path.touch(exist_ok=True)
-    with open(config.log_path, 'a') as messages_log:
-        for line in common.safe_split(s, "\n"):
-            messages_log.write(f"{prefix}{line}\n")
 
 
 def package_ml_artifacts(config: SelfDriverConfig):
@@ -995,7 +844,7 @@ YOUR TASKS:
         "summary":  a summary of why you chose that iteration for best - if there is a metric you are using to rank the iterations and pick the best, name the metric and the best_iteration's metric value,
         "details":  markdown formatted details a) expanding on why you chose that iteration  and b) an evaluation on how that iteration's model would perform in a production environment,
         "curriculum":  markdown formatted teaching lessons gleened from all of the iterations that got us to the best iteration.  This can be a really long response with many subject sections.  The audience for the curriculum response is a junior engineer trying to learn all they can about high-level area (machine-learning for example).  the goal here is to help the junior engineer build out their mental model, so real world examples and leaning into the 'why' is important.  NOTE:  Please do not mention the word 'curriculum' or name the audience in this response
-        
+
     }}
     ========= end example response format ===========
 
@@ -1028,16 +877,13 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     
     print(f"reviewing the {len(aval_iterations)} iterations and generating a final evaluation...")
     
-    log_llm_request(config, messages)
-    llm_response = llm_interface.chat(
+    eval_data = llm_chat(
+        "Package Artifacts",
+        config,
         messages,
-        config.code_planning_model,
+        config.model_code_planning,
         code_response=True
-    )
-    log_llm_response(config, llm_response)
-    
-    print(f"got llm response len: {len(llm_response.text)}")
-    eval_data, _ = ensure_parsable_json(config, llm_response.text)
+    ).json()
     
     best_iteration = SelfDrivingTaskIteration.objects.get(id=common.get(eval_data, 'best_iteration_id'))
     best_version_num = best_iteration.version_number
@@ -1070,9 +916,12 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         - DO NOT include the string "```markdown" anywhere in the response
     """)
     
-    log_llm_request(config, messages)
-    arch_llm_response = llm_interface.chat(messages, config.code_planning_model)
-    log_llm_response(config, arch_llm_response)
+    arch_llm_response = llm_chat(
+        "Writeup Summary",
+        config,
+        messages,
+        config.model_code_planning
+    )
     
     planning_model = best_iteration.planning_model
     if planning_model:
@@ -1169,14 +1018,29 @@ the user's GOAL is:
 {config.self_driving_task.goal}""")
 
 
-def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
-    # these will be include later in the context
-    existing_code_files = set()
-    for cv in CodeVersion.objects.filter(task_iteration=config.previous_iteration):
-        existing_code_files.add(cv.code_file_id)
+def get_relevant_code_files(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> list[LlmMessage]:
+    try:
+        previous_iteration_evaluation = config.self_driving_task.get_most_recent_iteration().evaluation_json
+        iteration_to_modify = SelfDrivingTaskIteration.objects.get(previous_iteration_evaluation.get("iteration_id_to_modify"))
+    except:
+        iteration_to_modify = config.self_driving_task.get_most_recent_iteration()
+    
+    messages = []
+    iteration_code_files = set()
+    for code_version in CodeVersion.objects.filter(task_iteration=iteration_to_modify):
+        iteration_code_files.add(code_version.code_file_id)
+        messages.append(LlmMessage.user(f"""
+        "{code_version.code_file.file_path}" is code file that you modified in the previous iteration of this task:
+
+        ============= BEGIN {code_version.code_file.file_path} CODE =============
+        {code_version.code}
+        ============= END {code_version.code_file.file_path} CODE =============
+                """))
     
     # Step 1: Get the structured retrieval cues from the LLM
-    llm_response_cues = llm_interface.chat(
+    cues = llm_chat(
+        "Find relavant code",
+        config,
         [
             get_sys_prompt("codefinder.md"),
             LlmMessage.user(config.self_driving_task.task.get_work_desc())
@@ -1184,10 +1048,8 @@ def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
         LlmModel.OPENAI_GPT_3_5_TURBO,
         output_schema=PROMPTS_DIR / "codefinder.md.schema.json",
         code_response=True
-    )
-    log_llm_response(config, llm_response_cues)
+    ).json()
     
-    cues = llm_response_cues.json()
     semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
     prompt_embedding = get_codebert_embedding(semantic_query).tolist()
     
@@ -1236,7 +1098,7 @@ def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
             Q(code_version__code_file__file_path__startswith="env/") |
             Q(code_version__code_file__file_path__startswith="venv/")
         )
-        .exclude(code_version__code_file__id__in=existing_code_files)
+        .exclude(code_version__code_file__id__in=iteration_code_files)
         .annotate(
             similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
         )
@@ -1250,7 +1112,6 @@ def get_likely_code_files(config: SelfDriverConfig) -> list[LlmMessage]:
     # Keep track of which code files we've already included to ensure only latest version per file
     processed_code_files = set()
     
-    messages = []
     for code_method in all_code_methods:
         code_file = code_method.code_version.code_file
         
@@ -1275,7 +1136,7 @@ You may use "{code_method.name}" but not modify it as it lives in imported packa
     
     # Then get code versions for other file types (excluding Python and JavaScript)
     # Also exclude files that are already included from previous iteration or code methods above
-    all_excluded_code_files = set(existing_code_files) | processed_code_files
+    all_excluded_code_files = set(iteration_code_files) | processed_code_files
     
     code_versions_query = (
         CodeVersion.objects
@@ -1311,3 +1172,69 @@ You may use "{code_method.name}" but not modify it as it lives in imported packa
         """))
     
     return messages
+
+
+def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):
+    config.log_path.touch(exist_ok=True)
+    log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+    log(config, f"LlmRequest")
+    for m in common.ensure_list(llm_messages):
+        log(config, m, prefix="\t")
+        log(config, "\n")
+    log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+
+
+def log_llm_response(config, llm_response: LlmResponse, suppress_log=False):
+    LlmRequest.objects.create(
+        task_iteration=config.self_driving_task.get_most_recent_iteration(),
+        token_count=llm_response.token_count,
+        price=llm_response.price_total
+    )
+    
+    if not suppress_log:
+        config.log_path.touch(exist_ok=True)
+        log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
+        log(config, f"Response from {llm_response.model.label()}")
+        log(config, llm_response.text, prefix="\t")
+        log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
+        log(config, "\n")
+
+
+def log(config: SelfDriverConfig, s: str, prefix: str = None):
+    prefix = prefix or ""
+    config.log_path.touch(exist_ok=True)
+    with open(config.log_path, 'a') as messages_log:
+        for line in common.safe_split(s, "\n"):
+            messages_log.write(f"{prefix}{line}\n")
+
+
+def llm_chat(
+        desc: str,
+        config: SelfDriverConfig,
+        messages: list[LlmMessage],
+        model: LlmModel,
+        output_schema: Path = None,
+        code_response=False,
+        debug=False
+) -> LlmResponse:
+    token_count = LlmMessage.get_total_token_count(model, messages)
+    max_tokens = MODEL_TO_MAX_TOKENS.get(model)
+    
+    if max_tokens:
+        print(f"{desc}: about to call out to {model}. {token_count:,}/{max_tokens:,} tokens used")
+    else:
+        print(f"{desc}: about to call out to {model}.  {token_count:,} tokens used")
+    
+    log_llm_request(config, messages)
+    llm_resp = llm_interface.chat(
+        messages=messages,
+        model=model,
+        output_schema=output_schema,
+        code_response=code_response,
+        debug=debug
+    )
+    log_llm_response(config, llm_resp)
+    
+    print(f"{desc}: total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f}")
+    
+    return llm_resp

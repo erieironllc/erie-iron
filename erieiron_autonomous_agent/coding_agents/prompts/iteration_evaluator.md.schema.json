@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/iteration-evaluator-output.schema.json",
+  "title": "IterationEvaluatorOutput",
+  "description": "Structured output from the iteration_evaluator agent.",
+  "type": "object",
+  "required": [
+    "goal_achieved",
+    "best_iteration_id",
+    "iteration_id_to_modify",
+    "previous_iteration_count",
+    "evaluation"
+  ],
+  "properties": {
+    "goal_achieved": {
+      "type": "boolean",
+      "description": "True if the GOAL was successfully achieved, false otherwise."
+    },
+    "best_iteration_id": {
+      "type": "string",
+      "description": "The ID of the best available code iteration to move forward with."
+    },
+    "iteration_id_to_modify": {
+      "description": "The iteration that the planner should build on. Either 'latest' or a specific iteration ID.",
+      "anyOf": [
+        { "type": "string", "const": "latest" },
+        { "type": "string", "minLength": 1 }
+      ]
+    },
+    "previous_iteration_count": {
+      "description": "How many previous iterations the planner should load for context. Typically a small integer or the string 'all'.",
+      "anyOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "string", "const": "all" }
+      ]
+    },
+    "evaluation": {
+      "type": "array",
+      "description": "List of diagnostic issues with the current or previous iterations.",
+      "items": {
+        "type": "object",
+        "required": ["summary", "details"],
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Short title or classification of the issue (e.g., 'throws KeyError')"
+          },
+          "details": {
+            "type": "string",
+            "description": "Log output or test results that support the summary."
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
