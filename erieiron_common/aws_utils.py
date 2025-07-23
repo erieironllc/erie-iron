@@ -15,6 +15,7 @@ from urllib.parse import unquote_plus
 
 import boto3
 import rsa
+import yaml
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
@@ -24,10 +25,152 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
 
+def extract_cloudformation_params(cfn_file: Path):
+    # Extract Parameters block using indentation-aware parsing
+    lines = cfn_file.read_text().splitlines()
+    start_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == "Parameters:":
+            start_idx = i
+            break
+    if start_idx is None:
+        return set(), {}
+    
+    param_lines = [lines[start_idx]]
+    base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
+    for line in lines[start_idx + 1:]:
+        if not line.strip():
+            param_lines.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent:
+            break
+        param_lines.append(line)
+    
+    param_block_str = "\n".join(param_lines)
+    parsed = yaml.safe_load(param_block_str)
+    
+    param_metadata = parsed.get("Parameters", {})
+    required_params = {
+        name for name, meta in param_metadata.items()
+        if "Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower()
+    }
+    
+    return required_params, param_metadata
+
+
+def push_cloudformation(
+        stack_name: str,
+        cfn_file: Path,
+        param_list: list,
+        region: str,
+        log_f
+):
+    logging.info(f"pushing {stack_name} to {region} with {cfn_file}")
+    cf_client = boto3.client("cloudformation", region_name=region)
+    template_body = cfn_file.read_text()
+    
+    stack_exists = cleanup_stack_if_broken(
+        stack_name,
+        region,
+        log_f
+    )
+    
+    if stack_exists:
+        log_f.write(f"Updating existing stack: {stack_name}\n")
+        logging.info(f"Updating existing stack: {stack_name}\n")
+        cf_client.update_stack(
+            StackName=stack_name,
+            TemplateBody=template_body,
+            Parameters=param_list,
+            Capabilities=["CAPABILITY_NAMED_IAM"]
+        )
+    else:
+        log_f.write(f"Creating new stack: {stack_name}\n")
+        logging.info(f"Creating new stack: {stack_name}\n")
+        cf_client.create_stack(
+            StackName=stack_name,
+            TemplateBody=template_body,
+            Parameters=param_list,
+            Capabilities=["CAPABILITY_NAMED_IAM"]
+        )
+    
+    cloudformation_wait(cf_client, stack_name)
+    
+    log_f.write(f"CloudFormation stack {stack_name} deployed successfully.\n")
+    logging.info(f"CloudFormation stack {stack_name} deployed successfully.\n")
+
+
+def cloudformation_wait(cf_client, stack_name, timeout=1200, poll_interval=10):
+    start_time = time.time()
+    
+    while True:
+        response = cf_client.describe_stacks(StackName=stack_name)
+        status = response['Stacks'][0]['StackStatus']
+        
+        time.sleep(poll_interval)
+        if time.time() - start_time > timeout:
+            raise TimeoutError(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
+        
+        if status.endswith("_IN_PROGRESS"):
+            continue
+        
+        if status.endswith("_COMPLETE"):
+            logging.info(f"Stack {stack_name} completed with status: {status}")
+            return
+
+        if "FAILED" in status or "ROLLBACK" in status:
+            raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
+        
+
+def cleanup_stack_if_broken(stack_name: str, region: str, log_f):
+    cf_client = boto3.client("cloudformation", region_name=region)
+    try:
+        stacks = cf_client.describe_stacks()["Stacks"]
+        matching_stack = next((s for s in stacks if s["StackName"] == stack_name), None)
+        
+        if matching_stack and matching_stack["StackStatus"] in ["ROLLBACK_FAILED", "ROLLBACK_COMPLETE"]:
+            log_f.write(f"Deleting broken stack: {stack_name} (status: ROLLBACK_FAILED)\n")
+            cf_client.delete_stack(StackName=stack_name)
+            cloudformation_wait(cf_client, stack_name)
+            stack_exists = False
+        else:
+            stack_exists = bool(matching_stack)
+    except cf_client.exceptions.ClientError as e:
+        if "does not exist" in str(e):
+            stack_exists = False
+        else:
+            raise
+    
+    return stack_exists
+
+
+def sanitize_aws_name(name: str, max_length: int = 128) -> str:
+    name = name.replace("_", "-")
+    if len(name) <= max_length:
+        return name
+    
+    parts = name.split("-")
+    if len(parts) == 1:
+        return name[:max_length]
+    
+    # Iteratively truncate the longest parts until under max_length
+    lengths = [len(p) for p in parts]
+    while sum(lengths) + len(parts) - 1 > max_length:
+        # Find index of longest part greater than 1 char
+        idx = max((i for i, l in enumerate(lengths) if l > 1), key=lambda i: lengths[i], default=None)
+        if idx is None:
+            break
+        lengths[idx] -= 1
+    
+    truncated_parts = [p[:l] for p, l in zip(parts, lengths)]
+    return "-".join(truncated_parts)
+
+
 def assert_account_name(required_account_name):
     sts = boto3.client('sts')
     account_id = sts.get_caller_identity()["Account"]
-
+    
     org = boto3.client('organizations')
     resp = org.describe_account(AccountId=account_id)
     account_name = resp["Account"]["Name"]
@@ -42,7 +185,7 @@ def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
     ).describe_auto_scaling_groups(
         AutoScalingGroupNames=[auto_scaling_group.value]
     )
-
+    
     if response["AutoScalingGroups"]:
         g = response["AutoScalingGroups"][0]
         return int(g["DesiredCapacity"]), int(g["MinSize"]), int(g["MaxSize"])
@@ -55,10 +198,10 @@ def set_asg_desired_capacity(auto_scaling_group, count: int):
     current_size, min_intances, max_instances = get_asg_size(auto_scaling_group)
     count = max(min_intances, count)
     count = min(max_instances, count)
-
+    
     if count == current_size:
         return
-
+    
     common.log_info(f"UPDATING ASG Capacity {auto_scaling_group.value} to {count}")
     response = boto3.client(
         'autoscaling',
@@ -83,10 +226,10 @@ def set_ecs_service_tasks(cluster_name, service_name, desired_count):
 def get_cloudwatch_url(around_time: datetime.datetime):
     if around_time is None:
         return None
-
+    
     logging_start_time = int((around_time - datetime.timedelta(seconds=.1)).timestamp() * 1000)
     logging_end_time = logging_start_time + 10000
-
+    
     return (
         f"https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2"
         f"#logsV2:log-groups/log-group/erieiron-baremetal-logs/log-events/container-logs"
@@ -101,7 +244,7 @@ def get_secret(secret_name: str):
         service_name='secretsmanager',
         region_name=os.getenv("AWS_REGION", "us-west-2")
     )
-
+    
     try:
         get_secret_value_response = client.get_secret_value(
             SecretId=secret_name
@@ -128,22 +271,22 @@ def get_cloudfron_url_signing_private_key():
     ).get_secret_value(
         SecretId=settings_common.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
     )
-
+    
     return rsa.PrivateKey.load_pkcs1(response["SecretString"].encode("utf-8"))
 
 
 def generate_signed_cloudfront_url(cloudfront_domain, s3_key, expires_in_seconds=604800):
     url = f"https://{cloudfront_domain}/{quote_plus(s3_key)}"
     expires = int(time.time()) + expires_in_seconds
-
+    
     policy = f'''{{"Statement":[{{"Resource":"{url}","Condition":{{"DateLessThan":{{"AWS:EpochTime":{expires}}}}}}}]}}'''
-
+    
     private_key = get_cloudfron_url_signing_private_key()
     signature = rsa.sign(policy.encode(), private_key, 'SHA-1')
     encoded_sig = quote_plus(base64.b64encode(signature).decode("utf-8"))
-
+    
     url = f"{url}?Expires={expires}&Signature={encoded_sig}&Key-Pair-Id={settings_common.CLOUDFRONT_KEY_PAIR_ID}"
-
+    
     return url
 
 
@@ -179,9 +322,9 @@ class AwsInterface:
             's3',
             region_name=os.getenv("AWS_REGION", "us-west-2")
         )
-
+        
         self.s3_passthrough_cache = S3LocalCache(s3_client)
-
+    
     def generate_presigned_url(self, bucket: str, file_key: str, content_type: str, expiration_minutes=1000):
         return boto3.client("s3").generate_presigned_url(
             'put_object',
@@ -192,108 +335,108 @@ class AwsInterface:
             },
             ExpiresIn=expiration_minutes * 60
         )
-
+    
     def assert_test_interface(self):
         raise Exception("Expecting test interface, but got real one")
-
+    
     def transcribe_audio(self, bucket, key):
         transcribe = boto3.client(
             'transcribe',
             region_name=settings_common.AWS_DEFAULT_REGION_NAME
         )
-
+        
         job_name = f"{key}_{uuid.uuid4()}"
-
+        
         response = transcribe.start_transcription_job(
             TranscriptionJobName=job_name,
             Media={'MediaFileUri': f"s3://{bucket}/{key}"},
             MediaFormat=key.split(".")[-1],
             LanguageCode='en-US'
         )
-
+        
         while True:
             status = transcribe.get_transcription_job(TranscriptionJobName=job_name)
             if status['TranscriptionJob']['TranscriptionJobStatus'] in ['COMPLETED', 'FAILED']:
                 break
             else:
                 time.sleep(2)
-
+        
         if status['TranscriptionJob']['TranscriptionJobStatus'] == 'COMPLETED':
             result = transcribe.get_transcription_job(TranscriptionJobName=job_name)
             result_uri = result['TranscriptionJob']['Transcript']['TranscriptFileUri']
-
+            
             # noinspection PyUnresolvedReferences
             with urllib.request.urlopen(result_uri) as response:
                 raw_json = response.read()
             transcription_result = json.loads(raw_json)
-
+            
             from erieiron_common import common
-
+            
             results = transcription_result['results']
-
+            
             return results
         else:
             return None
-
+    
     def transcribe_audio_openai(self, bucket, key):
         import openai
         # Download the audio file from S3 using the existing download method
         file_path = self.download(bucket, key)
-
+        
         # Open the downloaded file and transcribe using OpenAI's Whisper API
         with open(file_path, 'rb') as audio_file:
             transcript = openai.Audio.transcribe('whisper-1', audio_file)
-
+        
         return transcript
-
+    
     def get_log_events(self, log_group, start_date: datetime.date, end_date: datetime.date = None, filter_pattern=''):
         from erieiron_common import common
-
+        
         start_time, _ = common.date_to_epoch_ms(start_date)
         kwargs = {
             'logGroupName': log_group,
             'filterPattern': filter_pattern,
             'startTime': start_time
         }
-
+        
         if end_date is not None:
             _, end_time = common.date_to_epoch_ms(end_date)
             kwargs['endTime'] = end_time
-
+        
         page_iterator = boto3.client(
             'logs',
             region_name=settings_common.AWS_DEFAULT_REGION_NAME
         ).get_paginator(
             'filter_log_events'
         ).paginate(**kwargs)
-
+        
         for page in page_iterator:
             for event in page['events']:
                 yield event['message']
-
+    
     def send_email_from_template(self, subject, sender, recipient, template_name, ctx):
         from erieiron_common import common
         body = common.render_template(template_name, ctx)
-
+        
         self.send_email(
             subject=subject,
             sender=sender,
             recipient=recipient,
             body=body
         )
-
+    
     def send_email(self, subject, recipient, body, sender="erieironllc@gmail.com"):
         from erieiron_common import common
         common.log_info(f"sending email: {subject} to {recipient}")
-
+        
         sender = common.default_str(sender, settings_common.FEEDBACK_EMAIL)
         ses_client = boto3.client('ses', region_name=settings_common.AWS_DEFAULT_REGION_NAME)
-
+        
         # if recipient.lower() != "erieironllc@gmail.com":
         #     self.send_email(f"ccme: {subject} ({recipient})", "erieironllc@gmail.com", body)
-
+        
         text_body = body
-
+        
         # The HTML body of the email.
         if "<html" in body:
             html_body = body
@@ -304,7 +447,7 @@ class AwsInterface:
 <body>{body}</body>
 </html>
 """
-
+        
         if settings_common.DISABLE_EMAIL_SEND:
             logging.info(f"""
 NOT SENDING THIS EMAIL (settings.DISABLE_EMAIL_SEND=False)
@@ -323,7 +466,7 @@ BODY:
 
             """)
             return
-
+        
         ses_client.send_email(
             Source=sender,
             Destination={
@@ -348,34 +491,34 @@ BODY:
                 }
             }
         )
-
+    
     def object_exists(self, bucket: str, key: str):
         try:
             self.assert_object_exists(bucket, key)
             return True
         except:
             return False
-
+    
     def assert_object_exists(self, bucket: str, key: str):
         boto3.client("s3").head_object(
             Bucket=bucket,
             Key=key
         )
-
+    
     def create_empty_file(self, bucket: str, key: str) -> str:
         boto3.client("s3").put_object(Bucket=bucket, Key=key)
-
+    
     def delete(self, bucket: str, key: str) -> str:
         boto3.client("s3").delete_object(Bucket=bucket, Key=key)
-
+    
     def download(self, bucket: str, key: str) -> str:
         return str(self.s3_passthrough_cache.get_file(bucket, key))
-
+    
     def download_all(self, dest_dir: Path, bucket_name, prefix):
         dest_dir = Path(dest_dir).expanduser()
         dest_dir.mkdir(parents=True, exist_ok=True)
         s3 = boto3.client('s3')
-
+        
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
             for obj in page.get('Contents', []):
@@ -383,42 +526,42 @@ BODY:
                 # skip directories
                 if key.endswith('/'):
                     continue
-
+                
                 s3.download_file(
                     bucket_name,
                     key,
                     dest_dir / key.split('/')[-1]
                 )
-
+    
     def send_client_message(self, person, message_type, payload):
         from erieiron_common.json_encoder import ErieIronJSONEncoder
         from erieiron_common import common
-
+        
         if not person:
             raise ValueError("missing person")
         if not message_type:
             raise ValueError("missing message type")
         payload = payload or {}
-
+        
         apigateway_client = boto3.client(
             'apigatewaymanagementapi',
             region_name=settings_common.AWS_DEFAULT_REGION_NAME,
             endpoint_url=f"https://{settings_common.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}"
         )
-
+        
         table = boto3.resource(
             'dynamodb',
             region_name=settings_common.AWS_DEFAULT_REGION_NAME
         ).Table(
             settings_common.CLIENT_MESSAGE_DYNAMO_TABLE
         )
-
+        
         # query for all connections open for this person
         response = table.query(
             IndexName="person_id-index",
             KeyConditionExpression=boto3.dynamodb.conditions.Key("person_id").eq(str(person.pk))
         )
-
+        
         # send message to all connections
         for item in response.get('Items', []):
             connection_id = item['connection_id']
@@ -434,7 +577,7 @@ BODY:
             except ClientError as e:
                 if e.response['Error']['Code'] == 'GoneException':
                     common.log_debug(f"Websocket connection {connection_id} no longer exists.")
-
+                    
                     try:
                         table.delete_item(
                             Key={
@@ -446,26 +589,26 @@ BODY:
                 else:
                     # Handle other potential exceptions
                     raise e
-
+    
     def delete_websocket_connection(self, connection_id):
         from erieiron_common import common
         table = boto3.resource('dynamodb').Table("client-messages-db")
-
+        
         response = table.query(
             IndexName="connection_id-index",
             KeyConditionExpression=boto3.dynamodb.conditions.Key("connection_id").eq(connection_id)
         )
-
+        
         response = table.delete_item(
             Key={
                 'connection_id': connection_id  # Primary key field and value
             }
         )
-
+        
         items = response.get("Items", [])
-
+        
         common.log_info(f"Found {len(items)} items to delete for connection_id={connection_id}")
-
+        
         for item in items:
             table.delete_item(
                 Key={
@@ -474,17 +617,17 @@ BODY:
                 }
             )
             common.log_info(f'Deleted item with primary key: {item["person_id"], item["connection_id"]}')
-
+        
         common.log_info("Deletion complete.")
-
+    
     def iterate_s3_bucket_keys(self, bucket_name):
         s3 = boto3.client("s3")
-
+        
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket_name):
             for obj in page.get("Contents", []):
                 yield obj["Key"]
-
+    
     def upload_file(
             self,
             file_path: str,
@@ -496,11 +639,11 @@ BODY:
     ):
         if not os.path.exists(file_path):
             raise Exception(f"{file_path} does not exist")
-
+        
         from erieiron_common import common
         name = common.get(file_path, "name", str(file_path))
         common.log_debug(f"uploading {name} to s3://{dest_bucket}/{dest_key}")
-
+        
         if asyncronous:
             threading.Thread(
                 target=self._upload_file,
@@ -521,7 +664,7 @@ BODY:
                 delete_when_done
             )
             common.log_debug(f"uploaded {name} to s3://{dest_bucket}/{dest_key}")
-
+    
     def _upload_file(
             self,
             file_path: str,
@@ -536,7 +679,7 @@ BODY:
             key=dest_key,
             content_type=content_type
         )
-
+        
         # if delete_when_done:
         #     from erieiron_common.common import quietly_delete
         #     quietly_delete(file_path)

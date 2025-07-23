@@ -22,7 +22,7 @@ Each task **must** include the following fields
 - `task_type` *(string)* – determines high‑level nature of the task  
   - Allowed values:  
     - `CODING_APPLICATION` – editing the web application (frontend & backend)  
-    - `CODING_NON_UI_TASK` – general‑purpose scripts, scheduled or one‑off  
+    - `TASK_EXECUTION` – general‑purpose scripts, scheduled or one‑off  
     - `CODING_ML` – ML training or inference tasks  
     - `DESIGN_WEB_APPLICATION` – design or UX work  
     - `HUMAN_WORK` – requires human execution or judgment  
@@ -92,7 +92,7 @@ Each task **must** include the following fields
   "tasks": [
     {
       "task_id": "task_create_business_iam_role",
-      "task_type": "CODING_NON_UI_TASK",
+      "task_type": "TASK_EXECUTION",
       "execution_schedule": "ONCE",
       "depends_on": [],
       "task_description": "Create least‑privilege IAM role for the initiative",
@@ -106,7 +106,7 @@ Each task **must** include the following fields
     },
     {
       "task_id": "task_build_dev_runtime_container",
-      "task_type": "CODING_NON_UI_TASK",
+      "task_type": "TASK_EXECUTION",
       "execution_schedule": "ONCE",
       "depends_on": ["task_create_business_iam_role"],
       "task_description": "Build & push Python 3.11 dev container to ECR",
@@ -123,7 +123,7 @@ Each task **must** include the following fields
     },
     {
       "task_id": "task_verify_test_env",
-      "task_type": "CODING_NON_UI_TASK",
+      "task_type": "TASK_EXECUTION",
       "execution_schedule": "ONCE",
       "depends_on": ["task_create_business_iam_role"],
       "task_description": "Check whether 'test' CloudFormation stack exists",
@@ -146,7 +146,7 @@ Each task **must** include the following fields
 ```json
 {
   "task_id": "task_run_daily_data_cleanup",
-  "task_type": "CODING_NON_UI_TASK",
+  "task_type": "TASK_EXECUTION",
   "execution_schedule": "DAILY",
   "execution_start_time": "2025-07-06T02:00:00Z",
   "depends_on": ["task_implement_cleanup_script"],

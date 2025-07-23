@@ -254,7 +254,7 @@ class Business(BaseErieIronModel):
         instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
         sandbox_path = Path(self_driving_task_iteration.self_driving_task.sandbox_path)
         erie_common_path = sandbox_path / "venv/lib/python3.11/site-packages/erieiron_common"
-
+        
         files_to_index = [sandbox_path / f for f in common.iterate_files_deep(
             sandbox_path,
             file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh", ".txt", "Dockerfile"],
@@ -428,6 +428,12 @@ class Initiative(BaseErieIronModel):
     linked_goals = models.ManyToManyField("BusinessGoal", related_name="initiatives", blank=True)
     expected_kpi_lift = models.JSONField(default=dict)
     requires_unit_tests = models.BooleanField(default=True)
+    
+    def all_tasks_complete(self) -> bool:
+        if self.tasks.count() == 0:
+            return False
+        
+        return not self.tasks.exclude(status=TaskStatus.COMPLETE).exists()
 
 
 class ProductRequirement(BaseErieIronModel):
@@ -652,7 +658,20 @@ class SelfDrivingTask(BaseErieIronModel):
         )
         return result["total"] or 0.0
     
-    def iterate(self) -> 'SelfDrivingTaskIteration':
+    def iterate(self) -> Tuple['SelfDrivingTaskIteration', Optional['SelfDrivingTaskIteration']]:
+        iteration_to_modify = None
+        try:
+            if TaskType.CODING_ML.eq( self.task.task_type):
+                most_recent_iteration = self.get_most_recent_iteration()
+                iteration_to_modify = SelfDrivingTaskIteration.objects.get(
+                    id=most_recent_iteration.evaluation_json.get("iteration_id_to_modify")
+                )
+        except:
+            ...
+        
+        if not iteration_to_modify:
+            iteration_to_modify = self.get_most_recent_iteration()
+        
         max_version = SelfDrivingTaskIteration.objects.filter(
             self_driving_task=self
         ).aggregate(
@@ -660,10 +679,12 @@ class SelfDrivingTask(BaseErieIronModel):
         )["version_number__max"] or 0
         
         with transaction.atomic():
-            return SelfDrivingTaskIteration.objects.create(
+            current_iteration = SelfDrivingTaskIteration.objects.create(
                 self_driving_task=self,
                 version_number=max_version + 1
             )
+            
+        return current_iteration, iteration_to_modify
     
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
@@ -707,7 +728,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 self.self_driving_task.business,
                 self.get_relative_path(code_file)
             )
-            
+        
         code_version_to_modify = code_file.get_version(self)
         
         if not code_version_to_modify:
@@ -728,7 +749,10 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             return code_file
     
     def get_previous_iteration(self) -> 'SelfDrivingTaskIteration':
-        return self.get_previous_by_timestamp()
+        try:
+            return self.get_previous_by_timestamp()
+        except:
+            return None
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):

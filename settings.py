@@ -6,6 +6,8 @@ from pathlib import Path
 
 from erieiron_common import settings_utils
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 DEBUG = True
 
 BASE_DIR = Path(__file__).resolve().parent

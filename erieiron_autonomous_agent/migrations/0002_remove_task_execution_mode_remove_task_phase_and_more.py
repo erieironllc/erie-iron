@@ -54,13 +54,12 @@ class Migration(migrations.Migration):
             field=models.TextField(
                 choices=[
                     ("CODING_APPLICATION", "Coding web application"),
-                    ("CODING_NON_UI_TASK", "Coding non ui task"),
                     ("CODING_ML", "Coding ml"),
                     ("TASK_EXECUTION", "Task execution"),
                     ("DESIGN_WEB_APPLICATION", "Design web application"),
                     ("HUMAN_WORK", "Human work"),
                 ],
-                default=erieiron_common.enums.TaskType["CODING_NON_UI_TASK"],
+                default=erieiron_common.enums.TaskType["CODING_APPLICATION"],
             ),
         ),
     ]

@@ -13,7 +13,7 @@ from erieiron_autonomous_agent.models import (
 )
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_common import common
-from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, AwsEng, PubSubMessageType
+from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
@@ -274,38 +274,14 @@ def bootstrap_buiness(business_id):
                 "business": business
             }
         )
-        self_driving_task_iteration = self_driving_task.iterate()
+        self_driving_task_iteration, _ = self_driving_task.iterate()
         
         self_driving_task.sandbox_path = os.path.abspath(git.source_root)
         self_driving_task.save()
         
+        git.mk_venv()
         business.snapshot_code(self_driving_task_iteration)
         
-        for env in AwsEng:
-            pass
-            # subprocess.run(
-            #     [
-            #         "./scripts/deploy-cicd-and-roles.sh",
-            #         "--service_token", business.service_token,
-            #         "--environment", env.value
-            #     ],
-            #     check=True,
-            #     capture_output=True,
-            #     text=True,
-            #     cwd=git.source_root
-            # )
-            
-            # subprocess.run(
-            #     [
-            #         "./scripts/deploy-app.sh",
-            #         "--service_token", business.service_token,
-            #         "--environment", env.value
-            #     ],
-            #     check=True,
-            #     capture_output=True,
-            #     text=True,
-            #     cwd = git.source_root
-            # )
         PubSubManager.publish_id(
             PubSubMessageType.TASK_COMPLETED,
             task.id

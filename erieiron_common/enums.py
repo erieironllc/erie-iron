@@ -439,6 +439,9 @@ class InitiativeType(ErieEnum):
     SALES = auto()
 
 
-class AwsEng(ErieEnum):
+class AwsEnv(ErieEnum):
     DEV = "dev"
     PRODUCTION = "production"
+    
+    def get_aws_region(self) -> str:
+        return "us-west-2"

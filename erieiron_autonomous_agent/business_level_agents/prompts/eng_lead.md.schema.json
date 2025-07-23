@@ -102,7 +102,7 @@
           },
           "task_type": {
             "type": "string",
-            "enum": ["CODING_APPLICATION", "CODING_NON_UI_TASK", "CODING_ML", "DESIGN_WEB_APPLICATION", "HUMAN_WORK"],
+            "enum": ["CODING_APPLICATION", "TASK_EXECUTION", "CODING_ML", "DESIGN_WEB_APPLICATION", "HUMAN_WORK"],
             "description": "High-level nature of the task"
           }
         }
