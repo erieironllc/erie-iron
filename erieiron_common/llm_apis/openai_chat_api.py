@@ -1,4 +1,5 @@
 import logging
+import pprint
 import re
 from functools import lru_cache
 from typing import List
@@ -29,10 +30,14 @@ def chat(
     model_name = re.sub(r'-\d{4}-\d{2}-\d{2}$', '', model.value)
 
     def call_chat():
-        return client.chat.completions.create(
-            model=model_name,
-            messages=messages
-        ).choices[0].message.content
+        try:
+            return client.chat.completions.create(
+                model=model_name,
+                messages=messages
+            ).choices[0].message.content
+        except:
+            pprint.pprint(messages)
+            raise 
 
     def call_completions():
         prompt = ""

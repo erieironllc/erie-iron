@@ -6,9 +6,7 @@
   "type": "object",
   "required": [
     "goal_achieved",
-    "best_iteration_id",
-    "iteration_id_to_modify",
-    "previous_iteration_count",
+    "summary",
     "evaluation"
   ],
   "properties": {
@@ -16,23 +14,9 @@
       "type": "boolean",
       "description": "True if the GOAL was successfully achieved, false otherwise."
     },
-    "best_iteration_id": {
+    "summary": {
       "type": "string",
-      "description": "The ID of the best available code iteration to move forward with."
-    },
-    "iteration_id_to_modify": {
-      "description": "The iteration that the planner should build on. Either 'latest' or a specific iteration ID.",
-      "anyOf": [
-        { "type": "string", "const": "latest" },
-        { "type": "string", "minLength": 1 }
-      ]
-    },
-    "previous_iteration_count": {
-      "description": "How many previous iterations the planner should load for context. Typically a small integer or the string 'all'.",
-      "anyOf": [
-        { "type": "integer", "minimum": 0 },
-        { "type": "string", "const": "all" }
-      ]
+      "description": "A multi-sentence high-level summary of the current iteration's behavior, including any overarching interpretations or theories."
     },
     "evaluation": {
       "type": "array",

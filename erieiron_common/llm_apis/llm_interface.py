@@ -124,7 +124,10 @@ def post_process_response(resp):
 
 
 def sanitize_prompt(raw_text: str) -> str:
-    return raw_text
+    if isinstance(raw_text, dict):
+        return json.dumps(raw_text, indent=4)
+    else:
+        return raw_text
 
     # pii_entities = analyzer.analyze(text=raw_text, language="en")
     # operator_config = {

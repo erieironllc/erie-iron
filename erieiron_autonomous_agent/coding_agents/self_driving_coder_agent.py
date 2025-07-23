@@ -7,9 +7,11 @@ import tempfile
 import time
 import traceback
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional
 
+import boto3
 from django.db import transaction
 from django.db.models import Q
 from django.db.models.expressions import RawSQL
@@ -20,8 +22,8 @@ from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, settings_common
-from erieiron_common.aws_utils import get_aws_interface
-from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule
+from erieiron_common.aws_utils import get_aws_interface, extract_cloudformation_params, sanitize_aws_name, push_cloudformation, cloudformation_wait
+from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -68,7 +70,7 @@ class SelfDriverConfig:
         self.git = self.self_driving_task.get_git()
         
         self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o
-        self.model_code_planning = LlmModel.OPENAI_GPT_4o
+        self.model_code_planning = LlmModel.CLAUDE_3_7
         self.model_code_writing = LlmModel.OPENAI_O3_MINI
         
         # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
@@ -81,51 +83,92 @@ def execute(task_id: str):
     
     config = None
     log_output = None
+    skip_code_modification = False
     stop_reason = ""
     supress_eval = False
     try:
         for i in range(100):
             config = SelfDriverConfig(self_driving_task)
+            current_iteration = None
+            skip_code_modification = False
             
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
                     stop_reason = f"Stopping - hit the max budget ${config.budget :.2f}"
                     break
                 
-                iteration = self_driving_task.iterate()
+                if i == 0:
+                    current_iteration = self_driving_task.get_most_recent_iteration()
+                    if current_iteration and current_iteration.codeversion_set.all().exists():
+                        # if this is the first loop and we have a previous iteration of the code, 
+                        # we'll skip right to the execution step
+                        skip_code_modification = True
+                        with transaction.atomic():
+                            # clear out any previous execution artifacts
+                            SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+                                log_content="",
+                                evaluation_json=None
+                            )
+                            current_iteration.refresh_from_db(fields=["log_content", "evaluation_json"])
                 
-                log_iteration_headline(
-                    config,
-                    iteration
-                )
-                
-                relevant_code_files = get_relevant_code_files(
-                    config,
-                    iteration
-                )
-                
-                planning_data = plan_code_changes(
-                    config,
-                    iteration,
-                    relevant_code_files
-                )
-                
-                generate_code(
-                    config,
-                    iteration,
-                    planning_data
-                )
+                if skip_code_modification:
+                    log_execution_only_headline(
+                        config
+                    )
+                else:
+                    current_iteration, iteration_to_modify = self_driving_task.iterate()
+                    
+                    log_iteration_headline(
+                        config,
+                        current_iteration,
+                        iteration_to_modify
+                    )
+                    
+                    relevant_code_files = get_relevant_code_files(
+                        config,
+                        current_iteration,
+                        iteration_to_modify
+                    )
+                    
+                    planning_data = plan_code_changes(
+                        config,
+                        current_iteration,
+                        iteration_to_modify,
+                        relevant_code_files
+                    )
+                    
+                    pprint.pprint(planning_data)
+                    
+                    generate_code(
+                        config,
+                        current_iteration,
+                        iteration_to_modify,
+                        planning_data
+                    )
                 
                 try:
-                    execute_iteration(
+                    eval_data = execute_and_evaluate(
                         config,
-                        iteration
+                        current_iteration,
+                        AwsEnv.DEV
                     )
-                finally:
-                    evaluate_iteration_execution(
-                        config,
-                        iteration
-                    )
+                    pprint.pprint(eval_data)
+                except GoalAchieved as goal_achieved:
+                    if TaskType.CODING_ML.eq(config.task_type):
+                        raise goal_achieved
+                    elif not self_driving_task.task.initiative.all_tasks_complete():
+                        raise goal_achieved
+                    else:
+                        # for non-ml tasks, if all tasks are complete deploy to prod.  
+                        # execute_and_evaluate will re-throw GoalAchieved if the prod deploy is successful
+                        # perhaps think about moving this somewhere else - like listen to an event and then do this work in a separa message
+                        prod_deploy_iteration, _ = self_driving_task.iterate()
+                        execute_and_evaluate(
+                            config,
+                            prod_deploy_iteration,
+                            AwsEnv.PRODUCTION
+                        )
+            
             except AgentBlocked as agent_blocked:
                 pprint.pprint(agent_blocked.blocked_data)
                 stop_reason = "Agent Blocked"
@@ -159,7 +202,6 @@ def execute(task_id: str):
                 logging.exception(e)
                 config.supress_eval = True
                 if config.self_driving_task.task_id:
-                    pass
                     # PubSubManager.publish(
                     #     PubSubMessageType.TASK_FAILED,
                     #     payload={
@@ -167,6 +209,7 @@ def execute(task_id: str):
                     #         "error": traceback.format_exc()
                     #     }
                     # )
+                    ...
                 
                 break
     
@@ -179,16 +222,58 @@ def execute(task_id: str):
             package_ml_artifacts(config)
 
 
-def log_iteration_headline(config, iteration: SelfDrivingTaskIteration):
+def execute_and_evaluate(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration, environment: AwsEnv):
+    try:
+        execute_iteration(
+            config,
+            iteration,
+            environment
+        )
+    finally:
+        eval_data = evaluate_iteration_execution(
+            config,
+            iteration
+        )
+    
+    return eval_data
+
+
+def log_iteration_headline(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration
+):
+    iteration_to_modify_str = f"Modifying iteration {iteration_to_modify.id} (v{iteration_to_modify.version_number})" if iteration_to_modify else "initial version of code"
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
     headline = f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
 Task id {config.task.id} 
-iteration id {iteration.id} (v{iteration_count})
+iteration id {current_iteration.id} (v{iteration_count})
+{iteration_to_modify_str}
 sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
 total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
+tail -f {os.path.abspath(config.log_path)}
+
+https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
+--------------------------------------------------
+                                    """
+    print(headline)
+    log(config, headline)
+
+
+def log_execution_only_headline(config):
+    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
+    headline = f"""
+--------------------------------------------------
+{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
+
+Task id {config.task.id} 
+sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
+total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
+
+No coding - just gonna execute
 tail -f {os.path.abspath(config.log_path)}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
@@ -298,7 +383,7 @@ def run_docker_command(
         raise Exception(f"Docker execution failed - return code: {return_code}")
 
 
-def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> str:
+def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration, environment: AwsEnv) -> str:
     logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
     running_process = None
     
@@ -315,6 +400,12 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         )
         
         with open(logfile, "w") as log_f:
+            deploy_cloudformation_stacks(
+                config,
+                environment,
+                log_f
+            )
+            
             docker_image = build_docker_image(
                 self_driving_task,
                 log_f
@@ -329,15 +420,14 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                     log_f=log_f
                 )
             else:
-                run_docker_command(
-                    command_args="test",
-                    iteration=iteration,
-                    running_process=running_process,
-                    docker_image=docker_image,
-                    log_f=log_f
-                )
-                
-                # NEXT Step:  RUN THIS SHIT and see if it works!
+                if not AwsEnv.PRODUCTION.eq(environment):
+                    run_docker_command(
+                        command_args="test",
+                        iteration=iteration,
+                        running_process=running_process,
+                        docker_image=docker_image,
+                        log_f=log_f
+                    )
                 
                 if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
                     task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
@@ -379,16 +469,16 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
             running_process.save(update_fields=['is_running', 'terminated_at'])
         
         log_output = logfile.read_text()
-        log_output = f"{log_output}\n\n\nthrew:\n{traceback.format_exc()}"
         log(config, log_output, f"iteration-{iteration.id}")
         logging.exception(log_output)
     finally:
         with transaction.atomic():
             SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-                log_content=logfile.read_text()
+                log_content=common.truncate_text_lines(logfile.read_text())
             )
-        
         common.quietly_delete(logfile)
+        subprocess.run(["docker", "system", "prune", "-f"], check=True)
+        print("PRUNING COMPLETE")
 
 
 def init_task_execution(iteration):
@@ -416,41 +506,60 @@ def init_task_execution(iteration):
 def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration):
     iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=iteration.id)
     
-    previous_iteration_evals = []
-    for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.exclude(
-            id=iteration.id
-    ).filter(
-        evaluation_json__isnull=False
-    ).order_by("timestamp"):
-        previous_iteration_evals.append(LlmMessage.user(f"""
-**Prior Iteration Evaluation**
-iteration_evaluator output for iteration_id = '{prev_iter.id}'
-iteration timestamp: {prev_iter.timestamp}
-========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
-{json.dumps(prev_iter.evaluation_json, indent=4)}
-========= END iteration_id = '{prev_iter.id}' EVALUATION ======================="""))
-    
     eval_data = llm_chat(
-        "Evaluate Iteration",
+        "Iteration Summarizer",
         config,
         [
-            get_sys_prompt("iteration_evaluator.md"),
-            *previous_iteration_evals,
+            get_sys_prompt("iteration_summarizer.md"),
             LlmMessage.user(f"""
-**Execution and Test Logs**
+**Logs from iteration test output and execution**
+Base your evaluation on this log output
 ========= BEGIN LOG OUTPUT =======================
 {iteration.log_content}
 ========= END LOG OUTPUT =======================""")
         ],
         config.model_iteration_evaluation,
-        output_schema=PROMPTS_DIR / "iteration_evaluator.md.schema.json",
-        debug=True
+        output_schema=PROMPTS_DIR / "iteration_summarizer.md.schema.json"
     ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             evaluation_json=eval_data
         )
+    
+    previous_iteration_evals = []
+    for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
+            evaluation_json__isnull=False
+    ).order_by("timestamp"):
+        previous_iteration_evals.append(LlmMessage.user(f"""
+    **Iteration Evaluation**
+    iteration_evaluator output for iteration_id = '{prev_iter.id}'
+    iteration timestamp: {prev_iter.timestamp}
+    ========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
+    {json.dumps(prev_iter.evaluation_json, indent=4)}
+    ========= END iteration_id = '{prev_iter.id}' EVALUATION ======================="""))
+    
+    selection_data = llm_chat(
+        "Iteration Selector",
+        config,
+        [
+            get_sys_prompt("iteration_selector.md"),
+            *previous_iteration_evals
+        ],
+        config.model_iteration_evaluation,
+        output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            evaluation_json={
+                **selection_data,
+                **eval_data
+            }
+        )
+    
+    iteration.refresh_from_db(fields=["evaluation_json"])
+    eval_data = iteration.evaluation_json
     
     goal_achieved = common.parse_bool(eval_data.get('goal_achieved'))
     if goal_achieved:
@@ -459,13 +568,23 @@ iteration timestamp: {prev_iter.timestamp}
     return eval_data
 
 
-def build_previous_iteration_context_messages(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> List[LlmMessage]:
+def build_previous_iteration_context_messages(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration
+) -> List[LlmMessage]:
     eval_json = config.self_driving_task.get_most_recent_iteration().evaluation_json or {}
-    previous_iteration_count = eval_json.get("previous_iteration_count", 1)
-    if previous_iteration_count == "all":
-        previous_iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
     
-    return [
+    previous_iteration_count = eval_json.get("previous_iteration_count", 1)
+    previous_iterations:list[SelfDrivingTaskIteration] = list(
+        config.self_driving_task.selfdrivingtaskiteration_set.exclude(
+            id=current_iteration.id
+        ).filter(
+            evaluation_json__isnull=False
+        ).order_by("timestamp")
+    )[-previous_iteration_count:]
+    
+    messages = [
         LlmMessage.user(f"""
 **iteration_evaluator Output**
 iteration_evaluator output for iteration_id = '{prev_iter.id}'
@@ -474,14 +593,19 @@ iteration timestamp: {prev_iter.timestamp}
 {json.dumps(prev_iter.evaluation_json, indent=4)}
 ========= END iteration_id = '{prev_iter.id}' EVALUATION =======================
         """)
-        for prev_iter in reversed(config.self_driving_task.selfdrivingtaskiteration_set.exclude(
-            id=iteration.id
-        ).filter(
-            evaluation_json__isnull=False
-        ).order_by(
-            "-timestamp"
-        )[0:previous_iteration_count])
+        for prev_iter in previous_iterations
     ]
+    
+    if iteration_to_modify:
+        messages.append(LlmMessage.user(f"""
+**Log Output**
+Log output from iteration_id = '{iteration_to_modify.id}'
+========= BEGIN Log Output =======================
+{iteration_to_modify.log_content}
+========= END Log Output =======================
+        """))
+    
+    return messages
 
 
 def get_sys_prompt(
@@ -505,20 +629,10 @@ def get_sys_prompt(
 
 def generate_code(
         config: SelfDriverConfig,
-        iteration: SelfDrivingTaskIteration,
+        current_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration,
         planning_data: dict
 ) -> SelfDrivingTaskIteration:
-    iteration_id_to_modify = planning_data.get("iteration_id_to_modify", "latest")
-    previous_iteration = iteration.get_previous_iteration()
-    try:
-        iteration_to_modify = config.self_driving_task.selfdrivingtaskiteration_set.get(id=iteration_id_to_modify)
-    except:
-        iteration_to_modify = previous_iteration
-    
-    evaluation_of_previous_code = planning_data.get("evaluation", [])
-    if not iteration_to_modify:
-        iteration_to_modify = iteration
-    
     code_file_instructions = planning_data.get("code_files", [])
     if not code_file_instructions:
         raise Exception("no code files found")
@@ -545,7 +659,7 @@ def generate_code(
         if not instructions:
             print(f"no modifications for {code_file_path}")
             code_file.update(
-                iteration,
+                current_iteration,
                 code_version_to_modify.code
             )
         else:
@@ -557,8 +671,6 @@ def generate_code(
                     code_str = write_code(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
-                        previous_iteration=previous_iteration,
-                        evaluation_of_previous_code=evaluation_of_previous_code,
                         instructions=instructions,
                         previous_exception=previous_exception
                     )
@@ -572,20 +684,24 @@ def generate_code(
             
             if code_str:
                 code_file.update(
-                    iteration,
+                    current_iteration,
                     code_str,
                     code_instructions=instructions
                 )
     
     # NEXT STEP CONTINUE DEBUGGING 
-    return iteration
+    return current_iteration
 
 
-def plan_code_changes(config, iteration: SelfDrivingTaskIteration, relevant_code_files: list[LlmMessage]):
+def plan_code_changes(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration,
+        relevant_code_files: list[LlmMessage]
+):
     model = config.model_code_planning
     business = config.self_driving_task.business
-    previous_iteration = iteration.get_previous_iteration()
-
+    
     task = config.self_driving_task.task
     task_type = TaskType(task.task_type)
     
@@ -604,7 +720,11 @@ def plan_code_changes(config, iteration: SelfDrivingTaskIteration, relevant_code
             ]
         )),
         *common.ensure_list(
-            build_previous_iteration_context_messages(config, iteration)
+            build_previous_iteration_context_messages(
+                config, 
+                current_iteration, 
+                iteration_to_modify
+            )
         ),
         *common.ensure_list(
             get_dependencies_msg(config, for_planning=True)
@@ -624,7 +744,7 @@ def plan_code_changes(config, iteration: SelfDrivingTaskIteration, relevant_code
 This is the first attempt at implementing this task.  Please take your time to think of the best initial architecture.
 Identify an architecture that will allow for efficient code iteration and give us the best start towards achieving the user's GOAL. 
                 """)
-            if not previous_iteration else None
+            if not iteration_to_modify else None
         )
     ]
     
@@ -637,12 +757,12 @@ Identify an architecture that will allow for efficient code iteration and give u
     ).json()
     
     with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
             planning_model=model,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
         )
-        iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
+        current_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
     
     blocked_data = planning_data.get('blocked')
     if blocked_data:
@@ -654,17 +774,16 @@ Identify an architecture that will allow for efficient code iteration and give u
 def write_code(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
-        previous_iteration: SelfDrivingTaskIteration,
-        evaluation_of_previous_code,
         instructions,
         previous_exception: Optional[CodeCompilationError]
 ) -> str:
     model = config.model_code_writing
     
-    code_file_name = code_version_to_modify.code_file.get_path().name
+    code_file_path = code_version_to_modify.code_file.get_path()
+    code_file_name = code_file_path.name
     if code_file_name == "requirements.txt":
         prompt = "codewriter--requirements.txt.md"
-    elif code_file_name.startswith("cloudformation") and code_file_name.endswith(".yaml"):
+    elif code_file_path.parent.name == "cloudformation" and code_file_name.endswith(".yaml"):
         prompt = "codewriter--aws_cloudformation_coder.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
@@ -704,16 +823,6 @@ This code as the following error(s):
 
 Please try again, avoiding these errors
         """
-            )
-        )
-    elif evaluation_of_previous_code and previous_iteration:
-        messages.append(
-            LlmMessage.assistant(
-                f"""
-Your evaluation of the previous iteration's (iteration id={str(previous_iteration.id)}) performance against the user's GOAL is as follows:
-
-{json.dumps(evaluation_of_previous_code, indent=4)}
-                """
             )
         )
     
@@ -1018,24 +1127,48 @@ the user's GOAL is:
 {config.self_driving_task.goal}""")
 
 
-def get_relevant_code_files(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration) -> list[LlmMessage]:
-    try:
-        previous_iteration_evaluation = config.self_driving_task.get_most_recent_iteration().evaluation_json
-        iteration_to_modify = SelfDrivingTaskIteration.objects.get(previous_iteration_evaluation.get("iteration_id_to_modify"))
-    except:
-        iteration_to_modify = config.self_driving_task.get_most_recent_iteration()
-    
+def get_cloudformation_files(config: SelfDriverConfig) -> list[Path]:
+    cf_path = config.sandbox_root_dir / "cloudformation"
+    return [p for p in list(cf_path.glob("*.yaml")) if p.read_text().strip()]
+
+
+def get_relevant_code_files(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration
+) -> list[LlmMessage]:
     messages = []
     iteration_code_files = set()
-    for code_version in CodeVersion.objects.filter(task_iteration=iteration_to_modify):
+    iteration_code_versions = []
+    
+    with transaction.atomic():
+        for code_file_path in get_cloudformation_files(config):
+            code_file = CodeFile.get(business=config.business, code_file_path=code_file_path)
+            iteration_code_versions.append(
+                code_file.get_version(iteration_to_modify)
+                or code_file.get_latest_version()
+                or code_file.init_from_codefile(iteration_to_modify, code_file_path)
+            )
+    
+    iteration_code_versions += list(CodeVersion.objects.filter(
+        task_iteration=iteration_to_modify
+    ).exclude(
+        id__in=[cv.id for cv in iteration_code_versions]
+    ))
+    
+    for code_version in iteration_code_versions:
         iteration_code_files.add(code_version.code_file_id)
-        messages.append(LlmMessage.user(f"""
-        "{code_version.code_file.file_path}" is code file that you modified in the previous iteration of this task:
-
-        ============= BEGIN {code_version.code_file.file_path} CODE =============
-        {code_version.code}
-        ============= END {code_version.code_file.file_path} CODE =============
-                """))
+        
+        file_path = code_version.code_file.file_path
+        code = code_version.code
+        was_modified = code_version.task_iteration_id == iteration_to_modify.id
+        
+        messages.append(LlmMessage.user({
+            "file_path": file_path,
+            "modified_in_previous_iteration": was_modified,
+            "may_edit": True,
+            "code": code,
+        }))
     
     # Step 1: Get the structured retrieval cues from the LLM
     cues = llm_chat(
@@ -1106,33 +1239,27 @@ def get_relevant_code_files(config: SelfDriverConfig, iteration: SelfDrivingTask
         .order_by("similarity")
     )
     
-    # Process all code methods (original and additional)
-    all_code_methods = list(erie_common_code_methods) + list(additional_code_methods)
-    
     # Keep track of which code files we've already included to ensure only latest version per file
     processed_code_files = set()
-    
-    for code_method in all_code_methods:
+    methods_by_file = defaultdict(list)
+    for code_method in set(list(erie_common_code_methods) + list(additional_code_methods)):
         code_file = code_method.code_version.code_file
-        
-        # Skip if we've already processed this code file
         if code_file.id in processed_code_files:
             continue
-        
+        methods_by_file[code_file].append(code_method)
+    
+    for code_file, methods in methods_by_file.items():
         processed_code_files.add(code_file.id)
-        
-        file_path = code_file.file_path
-        relative_path = file_path.split("erieiron_common")
-        
-        messages.append(LlmMessage.user(f"""
-Possibly useful code method: "{code_method.name}"
-You may use "{code_method.name}" but not modify it as it lives in imported package
-"{code_method.name}" lives in the file "{relative_path}"
-
-============= BEGIN {code_method.name} CODE =============
-{code_method.code}
-============= END {code_method.name} CODE =============
-"""))
+        grouped_code = "\n\n".join([
+            f"# Method: {method.name}\n{method.code}" for method in methods
+        ])
+        messages.append(LlmMessage.user({
+            "file_path": code_file.file_path,
+            "may_edit": False,
+            "source": "imported_package",
+            "code": grouped_code,
+            "note": f"The following methods from an imported package may be referenced but not modified: {[m.name for m in methods]}"
+        }))
     
     # Then get code versions for other file types (excluding Python and JavaScript)
     # Also exclude files that are already included from previous iteration or code methods above
@@ -1163,13 +1290,12 @@ You may use "{code_method.name}" but not modify it as it lives in imported packa
     code_versions = list(latest_code_versions.values())
     
     for code_version in code_versions:
-        messages.append(LlmMessage.user(f"""
-"{code_version.code_file.file_path}" is an existing project code file that you may use and or edit
-
-============= BEGIN {code_version.code_file.file_path} CODE =============
-{code_version.code}
-============= END {code_version.code_file.file_path} CODE =============
-        """))
+        messages.append(LlmMessage.user({
+            "file_path": code_version.code_file.file_path,
+            "modified_in_previous_iteration": False,
+            "may_edit": True,
+            "code": code_version.code,
+        }))
     
     return messages
 
@@ -1238,3 +1364,192 @@ def llm_chat(
     print(f"{desc}: total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f}")
     
     return llm_resp
+
+
+def deploy_cloudformation_stacks(
+        config: SelfDriverConfig,
+        environment: AwsEnv,
+        log_f,
+):
+    cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
+    
+    self_driving_task = config.self_driving_task
+    sandbox_path = Path(config.sandbox_root_dir)
+    
+    for cfn_file in get_cloudformation_files(config):
+        if AwsEnv.PRODUCTION.eq(environment):
+            stack_name = f"{config.business.service_token}-{environment.value}-{cfn_file.stem}".replace("_", "-")
+        else:
+            # in non prod, each task gets a stack
+            stack_name = f"{config.business.service_token}-{environment.value}-{cfn_file.stem}-{self_driving_task.id}".replace("_", "-")
+        
+        stack_name = sanitize_aws_name(stack_name, max_length=128)
+        
+        try:
+            cloudformation_wait(cf_client, stack_name)
+        except:
+            pass
+        
+        try:
+            param_list = get_stack_parameters(
+                environment,
+                self_driving_task,
+                cfn_file,
+                log_f
+            )
+            
+            push_cloudformation(
+                stack_name,
+                cfn_file,
+                param_list,
+                environment.get_aws_region(),
+                log_f
+            )
+        except Exception as deploy_exception:
+            if "No updates are to be performed" in str(deploy_exception):
+                log_f.write(f"No updates needed for stack: {stack_name}\n")
+                return
+            
+            log_f.write(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
+            log_f.write(traceback.format_exc())
+            try:
+                events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
+                failed_events = [
+                    f"{e['Timestamp']} | Stack: {e['StackName']} | {e['LogicalResourceId']} ({e['ResourceType']}) | Status: {e['ResourceStatus']} | Reason: {e.get('ResourceStatusReason', '')} | PhysicalId: {e.get('PhysicalResourceId', '')} | Token: {e.get('ClientRequestToken', '')}"
+                    for e in events if "FAILED" in e["ResourceStatus"]
+                ]
+                log_f.write("CloudFormation failure events:\n")
+                log_f.write("\n".join(failed_events) + "\n")
+                
+                # Also describe the top 3 failed resources in more detail
+                failed_logical_ids = [e["LogicalResourceId"] for e in events if "FAILED" in e["ResourceStatus"]]
+                log_f.write("\nDetailed resource descriptions for top failures:\n")
+                for logical_id in failed_logical_ids[:3]:
+                    try:
+                        resource_details = cf_client.describe_stack_resource(
+                            StackName=stack_name,
+                            LogicalResourceId=logical_id
+                        )
+                        log_f.write(json.dumps(resource_details, indent=2, default=str) + "\n")
+                    except Exception as ex:
+                        log_f.write(f"Failed to describe resource {logical_id}: {ex}\n")
+            except Exception as event_ex:
+                log_f.write(f"Failed to fetch stack events: {event_ex}\n")
+            
+            from datetime import datetime, timedelta
+            log_f.write("\nRecent CloudTrail events in this region (last 15 min):\n")
+            try:
+                ct_client = boto3.client("cloudtrail", region_name=environment.get_aws_region())
+                end_time = common.get_now()
+                start_time = end_time - timedelta(minutes=15)
+                
+                ct_events = ct_client.lookup_events(
+                    StartTime=start_time,
+                    EndTime=end_time,
+                    MaxResults=100
+                )
+                
+                for ct_event in ct_events.get("Events", []):
+                    cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
+                    if cloudtrain_event_data.get("errorCode"):
+                        log_f.write(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
+                        log_f.write(json.dumps(cloudtrain_event_data, indent=4))
+            
+            except Exception as ct_ex:
+                log_f.write(f"Failed to fetch CloudTrail events: {ct_ex}\n")
+            
+            raise deploy_exception
+
+
+def get_stack_parameters(environment, self_driving_task, cfn_file, log_f):
+    required_parameters, parameters_metadata = extract_cloudformation_params(cfn_file)
+    
+    project_name = sanitize_aws_name(self_driving_task.business.service_token, max_length=64)
+    secrets_key = f"/erieiron/{project_name}/{environment.value}"
+    known_params = {
+        "ProjectName": project_name,
+        "Environment": environment.value,
+        **get_rds_credentials(project_name, environment, secrets_key, self_driving_task),
+        **get_admin_credentials(project_name, environment, secrets_key, self_driving_task)
+    }
+    aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
+    try:
+        response = aws_secrets_client.get_secret_value(
+            SecretId=secrets_key
+        )
+        known_params = {
+            **known_params,
+            **json.loads(response["SecretString"]),
+        }
+        secret_params = json.loads(response["SecretString"])
+    except aws_secrets_client.exceptions.ResourceNotFoundException as rnfe:
+        logging.info(f"no secrets found for {secrets_key}")
+    missing = set()
+    for param in required_parameters:
+        param_meta = parameters_metadata.get(param, {})
+        desc = str(param_meta.get("Description", "")).lower()
+        has_default = "Default" in param_meta
+        is_optional = "(optional)" in desc or has_default
+        if param not in known_params and not is_optional:
+            missing.add(param)
+    if missing:
+        raise AgentBlocked({
+            "desc": "Missing required CloudFormation parameters",
+            "missing_parameters": sorted(missing),
+            "file": cfn_file.name,
+            "secret_hint": f"/erieiron/{project_name}/{environment.value}/cloudformation"
+        })
+    param_list = [{"ParameterKey": k, "ParameterValue": str(known_params[k])} for k in required_parameters]
+    
+    return param_list
+
+
+def get_admin_credentials(project_name, environment, secrets_key, self_driving_task):
+    aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
+    admin_secrets_key = f"{secrets_key}/appadmin"
+    
+    try:
+        response = aws_secrets_client.get_secret_value(SecretId=admin_secrets_key)
+        creds = json.loads(response)
+    except Exception:
+        creds = set_secret(aws_secrets_client, admin_secrets_key, {
+            "AdminPassword": common.random_string(20)
+        })
+    
+    return creds
+
+
+def set_secret(aws_secrets_client, admin_secrets_key, json_val):
+    try:
+        aws_secrets_client.create_secret(
+            Name=admin_secrets_key,
+            SecretString=json.dumps(json_val)
+        )
+    except aws_secrets_client.exceptions.ResourceExistsException:
+        aws_secrets_client.put_secret_value(
+            SecretId=admin_secrets_key,
+            SecretString=json.dumps(json_val)
+        )
+    
+    return json_val
+
+
+def get_rds_credentials(project_name, environment, secrets_key, self_driving_task):
+    aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
+    rds_secrets_key = f"{secrets_key}/rds"
+    
+    try:
+        rds_secret = aws_secrets_client.get_secret_value(SecretId=rds_secrets_key)
+        db_creds = json.loads(rds_secret["SecretString"])
+    except aws_secrets_client.exceptions.ResourceNotFoundException:
+        if AwsEnv.DEV.eq(environment):
+            db_name = sanitize_aws_name(f"{project_name}-{environment}-{self_driving_task.task.id}", max_length=50)
+        else:
+            db_name = sanitize_aws_name(f"{project_name}-{environment}", max_length=50)
+        
+        db_creds = set_secret(aws_secrets_client, rds_secrets_key, {
+            "DBPassword": common.random_string(20),
+            "DBName": db_name
+        })
+    
+    return db_creds

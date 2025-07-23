@@ -1757,3 +1757,23 @@ def run_cmd(cwd: Path, cmd: list[str]) -> subprocess.CompletedProcess:
         logging.info(result.stderr)
     
     return result
+
+
+def truncate_text_lines(text_blob: str) -> str:
+    if not text_blob:
+        return text_blob
+    
+    processed_lines = []
+    for line in text_blob.splitlines():
+        if len(line) > 1000:
+            line = f"[TRUNCATED] {line[:300]}...[{len(line)} chars]...{line[-100:]}"
+        processed_lines.append(line)
+    
+    return "\n".join(processed_lines)
+
+
+def random_string(length=16):
+    import string
+    import secrets
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
