@@ -5,11 +5,16 @@
   "description": "Structured output from the iteration_evaluator agent.",
   "type": "object",
   "required": [
+    "deployment_failed",
     "goal_achieved",
     "summary",
     "evaluation"
   ],
   "properties": {
+    "deployment_failed": {
+      "type": "boolean",
+      "description": "True if any infrastructure or deployment issue blocked execution (e.g., CloudFormation error, Docker build failure, service crash)."
+    },
     "goal_achieved": {
       "type": "boolean",
       "description": "True if the GOAL was successfully achieved, false otherwise."

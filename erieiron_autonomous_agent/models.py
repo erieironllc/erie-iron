@@ -17,7 +17,7 @@ from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRati
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
-from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType
+from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType, AwsEnv
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.models import BaseErieIronModel
@@ -602,6 +602,7 @@ class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     main_name = models.TextField(null=False)
     sandbox_path = models.TextField(null=False)
+    cloudformation_stack_name = models.TextField(null=True)
     goal = models.TextField(null=False)
     task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     config_path = models.TextField(null=True, db_index=True)
@@ -661,7 +662,7 @@ class SelfDrivingTask(BaseErieIronModel):
     def iterate(self) -> Tuple['SelfDrivingTaskIteration', Optional['SelfDrivingTaskIteration']]:
         iteration_to_modify = None
         try:
-            if TaskType.CODING_ML.eq( self.task.task_type):
+            if TaskType.CODING_ML.eq(self.task.task_type):
                 most_recent_iteration = self.get_most_recent_iteration()
                 iteration_to_modify = SelfDrivingTaskIteration.objects.get(
                     id=most_recent_iteration.evaluation_json.get("iteration_id_to_modify")
@@ -683,11 +684,29 @@ class SelfDrivingTask(BaseErieIronModel):
                 self_driving_task=self,
                 version_number=max_version + 1
             )
-            
+        
         return current_iteration, iteration_to_modify
     
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
+    
+    def get_cloudformation_stack_name(self, environment:AwsEnv):
+        from erieiron_common.aws_utils import sanitize_aws_name
+        
+        cloudformation_stack_name = f'{self.business.service_token}-{environment}'
+        if AwsEnv.PRODUCTION.DEV.eq(environment):
+            cloudformation_stack_name = f'{cloudformation_stack_name}-{self.id}'
+        cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=40)
+        
+        if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name != cloudformation_stack_name:
+            with transaction.atomic():
+                SelfDrivingTask.objects.filter(id=self.id).update(
+                    cloudformation_stack_name=cloudformation_stack_name
+                )
+            self.refresh_from_db(fields=["cloudformation_stack_name"])
+        
+        return cloudformation_stack_name
+        
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
@@ -753,6 +772,12 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             return self.get_previous_by_timestamp()
         except:
             return None
+    
+    def deployment_failed(self):
+        return common.parse_bool(common.get(self, ["evaluation_json", "deployment_failed"], False))
+    
+    def goal_achieved(self):
+        return common.parse_bool(common.get(self, ["evaluation_json", "goal_achieved"], False))
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):
@@ -838,10 +863,18 @@ class CodeFile(BaseErieIronModel):
     def get_latest_version(self) -> 'CodeVersion':
         return self.codeversion_set.order_by("created_at").last()
     
-    def get_version(self, iteration: SelfDrivingTaskIteration) -> 'CodeVersion':
-        return self.codeversion_set.filter(
+    def get_version(self, iteration: SelfDrivingTaskIteration, default_to_latest=False) -> Optional['CodeVersion']:
+        code_version = self.codeversion_set.filter(
             task_iteration=iteration
         ).order_by("created_at").last()
+        
+        if code_version:
+            return code_version
+        
+        if default_to_latest:
+            return self.get_latest_version()
+        
+        return None
     
     @staticmethod
     def get(business: Business, code_file_path: Path) -> 'CodeFile':
@@ -970,6 +1003,16 @@ class CodeVersion(BaseErieIronModel):
                     code=method_data["code"],
                     codebert_embedding=get_codebert_embedding(method_data["code"])
                 )
+    
+    def get_llm_message(self):
+        from erieiron_common.llm_apis.llm_interface import LlmMessage
+        code_file = self.code_file
+        return LlmMessage.user({
+            "file_path": code_file.file_path,
+            "modified_in_previous_iteration": False,
+            "may_edit": "venv/" not in str(code_file.get_path()),
+            "code": self.code,
+        })
 
 
 class CodeMethod(BaseErieIronModel):

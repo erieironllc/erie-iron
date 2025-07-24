@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+import traceback
 import urllib
 import uuid
 from functools import lru_cache
@@ -19,8 +20,10 @@ import yaml
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from erieiron_common import common
 from erieiron_common import settings_common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
+from erieiron_common.enums import AwsEnv
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
@@ -60,31 +63,31 @@ def extract_cloudformation_params(cfn_file: Path):
 
 
 def push_cloudformation(
-        stack_name: str,
-        cfn_file: Path,
-        param_list: list,
-        region: str,
+        stack_name: str, 
+        environment: AwsEnv, 
+        cfn_file: Path, 
+        param_list: list, 
         log_f
 ):
-    logging.info(f"pushing {stack_name} to {region} with {cfn_file}")
-    cf_client = boto3.client("cloudformation", region_name=region)
+    logging.info(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
+    cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
     template_body = cfn_file.read_text()
     
-    stack_exists = cleanup_stack_if_broken(
-        stack_name,
-        region,
-        log_f
-    )
-    
-    if stack_exists:
+    if get_stack(stack_name, cf_client):
+        assert_cloudformation_stack_valid(stack_name, cf_client)
+        
         log_f.write(f"Updating existing stack: {stack_name}\n")
         logging.info(f"Updating existing stack: {stack_name}\n")
-        cf_client.update_stack(
-            StackName=stack_name,
-            TemplateBody=template_body,
-            Parameters=param_list,
-            Capabilities=["CAPABILITY_NAMED_IAM"]
-        )
+        try:
+            cf_client.update_stack(
+                StackName=stack_name,
+                TemplateBody=template_body,
+                Parameters=param_list,
+                Capabilities=["CAPABILITY_NAMED_IAM"]
+            )
+        except Exception as deploy_exception:
+            if "No updates are to be performed" not in str(deploy_exception):
+                raise deploy_exception
     else:
         log_f.write(f"Creating new stack: {stack_name}\n")
         logging.info(f"Creating new stack: {stack_name}\n")
@@ -95,74 +98,117 @@ def push_cloudformation(
             Capabilities=["CAPABILITY_NAMED_IAM"]
         )
     
-    cloudformation_wait(cf_client, stack_name)
+    cloudformation_wait(cf_client, stack_name, throw_on_fail=True)
     
     log_f.write(f"CloudFormation stack {stack_name} deployed successfully.\n")
     logging.info(f"CloudFormation stack {stack_name} deployed successfully.\n")
 
 
-def cloudformation_wait(cf_client, stack_name, timeout=1200, poll_interval=10):
+def cloudformation_wait(
+        cf_client,
+        stack_name,
+        timeout=1200,
+        poll_interval=10,
+        throw_on_fail=False
+):
     start_time = time.time()
     
     while True:
-        response = cf_client.describe_stacks(StackName=stack_name)
-        status = response['Stacks'][0]['StackStatus']
-        
         time.sleep(poll_interval)
+        
+        stack = get_stack(stack_name, cf_client)
+        if not stack:
+            return
+        
+        status = stack['StackStatus']
+        if throw_on_fail:
+            if not status.startswith("ROLLBACK_"):
+                break
+        
+        if not status.endswith("_IN_PROGRESS"):
+            break
+        
         if time.time() - start_time > timeout:
             raise TimeoutError(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
         
-        if status.endswith("_IN_PROGRESS"):
-            continue
-        
-        if status.endswith("_COMPLETE"):
-            logging.info(f"Stack {stack_name} completed with status: {status}")
-            return
-
-        if "FAILED" in status or "ROLLBACK" in status:
-            raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
-        
-
-def cleanup_stack_if_broken(stack_name: str, region: str, log_f):
-    cf_client = boto3.client("cloudformation", region_name=region)
-    try:
-        stacks = cf_client.describe_stacks()["Stacks"]
-        matching_stack = next((s for s in stacks if s["StackName"] == stack_name), None)
-        
-        if matching_stack and matching_stack["StackStatus"] in ["ROLLBACK_FAILED", "ROLLBACK_COMPLETE"]:
-            log_f.write(f"Deleting broken stack: {stack_name} (status: ROLLBACK_FAILED)\n")
-            cf_client.delete_stack(StackName=stack_name)
-            cloudformation_wait(cf_client, stack_name)
-            stack_exists = False
-        else:
-            stack_exists = bool(matching_stack)
-    except cf_client.exceptions.ClientError as e:
-        if "does not exist" in str(e):
-            stack_exists = False
-        else:
-            raise
+        logging.info(f"waiting on {stack_name}.  status: {status}")
     
-    return stack_exists
+    if throw_on_fail:
+        assert_cloudformation_stack_valid(stack_name, cf_client)
+
+
+def get_stack(stack_name, cf_client):
+    try:
+        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])
+    except:
+        return None
+
+
+def assert_cloudformation_stack_valid(stack_name, cf_client):
+    matching_stack = get_stack(stack_name, cf_client)
+    if not matching_stack:
+        raise RuntimeError(f"CloudFormation stack {stack_name} doesn't exist")
+    
+    status = matching_stack['StackStatus']
+    if "FAILED" in status or "ROLLBACK" in status:
+        raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
+
+
+def prepare_stack_for_update(stack_name: str, cf_client):
+    for i in range(5):
+        matching_stack = get_stack(stack_name, cf_client)
+        if not matching_stack:
+            return
+        
+        try:
+            status = matching_stack["StackStatus"]
+            if status.startswith("ROLLBACK_") or status == "DELETE_FAILED":
+                logging.info(f"Deleting broken stack: {stack_name} (status: {status}) attempt {i + 1}\n")
+                
+                try:
+                    resources = cf_client.describe_stack_resources(StackName=stack_name)['StackResources']
+                    for r in resources:
+                        if r['ResourceStatus'] == 'DELETE_FAILED':
+                            logging.info(f"Resource {r['LogicalResourceId']} stuck in DELETE_FAILED. Manual cleanup may be required.\n")
+                            # Optional: custom cleanup logic could go here
+                except Exception as e:
+                    logging.info(f"Failed to describe stack resources: {e}\n")
+                cf_client.delete_stack(StackName=stack_name)
+            
+            cloudformation_wait(cf_client, stack_name)
+        except cf_client.exceptions.ClientError as e:
+            if "does not exist" in str(e):
+                ...
+            else:
+                logging.info(traceback.format_exc())
+                raise
 
 
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:
     name = name.replace("_", "-")
     if len(name) <= max_length:
         return name
-    
+
     parts = name.split("-")
     if len(parts) == 1:
         return name[:max_length]
-    
-    # Iteratively truncate the longest parts until under max_length
+
+    # Preserve the first two parts entirely
     lengths = [len(p) for p in parts]
+    protected_count = min(2, len(lengths))
+
+    # Iteratively truncate the remaining parts until under max_length
     while sum(lengths) + len(parts) - 1 > max_length:
-        # Find index of longest part greater than 1 char
-        idx = max((i for i, l in enumerate(lengths) if l > 1), key=lambda i: lengths[i], default=None)
+        # Find index of longest part that is not protected and greater than 1 char
+        idx = max(
+            (i for i in range(protected_count, len(lengths)) if lengths[i] > 1),
+            key=lambda i: lengths[i],
+            default=None
+        )
         if idx is None:
             break
         lengths[idx] -= 1
-    
+
     truncated_parts = [p[:l] for p, l in zip(parts, lengths)]
     return "-".join(truncated_parts)
 
