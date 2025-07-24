@@ -21,8 +21,7 @@ import settings
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
-from erieiron_common import common, settings_common
-from erieiron_common.aws_utils import get_aws_interface, extract_cloudformation_params, sanitize_aws_name, push_cloudformation, cloudformation_wait
+from erieiron_common import common, settings_common, aws_utils
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
@@ -70,7 +69,7 @@ class SelfDriverConfig:
         self.git = self.self_driving_task.get_git()
         
         self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o
-        self.model_code_planning = LlmModel.CLAUDE_3_7
+        self.model_code_planning = LlmModel.OPENAI_GPT_4o
         self.model_code_writing = LlmModel.OPENAI_O3_MINI
         
         # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
@@ -99,7 +98,7 @@ def execute(task_id: str):
                 
                 if i == 0:
                     current_iteration = self_driving_task.get_most_recent_iteration()
-                    if current_iteration and current_iteration.codeversion_set.all().exists():
+                    if current_iteration and self_driving_task.selfdrivingtaskiteration_set.count() > 1:
                         # if this is the first loop and we have a previous iteration of the code, 
                         # we'll skip right to the execution step
                         skip_code_modification = True
@@ -113,7 +112,8 @@ def execute(task_id: str):
                 
                 if skip_code_modification:
                     log_execution_only_headline(
-                        config
+                        config,
+                        current_iteration
                     )
                 else:
                     current_iteration, iteration_to_modify = self_driving_task.iterate()
@@ -137,7 +137,7 @@ def execute(task_id: str):
                         relevant_code_files
                     )
                     
-                    pprint.pprint(planning_data)
+                    # pprint.pprint(planning_data)
                     
                     generate_code(
                         config,
@@ -263,7 +263,7 @@ https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
     log(config, headline)
 
 
-def log_execution_only_headline(config):
+def log_execution_only_headline(config: SelfDriverConfig, current_iteration: SelfDrivingTaskIteration):
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
     headline = f"""
 --------------------------------------------------
@@ -273,7 +273,7 @@ Task id {config.task.id}
 sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
 total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
 
-No coding - just gonna execute
+No coding - just gonna execute iteration {current_iteration.id} (v{current_iteration.version_number})
 tail -f {os.path.abspath(config.log_path)}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
@@ -527,42 +527,42 @@ Base your evaluation on this log output
             evaluation_json=eval_data
         )
     
-    previous_iteration_evals = []
-    for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
-            evaluation_json__isnull=False
-    ).order_by("timestamp"):
-        previous_iteration_evals.append(LlmMessage.user(f"""
-    **Iteration Evaluation**
-    iteration_evaluator output for iteration_id = '{prev_iter.id}'
-    iteration timestamp: {prev_iter.timestamp}
-    ========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
-    {json.dumps(prev_iter.evaluation_json, indent=4)}
-    ========= END iteration_id = '{prev_iter.id}' EVALUATION ======================="""))
-    
-    selection_data = llm_chat(
-        "Iteration Selector",
-        config,
-        [
-            get_sys_prompt("iteration_selector.md"),
-            *previous_iteration_evals
-        ],
-        config.model_iteration_evaluation,
-        output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
-    ).json()
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-            evaluation_json={
-                **selection_data,
-                **eval_data
-            }
-        )
+    if TaskType.CODING_ML.eq(config.task_type):
+        previous_iteration_evals = []
+        for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
+                evaluation_json__isnull=False
+        ).order_by("timestamp"):
+            previous_iteration_evals.append(LlmMessage.user(f"""
+        **Iteration Evaluation**
+        iteration_evaluator output for iteration_id = '{prev_iter.id}'
+        iteration timestamp: {prev_iter.timestamp}
+        ========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
+        {json.dumps(prev_iter.evaluation_json, indent=4)}
+        ========= END iteration_id = '{prev_iter.id}' EVALUATION ======================="""))
+        
+        selection_data = llm_chat(
+            "Iteration Selector",
+            config,
+            [
+                get_sys_prompt("iteration_selector.md"),
+                *previous_iteration_evals
+            ],
+            config.model_iteration_evaluation,
+            output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
+        ).json()
+        
+        with transaction.atomic():
+            SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+                evaluation_json={
+                    **selection_data,
+                    **eval_data
+                }
+            )
     
     iteration.refresh_from_db(fields=["evaluation_json"])
     eval_data = iteration.evaluation_json
     
-    goal_achieved = common.parse_bool(eval_data.get('goal_achieved'))
-    if goal_achieved:
+    if iteration.goal_achieved():
         raise GoalAchieved(eval_data)
     
     return eval_data
@@ -576,7 +576,7 @@ def build_previous_iteration_context_messages(
     eval_json = config.self_driving_task.get_most_recent_iteration().evaluation_json or {}
     
     previous_iteration_count = eval_json.get("previous_iteration_count", 1)
-    previous_iterations:list[SelfDrivingTaskIteration] = list(
+    previous_iterations: list[SelfDrivingTaskIteration] = list(
         config.self_driving_task.selfdrivingtaskiteration_set.exclude(
             id=current_iteration.id
         ).filter(
@@ -680,7 +680,9 @@ def generate_code(
                     previous_exception = e
             
             if previous_exception:
-                raise previous_exception
+                # validation failed three times.  keep going, if it fails in deployment or execution we'll have another 
+                # chances at the feedback loop
+                logging.exception(previous_exception)
             
             if code_str:
                 code_file.update(
@@ -721,8 +723,8 @@ def plan_code_changes(
         )),
         *common.ensure_list(
             build_previous_iteration_context_messages(
-                config, 
-                current_iteration, 
+                config,
+                current_iteration,
                 iteration_to_modify
             )
         ),
@@ -733,18 +735,30 @@ def plan_code_changes(
             relevant_code_files
         ),
         *common.ensure_list(
-            get_goal_msg(config)
+            get_docs_msg(config)
         ),
         *common.ensure_list(
             config.guidance
         ),
         *common.ensure_list(
-            LlmMessage.user(
-                f"""
+            LlmMessage.user(f"""
+The previous iteration failed at the deployment stage.   
+
+**Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
+- Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
+- You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs, requirements.txt, etc)
+            """)
+            if iteration_to_modify.deployment_failed() else None
+        ),
+        *common.ensure_list(
+            LlmMessage.user(f"""
 This is the first attempt at implementing this task.  Please take your time to think of the best initial architecture.
 Identify an architecture that will allow for efficient code iteration and give us the best start towards achieving the user's GOAL. 
                 """)
             if not iteration_to_modify else None
+        ),
+        *common.ensure_list(
+            get_goal_msg(config)
         )
     ]
     
@@ -753,6 +767,7 @@ Identify an architecture that will allow for efficient code iteration and give u
         config,
         messages,
         model,
+        debug=True,
         output_schema=PROMPTS_DIR / "codeplanner.schema.json"
     ).json()
     
@@ -781,24 +796,27 @@ def write_code(
     
     code_file_path = code_version_to_modify.code_file.get_path()
     code_file_name = code_file_path.name
-    if code_file_name == "requirements.txt":
+    code_file_name_lower = code_file_name.lower()
+    if code_file_name_lower == "requirements.txt":
         prompt = "codewriter--requirements.txt.md"
-    elif code_file_path.parent.name == "cloudformation" and code_file_name.endswith(".yaml"):
+    elif code_file_name_lower.endswith(".md"):
+        prompt = "codewriter--documentation_writer.md"
+    elif code_file_path.parent.name == "cloudformation" and code_file_name_lower.endswith(".yaml"):
         prompt = "codewriter--aws_cloudformation_coder.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
-    elif code_file_name.endswith(".py"):
+    elif code_file_name_lower.endswith(".py"):
         prompt = "codewriter--python_coder.md"
-    elif code_file_name.endswith(".sql"):
+    elif code_file_name_lower.endswith(".sql"):
         prompt = "codewriter--sql_coder.md"
-    elif code_file_name.endswith(".js"):
+    elif code_file_name_lower.endswith(".js"):
         prompt = "codewriter--javascript_coder.md"
-    elif code_file_name.endswith(".html"):
+    elif code_file_name_lower.endswith(".html"):
         prompt = "codewriter--html_coder.md"
-    elif code_file_name.endswith(".css"):
+    elif code_file_name_lower.endswith(".css"):
         prompt = "codewriter--css_coder.md"
     else:
-        raise Exception(f"no coder implemented for {code_file_name}")
+        raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
     
     messages: list[LlmMessage] = [
         *common.ensure_list(
@@ -810,21 +828,6 @@ def write_code(
             get_dependencies_msg(config, for_planning=False)
         )
     ]
-    
-    if previous_exception:
-        messages.append(
-            LlmMessage.user(
-                f"""
-This is code from the previous attempt to generate code based on the instruction set:
-{previous_exception.code_str}
-
-This code as the following error(s): 
-{str(previous_exception)}
-
-Please try again, avoiding these errors
-        """
-            )
-        )
     
     code_file_path = code_version_to_modify.code_file.file_path
     if code_version_to_modify.code:
@@ -858,12 +861,137 @@ Please write the initial version of {code_file_path}, following each of these in
             )
         )
     
-    return llm_chat(
+    if previous_exception:
+        messages.append(LlmMessage.user(f'''
+This is code from your previous attempt to generate code based on the instruction set:
+============ BEGIN PREVIOUS CODE =============
+{previous_exception.code_str}
+============ END PREVIOUS CODE ===============
+
+This code failed the validation step with the following error(s): 
+============ BEGIN VALIDATION EXCEPTION =============
+{str(previous_exception)}
+============ END VALIDATION EXCEPTION ===============
+
+Please try writing the code again and avoid these errors
+           '''))
+    
+    code = llm_chat(
         f"Write code for {code_file_name}",
         config,
         messages,
         model
     ).text
+    
+    return validate_code(
+        code_version_to_modify.code_file.get_path(),
+        code
+    )
+
+
+def validate_code(code_file_path: Path, code: str) -> str:
+    code_file_name = code_file_path.name.lower()
+    if code_file_name.endswith(".js"):
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', suffix=".js", delete=False) as tmp:
+                tmp.write(code)
+                tmp.flush()
+                result = subprocess.run(
+                    ["eslint", "--no-eslintrc", "--stdin", "--stdin-filename", tmp.name],
+                    capture_output=True,
+                    text=True
+                )
+            if result.returncode != 0:
+                raise CodeCompilationError(code, f"JavaScript lint errors:\n{result.stdout.strip()}")
+        finally:
+            os.remove(tmp.name)
+    
+    elif code_file_name.endswith(".css"):
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', suffix=".css", delete=False) as tmp:
+                tmp.write(code)
+                tmp.flush()
+                result = subprocess.run(
+                    ["stylelint", tmp.name],
+                    capture_output=True,
+                    text=True
+                )
+            if result.returncode != 0:
+                raise CodeCompilationError(code, f"CSS lint errors:\n{result.stdout.strip()}")
+        finally:
+            os.remove(tmp.name)
+    
+    elif code_file_name.startswith("Dockerfile"):
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', suffix="", delete=False) as tmp:
+                tmp.write(code)
+                tmp.flush()
+                result = subprocess.run(
+                    ["hadolint", tmp.name],
+                    capture_output=True,
+                    text=True
+                )
+            if result.returncode != 0:
+                raise CodeCompilationError(code, f"Dockerfile lint errors:\n{result.stdout.strip()}")
+        finally:
+            os.remove(tmp.name)
+    
+    elif False and code_file_path.parent.name == "cloudformation" and code_file_name.endswith(".yaml"):
+        ## skipping this for now, as it seems like it's better for the feedback look to let cloudformation surface the errors
+        import subprocess
+        import tempfile
+        import json as _json
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', suffix=".yaml", delete=False) as tmp:
+                tmp.write(code)
+                tmp.flush()
+                result = subprocess.run(
+                    ["cfn-lint", "--format", "json", tmp.name],
+                    capture_output=True,
+                    text=True
+                )
+            if result.returncode != 0:
+                try:
+                    findings = _json.loads(result.stdout)
+                    errors_only = [f for f in findings if f.get("Level") == "Error"]
+                    if errors_only:
+                        error_msgs = "\n".join(f"Line {f['Location']['Start']['LineNumber']}: {f['Message']}" for f in errors_only)
+                        raise CodeCompilationError(code, f"CloudFormation lint errors:\n{error_msgs}")
+                except Exception as cf_lint_e:
+                    logging.exception(cf_lint_e)
+                    raise CodeCompilationError(code, f"CloudFormation lint errors:\n{result.stdout.strip()}")
+        finally:
+            os.remove(tmp.name)
+    
+    elif code_file_name.endswith(".py"):
+        import ast
+        try:
+            ast.parse(code)
+        except SyntaxError as e:
+            raise CodeCompilationError(code, f"Syntax error in Python file '{code_file_name}': {e}")
+    elif code_file_name == "requirements.txt":
+        # noinspection PyProtectedMember
+        from pip._internal.req.constructors import install_req_from_line
+        # noinspection PyProtectedMember
+        from pip._internal.exceptions import InstallationError
+        
+        lines = code.splitlines()
+        for i, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue  # Allow empty lines and comments
+            try:
+                install_req_from_line(line)
+            except InstallationError as e:
+                raise CodeCompilationError(line, f"Invalid requirement on line {i}: '{line}' — {e}")
+    
+    return code
 
 
 def get_dependencies_msg(config: SelfDriverConfig, for_planning: bool) -> LlmMessage:
@@ -1055,7 +1183,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         s3_dir = None
     
     for file in checkpoint_files:
-        get_aws_interface().upload_file(
+        aws_utils.get_aws_interface().upload_file(
             file,
             settings_common.BUCKETS[S3Bucket.MODELS],
             f"{s3_dir}/{file.name}"
@@ -1121,15 +1249,45 @@ scpc "{os.path.abspath(archive_path)}"
     print(f"code updated to iteration v{best_version_num}")
 
 
+def get_docs_msg(config) -> list[LlmMessage]:
+    def _load_markdown_doc(path: Path) -> Optional[LlmMessage]:
+        if path.exists() and path.is_file():
+            return None
+    
+    files = []
+    # readme_path = config.sandbox_root_dir / "README.md"
+    # if readme_path.exists():
+    #     files.append(readme_path)
+    
+    docs_dir = config.sandbox_root_dir / "docs"
+    if docs_dir.exists():
+        for md_file in docs_dir.glob("*.md"):
+            files.append(md_file)
+    
+    return [
+        LlmMessage.user(f"""
+The following is the content of `{file.name}`, a Markdown documentation file. 
+It may contain high-level design notes, architecture explanations, or usage instructions useful to developers and future planning agents.
+
+{file.read_text()}
+        """)
+        for file in files
+    ]
+
+
 def get_goal_msg(config):
-    return LlmMessage.user(f"""
-the user's GOAL is:
-{config.self_driving_task.goal}""")
+    return LlmMessage.user(f'''
+Please plan code changes that work towards achieving this GOAL:
+"""
+{config.self_driving_task.goal}
+"""
+
+**ACHIEVING THIS GOAL IS YOUR PRIMARY OBJECTIVE**
+''')
 
 
-def get_cloudformation_files(config: SelfDriverConfig) -> list[Path]:
-    cf_path = config.sandbox_root_dir / "cloudformation"
-    return [p for p in list(cf_path.glob("*.yaml")) if p.read_text().strip()]
+def get_cloudformation_file(config: SelfDriverConfig) -> Path:
+    return common.assert_exists(config.sandbox_root_dir / "cloudformation" / "infrastructure.yaml")
 
 
 def get_relevant_code_files(
@@ -1138,17 +1296,52 @@ def get_relevant_code_files(
         iteration_to_modify: SelfDrivingTaskIteration
 ) -> list[LlmMessage]:
     messages = []
+    
+    ## deployment failed - just return deployment files
+    if iteration_to_modify.deployment_failed():
+        deployment_files: list[Path] = [
+            config.sandbox_root_dir / "Dockerfile",
+            config.sandbox_root_dir / "requirements.txt"
+        ]
+        
+        # Include all .yaml files in the cloudformation directory
+        cloudformation_dir = config.sandbox_root_dir / "cloudformation"
+        if cloudformation_dir.exists():
+            for p in cloudformation_dir.glob("*.yaml"):
+                deployment_files.append(Path(p).relative_to(config.sandbox_root_dir))
+        
+        for f in deployment_files:
+            try:
+                relative_file = f.relative_to(config.sandbox_root_dir)
+            except:
+                relative_file = f
+            
+            code_file = CodeFile.get(
+                config.business,
+                relative_file
+            )
+            
+            code_version = code_file.get_version(iteration_to_modify, default_to_latest=True)
+            if not code_version:
+                code_version = CodeFile.init_from_codefile(current_iteration, relative_file)
+            
+            if code_version and code_version.code:
+                messages.append(code_version.get_llm_message())
+            else:
+                print(f"??? {f}")
+        return messages
+    
     iteration_code_files = set()
     iteration_code_versions = []
     
     with transaction.atomic():
-        for code_file_path in get_cloudformation_files(config):
-            code_file = CodeFile.get(business=config.business, code_file_path=code_file_path)
-            iteration_code_versions.append(
-                code_file.get_version(iteration_to_modify)
-                or code_file.get_latest_version()
-                or code_file.init_from_codefile(iteration_to_modify, code_file_path)
-            )
+        code_file_path = get_cloudformation_file(config)
+        code_file = CodeFile.get(business=config.business, code_file_path=code_file_path)
+        iteration_code_versions.append(
+            code_file.get_version(iteration_to_modify)
+            or code_file.get_latest_version()
+            or code_file.init_from_codefile(iteration_to_modify, code_file_path)
+        )
     
     iteration_code_versions += list(CodeVersion.objects.filter(
         task_iteration=iteration_to_modify
@@ -1290,12 +1483,7 @@ def get_relevant_code_files(
     code_versions = list(latest_code_versions.values())
     
     for code_version in code_versions:
-        messages.append(LlmMessage.user({
-            "file_path": code_version.code_file.file_path,
-            "modified_in_previous_iteration": False,
-            "may_edit": True,
-            "code": code_version.code,
-        }))
+        messages.append(code_version.get_llm_message())
     
     return messages
 
@@ -1376,102 +1564,128 @@ def deploy_cloudformation_stacks(
     self_driving_task = config.self_driving_task
     sandbox_path = Path(config.sandbox_root_dir)
     
-    for cfn_file in get_cloudformation_files(config):
-        if AwsEnv.PRODUCTION.eq(environment):
-            stack_name = f"{config.business.service_token}-{environment.value}-{cfn_file.stem}".replace("_", "-")
-        else:
-            # in non prod, each task gets a stack
-            stack_name = f"{config.business.service_token}-{environment.value}-{cfn_file.stem}-{self_driving_task.id}".replace("_", "-")
-        
-        stack_name = sanitize_aws_name(stack_name, max_length=128)
-        
-        try:
-            cloudformation_wait(cf_client, stack_name)
-        except:
-            pass
-        
-        try:
-            param_list = get_stack_parameters(
-                environment,
-                self_driving_task,
-                cfn_file,
-                log_f
-            )
-            
-            push_cloudformation(
-                stack_name,
-                cfn_file,
-                param_list,
-                environment.get_aws_region(),
-                log_f
-            )
-        except Exception as deploy_exception:
-            if "No updates are to be performed" in str(deploy_exception):
-                log_f.write(f"No updates needed for stack: {stack_name}\n")
-                return
-            
-            log_f.write(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
-            log_f.write(traceback.format_exc())
-            try:
-                events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
-                failed_events = [
-                    f"{e['Timestamp']} | Stack: {e['StackName']} | {e['LogicalResourceId']} ({e['ResourceType']}) | Status: {e['ResourceStatus']} | Reason: {e.get('ResourceStatusReason', '')} | PhysicalId: {e.get('PhysicalResourceId', '')} | Token: {e.get('ClientRequestToken', '')}"
-                    for e in events if "FAILED" in e["ResourceStatus"]
-                ]
-                log_f.write("CloudFormation failure events:\n")
-                log_f.write("\n".join(failed_events) + "\n")
-                
-                # Also describe the top 3 failed resources in more detail
-                failed_logical_ids = [e["LogicalResourceId"] for e in events if "FAILED" in e["ResourceStatus"]]
-                log_f.write("\nDetailed resource descriptions for top failures:\n")
-                for logical_id in failed_logical_ids[:3]:
-                    try:
-                        resource_details = cf_client.describe_stack_resource(
-                            StackName=stack_name,
-                            LogicalResourceId=logical_id
-                        )
-                        log_f.write(json.dumps(resource_details, indent=2, default=str) + "\n")
-                    except Exception as ex:
-                        log_f.write(f"Failed to describe resource {logical_id}: {ex}\n")
-            except Exception as event_ex:
-                log_f.write(f"Failed to fetch stack events: {event_ex}\n")
-            
-            from datetime import datetime, timedelta
-            log_f.write("\nRecent CloudTrail events in this region (last 15 min):\n")
-            try:
-                ct_client = boto3.client("cloudtrail", region_name=environment.get_aws_region())
-                end_time = common.get_now()
-                start_time = end_time - timedelta(minutes=15)
-                
-                ct_events = ct_client.lookup_events(
-                    StartTime=start_time,
-                    EndTime=end_time,
-                    MaxResults=100
-                )
-                
-                for ct_event in ct_events.get("Events", []):
-                    cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
-                    if cloudtrain_event_data.get("errorCode"):
-                        log_f.write(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
-                        log_f.write(json.dumps(cloudtrain_event_data, indent=4))
-            
-            except Exception as ct_ex:
-                log_f.write(f"Failed to fetch CloudTrail events: {ct_ex}\n")
-            
-            raise deploy_exception
-
-
-def get_stack_parameters(environment, self_driving_task, cfn_file, log_f):
-    required_parameters, parameters_metadata = extract_cloudformation_params(cfn_file)
+    cfn_file = get_cloudformation_file(config)
+    stack_name = self_driving_task.get_cloudformation_stack_name(environment)
     
-    project_name = sanitize_aws_name(self_driving_task.business.service_token, max_length=64)
+    start_time = time.time()
+    try:
+        
+        aws_utils.prepare_stack_for_update(
+            stack_name,
+            cf_client
+        )
+        
+        try:
+            if aws_utils.get_stack(stack_name, cf_client):
+                aws_utils.assert_cloudformation_stack_valid(
+                    stack_name,
+                    cf_client
+                )
+        except:
+            raise AgentBlocked(f"cloudformation stack {stack_name} in {environment.get_aws_region()} is wedged and cannot be autonomously fixed.  JJ or a Human needs to clean up manually")
+        
+        aws_utils.push_cloudformation(
+            stack_name,
+            environment,
+            cfn_file,
+            get_stack_parameters(
+                stack_name,
+                environment,
+                cfn_file,
+                self_driving_task,
+                log_f
+            ),
+            log_f
+        )
+    except Exception as deploy_exception:
+        log_f.write(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
+        log_f.write(traceback.format_exc())
+        try:
+            events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
+            # Filter events to only include those that occurred after deployment start_time
+            from datetime import datetime, timezone
+            deployment_start_datetime = datetime.fromtimestamp(start_time, tz=timezone.utc)
+            recent_events = [
+                e for e in events 
+                if e['Timestamp'] >= deployment_start_datetime
+            ]
+            # Sort events in ascending order (oldest first)
+            recent_events.sort(key=lambda x: x['Timestamp'])
+            
+            failed_events = [
+                f"{e['Timestamp']} | Stack: {e['StackName']} | {e['LogicalResourceId']} ({e['ResourceType']}) | Status: {e['ResourceStatus']} | Reason: {e.get('ResourceStatusReason', '')} | PhysicalId: {e.get('PhysicalResourceId', '')} | Token: {e.get('ClientRequestToken', '')}"
+                for e in recent_events if "FAILED" in e["ResourceStatus"]
+            ]
+            log_f.write("CloudFormation failure events:\n")
+            log_f.write("\n".join(failed_events) + "\n")
+            
+            # Also describe the top 3 failed resources in more detail
+            failed_logical_ids = [e["LogicalResourceId"] for e in recent_events if "FAILED" in e["ResourceStatus"]]
+            log_f.write("\nDetailed resource descriptions for top failures:\n")
+            for logical_id in failed_logical_ids[:3]:
+                try:
+                    resource_details = cf_client.describe_stack_resource(
+                        StackName=stack_name,
+                        LogicalResourceId=logical_id
+                    )
+                    log_f.write(json.dumps(resource_details, indent=2, default=str) + "\n")
+                except Exception as ex:
+                    log_f.write(f"Failed to describe resource {logical_id}: {ex}\n")
+        except Exception as event_ex:
+            log_f.write(f"Failed to fetch stack events: {event_ex}\n")
+        
+        from datetime import datetime, timedelta
+        log_f.write("\nRecent CloudTrail events in this region (last 15 min):\n")
+        try:
+            ct_client = boto3.client("cloudtrail", region_name=environment.get_aws_region())
+            end_time = common.get_now()
+            ct_query_start_time = end_time - timedelta(minutes=15)
+            
+            ct_events = ct_client.lookup_events(
+                StartTime=ct_query_start_time,
+                EndTime=end_time,
+                MaxResults=100
+            )
+            
+            # Filter events to only include those that occurred after deployment start_time
+            from datetime import timezone
+            deployment_start_datetime = datetime.fromtimestamp(start_time, tz=timezone.utc)
+            recent_ct_events = [
+                event for event in ct_events.get("Events", [])
+                if event['EventTime'] >= deployment_start_datetime
+            ]
+            # Sort events in ascending order (oldest first)
+            recent_ct_events.sort(key=lambda x: x['EventTime'])
+            
+            for ct_event in recent_ct_events:
+                cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
+                error_message: str = cloudtrain_event_data.get("errorMessage")
+                if error_message:
+                    if "No updates are to be performed" in error_message:
+                        continue
+                    
+                    if error_message.lower().startswith("stack with id") and error_message.lower().endswith("does not exist"):
+                        continue
+                    
+                    log_f.write(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
+                    log_f.write(json.dumps(cloudtrain_event_data, indent=4))
+        
+        except Exception as ct_ex:
+            log_f.write(f"Failed to fetch CloudTrail events: {ct_ex}\n")
+        
+        raise deploy_exception
+
+
+def get_stack_parameters(stack_name: str, environment: AwsEnv, cfn_file: Path, self_driving_task: SelfDrivingTask, log_f):
+    project_name = aws_utils.sanitize_aws_name(self_driving_task.business.service_token, max_length=64)
     secrets_key = f"/erieiron/{project_name}/{environment.value}"
+    
     known_params = {
-        "ProjectName": project_name,
-        "Environment": environment.value,
+        "StackIdentifier": stack_name,
         **get_rds_credentials(project_name, environment, secrets_key, self_driving_task),
         **get_admin_credentials(project_name, environment, secrets_key, self_driving_task)
     }
+    
     aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
     try:
         response = aws_secrets_client.get_secret_value(
@@ -1483,7 +1697,10 @@ def get_stack_parameters(environment, self_driving_task, cfn_file, log_f):
         }
         secret_params = json.loads(response["SecretString"])
     except aws_secrets_client.exceptions.ResourceNotFoundException as rnfe:
-        logging.info(f"no secrets found for {secrets_key}")
+        # logging.info(f"no secrets found for {secrets_key}")
+        ...
+    
+    required_parameters, parameters_metadata = aws_utils.extract_cloudformation_params(cfn_file)
     missing = set()
     for param in required_parameters:
         param_meta = parameters_metadata.get(param, {})
@@ -1492,6 +1709,7 @@ def get_stack_parameters(environment, self_driving_task, cfn_file, log_f):
         is_optional = "(optional)" in desc or has_default
         if param not in known_params and not is_optional:
             missing.add(param)
+    
     if missing:
         raise AgentBlocked({
             "desc": "Missing required CloudFormation parameters",
@@ -1499,9 +1717,14 @@ def get_stack_parameters(environment, self_driving_task, cfn_file, log_f):
             "file": cfn_file.name,
             "secret_hint": f"/erieiron/{project_name}/{environment.value}/cloudformation"
         })
-    param_list = [{"ParameterKey": k, "ParameterValue": str(known_params[k])} for k in required_parameters]
     
-    return param_list
+    return [
+        {
+            "ParameterKey": k,
+            "ParameterValue": str(known_params[k])
+        }
+        for k in required_parameters
+    ]
 
 
 def get_admin_credentials(project_name, environment, secrets_key, self_driving_task):
@@ -1543,9 +1766,9 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
         db_creds = json.loads(rds_secret["SecretString"])
     except aws_secrets_client.exceptions.ResourceNotFoundException:
         if AwsEnv.DEV.eq(environment):
-            db_name = sanitize_aws_name(f"{project_name}-{environment}-{self_driving_task.task.id}", max_length=50)
+            db_name = aws_utils.sanitize_aws_name(f"{project_name}-{environment}-{self_driving_task.task.id}", max_length=50)
         else:
-            db_name = sanitize_aws_name(f"{project_name}-{environment}", max_length=50)
+            db_name = aws_utils.sanitize_aws_name(f"{project_name}-{environment}", max_length=50)
         
         db_creds = set_secret(aws_secrets_client, rds_secrets_key, {
             "DBPassword": common.random_string(20),

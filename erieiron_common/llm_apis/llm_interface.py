@@ -26,7 +26,7 @@ def chat(
     
     if output_schema and output_schema.exists():
         code_response = True
-        messages.append(LlmMessage.sys("The output json will be validated against this schema", output_schema))
+        messages = [LlmMessage.sys("The output json will be validated against this schema", output_schema)] + messages
         
     if not model:
         models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
@@ -78,14 +78,13 @@ def chat(
                 with open(output_schema, "r") as schema_file:
                     schema = json.load(schema_file)
 
-                try:
-                    jsonschema_validate(instance=resp.json(), schema=schema)
-                except Exception:
-                    # Attempt to coerce JSON to schema using a cheaper model
-                    coerced_json = coerce_json_to_schema(resp.text, schema)
-                    resp.parsed_json = coerced_json
-                    # Validate again after coercion
-                    jsonschema_validate(instance=resp.parsed_json, schema=schema)
+                for i in range(5):
+                    try:
+                        jsonschema_validate(instance=resp.json(), schema=schema)
+                        break
+                    except Exception:
+                        # Attempt to coerce JSON to schema using a cheaper model
+                        resp.parsed_json = coerce_json_to_schema(resp.text, schema)
 
                 if debug:
                     print(f"""
@@ -280,16 +279,16 @@ class LlmMessage:
             else:
                 raise ValueError(f"invalid message type {m}")
 
-        if code_response:
-            messages_out.append(
-                LlmMessage(
-                    message_type=LlmMessageType.SYSTEM,
-                    text="""
-respond only with valid code or JSON. do not include any markdown formatting, such as triple backticks or language tags.
-if responding with JSON, the property names must be encosed in "double quotes"
-                    """
-                )
-            )
+        # if code_response:
+        #     messages_out.append(
+        #         LlmMessage(
+        #             message_type=LlmMessageType.SYSTEM,
+        #             text="""
+# respond only with valid code or JSON. do not include any markdown formatting, such as triple backticks or language tags.
+# if responding with JSON, the property names must be encosed in "double quotes"
+#                     """
+#                 )
+#             )
 
         token_count = LlmMessage.get_total_token_count(model, messages_out)
         while token_count > MODEL_TO_MAX_TOKENS.get(model, sys.maxsize):

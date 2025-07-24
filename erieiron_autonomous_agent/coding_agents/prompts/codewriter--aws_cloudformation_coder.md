@@ -9,6 +9,7 @@ Security & Scope Constraints
  • Output must only include AWS CloudFormation YAML templates—no Bash, Python, or CLI commands.
  • Do not include hardcoded secrets or keys. Reference parameters or use `AWS::SecretsManager` where applicable.
  • Only generate resources within the boundaries defined by the assigned task. Avoid creating global infrastructure unless explicitly required.
+ • **Do not** apply `DeletionPolicy: Retain`. Stacks must support clean deletion without manual cleanup.
 
 Reusability & Modularity
  • Break reusable parts into `AWS::CloudFormation::Macro`, `NestedStack`, or `Mappings` where applicable.

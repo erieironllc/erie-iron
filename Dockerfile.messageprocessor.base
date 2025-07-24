@@ -55,6 +55,10 @@ RUN apt-get update && apt-get install -y \
     rm -rf /var/lib/apt/lists/* \
 WORKDIR /app
 
+# Install hadolint (Dockerfile linter)
+RUN wget -O /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64 \
+    && chmod +x /usr/local/bin/hadolint
+
 RUN if ! python --version | grep -q "3.11"; then echo "Python 3.11 is required!"; exit 1; fi
 
 COPY requirements.txt ./

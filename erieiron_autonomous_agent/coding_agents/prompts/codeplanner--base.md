@@ -100,7 +100,7 @@ Before proposing any file edit or plan, reason step-by-step through:
 - What went wrong (based on the evaluator’s diagnostics or execution logs)  
 - Why it happened (the probable root cause)  
 - What must be changed to fix it  
-This diagnostic reasoning must inform and justify each planned change. If a failure cannot be understood from the available data, emit a `blocked` object asking for clarification.
+Use this reasoning step to anticipate not only the immediate fix, but also any related issues likely to surface in the next execution cycle. Your goal is to reduce iteration count by proactively addressing clusters of related errors.
 
 3. **Plan Deterministic Edits**
     - Emit only `code_files` plans—stepwise, deterministic instructions for modifying code files.
@@ -111,11 +111,11 @@ This diagnostic reasoning must inform and justify each planned change. If a fail
 
 ### Infrastructure-Specific Planning Requirements
 
-- All infrastructure must be provisioned through CloudFormation.
-- If infrastructure provisioning fails, it must be fixed before proposing any unrelated code changes.
-- All role-related infrastructure changes must be defined in `./cloudformation/roles.yaml`.
 - All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `./cloudformation/infrastructure.yaml`.
+- All CloudFormation definitions must go in the file `./cloudformation/infrastructure.yaml`. No other CloudFormation files may be created or modified.
+- If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
+- All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
 - When changes involve IAM roles or permissions:
     - Follow the principle of least privilege: include only permissions essential to accomplish the task.
     - Identify all required permissions up front to avoid iteration churn due to missing access.
@@ -125,9 +125,9 @@ This diagnostic reasoning must inform and justify each planned change. If a fail
     - Do not assume or configure any locally running PostgreSQL service.
     - Source all connection details from environment variables or AWS Secrets Manager.
 
-- **Forbidden Actions**
+-- **Forbidden Actions**
     - Do not generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
-    - Do not create or plan any new CloudFormation YAML files; only modify `./cloudformation/roles.yaml` or `./cloudformation/infrastructure.yaml`.
+    - Do not create or plan any new CloudFormation YAML files. Only modify `./cloudformation/infrastructure.yaml`.
     
 ---
 
@@ -140,7 +140,7 @@ This diagnostic reasoning must inform and justify each planned change. If a fail
 
 - `test_module`
     - Must be a Python test module (e.g., `src/task/test_execute.py`) that defines the `test()` function or standard Django-style unit tests.
-    - This field must **never** reference a `.yaml`, `.json`, or other non-Python file.
+    - This module must **never** reference a `.yaml`, `.json`, or other non-Python file.
     - This module should validate the behavior of `execute_module`.
 
 - `code_files`
@@ -151,8 +151,28 @@ This diagnostic reasoning must inform and justify each planned change. If a fail
     - Each instruction must include:
         - `step_number`: execution order
         - `action`: a short directive (e.g., "modify function `execute`")
-        - `details`: a precise and testable explanation of the change, written for another engineer
+        - `details`: a complete, precise, and testable explanation of the code change. This must contain all necessary information the code writer will need, because the writer does not see logs, planner reasoning, or any context beyond this instruction. Include:
+            - The full logic of the change
+            - If the change was motivated by error message(s) in the evaluation entries, include the full contents of the error message(s)
+            - Any assumptions, data structures, or function names involved
+            - Expected side effects, if relevant
+            - Enough context for another engineer to make the edit without guesswork
     - **Do not emit raw code.** Every change must be described in structured form.
+    - You may also propose new `.md` files containing Markdown documentation. These must follow the same instruction structure as code files.
+    
+---
+
+### Documentation Planning Guidelines
+
+You are encouraged to propose new documentation files whenever they will help current or future developers or planning agents understand the system.
+- All documentation files must use the `.md` extension and be written in Markdown format.
+- A `README.md` is required for every project, submodule, or newly introduced component.
+- A `./docs/architecture.md` is required for every project, submodule, or newly introduced component.  This must contain a detailed description of the current architecture, and if useful, thoughts about future architecture evolution.  If there are future thoughts, they must be clearly communicated as 'not current architecture' and in their own section
+- Additional documentation such as `design_notes.md`, `limitations.md`, or `setup.md` is also encouraged when useful
+- These documentation files will be included as part of planning context in future iterations.
+- Think of your audience as both developers learning the system and future agents trying to plan the next change.
+- Use documentation to explain intent, trade-offs, high-level structure, and key assumptions.
+- The README.md should live in the source root, while all other .md documentation files **must** live in a directory named "./docs"
 
 ---
 
@@ -168,29 +188,6 @@ If unable to proceed due to ambiguity, missing context, or constraints, emit thi
   }
 }
 ```
-
----
-
-## Planning Strategy
-
-- Always treat the `iteration_evaluator` output as authoritative...
-- If the evaluator output includes CloudFormation or infrastructure errors, prioritize fixing those before proposing any other code changes. When infrastructure setup fails, the test and execute phases are skipped, meaning there is no feedback loop available for non-infrastructure code. As a result, any application-level changes made under these conditions would be speculative and should be avoided.
-- If the code fails due to infrastructure or permissions, do not modify it—surface the environment issue.
-- If the code throws an exception, revert to the last working iteration.
-- If the code runs but the GOAL is not met, propose the next concrete improvement.
-- If the issue is with a file that causes build failure but the correction is straightforward, propose the fix rather than returning a `blocked` result. Favor self-unblocking whenever there is enough context.
-- If the GOAL is unclear or validation is missing, emit a `blocked` object.
-- All plans must include diagnostic logging to support debugging and validation.
-    - ML models must log evaluation metrics with a `[METRIC]` prefix (e.g., `[METRIC] f1=0.89`)
-    - Executable tasks must emit logs for:
-      - key inputs and parameters
-      - branching decisions
-      - any caught exceptions or failures
-- For AWS tasks involving IAM or CloudFormation:
-    - Include diagnostic logging or planning comments to justify permission requirements
-
-Evaluation objects are not part of your output. They are input evidence used to justify your plan.
-
 ---
 
 ### Logging Requirements
@@ -228,3 +225,28 @@ Here is an example of a complete output structure:
   ]
 }
 ```
+
+---
+
+## Planning Strategy
+
+- Maximize iteration efficiency: minimize the number of cycles needed to resolve known or inferable issues. If you can predict that a change will cause a follow-up failure (e.g., due to missing imports, incomplete schema, or inconsistent assumptions), include the fix now rather than waiting for feedback. Strive to resolve entire classes of errors in one pass.
+- Always treat the `iteration_evaluator` output as authoritative...
+- If the evaluator output includes deployment errors, CloudFormation errors, Dockerfile or Container errors, or other infrastructure errors, prioritize fixing those issues before proposing any other code changes. When infrastructure setup fails, the test and execute phases are skipped, meaning there is no feedback loop available for non-infrastructure code.
+If deployment failed, you must not propose any changes to application code, test code, handlers, models, or logic. Since nothing ran, there is no signal available about whether any of those systems are working or broken. All such changes would be speculative and violate the feedback-driven planning loop.
+- If the code throws an exception, revert to the last working iteration.
+- If the code runs but the GOAL is not met, propose the next concrete improvement.
+- If the issue is with a file that causes build failure but the correction is straightforward, propose the fix rather than returning a `blocked` result. Favor self-unblocking whenever there is enough context.
+- If the GOAL is unclear or validation is missing, emit a `blocked` object.
+- All plans must include diagnostic logging to support debugging and validation.
+    - ML models must log evaluation metrics with a `[METRIC]` prefix (e.g., `[METRIC] f1=0.89`)
+    - Executable tasks must emit logs for:
+        - key inputs and parameters
+        - branching decisions
+        - any caught exceptions or failures
+- For AWS tasks involving IAM or CloudFormation:
+    - Include diagnostic logging or planning comments to justify permission requirements
+
+
+
+**Reminder**: The `details` field is the code writer’s only source of context. If information is missing, the code may be incorrect. Do not assume shared memory between agents.
