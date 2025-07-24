@@ -700,12 +700,13 @@ class SelfDrivingTask(BaseErieIronModel):
         
         cloudformation_stack_name = [
             self.business.service_token, 
-            environment
+            environment.value
         ]
         
         if AwsEnv.PRODUCTION.DEV.eq(environment):
-            cloudformation_stack_name += [
-                cloudformation_stack_name, 
+            cloudformation_stack_name = [
+                *cloudformation_stack_name,
+                self.task.initiative.id,
                 self.id
             ]
             
