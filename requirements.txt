@@ -43,7 +43,7 @@ psycopg2-binary
 pydot
 pydub
 pytest-django
-python-decouple
+python-ecr_authenticate_for_dockerfile
 rapidfuzz
 requests
 resampy>=0.4

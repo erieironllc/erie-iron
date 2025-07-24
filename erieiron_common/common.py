@@ -1722,8 +1722,12 @@ def replace_in_file(the_file: Path, replacements: list[tuple[str, str]]):
     return the_file
 
 
+def strings(l):
+    return [str(s) for s in ensure_list(l)]
+
+
 def safe_join(string_list, delim=" "):
-    return str(delim).join([str(s) for s in ensure_list(string_list)])
+    return str(delim).join(strings(string_list))
 
 
 def run_cmd(cwd: Path, cmd: list[str]) -> subprocess.CompletedProcess:
@@ -1777,3 +1781,8 @@ def random_string(length=16):
     import secrets
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
+def assert_not_empty(s):
+    if not s:
+        raise ValueError("value is empty")

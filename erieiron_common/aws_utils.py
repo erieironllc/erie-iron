@@ -3,6 +3,8 @@ import datetime
 import json
 import logging
 import os
+import re
+import subprocess
 import threading
 import time
 import traceback
@@ -63,10 +65,10 @@ def extract_cloudformation_params(cfn_file: Path):
 
 
 def push_cloudformation(
-        stack_name: str, 
-        environment: AwsEnv, 
-        cfn_file: Path, 
-        param_list: list, 
+        stack_name: str,
+        environment: AwsEnv,
+        cfn_file: Path,
+        param_list: list,
         log_f
 ):
     logging.info(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
@@ -98,7 +100,11 @@ def push_cloudformation(
             Capabilities=["CAPABILITY_NAMED_IAM"]
         )
     
-    cloudformation_wait(cf_client, stack_name, throw_on_fail=True)
+    cloudformation_wait(
+        cf_client,
+        stack_name,
+        throw_on_fail=True
+    )
     
     log_f.write(f"CloudFormation stack {stack_name} deployed successfully.\n")
     logging.info(f"CloudFormation stack {stack_name} deployed successfully.\n")
@@ -184,19 +190,50 @@ def prepare_stack_for_update(stack_name: str, cf_client):
                 raise
 
 
+def ecr_authenticate_for_dockerfile(dockerfile, log_f):
+    with open(dockerfile) as f:
+        pattern = r'(?<=FROM\s)(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
+        for base_img in re.findall(pattern, f.read()):
+            ecr_login(base_img, log_f)
+
+
+def ecr_login(ecr_repo_uri, log_f):
+    region = parse_region_from_ecr_uri(ecr_repo_uri)
+    subprocess.run(
+        f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo_uri}",
+        shell=True,
+        check=True,
+        stdout=log_f,
+        stderr=subprocess.STDOUT
+    )
+
+
+def parse_region_from_ecr_uri(image_uri: str) -> str:
+    try:
+        parts = image_uri.split(".")
+        if "ecr" in parts and len(parts) >= 4:
+            return parts[3]  # region is always the 4th part
+    except Exception:
+        pass
+    raise ValueError(f"Could not parse region from ECR URI: {image_uri}")
+
+
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:
-    name = name.replace("_", "-")
+    if common.is_list_like(name):
+        name = common.safe_join(name, "-")
+    name = name.replace("_", "-").replace(" ", "-")
+    
     if len(name) <= max_length:
         return name
-
+    
     parts = name.split("-")
     if len(parts) == 1:
         return name[:max_length]
-
+    
     # Preserve the first two parts entirely
     lengths = [len(p) for p in parts]
     protected_count = min(2, len(lengths))
-
+    
     # Iteratively truncate the remaining parts until under max_length
     while sum(lengths) + len(parts) - 1 > max_length:
         # Find index of longest part that is not protected and greater than 1 char
@@ -208,7 +245,7 @@ def sanitize_aws_name(name: str, max_length: int = 128) -> str:
         if idx is None:
             break
         lengths[idx] -= 1
-
+    
     truncated_parts = [p[:l] for p, l in zip(parts, lengths)]
     return "-".join(truncated_parts)
 

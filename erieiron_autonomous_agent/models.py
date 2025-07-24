@@ -17,6 +17,7 @@ from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRati
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
+from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType, AwsEnv
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -690,13 +691,25 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
     
+    def get_cloudformation_key_prefix(self, environment: AwsEnv):
+        from erieiron_common.aws_utils import sanitize_aws_name
+        return sanitize_aws_name(self.get_cloudformation_stack_name(environment), max_length=40)
+    
     def get_cloudformation_stack_name(self, environment:AwsEnv):
         from erieiron_common.aws_utils import sanitize_aws_name
         
-        cloudformation_stack_name = f'{self.business.service_token}-{environment}'
+        cloudformation_stack_name = [
+            self.business.service_token, 
+            environment
+        ]
+        
         if AwsEnv.PRODUCTION.DEV.eq(environment):
-            cloudformation_stack_name = f'{cloudformation_stack_name}-{self.id}'
-        cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=40)
+            cloudformation_stack_name += [
+                cloudformation_stack_name, 
+                self.id
+            ]
+            
+        cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=128)
         
         if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name != cloudformation_stack_name:
             with transaction.atomic():
