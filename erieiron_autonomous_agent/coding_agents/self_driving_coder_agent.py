@@ -371,11 +371,17 @@ def push_image_to_ecr(
         stderr=subprocess.STDOUT
     )
     
+    env = os.environ.copy()
+    env.pop("HTTP_PROXY", None)
+    env.pop("http_proxy", None)
+    env.pop("HTTPS_PROXY", None)
+    env.pop("https_proxy", None)
     subprocess.run(
         ["docker", "push", full_image_uri],
         check=True,
         stdout=log_f,
-        stderr=subprocess.STDOUT
+        stderr=subprocess.STDOUT,
+        env=env
     )
     log_f.write(f"======== COMPLETED ECR Push to {full_image_uri}\n\n\n\n")
     
