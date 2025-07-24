@@ -22,6 +22,7 @@ from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, settings_common, aws_utils
+from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, S3Bucket, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
@@ -293,29 +294,39 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     return self_driving_task
 
 
-def build_docker_image(self_driving_task: SelfDrivingTask, log_f) -> str:
-    docker_image = f"self_driving_task--{self_driving_task.id}"
+def build_docker_image(
+        current_iteration: SelfDrivingTaskIteration,
+        envinronment: AwsEnv,
+        docker_file: Path,
+        log_f
+) -> str:
+    self_driving_task = current_iteration.self_driving_task
+    
+    docker_image_tag = sanitize_aws_name([
+        self_driving_task.business.name,
+        self_driving_task.id,
+        current_iteration.version_number
+    ], max_length=128)
+    
+    log_f.write(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
     sandbox_path = self_driving_task.sandbox_path
     
-    log_f.write("=" * 50 + "\n")
-    log_f.write("BUILDING DOCKER IMAGE\n")
-    log_f.write("=" * 50 + "\n")
-    log_f.flush()
-    
-    build_cmd = [
-        "docker",
-        "build",
-        "-t", docker_image,
-        "--build-arg", f"GITHUB_TOKEN={os.environ.get('GITHUB_TOKEN', '')}",
-        "-f", f"{sandbox_path}/Dockerfile",
-        sandbox_path
-    ]
-    
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+
     build_process = subprocess.Popen(
-        build_cmd,
+        common.strings([
+            "docker",
+            "build",
+            "--secret", "id=github_token,env=GITHUB_TOKEN",
+            "-t", docker_image_tag,
+            "-f", docker_file,
+            docker_file.parent
+        ]),
         stdout=log_f,
         stderr=subprocess.STDOUT,
-        text=True
+        text=True,
+        env=env
     )
     
     while build_process.poll() is None:
@@ -324,7 +335,51 @@ def build_docker_image(self_driving_task: SelfDrivingTask, log_f) -> str:
     if build_process.returncode != 0:
         raise Exception(f"Docker build failed with return code: {build_process.returncode}")
     
-    return docker_image
+    log_f.write(f"======== COMPLETED DOCKER Build for {docker_image_tag}\n\n\n\n")
+    
+    return docker_image_tag
+
+
+def push_image_to_ecr(
+        iteration: SelfDrivingTaskIteration,
+        envinronment: AwsEnv,
+        docker_image_tag: str,
+        log_f
+):
+    region = envinronment.get_aws_region()
+    ecr_client = boto3.client("ecr", region_name=region)
+    account_id = boto3.client("sts").get_caller_identity()["Account"]
+    
+    repo_name = sanitize_aws_name(iteration.self_driving_task.business.service_token)
+    ecr_repo_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}"
+    
+    full_image_uri = f"{ecr_repo_uri}:{docker_image_tag}"
+    log_f.write(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
+    
+    try:
+        ecr_client.describe_repositories(repositoryNames=[repo_name])
+    except ecr_client.exceptions.RepositoryNotFoundException:
+        ecr_client.create_repository(repositoryName=repo_name)
+    
+    repo_desc = ecr_client.describe_repositories(repositoryNames=[repo_name])
+    ecr_arn = repo_desc["repositories"][0]["repositoryArn"]
+    
+    subprocess.run(
+        ["docker", "tag", docker_image_tag, full_image_uri],
+        check=True,
+        stdout=log_f,
+        stderr=subprocess.STDOUT
+    )
+    
+    subprocess.run(
+        ["docker", "push", full_image_uri],
+        check=True,
+        stdout=log_f,
+        stderr=subprocess.STDOUT
+    )
+    log_f.write(f"======== COMPLETED ECR Push to {full_image_uri}\n\n\n\n")
+    
+    return full_image_uri, ecr_arn
 
 
 def run_docker_command(
@@ -400,14 +455,30 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         )
         
         with open(logfile, "w") as log_f:
-            deploy_cloudformation_stacks(
-                config,
-                environment,
+            docker_file = config.sandbox_root_dir / "Dockerfile"
+            aws_utils.ecr_authenticate_for_dockerfile(
+                docker_file,
                 log_f
             )
             
-            docker_image = build_docker_image(
-                self_driving_task,
+            docker_image_tag = build_docker_image(
+                iteration,
+                environment,
+                docker_file,
+                log_f
+            )
+            
+            full_image_uri, ecr_arn = push_image_to_ecr(
+                iteration,
+                environment,
+                docker_image_tag,
+                log_f
+            )
+            
+            deploy_cloudformation_stacks(
+                config,
+                environment,
+                ecr_arn,
                 log_f
             )
             
@@ -416,7 +487,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                     command_args=self_driving_task.main_name,
                     iteration=iteration,
                     running_process=running_process,
-                    docker_image=docker_image,
+                    docker_image=docker_image_tag,
                     log_f=log_f
                 )
             else:
@@ -425,7 +496,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                         command_args="test",
                         iteration=iteration,
                         running_process=running_process,
-                        docker_image=docker_image,
+                        docker_image=docker_image_tag,
                         log_f=log_f
                     )
                 
@@ -446,7 +517,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                         ],
                         iteration=iteration,
                         running_process=running_process,
-                        docker_image=docker_image,
+                        docker_image=docker_image_tag,
                         log_f=log_f
                     )
             
@@ -1266,7 +1337,7 @@ def get_docs_msg(config) -> list[LlmMessage]:
     
     return [
         LlmMessage.user(f"""
-The following is the content of `{file.name}`, a Markdown documentation file. 
+The following is the content of `./docs/{file.name}`, a Markdown documentation file. 
 It may contain high-level design notes, architecture explanations, or usage instructions useful to developers and future planning agents.
 
 {file.read_text()}
@@ -1557,6 +1628,7 @@ def llm_chat(
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
         environment: AwsEnv,
+        ecr_arn: str,
         log_f,
 ):
     cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
@@ -1566,6 +1638,7 @@ def deploy_cloudformation_stacks(
     
     cfn_file = get_cloudformation_file(config)
     stack_name = self_driving_task.get_cloudformation_stack_name(environment)
+    log_f.write(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
     
     start_time = time.time()
     try:
@@ -1584,19 +1657,22 @@ def deploy_cloudformation_stacks(
         except:
             raise AgentBlocked(f"cloudformation stack {stack_name} in {environment.get_aws_region()} is wedged and cannot be autonomously fixed.  JJ or a Human needs to clean up manually")
         
+        cloudformation_params = get_stack_parameters(
+            self_driving_task,
+            environment,
+            cfn_file,
+            ecr_arn,
+            log_f
+        )
+        
         aws_utils.push_cloudformation(
             stack_name,
             environment,
             cfn_file,
-            get_stack_parameters(
-                stack_name,
-                environment,
-                cfn_file,
-                self_driving_task,
-                log_f
-            ),
+            cloudformation_params,
             log_f
         )
+        log_f.write(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
     except Exception as deploy_exception:
         log_f.write(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
         log_f.write(traceback.format_exc())
@@ -1606,7 +1682,7 @@ def deploy_cloudformation_stacks(
             from datetime import datetime, timezone
             deployment_start_datetime = datetime.fromtimestamp(start_time, tz=timezone.utc)
             recent_events = [
-                e for e in events 
+                e for e in events
                 if e['Timestamp'] >= deployment_start_datetime
             ]
             # Sort events in ascending order (oldest first)
@@ -1676,12 +1752,19 @@ def deploy_cloudformation_stacks(
         raise deploy_exception
 
 
-def get_stack_parameters(stack_name: str, environment: AwsEnv, cfn_file: Path, self_driving_task: SelfDrivingTask, log_f):
+def get_stack_parameters(
+        self_driving_task: SelfDrivingTask,
+        environment: AwsEnv,
+        cfn_file: Path,
+        ecr_arn: str,
+        log_f
+):
     project_name = aws_utils.sanitize_aws_name(self_driving_task.business.service_token, max_length=64)
     secrets_key = f"/erieiron/{project_name}/{environment.value}"
     
     known_params = {
-        "StackIdentifier": stack_name,
+        "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(environment),
+        "ECRRepositoryArn": ecr_arn,
         **get_rds_credentials(project_name, environment, secrets_key, self_driving_task),
         **get_admin_credentials(project_name, environment, secrets_key, self_driving_task)
     }
@@ -1766,9 +1849,16 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
         db_creds = json.loads(rds_secret["SecretString"])
     except aws_secrets_client.exceptions.ResourceNotFoundException:
         if AwsEnv.DEV.eq(environment):
-            db_name = aws_utils.sanitize_aws_name(f"{project_name}-{environment}-{self_driving_task.task.id}", max_length=50)
+            db_name = aws_utils.sanitize_aws_name([
+                project_name,
+                environment,
+                self_driving_task.task.id
+            ], max_length=50)
         else:
-            db_name = aws_utils.sanitize_aws_name(f"{project_name}-{environment}", max_length=50)
+            db_name = aws_utils.sanitize_aws_name([
+                project_name,
+                environment
+            ], max_length=50)
         
         db_creds = set_secret(aws_secrets_client, rds_secrets_key, {
             "DBPassword": common.random_string(20),

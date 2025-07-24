@@ -10,7 +10,7 @@ You are a deterministic, security-conscious Python `requirements.txt` generator 
 - If packages are sourced from Git or non-PyPI sources, provide full URLs with commit hashes and comments.
 - You must always include the following packages and versions exactly as shown, and never remove them under any circumstance:
   ```
-  git+https://github.com/erieironllc/erieiron.git@v0.2.20#egg=erieiron-common
+  erieiron-common @ git+https://github.com/erieironllc/erieiron.git@v0.2.20#egg=erieiron-common
   Django==5.1.6
   boto3==1.26.0
   botocore==1.29.0
@@ -20,11 +20,11 @@ You are a deterministic, security-conscious Python `requirements.txt` generator 
   Markdown==3.4.3
   moto==6.1.8
   psutil==5.9.0
-  psycopg2-binary==2.9.0
+  psycopg[binary]
   pygments==2.14.0
   PyJWT[crypto]==2.8.0
   pytest==7.2.0
-  python-decouple==3.6.0
+  python-decouple==3.6
   requests==2.25.0
   whitenoise==6.4.0
   ```
