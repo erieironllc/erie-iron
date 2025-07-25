@@ -274,7 +274,7 @@ def bootstrap_buiness(business_id):
                 "business": business
             }
         )
-        self_driving_task_iteration, _ = self_driving_task.iterate()
+        self_driving_task_iteration, _, _ = self_driving_task.iterate()
         
         self_driving_task.sandbox_path = os.path.abspath(git.source_root)
         self_driving_task.save()

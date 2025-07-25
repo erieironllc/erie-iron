@@ -17,7 +17,6 @@ from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRati
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
-from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType, AwsEnv
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -85,7 +84,6 @@ class Business(BaseErieIronModel):
         return not BusinessAnalysis.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(days=14)).exists()
     
     def get_human_capacity(self):
-        # TODO make this real
         return {
             "timestamp": "2025-06-10T18:00:00Z",
             "active_humans": [
@@ -141,8 +139,6 @@ class Business(BaseErieIronModel):
         # }
     
     def get_aws_capacity(self, fake_aws=False):
-        # TODO make this real
-        
         if not fake_aws:
             return {
                 "compute": "virtually unlimited",
@@ -251,10 +247,9 @@ class Business(BaseErieIronModel):
         
         return goals_status
     
-    def snapshot_code(self, self_driving_task_iteration: 'SelfDrivingTaskIteration'):
+    def snapshot_code(self, self_driving_task_iteration: 'SelfDrivingTaskIteration', include_erie_common=True):
         instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
         sandbox_path = Path(self_driving_task_iteration.self_driving_task.sandbox_path)
-        erie_common_path = sandbox_path / "venv/lib/python3.11/site-packages/erieiron_common"
         
         files_to_index = [sandbox_path / f for f in common.iterate_files_deep(
             sandbox_path,
@@ -262,12 +257,14 @@ class Business(BaseErieIronModel):
             gitignore_patterns=["core/migrations/"]
         )]
         
-        files_to_index += [erie_common_path / f for f in common.iterate_files_deep(
-            erie_common_path,
-            file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh"],
-            respect_git_ignore=False,
-            gitignore_patterns=["migrations/"]
-        )]
+        if include_erie_common:
+            erie_common_path = sandbox_path / "venv/lib/python3.11/site-packages/erieiron_common"
+            files_to_index += [erie_common_path / f for f in common.iterate_files_deep(
+                erie_common_path,
+                file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh"],
+                respect_git_ignore=False,
+                gitignore_patterns=["migrations/"]
+            )]
         
         for file_path in files_to_index:
             try:
@@ -287,7 +284,7 @@ class Business(BaseErieIronModel):
                 if (sandbox_path / relative_file_path).read_text() != version.code:
                     CodeFile.update_from_path(
                         self_driving_task_iteration,
-                        relative_file_path,
+                        (sandbox_path / relative_file_path),
                         instructions
                     )
 
@@ -660,14 +657,13 @@ class SelfDrivingTask(BaseErieIronModel):
         )
         return result["total"] or 0.0
     
-    def iterate(self) -> Tuple['SelfDrivingTaskIteration', Optional['SelfDrivingTaskIteration']]:
+    def iterate(self) -> Tuple['SelfDrivingTaskIteration', Optional['SelfDrivingTaskIteration'], Optional['SelfDrivingTaskIteration']]:
         iteration_to_modify = None
         try:
-            if TaskType.CODING_ML.eq(self.task.task_type):
-                most_recent_iteration = self.get_most_recent_iteration()
-                iteration_to_modify = SelfDrivingTaskIteration.objects.get(
-                    id=most_recent_iteration.evaluation_json.get("iteration_id_to_modify")
-                )
+            most_recent_iteration = self.get_most_recent_iteration()
+            iteration_to_modify = SelfDrivingTaskIteration.objects.get(
+                id=most_recent_iteration.evaluation_json.get("iteration_id_to_modify")
+            )
         except:
             ...
         
@@ -686,7 +682,7 @@ class SelfDrivingTask(BaseErieIronModel):
                 version_number=max_version + 1
             )
         
-        return current_iteration, iteration_to_modify
+        return current_iteration, most_recent_iteration, iteration_to_modify
     
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
@@ -695,11 +691,11 @@ class SelfDrivingTask(BaseErieIronModel):
         from erieiron_common.aws_utils import sanitize_aws_name
         return sanitize_aws_name(self.get_cloudformation_stack_name(environment), max_length=40)
     
-    def get_cloudformation_stack_name(self, environment:AwsEnv):
+    def get_cloudformation_stack_name(self, environment: AwsEnv):
         from erieiron_common.aws_utils import sanitize_aws_name
         
         cloudformation_stack_name = [
-            self.business.service_token, 
+            self.business.service_token,
             environment.value
         ]
         
@@ -709,7 +705,7 @@ class SelfDrivingTask(BaseErieIronModel):
                 self.task.initiative.id,
                 self.id
             ]
-            
+        
         cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=128)
         
         if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name != cloudformation_stack_name:
@@ -720,7 +716,9 @@ class SelfDrivingTask(BaseErieIronModel):
             self.refresh_from_db(fields=["cloudformation_stack_name"])
         
         return cloudformation_stack_name
-        
+    
+    def get_sandbox(self) -> Path:
+        return Path(self.sandbox_path)
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
@@ -751,9 +749,16 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         return totals['total_price'] or 0, totals['total_tokens'] or 0
     
     def write_to_disk(self):
-        sandbox_path = self.self_driving_task.sandbox_path
-        for cv in self.codeversion_set.all():
-            cv.write_to_disk(sandbox_path)
+        sandbox_path = self.self_driving_task.get_sandbox()
+        
+        business = self.self_driving_task.business
+        for code_file in list(business.codefile_set.all().order_by("file_path")):
+            code_version = code_file.get_version(self)
+            if code_version:
+                code_version.write_to_disk(sandbox_path)
+            else:
+                common.quietly_delete(sandbox_path / code_file.get_path())
+                logging.info(f"{code_file.get_path()} did not exist at iteration {self.id}.  removing from disk")
     
     def get_code_version(self, code_file: 'CodeFile'):
         if isinstance(code_file, Path):
@@ -865,6 +870,9 @@ class CodeFile(BaseErieIronModel):
     file_path = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     
+    def __str__(self):
+        return f"{self.file_path} - {self.id}"
+    
     def get_path(self) -> Path:
         return Path(self.file_path)
     
@@ -877,7 +885,11 @@ class CodeFile(BaseErieIronModel):
     def get_latest_version(self) -> 'CodeVersion':
         return self.codeversion_set.order_by("created_at").last()
     
-    def get_version(self, iteration: SelfDrivingTaskIteration, default_to_latest=False) -> Optional['CodeVersion']:
+    def get_version(
+            self, 
+            iteration: SelfDrivingTaskIteration, 
+            default_to_latest=False
+    ) -> Optional['CodeVersion']:
         code_version = self.codeversion_set.filter(
             task_iteration=iteration
         ).order_by("created_at").last()
@@ -888,7 +900,14 @@ class CodeFile(BaseErieIronModel):
         if default_to_latest:
             return self.get_latest_version()
         
-        return None
+        # Find the code version from the iteration that is closest without being after this iteration
+        # This gets the "last known version" of this file at the time of the given iteration
+        closest_version = self.codeversion_set.filter(
+            task_iteration__self_driving_task=iteration.self_driving_task,
+            task_iteration__timestamp__lte=iteration.timestamp
+        ).order_by('-task_iteration__timestamp').first()
+        
+        return closest_version
     
     @staticmethod
     def get(business: Business, code_file_path: Path) -> 'CodeFile':
@@ -984,11 +1003,7 @@ class CodeVersion(BaseErieIronModel):
         if not sandbox_root_dir:
             sandbox_root_dir = self.task_iteration.self_driving_task.sandbox_path
         
-        file_path = common.assert_in_sandbox(
-            sandbox_root_dir,
-            self.code_file.file_path
-        )
-        
+        file_path = Path(sandbox_root_dir) / self.code_file.file_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(self.code)
         

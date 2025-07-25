@@ -7,7 +7,10 @@
   "required": [
     "best_iteration_id",
     "iteration_id_to_modify",
-    "previous_iteration_count"
+    "previous_iteration_count",
+    "reason_for_best_iteration_id",
+    "reason_for_iteration_id_to_modify",
+    "multi_iteration_trend_summary"
   ],
   "properties": {
     "best_iteration_id": {
@@ -26,6 +29,45 @@
       "anyOf": [
         { "type": "integer", "minimum": 1 }
       ]
+    },
+    "reason_for_best_iteration_id": {
+      "type": "string",
+      "description": "A detailed justification explaining why this iteration was selected as the best."
+    },
+    "reason_for_iteration_id_to_modify": {
+      "type": "string",
+      "description": "A detailed justification explaining why this iteration was chosen as the one to modify next."
+    },
+    "multi_iteration_trend_summary": {
+      "type": "string",
+      "description": "A concise summary of patterns observed across multiple iterations, including what kinds of changes have helped or hindered progress."
+    },
+    "multi_iteration_trend_analysis": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "change_type": { "type": "string" },
+          "effect": { "type": "string" },
+          "confidence": { "type": "number" },
+          "rationale": { "type": "string" }
+        },
+        "required": ["change_type", "effect", "confidence", "rationale"]
+      },
+      "description": "Structured list of trend observations and their assessed confidence and outcomes."
+    },
+    "strategic_guidance": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "suggested_action": { "type": "string" },
+          "justification": { "type": "string" },
+          "confidence": { "type": "number" }
+        },
+        "required": ["suggested_action", "justification", "confidence"]
+      },
+      "description": "Optional structured recommendations based on multi-iteration trend analysis."
     }
   },
   "additionalProperties": false

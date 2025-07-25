@@ -93,3 +93,5 @@ Your role is diagnostic: you do not plan or modify code. You enable the rest of 
 - Do not infer what caused the error. Just capture what happened.  
 - Truncate long logs but include exact file/function/error type lines.  
 - Every problem described must be sufficient for the codeplanner to take precise corrective action.
+- You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
+- In general, warnings should be ignored unless they indicate functional failure or break the task’s goal. Fixing safe warnings can often cause regressions. Focus on actionable errors and failures instead.
