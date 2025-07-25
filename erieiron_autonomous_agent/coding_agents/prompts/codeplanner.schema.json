@@ -22,11 +22,15 @@
           "description": "List of file-level deterministic planning instructions",
           "items": {
             "type": "object",
-            "required": ["code_file_path", "instructions"],
+            "required": ["code_file_path", "instructions", "guidance"],
             "properties": {
               "code_file_path": {
                 "type": "string",
                 "description": "Relative file path to be created or modified"
+              },
+              "guidance": {
+                "type": "string",
+                "description": "Strategic advice for the code writer based on trends or previous iteration summaries"
               },
               "instructions": {
                 "type": "array",

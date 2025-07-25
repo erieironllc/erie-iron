@@ -168,7 +168,7 @@ def prepare_stack_for_update(stack_name: str, cf_client):
         
         try:
             status = matching_stack["StackStatus"]
-            if status.startswith("ROLLBACK_") or status == "DELETE_FAILED":
+            if 'ROLLBACK' in status:
                 logging.info(f"Deleting broken stack: {stack_name} (status: {status}) attempt {i + 1}\n")
                 
                 try:

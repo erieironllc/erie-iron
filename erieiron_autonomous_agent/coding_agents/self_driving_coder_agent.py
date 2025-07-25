@@ -66,7 +66,8 @@ class SelfDriverConfig:
         artifacts_root = self.sandbox_root_dir / ARTIFACTS
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = artifacts_root
-        self.log_path = artifacts_root / f"{self.self_driving_task.id}.output.log"
+        self.log_path = artifacts_root / f"{self.self_driving_task.id}.llm.output.log"
+        self.log_f = None
         self.git = self.self_driving_task.get_git()
         
         self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o
@@ -117,7 +118,9 @@ def execute(task_id: str):
                         current_iteration
                     )
                 else:
-                    current_iteration, iteration_to_modify = self_driving_task.iterate()
+                    current_iteration, previous_iteration, iteration_to_modify = self_driving_task.iterate()
+                    
+                    iteration_to_modify.write_to_disk()
                     
                     log_iteration_headline(
                         config,
@@ -125,21 +128,24 @@ def execute(task_id: str):
                         iteration_to_modify
                     )
                     
+                    logging.info(f"PHASE - get_relevant_code_files: {current_iteration.id}")
                     relevant_code_files = get_relevant_code_files(
                         config,
                         current_iteration,
                         iteration_to_modify
                     )
                     
+                    logging.info(f"PHASE - plan_code_changes: {current_iteration.id}")
                     planning_data = plan_code_changes(
                         config,
                         current_iteration,
+                        previous_iteration,
                         iteration_to_modify,
                         relevant_code_files
                     )
+                    pprint.pprint(planning_data)
                     
-                    # pprint.pprint(planning_data)
-                    
+                    logging.info(f"PHASE - generate_code: {current_iteration.id}")
                     generate_code(
                         config,
                         current_iteration,
@@ -148,12 +154,25 @@ def execute(task_id: str):
                     )
                 
                 try:
-                    eval_data = execute_and_evaluate(
-                        config,
-                        current_iteration,
-                        AwsEnv.DEV
-                    )
-                    pprint.pprint(eval_data)
+                    try:
+                        logging.info(f"PHASE - execute_iteration: {current_iteration.id}")
+                        execute_iteration(
+                            config,
+                            current_iteration,
+                            AwsEnv.DEV
+                        )
+                    finally:
+                        logging.info(f"PHASE - evaluate_iteration_execution: {current_iteration.id}")
+                        eval_data = None
+                        try:
+                            eval_data = evaluate_iteration_execution(
+                                config,
+                                current_iteration
+                            )
+                        finally:
+                            if eval_data:
+                                pprint.pprint(eval_data)
+                
                 except GoalAchieved as goal_achieved:
                     if TaskType.CODING_ML.eq(config.task_type):
                         raise goal_achieved
@@ -163,8 +182,8 @@ def execute(task_id: str):
                         # for non-ml tasks, if all tasks are complete deploy to prod.  
                         # execute_and_evaluate will re-throw GoalAchieved if the prod deploy is successful
                         # perhaps think about moving this somewhere else - like listen to an event and then do this work in a separa message
-                        prod_deploy_iteration, _ = self_driving_task.iterate()
-                        execute_and_evaluate(
+                        prod_deploy_iteration, _, _ = self_driving_task.iterate()
+                        execute_iteration(
                             config,
                             prod_deploy_iteration,
                             AwsEnv.PRODUCTION
@@ -182,7 +201,7 @@ def execute(task_id: str):
                     PubSubManager.publish(
                         PubSubMessageType.TASK_BLOCKED,
                         payload={
-                            **agent_blocked.blocked_data,
+                            "blocked_data": json.dumps(agent_blocked.blocked_data),
                             "task_id": config.self_driving_task.task_id
                         }
                     )
@@ -221,22 +240,6 @@ def execute(task_id: str):
         print("STOP REASON", stop_reason)
         if TaskType.CODING_ML.eq(config.task_type):
             package_ml_artifacts(config)
-
-
-def execute_and_evaluate(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration, environment: AwsEnv):
-    try:
-        execute_iteration(
-            config,
-            iteration,
-            environment
-        )
-    finally:
-        eval_data = evaluate_iteration_execution(
-            config,
-            iteration
-        )
-    
-    return eval_data
 
 
 def log_iteration_headline(
@@ -313,7 +316,7 @@ def build_docker_image(
     
     env = os.environ.copy()
     env["DOCKER_BUILDKIT"] = "1"
-
+    
     build_process = subprocess.Popen(
         common.strings([
             "docker",
@@ -355,6 +358,7 @@ def push_image_to_ecr(
     
     full_image_uri = f"{ecr_repo_uri}:{docker_image_tag}"
     log_f.write(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
+    log_f.flush()  # Ensure ECR auth logs are visible to tailing thread
     
     try:
         ecr_client.describe_repositories(repositoryNames=[repo_name])
@@ -461,76 +465,89 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         )
         
         with open(logfile, "w") as log_f:
-            docker_file = config.sandbox_root_dir / "Dockerfile"
-            aws_utils.ecr_authenticate_for_dockerfile(
-                docker_file,
-                log_f
-            )
+            stop_tailing = start_log_tail_thread(logfile)
             
-            docker_image_tag = build_docker_image(
-                iteration,
-                environment,
-                docker_file,
-                log_f
-            )
-            
-            full_image_uri, ecr_arn = push_image_to_ecr(
-                iteration,
-                environment,
-                docker_image_tag,
-                log_f
-            )
-            
-            deploy_cloudformation_stacks(
-                config,
-                environment,
-                ecr_arn,
-                log_f
-            )
-            
-            if TaskType.CODING_ML.eq(task_type):
-                run_docker_command(
-                    command_args=self_driving_task.main_name,
-                    iteration=iteration,
-                    running_process=running_process,
-                    docker_image=docker_image_tag,
-                    log_f=log_f
+            try:
+                docker_file = config.sandbox_root_dir / "Dockerfile"
+                aws_utils.ecr_authenticate_for_dockerfile(
+                    docker_file,
+                    log_f
                 )
-            else:
-                if not AwsEnv.PRODUCTION.eq(environment):
-                    run_docker_command(
-                        command_args="test",
-                        iteration=iteration,
-                        running_process=running_process,
-                        docker_image=docker_image_tag,
-                        log_f=log_f
-                    )
+                log_f.flush()  # Ensure ECR auth logs are visible to tailing thread
                 
-                if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
-                    task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
-                    task_io_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    input_file = task_io_dir / f"{task.id}-input.json"
-                    common.write_json(input_file, task.get_upstream_outputs())
-                    
-                    output_file = task_io_dir / f"{task.id}-output.json"
-                    
+                docker_image_tag = build_docker_image(
+                    iteration,
+                    environment,
+                    docker_file,
+                    log_f
+                )
+                log_f.flush()  # Ensure Docker build logs are visible to tailing thread
+                
+                full_image_uri, ecr_arn = push_image_to_ecr(
+                    iteration,
+                    environment,
+                    docker_image_tag,
+                    log_f
+                )
+                log_f.flush()  # Ensure ECR push logs are visible to tailing thread
+                
+                deploy_cloudformation_stacks(
+                    config,
+                    environment,
+                    ecr_arn,
+                    log_f
+                )
+                log_f.flush()  # Ensure CloudFormation deployment logs are visible to tailing thread
+                
+                if TaskType.CODING_ML.eq(task_type):
                     run_docker_command(
-                        command_args=[
-                            self_driving_task.main_name,
-                            "--input_file", input_file,
-                            "--output_file", output_file
-                        ],
+                        command_args=self_driving_task.main_name,
                         iteration=iteration,
                         running_process=running_process,
                         docker_image=docker_image_tag,
                         log_f=log_f
                     )
-            
-            running_process.update_log_tail()
-            running_process.is_running = False
-            running_process.terminated_at = common.get_now()
-            running_process.save(update_fields=['is_running', 'terminated_at'])
+                    log_f.flush()  # Ensure ML execution logs are visible to tailing thread
+                else:
+                    if not AwsEnv.PRODUCTION.eq(environment):
+                        run_docker_command(
+                            command_args="test",
+                            iteration=iteration,
+                            running_process=running_process,
+                            docker_image=docker_image_tag,
+                            log_f=log_f
+                        )
+                        log_f.flush()  # Ensure test execution logs are visible to tailing thread
+                    
+                    if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
+                        task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
+                        task_io_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        input_file = task_io_dir / f"{task.id}-input.json"
+                        common.write_json(input_file, task.get_upstream_outputs())
+                        
+                        output_file = task_io_dir / f"{task.id}-output.json"
+                        
+                        run_docker_command(
+                            command_args=[
+                                self_driving_task.main_name,
+                                "--input_file", input_file,
+                                "--output_file", output_file
+                            ],
+                            iteration=iteration,
+                            running_process=running_process,
+                            docker_image=docker_image_tag,
+                            log_f=log_f
+                        )
+                        log_f.flush()  # Ensure task execution logs are visible to tailing thread
+                
+                running_process.update_log_tail()
+                running_process.is_running = False
+                running_process.terminated_at = common.get_now()
+                running_process.save(update_fields=['is_running', 'terminated_at'])
+            finally:
+                # Stop the tailing thread
+                stop_tailing.set()
         
         log_output = logfile.read_text()
         log(config, log_output, f"iteration-{iteration.id}")
@@ -547,8 +564,12 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         
         log_output = logfile.read_text()
         log(config, log_output, f"iteration-{iteration.id}")
-        logging.exception(log_output)
     finally:
+        # Ensure tailing thread is stopped if it exists
+        if 'stop_tailing' in locals():
+            stop_tailing.set()
+        
+        config.business.snapshot_code(iteration, include_erie_common=False)
         with transaction.atomic():
             SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
                 log_content=common.truncate_text_lines(logfile.read_text())
@@ -556,6 +577,45 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         common.quietly_delete(logfile)
         subprocess.run(["docker", "system", "prune", "-f"], check=True)
         print("PRUNING COMPLETE")
+
+
+def start_log_tail_thread(logfile):
+    # Start a background thread to tail the logfile contents to logging.info()
+    import threading
+    stop_tailing = threading.Event()
+    
+    def tail_logfile():
+        """Tail the logfile and stream new content to logging.info()"""
+        try:
+            last_position = 0
+            while not stop_tailing.is_set():
+                try:
+                    # Check if file exists and get its current size
+                    if logfile.exists():
+                        current_size = logfile.stat().st_size
+                        if current_size > last_position:
+                            # File has grown, read new content
+                            with open(logfile, "r") as tail_f:
+                                tail_f.seek(last_position)
+                                new_content = tail_f.read(current_size - last_position)
+                                if new_content:
+                                    # Split into lines and log each one
+                                    for line in new_content.splitlines():
+                                        if line.strip():  # Only log non-empty lines
+                                            logging.info(f"[Docker Execution] {line}")
+                            last_position = current_size
+                    
+                    # Wait before checking again
+                    time.sleep(0.2)
+                except (FileNotFoundError, OSError):
+                    # File might not exist yet or be temporarily unavailable
+                    time.sleep(0.5)
+        except Exception as e:
+            logging.error(f"Error tailing logfile: {e}")
+    
+    tail_thread = threading.Thread(target=tail_logfile, daemon=True)
+    tail_thread.start()
+    return stop_tailing
 
 
 def init_task_execution(iteration):
@@ -604,37 +664,38 @@ Base your evaluation on this log output
             evaluation_json=eval_data
         )
     
-    if TaskType.CODING_ML.eq(config.task_type):
-        previous_iteration_evals = []
-        for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
-                evaluation_json__isnull=False
-        ).order_by("timestamp"):
-            previous_iteration_evals.append(LlmMessage.user(f"""
-        **Iteration Evaluation**
-        iteration_evaluator output for iteration_id = '{prev_iter.id}'
-        iteration timestamp: {prev_iter.timestamp}
-        ========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
-        {json.dumps(prev_iter.evaluation_json, indent=4)}
-        ========= END iteration_id = '{prev_iter.id}' EVALUATION ======================="""))
-        
-        selection_data = llm_chat(
-            "Iteration Selector",
-            config,
-            [
-                get_sys_prompt("iteration_selector.md"),
-                *previous_iteration_evals
-            ],
-            config.model_iteration_evaluation,
-            output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
-        ).json()
-        
-        with transaction.atomic():
-            SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-                evaluation_json={
-                    **selection_data,
-                    **eval_data
-                }
-            )
+    previous_iteration_evals = []
+    for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
+            evaluation_json__isnull=False
+    ).order_by("-timestamp")[:20][::-1]:
+        previous_iteration_evals.append(LlmMessage.user(f"""
+**Iteration Evaluation**
+{"This is the evaluation of the most iteration current iteration - this reflects the latest state of the code" if prev_iter == iteration else ""}
+iteration_evaluator output for iteration_id = '{prev_iter.id}'
+iteration timestamp: {prev_iter.timestamp}
+========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
+{json.dumps(prev_iter.evaluation_json, indent=4)}
+========= END iteration_id = '{prev_iter.id}' EVALUATION =======================
+"""))
+    
+    selection_data = llm_chat(
+        "Iteration Selector",
+        config,
+        [
+            get_sys_prompt("iteration_selector.md"),
+            *previous_iteration_evals
+        ],
+        config.model_iteration_evaluation,
+        output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            evaluation_json={
+                **selection_data,
+                **eval_data
+            }
+        )
     
     iteration.refresh_from_db(fields=["evaluation_json"])
     eval_data = iteration.evaluation_json
@@ -648,35 +709,55 @@ Base your evaluation on this log output
 def build_previous_iteration_context_messages(
         config: SelfDriverConfig,
         current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration,
         iteration_to_modify: SelfDrivingTaskIteration
 ) -> List[LlmMessage]:
     eval_json = config.self_driving_task.get_most_recent_iteration().evaluation_json or {}
     
     previous_iteration_count = eval_json.get("previous_iteration_count", 1)
-    previous_iterations: list[SelfDrivingTaskIteration] = list(
+    all_iterations = list(
         config.self_driving_task.selfdrivingtaskiteration_set.exclude(
             id=current_iteration.id
         ).filter(
             evaluation_json__isnull=False
         ).order_by("timestamp")
-    )[-previous_iteration_count:]
+    )
+    
+    previous_iterations = all_iterations[-previous_iteration_count:]
+    
+    if iteration_to_modify and iteration_to_modify not in previous_iterations:
+        previous_iterations.append(iteration_to_modify)
+    
+    if previous_iteration and previous_iteration not in previous_iterations:
+        previous_iterations.append(previous_iteration)
     
     messages = [
         LlmMessage.user(f"""
 **iteration_evaluator Output**
+{"This is the evalutation of the execution of the previous iteration of the code" if prev_iter == previous_iteration and previous_iteration != iteration_to_modify else ""}
+{"We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code" if prev_iter == iteration_to_modify else ""}
 iteration_evaluator output for iteration_id = '{prev_iter.id}'
 iteration timestamp: {prev_iter.timestamp}
 ========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
 {json.dumps(prev_iter.evaluation_json, indent=4)}
 ========= END iteration_id = '{prev_iter.id}' EVALUATION =======================
         """)
-        for prev_iter in previous_iterations
+        for prev_iter in sorted(previous_iterations, key=lambda i:i.timestamp)
     ]
+    
+    if previous_iteration and previous_iteration != iteration_to_modify:
+        messages.append(LlmMessage.user(f"""
+**Log Output**
+Log output from executing the PREVIOUS ITERATION (iteration_id = '{iteration_to_modify.id})'
+========= BEGIN Log Output =======================
+{iteration_to_modify.log_content}
+========= END Log Output =======================
+            """))
     
     if iteration_to_modify:
         messages.append(LlmMessage.user(f"""
 **Log Output**
-Log output from iteration_id = '{iteration_to_modify.id}'
+Log output from executing the ITERATION WE ARE ROLLING THE CODE BACK TO (iteration_id = '{iteration_to_modify.id})'
 ========= BEGIN Log Output =======================
 {iteration_to_modify.log_content}
 ========= END Log Output =======================
@@ -768,13 +849,13 @@ def generate_code(
                     code_instructions=instructions
                 )
     
-    # NEXT STEP CONTINUE DEBUGGING 
     return current_iteration
 
 
 def plan_code_changes(
         config: SelfDriverConfig,
         current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration,
         iteration_to_modify: SelfDrivingTaskIteration,
         relevant_code_files: list[LlmMessage]
 ):
@@ -802,6 +883,7 @@ def plan_code_changes(
             build_previous_iteration_context_messages(
                 config,
                 current_iteration,
+                previous_iteration,
                 iteration_to_modify
             )
         ),
@@ -844,7 +926,6 @@ Identify an architecture that will allow for efficient code iteration and give u
         config,
         messages,
         model,
-        debug=True,
         output_schema=PROMPTS_DIR / "codeplanner.schema.json"
     ).json()
     
@@ -874,7 +955,7 @@ def write_code(
     code_file_path = code_version_to_modify.code_file.get_path()
     code_file_name = code_file_path.name
     code_file_name_lower = code_file_name.lower()
-    if code_file_name_lower == "requirements.txt":
+    if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
         prompt = "codewriter--requirements.txt.md"
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
@@ -1353,12 +1434,20 @@ It may contain high-level design notes, architecture explanations, or usage inst
 
 
 def get_goal_msg(config):
+    task = config.self_driving_task.task
     return LlmMessage.user(f'''
 Please plan code changes that work towards achieving this GOAL:
-"""
-{config.self_driving_task.goal}
-"""
 
+# Goal
+{task.description}
+
+# Test Plan
+{task.test_plan or 'none'}
+
+# Risk Notes
+{task.risk_notes or 'none'}
+
+# PRIMARY OBJECTIVE
 **ACHIEVING THIS GOAL IS YOUR PRIMARY OBJECTIVE**
 ''')
 

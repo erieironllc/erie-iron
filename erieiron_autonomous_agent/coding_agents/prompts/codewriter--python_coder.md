@@ -9,6 +9,12 @@ Security & File Constraints
  • You may only create, edit, or delete files within the <sandbox_dir> directory. Use Path("<sandbox_dir>") / "<filename>" for all file paths.
  • All file system interactions must resolve paths within the sandbox. Use `Path("<sandbox_dir>") / "..."` and ensure all resolved paths remain within this directory.
 
+### Billing Safety
+ • Avoid code patterns that may cause unbounded cloud resource usage, especially with AWS services.
+ • Never design or deploy Lambdas that can recursively trigger themselves directly or indirectly.
+ • Guard against unbounded loops, runaway retries, or unbounded concurrency when invoking external services.
+ • Include runtime safeguards (e.g., counters, rate limits, timeout handling) to prevent uncontrolled execution.
+
 Reusable Methods
  • Always check if a required function already exists.
  • This ensures consistent behavior, sandbox compliance, and observability.

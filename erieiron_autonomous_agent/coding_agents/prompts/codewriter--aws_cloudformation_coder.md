@@ -11,6 +11,14 @@ Security & Scope Constraints
  • Only generate resources within the boundaries defined by the assigned task. Avoid creating global infrastructure unless explicitly required.
  • **Do not** apply `DeletionPolicy: Retain`. Stacks must support clean deletion without manual cleanup.
 
+### Billing Safety
+ • Avoid templates that can result in runaway cost or infinite execution cycles.
+ • **Never** create AWS Lambda functions, Step Functions, or EventBridge Rules that can recursively trigger themselves.
+ • Use `ReservedConcurrentExecutions`, `MaximumRetryAttempts`, or timeout constraints to bound execution where applicable.
+ • Do not create resources with unbounded scaling policies (e.g., autoscaling groups with no `MaxSize`).
+ • Avoid `ScheduleExpression` or event triggers without clearly defined purpose and termination logic.
+ • If you use `AWS::Lambda::EventSourceMapping`, ensure it does not point to the same Lambda it triggers.
+
 Reusability & Modularity
  • Break reusable parts into `AWS::CloudFormation::Macro`, `NestedStack`, or `Mappings` where applicable.
  • Use Parameters and Outputs to improve reusability and interoperability with other stacks.
