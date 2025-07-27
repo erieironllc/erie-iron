@@ -10,7 +10,10 @@
     "previous_iteration_count",
     "reason_for_best_iteration_id",
     "reason_for_iteration_id_to_modify",
-    "multi_iteration_trend_summary"
+    "multi_iteration_trend_summary",
+    "summary",
+    "status_report",
+    "evaluation"
   ],
   "properties": {
     "best_iteration_id": {
@@ -68,6 +71,10 @@
         "required": ["suggested_action", "justification", "confidence"]
       },
       "description": "Optional structured recommendations based on multi-iteration trend analysis."
+    },
+    "status_report": {
+      "type": "string",
+      "description": "Standup-style summary of what the system currently does, what is partially working, and what is not yet functioning, based on logs from this iteration."
     }
   },
   "additionalProperties": false

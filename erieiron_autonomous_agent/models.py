@@ -599,6 +599,7 @@ class TaskDesignRequirements(BaseErieIronModel):
 class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     main_name = models.TextField(null=False)
+    test_file_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
     cloudformation_stack_name = models.TextField(null=True)
     goal = models.TextField(null=False)
@@ -645,7 +646,7 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_most_recent_log_contents(self) -> Optional[str]:
         last_iteration = self.get_most_recent_iteration()
         if last_iteration:
-            return last_iteration.log_content
+            return last_iteration.log_content_execution
         else:
             return None
     
@@ -659,8 +660,9 @@ class SelfDrivingTask(BaseErieIronModel):
     
     def iterate(self) -> Tuple['SelfDrivingTaskIteration', Optional['SelfDrivingTaskIteration'], Optional['SelfDrivingTaskIteration']]:
         iteration_to_modify = None
+        most_recent_iteration = self.get_most_recent_iteration()
+        
         try:
-            most_recent_iteration = self.get_most_recent_iteration()
             iteration_to_modify = SelfDrivingTaskIteration.objects.get(
                 id=most_recent_iteration.evaluation_json.get("iteration_id_to_modify")
             )
@@ -681,6 +683,9 @@ class SelfDrivingTask(BaseErieIronModel):
                 self_driving_task=self,
                 version_number=max_version + 1
             )
+            
+        if not iteration_to_modify:
+            iteration_to_modify = current_iteration
         
         return current_iteration, most_recent_iteration, iteration_to_modify
     
@@ -729,7 +734,8 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     execute_module = models.TextField(null=True)
     planning_model = models.TextField()
     coding_model = models.TextField()
-    log_content = models.TextField()
+    log_content_execution = models.TextField(null=True)
+    log_content_coding = models.TextField(null=True)
     evaluation_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     

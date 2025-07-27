@@ -124,7 +124,7 @@ def post_process_response(resp):
 
 def sanitize_prompt(raw_text: str) -> str:
     if isinstance(raw_text, dict):
-        return json.dumps(raw_text, indent=4)
+        return json.dumps(raw_text, indent=4, cls=ErieIronJSONEncoder)
     else:
         return raw_text
 
@@ -259,7 +259,7 @@ class LlmMessage:
     def get_token_count(self, model: LlmModel) -> int:
         return LlmMessage._get_token_count(
             model,
-            json.dumps(self.get_message_json(model))
+            json.dumps(self.get_message_json(model), cls=ErieIronJSONEncoder)
         )
 
     @staticmethod
@@ -275,7 +275,10 @@ class LlmMessage:
                     messages_out.append(LlmMessage.user(json.dumps(m, indent=4, cls=ErieIronJSONEncoder)))
             elif isinstance(m, LlmMessage):
                 if m.text:
-                    messages_out.append(m)
+                    if isinstance(m.text, dict):
+                        messages_out.append(LlmMessage.user(json.dumps(m.text, indent=4, cls=ErieIronJSONEncoder)))
+                    else:
+                        messages_out.append(m)
             else:
                 raise ValueError(f"invalid message type {m}")
 

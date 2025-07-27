@@ -100,19 +100,18 @@ def execute(task_id: str):
                 
                 if i == 0:
                     current_iteration = self_driving_task.get_most_recent_iteration()
-                    if current_iteration and self_driving_task.selfdrivingtaskiteration_set.count() > 1:
-                        # if this is the first loop and we have a previous iteration of the code, 
-                        # we'll skip right to the execution step
-                        skip_code_modification = True
-                        with transaction.atomic():
-                            # clear out any previous execution artifacts
-                            SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-                                log_content="",
-                                evaluation_json=None
-                            )
-                            current_iteration.refresh_from_db(fields=["log_content", "evaluation_json"])
-                
-                if skip_code_modification:
+                    if not current_iteration:
+                        current_iteration, _, _ = self_driving_task.iterate()
+                    
+                    SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+                        log_content_execution="",
+                        evaluation_json=None
+                    )
+                    current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
+                    
+                    if not config.business.codefile_set.exists():
+                        config.business.snapshot_code(current_iteration, include_erie_common=True)
+                    
                     log_execution_only_headline(
                         config,
                         current_iteration
@@ -127,28 +126,31 @@ def execute(task_id: str):
                         current_iteration,
                         iteration_to_modify
                     )
-                    
-                    logging.info(f"PHASE - get_relevant_code_files: {current_iteration.id}")
-                    relevant_code_files = get_relevant_code_files(
-                        config,
-                        current_iteration,
-                        iteration_to_modify
-                    )
-                    
-                    logging.info(f"PHASE - plan_code_changes: {current_iteration.id}")
-                    planning_data = plan_code_changes(
-                        config,
-                        current_iteration,
-                        previous_iteration,
-                        iteration_to_modify,
-                        relevant_code_files
-                    )
-                    pprint.pprint(planning_data)
+        
+                    coding_logfile = common.create_temp_file(f"iteration-{str(current_iteration.id)}", ".coding.log")
+                    with open(coding_logfile, "w") as coding_log_f:
+                        logging.info(f"PHASE - get_relevant_code_files: {current_iteration.id}")
+                        relevant_code_files = get_relevant_code_files(
+                            config,
+                            current_iteration,
+                            iteration_to_modify
+                        )
+                        
+                        logging.info(f"PHASE - plan_code_changes: {current_iteration.id}")
+                        planning_data = plan_code_changes(
+                            config,
+                            current_iteration,
+                            previous_iteration,
+                            iteration_to_modify,
+                            relevant_code_files
+                        )
+                        pprint.pprint(planning_data)
                     
                     logging.info(f"PHASE - generate_code: {current_iteration.id}")
                     generate_code(
                         config,
                         current_iteration,
+                        previous_iteration,
                         iteration_to_modify,
                         planning_data
                     )
@@ -483,13 +485,17 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                 )
                 log_f.flush()  # Ensure Docker build logs are visible to tailing thread
                 
-                full_image_uri, ecr_arn = push_image_to_ecr(
-                    iteration,
-                    environment,
-                    docker_image_tag,
-                    log_f
-                )
-                log_f.flush()  # Ensure ECR push logs are visible to tailing thread
+                try:
+                    full_image_uri, ecr_arn = push_image_to_ecr(
+                        iteration,
+                        environment,
+                        docker_image_tag,
+                        log_f
+                    )
+                except Exception as e:
+                    raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+                finally:
+                    log_f.flush()  # Ensure ECR push logs are visible to tailing thread
                 
                 deploy_cloudformation_stacks(
                     config,
@@ -572,7 +578,7 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         config.business.snapshot_code(iteration, include_erie_common=False)
         with transaction.atomic():
             SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-                log_content=common.truncate_text_lines(logfile.read_text())
+                log_content_execution=common.truncate_text_lines(logfile.read_text())
             )
         common.quietly_delete(logfile)
         subprocess.run(["docker", "system", "prune", "-f"], check=True)
@@ -652,7 +658,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
 **Logs from iteration test output and execution**
 Base your evaluation on this log output
 ========= BEGIN LOG OUTPUT =======================
-{iteration.log_content}
+{iteration.log_content_execution}
 ========= END LOG OUTPUT =======================""")
         ],
         config.model_iteration_evaluation,
@@ -731,26 +737,18 @@ def build_previous_iteration_context_messages(
     if previous_iteration and previous_iteration not in previous_iterations:
         previous_iterations.append(previous_iteration)
     
-    messages = [
-        LlmMessage.user(f"""
-**iteration_evaluator Output**
-{"This is the evalutation of the execution of the previous iteration of the code" if prev_iter == previous_iteration and previous_iteration != iteration_to_modify else ""}
-{"We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code" if prev_iter == iteration_to_modify else ""}
-iteration_evaluator output for iteration_id = '{prev_iter.id}'
-iteration timestamp: {prev_iter.timestamp}
-========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
-{json.dumps(prev_iter.evaluation_json, indent=4)}
-========= END iteration_id = '{prev_iter.id}' EVALUATION =======================
-        """)
-        for prev_iter in sorted(previous_iterations, key=lambda i:i.timestamp)
-    ]
+    messages = get_iteration_eval_llm_messages(
+        previous_iterations,
+        previous_iteration,
+        iteration_to_modify
+    )
     
     if previous_iteration and previous_iteration != iteration_to_modify:
         messages.append(LlmMessage.user(f"""
 **Log Output**
 Log output from executing the PREVIOUS ITERATION (iteration_id = '{iteration_to_modify.id})'
 ========= BEGIN Log Output =======================
-{iteration_to_modify.log_content}
+{iteration_to_modify.log_content_execution}
 ========= END Log Output =======================
             """))
     
@@ -759,11 +757,31 @@ Log output from executing the PREVIOUS ITERATION (iteration_id = '{iteration_to_
 **Log Output**
 Log output from executing the ITERATION WE ARE ROLLING THE CODE BACK TO (iteration_id = '{iteration_to_modify.id})'
 ========= BEGIN Log Output =======================
-{iteration_to_modify.log_content}
+{iteration_to_modify.log_content_execution}
 ========= END Log Output =======================
         """))
     
     return messages
+
+
+def get_iteration_eval_llm_messages(
+        iterations: list[SelfDrivingTaskIteration],
+        previous_iteration: SelfDrivingTaskIteration = None,
+        iteration_to_modify: SelfDrivingTaskIteration = None
+) -> list[LlmMessage]:
+    return [
+        LlmMessage.user(f"""
+**iteration_evaluator Output**
+{"This is the evalutation of the execution of the previous iteration of the code" if iteration == previous_iteration and previous_iteration != iteration_to_modify else ""}
+{"We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code" if iteration == iteration_to_modify else ""}
+iteration_evaluator output for iteration_id = '{iteration.id}'
+iteration timestamp: {iteration.timestamp}
+========= BEGIN iteration_id = '{iteration.id}' EVALUATION =======================
+{json.dumps(iteration.evaluation_json, indent=4)}
+========= END iteration_id = '{iteration.id}' EVALUATION =======================
+        """)
+        for iteration in sorted(iterations, key=lambda i: i.timestamp)
+    ]
 
 
 def get_sys_prompt(
@@ -788,6 +806,7 @@ def get_sys_prompt(
 def generate_code(
         config: SelfDriverConfig,
         current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration,
         iteration_to_modify: SelfDrivingTaskIteration,
         planning_data: dict
 ) -> SelfDrivingTaskIteration:
@@ -797,6 +816,9 @@ def generate_code(
     
     for cfi in code_file_instructions:
         code_file_path_str: str = cfi.get("code_file_path")
+        if code_file_path_str.startswith("/"):
+            raise Exception(f"invalid file path: {code_file_path_str} - code file paths are forbidden from starting with a slash")
+        
         if code_file_path_str.startswith(str(config.sandbox_root_dir)):
             code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
         
@@ -830,6 +852,9 @@ def generate_code(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
                         instructions=instructions,
+                        current_iteration=current_iteration,
+                        previous_iteration=previous_iteration,
+                        iteration_to_modify=iteration_to_modify,
                         previous_exception=previous_exception
                     )
                     
@@ -897,6 +922,9 @@ def plan_code_changes(
             get_docs_msg(config)
         ),
         *common.ensure_list(
+            get_file_structure_msg(config.sandbox_root_dir)
+        ),
+        *common.ensure_list(
             config.guidance
         ),
         *common.ensure_list(
@@ -948,33 +976,15 @@ def write_code(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
         instructions,
-        previous_exception: Optional[CodeCompilationError]
+        current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration = None,
+        iteration_to_modify: SelfDrivingTaskIteration = None,
+        previous_exception: Optional[CodeCompilationError] = None
 ) -> str:
-    model = config.model_code_writing
-    
     code_file_path = code_version_to_modify.code_file.get_path()
     code_file_name = code_file_path.name
-    code_file_name_lower = code_file_name.lower()
-    if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
-        prompt = "codewriter--requirements.txt.md"
-    elif code_file_name_lower.endswith(".md"):
-        prompt = "codewriter--documentation_writer.md"
-    elif code_file_path.parent.name == "cloudformation" and code_file_name_lower.endswith(".yaml"):
-        prompt = "codewriter--aws_cloudformation_coder.md"
-    elif code_file_name.startswith("Dockerfile"):
-        prompt = "codewriter--dockerfile_coder.md"
-    elif code_file_name_lower.endswith(".py"):
-        prompt = "codewriter--python_coder.md"
-    elif code_file_name_lower.endswith(".sql"):
-        prompt = "codewriter--sql_coder.md"
-    elif code_file_name_lower.endswith(".js"):
-        prompt = "codewriter--javascript_coder.md"
-    elif code_file_name_lower.endswith(".html"):
-        prompt = "codewriter--html_coder.md"
-    elif code_file_name_lower.endswith(".css"):
-        prompt = "codewriter--css_coder.md"
-    else:
-        raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
+    
+    prompt = get_codewriter_system_prompt(code_file_path)
     
     messages: list[LlmMessage] = [
         *common.ensure_list(
@@ -984,6 +994,13 @@ def write_code(
             )),
         *common.ensure_list(
             get_dependencies_msg(config, for_planning=False)
+        ),
+        *common.ensure_list(
+            get_iteration_eval_llm_messages(
+                [previous_iteration, iteration_to_modify],
+                previous_iteration,
+                iteration_to_modify
+            )
         )
     ]
     
@@ -1038,13 +1055,43 @@ Please try writing the code again and avoid these errors
         f"Write code for {code_file_name}",
         config,
         messages,
-        model
+        config.model_code_writing
     ).text
     
     return validate_code(
         code_version_to_modify.code_file.get_path(),
         code
     )
+
+
+def get_codewriter_system_prompt(code_file_path):
+    code_file_name = code_file_path.name
+    code_file_name_lower = code_file_name.lower()
+    if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
+        prompt = "codewriter--requirements.txt.md"
+    elif code_file_name_lower.endswith(".json"):
+        prompt = "codewriter--json_coder.md"
+    elif code_file_name_lower.endswith(".eml"):
+        prompt = "codewriter--eml_coder.md"
+    elif code_file_name_lower.endswith(".md"):
+        prompt = "codewriter--documentation_writer.md"
+    elif code_file_path.parent.name == "cloudformation" and code_file_name_lower.endswith(".yaml"):
+        prompt = "codewriter--aws_cloudformation_coder.md"
+    elif code_file_name.startswith("Dockerfile"):
+        prompt = "codewriter--dockerfile_coder.md"
+    elif code_file_name_lower.endswith(".py"):
+        prompt = "codewriter--python_coder.md"
+    elif code_file_name_lower.endswith(".sql"):
+        prompt = "codewriter--sql_coder.md"
+    elif code_file_name_lower.endswith(".js"):
+        prompt = "codewriter--javascript_coder.md"
+    elif code_file_name_lower.endswith(".html"):
+        prompt = "codewriter--html_coder.md"
+    elif code_file_name_lower.endswith(".css"):
+        prompt = "codewriter--css_coder.md"
+    else:
+        raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
+    return prompt
 
 
 def validate_code(code_file_path: Path, code: str) -> str:
@@ -1082,6 +1129,12 @@ def validate_code(code_file_path: Path, code: str) -> str:
                 raise CodeCompilationError(code, f"CSS lint errors:\n{result.stdout.strip()}")
         finally:
             os.remove(tmp.name)
+    
+    elif code_file_name.endswith("json"):
+        try:
+            json.loads(code)
+        except Exception as e:
+            raise CodeCompilationError(code, f"json parse error:\n{e}")
     
     elif code_file_name.startswith("Dockerfile"):
         import subprocess
@@ -1522,12 +1575,13 @@ def get_relevant_code_files(
         code = code_version.code
         was_modified = code_version.task_iteration_id == iteration_to_modify.id
         
-        messages.append(LlmMessage.user({
-            "file_path": file_path,
-            "modified_in_previous_iteration": was_modified,
-            "may_edit": True,
-            "code": code,
-        }))
+        if code:
+            messages.append(LlmMessage.user({
+                "file_path": file_path,
+                "modified_in_previous_iteration": was_modified,
+                "may_edit": True,
+                "code": code,
+            }))
     
     # Step 1: Get the structured retrieval cues from the LLM
     cues = llm_chat(
@@ -1649,7 +1703,8 @@ def get_relevant_code_files(
     code_versions = list(latest_code_versions.values())
     
     for code_version in code_versions:
-        messages.append(code_version.get_llm_message())
+        if code_version.code:
+            messages.append(code_version.get_llm_message())
     
     return messages
 
@@ -1961,3 +2016,29 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
         })
     
     return db_creds
+
+
+def get_file_structure_msg(root_dir: Path) -> LlmMessage:
+    structure = {}
+    skip_dirs = {"env", "venv", "node_modules", "__pycache__"}
+    
+    for path in sorted(root_dir.glob("**/*")):
+        # Skip any path that contains a directory in skip_dirs
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        
+        relative_path = path.relative_to(root_dir)
+        parts = relative_path.parts
+        
+        current = structure
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        if path.is_file():
+            current[parts[-1]] = None
+        else:
+            current.setdefault(parts[-1], {})
+    
+    return LlmMessage.user(f"""
+## Project File Structure (read-only reference for reuse planning)
+{json.dumps(structure, indent=4)}
+    """)

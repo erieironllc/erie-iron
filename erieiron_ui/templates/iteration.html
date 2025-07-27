@@ -63,7 +63,7 @@
                 </button>
             </li>
         {% endif %}
-        {% if iteration.log_content %}
+        {% if iteration.log_content_execution %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs"
                         type="button" role="tab">
@@ -137,7 +137,7 @@
             {% endfor %}
         </div>
         <div class="tab-pane " id="logs" role="tabpanel" aria-labelledby="logs-tab">
-            <pre style="font-size: 8pt">{{ iteration.log_content }}</pre>
+            <pre style="font-size: 8pt">{{ iteration.log_content_execution }}</pre>
         </div>
 
         <div class="tab-pane  " id="processes" role="tabpanel" aria-labelledby="processes-tab">

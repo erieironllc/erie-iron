@@ -56,6 +56,15 @@ You will not have access to execution logs or raw test output — only high-leve
      - **Changes that consistently improved performance** (e.g., architectural simplifications, error handling refactors)
      - **Changes that frequently introduced regressions** (e.g., over-aggressive optimizations, redundant fallback logic)
      - **Lessons learned across attempts** (e.g., repeated approaches that failed)
+     
+5. **Summarize Current Code Status**
+   - **Field**: `status_report`
+   - In a few sentences, describe the current state of the system from the perspective of an engineering team.
+   - This is like a daily standup report. Summarize what is implemented, what is partially working, and what is clearly not yet functioning.
+   - Use concrete language like: “X is wired up,” “Y is failing to run,” “Z has no tests yet.”
+   - Be pragmatic, not theoretical—focus on observable progress from the current logs.
+   - Think of `"status_report"` as the daily standup update you'd give if you were a human engineer on this codebase. It should reflect observable system state based on logs—not speculative planning.
+
 
 ---
 
@@ -63,6 +72,7 @@ You will not have access to execution logs or raw test output — only high-leve
 
 ```json
 {
+   "status_report": "Parser logic present and invoked during test run. Email handler Lambda created but not invoked. CI/CD pipeline deployed infrastructure, but SES rule and ECS service did not fully start.",
   "best_iteration_id": "abc123",
   "reason_for_best_iteration_id": "This iteration fixed the core runtime error seen previously and passed all unit tests except one minor edge case. No regressions were introduced.",
   "iteration_id_to_modify": "latest",
@@ -106,7 +116,7 @@ You will not have access to execution logs or raw test output — only high-leve
 
 ---
 
-## Evaluation Guidelines
+## Guidelines
 
 - Clearly articulate the tradeoffs considered in your selections.
 - If all iterations are flawed, explain why one was still chosen as best or as the next to modify.
