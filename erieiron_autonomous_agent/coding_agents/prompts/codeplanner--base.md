@@ -109,6 +109,7 @@ Use this context to assess existing implementation, surface failures, and detect
     - What must be changed to fix it  
     Use this reasoning step to anticipate not only the immediate fix, but also any related issues likely to surface in the next execution cycle. Your goal is to reduce iteration count by proactively addressing clusters of related errors.
 
+
 4. **Plan Deterministic Edits**
     - Emit only `code_files` plans—stepwise, deterministic instructions for modifying code files.
     - Always consult the file structure metadata before proposing new files. If a file of similar purpose exists, reuse or extend it.
@@ -117,10 +118,27 @@ Use this context to assess existing implementation, surface failures, and detect
 
 ---
 
+### Test File Planning Constraints
+
+When a test file path is provided as `<test_file_path>`, you must follow these constraints:
+
+- **Only modify this test file.** You may not create additional test files under any circumstances.
+- You may modify or add tests inside `<test_file_path>` if doing so is necessary to bring the implementation closer to the GOAL or to fix a failing assertion.
+- You must preserve the original **intent and spirit** of the test logic generated in the first iteration, as defined by Test Driven Development (TDD). This means:
+  - Don’t remove or neuter failing tests just to make the code pass.
+  - Don’t fake inputs, mock outputs, or bypass test logic to “force” success.
+  - Do not remove test assertions unless they are clearly redundant or logically invalid.
+- It is acceptable to refactor or extend the test suite for clarity, coverage, or correctness — but only if it helps validate the GOAL more effectively.
+- Any test edits must be fully aligned with evaluator feedback and must advance the system toward satisfying the GOAL.
+
+Violating these constraints may result in invalid task execution or untrustworthy success signals, and must be avoided.
+
+---
+
 ### Infrastructure-Specific Planning Requirements
 
-- All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `cloudformation/infrastructure.yaml`.
-- All CloudFormation definitions must go in the file `cloudformation/infrastructure.yaml`. No other CloudFormation files may be created or modified.
+- All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `infrastructure.yaml`.
+- All CloudFormation definitions must go in the file `infrastructure.yaml`. No other CloudFormation files may be created or modified.
 - If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
@@ -134,27 +152,16 @@ Use this context to assess existing implementation, surface failures, and detect
     - Do not assume or configure any locally running PostgreSQL service.
     - Source all connection details from environment variables or AWS Secrets Manager.
 
-- All infrastructure must be defined in `infrastructure.yaml` to ensure coherent, atomic stack deployment and teardown. If the correct file is not being used, the planning agent must correct this by placing all changes in `cloudformation/infrastructure.yaml`. It must never propose or reference any other CloudFormation file, and must not return a `blocked` result for this case.
+- All infrastructure must be defined in `infrastructure.yaml` to ensure coherent, atomic stack deployment and teardown. If the correct file is not being used, the planning agent must correct this by placing all changes in `infrastructure.yaml`. It must never propose or reference any other CloudFormation file, and must not return a `blocked` result for this case.
 
 -- **Forbidden Actions**
 - Do not generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
-- You must never create, modify, or reference any CloudFormation file other than `cloudformation/infrastructure.yaml`. If a plan attempts to use a different CloudFormation file, the planning agent must halt and emit a `blocked` result.
+- You must never create, modify, or reference any CloudFormation file other than `infrastructure.yaml`. If a plan attempts to use a different CloudFormation file, the planning agent must halt and emit a `blocked` result.
 - Do not create new files when an existing file already covers the same functional scope, as determined by the project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.
     
 ---
 
 ## Output Fields
-
-- `execute_module`
-    - Must be a Python module (e.g., `src/task/execute.py`) that defines the `execute()` or `train()` function.
-    - This field must **never** reference a `.yaml`, `.json`, or other non-Python file.
-    - It should always point to the Django management command that performs the task logic.
-
-- `test_module`
-    - Must be a Python test module (e.g., `src/task/test_execute.py`) that defines the `test()` function or standard Django-style unit tests.
-    - This module must **never** reference a `.yaml`, `.json`, or other non-Python file.
-    - This module should validate the behavior of `execute_module`.
-    - The `test_module` must assert that the GOAL has been achieved.
 
  - `code_files`
     - A list of file-level edit plans. Each item must include:
@@ -162,6 +169,32 @@ Use this context to assess existing implementation, surface failures, and detect
           - File paths must always be relative paths. Never begin a file path with a slash (`/`). Any file path starting with `/` is invalid and must be corrected.
         - `instructions`: a list of step-by-step planning instructions
             - The `instructions` list must be in execution order. Earlier steps must not depend on later steps.
+        - `code_writing_model`: The LLM model that will be used to write the code based on the instructions. **Must be one of**:
+            - claude-3-opus-20240229
+            - gpt-4o-2024-08-06
+            - gpt-4o
+            - gpt-4-turbo
+            - gpt-4.5
+            - claude-3-7-sonnet-20250219
+            - claude-3-5-sonnet-20240620
+            - o3-pro-2025-06-10
+            - o3-mini-2025-01-31
+
+The selection of `code_writing_model` must be done carefully and thoughtfully to optimize for both effectiveness and cost. Follow these guidelines:
+
+- Use lower-cost models (e.g., `o3-mini-2025-01-31`, `claude-3-5-sonnet-20240620`, `gpt-4o`) for simple, isolated changes such as:
+  - Small function edits
+  - Logging adjustments
+  - Static content updates
+  - Markdown or documentation generation
+- Use more powerful models (e.g., `claude-3-opus-20240229`, `gpt-4o-2024-08-06`) for:
+  - Multi-file logic coordination
+  - Complex branching, parsing, or concurrency
+  - AWS infrastructure, IAM policies, or CloudFormation generation
+  - Tasks where lower-power models have failed in recent iterations
+
+You should escalate model complexity only when previous attempts failed or when the planning complexity clearly warrants it. Repeated use of expensive models without justification may deplete the task budget and force human escalation — this must be avoided.
+
         - `guidance`: **Required high-level advice for the code writer.** This field provides strategic context that falls outside of any individual instruction step. It should help the code writer make sound implementation decisions by surfacing:
           - **Common pitfalls to avoid** (especially ones seen in prior iterations)
           - **Effective patterns or strategies** that have proven successful
@@ -271,12 +304,11 @@ Here is an example of a complete output structure:
 
 ```json
 {
-   "execute_module": "src/main.py",
-   "test_module": "src/test_main.py",
    "code_files": [
       {
          "code_file_path": "src/main.py",
          "guidance": "This file previously failed due to an IndexError when accessing a list. Ensure bounds checking is added before list access. Also, log the list length and the accessed index to aid in debugging if the issue recurs. Avoid using try/except to suppress the error silently—this bug needs visibility if it occurs again.",
+         "code_writing_model": "claude-3-5-sonnet-20240620",
          "instructions": [
             {
                "step_number": 1,
@@ -286,8 +318,9 @@ Here is an example of a complete output structure:
          ]
       },
       {
-         "code_file_path": "cloudformation/infrastructure.yaml",
+         "code_file_path": "infrastructure.yaml",
          "guidance": "The evaluator shows that the Lambda failed to initialize due to a missing AWS region. This is a common configuration error when Boto3 is used without setting `AWS_DEFAULT_REGION`. Be sure to place the environment variable inside the correct Lambda resource's `Properties.Environment.Variables` block, and double-check that no other parameters are affected. Avoid adding this to global config blocks that don't get inherited by Lambda functions.",
+         "code_writing_model": "gpt-4o-2024-08-06",
          "instructions": [
             {
                "step_number": 1,
@@ -312,7 +345,7 @@ Here is an example of a complete output structure:
 - If the code runs but the GOAL is not met, propose the next concrete improvement.
 - If the issue is with a file that causes build failure but the correction is straightforward, propose the fix rather than returning a `blocked` result. Favor self-unblocking whenever there is enough context.
 - If the GOAL is unclear or validation is missing, emit a `blocked` object.
-- If any proposed `code_file_path` includes a CloudFormation YAML file other than `cloudformation/infrastructure.yaml`, that is a violation of infrastructure constraints and must be corrected by re-planning the change within `cloudformation/infrastructure.yaml`. This condition must never result in a `blocked` output - rather just edit the existing `cloudformation/infrastructure.yaml` file 
+- If any proposed `code_file_path` includes a CloudFormation YAML file other than `infrastructure.yaml`, that is a violation of infrastructure constraints and must be corrected by re-planning the change within `infrastructure.yaml`. This condition must never result in a `blocked` output - rather just edit the existing `infrastructure.yaml` file 
 - If no matching code files are returned, begin planning using conventional file/module layout for the task type and document your assumptions.
 - All plans must include diagnostic logging to support debugging and validation.
     - ML models must log evaluation metrics with a `[METRIC]` prefix (e.g., `[METRIC] f1=0.89`)

@@ -55,6 +55,7 @@ MODEL_TO_IMPL = {
     LlmModel.GEMINI_2_5_PRO: gemini_chat_api,
     LlmModel.GEMINI_2_0_FLASH: gemini_chat_api,
 
+    LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE: claude_chat_api,
     LlmModel.CLAUDE_3_7: claude_chat_api,
     LlmModel.CLAUDE_3_5: claude_chat_api,
 

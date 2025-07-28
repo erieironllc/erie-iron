@@ -70,13 +70,11 @@ class SelfDriverConfig:
         self.log_f = None
         self.git = self.self_driving_task.get_git()
         
-        self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o
-        self.model_code_planning = LlmModel.OPENAI_GPT_4o
-        self.model_code_writing = LlmModel.OPENAI_O3_MINI
+        self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o_20240806
+        self.model_code_planning = LlmModel.OPENAI_GPT_4o_20240806
         
         # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
         # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
-        # self.model_code_writing = LlmModel.OPENAI_O3_MINI
 
 
 def execute(task_id: str):
@@ -98,7 +96,23 @@ def execute(task_id: str):
                     stop_reason = f"Stopping - hit the max budget ${config.budget :.2f}"
                     break
                 
-                if i == 0:
+                if not self_driving_task.test_file_path:
+                    current_iteration, _, _ = self_driving_task.iterate()
+                    if not config.business.codefile_set.exists():
+                        config.business.snapshot_code(current_iteration, include_erie_common=True)
+                    
+                    log_initial_test_only_headline(
+                        config,
+                        current_iteration
+                    )
+                    
+                    write_initial_test(
+                        config,
+                        current_iteration
+                    )
+                
+                elif i == 0:
+                    # we've re-started an self driving task - just execute on the first time around
                     current_iteration = self_driving_task.get_most_recent_iteration()
                     if not current_iteration:
                         current_iteration, _, _ = self_driving_task.iterate()
@@ -109,16 +123,12 @@ def execute(task_id: str):
                     )
                     current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
                     
-                    if not config.business.codefile_set.exists():
-                        config.business.snapshot_code(current_iteration, include_erie_common=True)
-                    
                     log_execution_only_headline(
                         config,
                         current_iteration
                     )
                 else:
                     current_iteration, previous_iteration, iteration_to_modify = self_driving_task.iterate()
-                    
                     iteration_to_modify.write_to_disk()
                     
                     log_iteration_headline(
@@ -126,7 +136,7 @@ def execute(task_id: str):
                         current_iteration,
                         iteration_to_modify
                     )
-        
+                    
                     coding_logfile = common.create_temp_file(f"iteration-{str(current_iteration.id)}", ".coding.log")
                     with open(coding_logfile, "w") as coding_log_f:
                         logging.info(f"PHASE - get_relevant_code_files: {current_iteration.id}")
@@ -145,15 +155,15 @@ def execute(task_id: str):
                             relevant_code_files
                         )
                         pprint.pprint(planning_data)
-                    
-                    logging.info(f"PHASE - generate_code: {current_iteration.id}")
-                    generate_code(
-                        config,
-                        current_iteration,
-                        previous_iteration,
-                        iteration_to_modify,
-                        planning_data
-                    )
+                        
+                        logging.info(f"PHASE - generate_code: {current_iteration.id}")
+                        generate_code(
+                            config,
+                            current_iteration,
+                            previous_iteration,
+                            iteration_to_modify,
+                            planning_data
+                        )
                 
                 try:
                     try:
@@ -280,6 +290,26 @@ sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}
 total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
 
 No coding - just gonna execute iteration {current_iteration.id} (v{current_iteration.version_number})
+tail -f {os.path.abspath(config.log_path)}
+
+https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
+--------------------------------------------------
+                                    """
+    print(headline)
+    log(config, headline)
+
+
+def log_initial_test_only_headline(config: SelfDriverConfig, current_iteration: SelfDrivingTaskIteration):
+    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
+    headline = f"""
+--------------------------------------------------
+{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
+
+Task id {config.task.id} 
+sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
+total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
+
+First execution - will write the test for test driven development
 tail -f {os.path.abspath(config.log_path)}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
@@ -852,6 +882,7 @@ def generate_code(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
                         instructions=instructions,
+                        code_writing_model=LlmModel(cfi.get("code_writing_model")),
                         current_iteration=current_iteration,
                         previous_iteration=previous_iteration,
                         iteration_to_modify=iteration_to_modify,
@@ -877,6 +908,82 @@ def generate_code(
     return current_iteration
 
 
+def write_initial_test(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration
+):
+    task = config.task
+    
+    previous_exception = None
+    
+    for i in range(3):
+        try:
+            messages = [
+                get_sys_prompt("codewriter--initial_test.md"),
+                # Insert strict Python-only output message at the top:
+                LlmMessage.user("Please output only valid Python source code. Do not include Markdown formatting, triple backticks, or explanatory comments. The output must be a single Python file that can be executed directly."),
+                LlmMessage.user(f'''
+**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**
+
+# Goal
+{task.description}
+
+# Test Plan
+{task.test_plan or 'none'}
+
+# Risk Notes
+{task.risk_notes or 'none'}
+        ''')
+            ]
+            
+            if previous_exception:
+                messages.append(LlmMessage.user(f"""
+    Your previous attempt at writing this code failed with this exception:
+    {previous_exception}
+
+    Please attempt to write the code again and avoid causing this error
+                """))
+            
+            code = llm_chat(
+                "Write initial test",
+                config,
+                messages,
+                LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE
+            ).text
+            
+            test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
+            test_file_path_dir.mkdir(parents=True, exist_ok=True)
+            test_file_path = test_file_path_dir / common.sanitize_filename(f'test_{task.id}.py')
+            
+            validate_code(test_file_path, code)
+            test_file_path.write_text(code)
+            
+            with transaction.atomic():
+                code_verson = current_iteration.get_code_version(test_file_path)
+                SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+                    test_file_path=test_file_path.relative_to(config.sandbox_root_dir)
+                )
+                config.self_driving_task.refresh_from_db(fields=["test_file_path"])
+            
+            return test_file_path
+        except Exception as e:
+            logging.exception(e)
+            previous_exception = e
+    
+    raise previous_exception
+
+
+def get_budget_message(config) -> LlmMessage:
+    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
+    
+    return LlmMessage.user(f"""
+## Budget Information
+This is your attempt number {iteration_count + 1} on this Task
+
+You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget of ${config.budget :.2f} USD
+    """)
+
+
 def plan_code_changes(
         config: SelfDriverConfig,
         current_iteration: SelfDrivingTaskIteration,
@@ -890,13 +997,21 @@ def plan_code_changes(
     task = config.self_driving_task.task
     task_type = TaskType(task.task_type)
     
+    system_prompt_files = [
+        "codeplanner--base.md",
+        MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type]
+    ]
+    
+    if config.self_driving_task.test_file_path:
+        system_prompt_files.append(
+            "codeplanner--test_driven_development.md"
+        )
+    
     messages = [
         *common.ensure_list(get_sys_prompt(
+            system_prompt_files,
             [
-                "codeplanner--base.md",
-                MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type]
-            ],
-            [
+                ("<test_file_path>", str(config.self_driving_task.test_file_path or "")),
                 ("<aws_tag>", str(business.service_token)),
                 ("<db_name>", str(business.service_token)),
                 ("<iam_role_name>", str(business.get_iam_role_name())),
@@ -904,6 +1019,9 @@ def plan_code_changes(
                 ("<sandbox_dir>", str(config.sandbox_root_dir))
             ]
         )),
+        *common.ensure_list(
+            get_budget_message(config)
+        ),
         *common.ensure_list(
             build_previous_iteration_context_messages(
                 config,
@@ -922,7 +1040,7 @@ def plan_code_changes(
             get_docs_msg(config)
         ),
         *common.ensure_list(
-            get_file_structure_msg(config.sandbox_root_dir)
+            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.deployment_failed() else []
         ),
         *common.ensure_list(
             config.guidance
@@ -933,19 +1051,11 @@ The previous iteration failed at the deployment stage.
 
 **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
 - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
-- You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs, requirements.txt, etc)
+- You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
+
+**YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM**
             """)
-            if iteration_to_modify.deployment_failed() else None
-        ),
-        *common.ensure_list(
-            LlmMessage.user(f"""
-This is the first attempt at implementing this task.  Please take your time to think of the best initial architecture.
-Identify an architecture that will allow for efficient code iteration and give us the best start towards achieving the user's GOAL. 
-                """)
-            if not iteration_to_modify else None
-        ),
-        *common.ensure_list(
-            get_goal_msg(config)
+            if iteration_to_modify.deployment_failed() else get_goal_msg(config)
         )
     ]
     
@@ -954,6 +1064,7 @@ Identify an architecture that will allow for efficient code iteration and give u
         config,
         messages,
         model,
+        debug=True,
         output_schema=PROMPTS_DIR / "codeplanner.schema.json"
     ).json()
     
@@ -976,6 +1087,7 @@ def write_code(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
         instructions,
+        code_writing_model: LlmModel,
         current_iteration: SelfDrivingTaskIteration,
         previous_iteration: SelfDrivingTaskIteration = None,
         iteration_to_modify: SelfDrivingTaskIteration = None,
@@ -1018,6 +1130,7 @@ def write_code(
         messages.append(
             LlmMessage.user(
                 f"""
+**YOUR ONE AND ONLY TASK:**
 Modify {code_file_path}, following each of these instructions exactly and in order:
 
 {json.dumps(instructions, indent=4)}
@@ -1029,7 +1142,8 @@ Modify {code_file_path}, following each of these instructions exactly and in ord
         messages.append(
             LlmMessage.user(
                 f"""
-Please write the initial version of {code_file_path}, following each of these instructions exactly and in order:
+**YOUR ONE AND ONLY TASK:**
+Write the initial version of {code_file_path}, following each of these instructions exactly and in order:
 
 {json.dumps(instructions, indent=4)}
         """
@@ -1055,7 +1169,8 @@ Please try writing the code again and avoid these errors
         f"Write code for {code_file_name}",
         config,
         messages,
-        config.model_code_writing
+        code_writing_model,
+        debug=True
     ).text
     
     return validate_code(
@@ -1075,7 +1190,7 @@ def get_codewriter_system_prompt(code_file_path):
         prompt = "codewriter--eml_coder.md"
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
-    elif code_file_path.parent.name == "cloudformation" and code_file_name_lower.endswith(".yaml"):
+    elif code_file_name == "infrastructure.yaml":
         prompt = "codewriter--aws_cloudformation_coder.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
@@ -1153,7 +1268,7 @@ def validate_code(code_file_path: Path, code: str) -> str:
         finally:
             os.remove(tmp.name)
     
-    elif False and code_file_path.parent.name == "cloudformation" and code_file_name.endswith(".yaml"):
+    elif False and code_file_name == "infrastructure.yaml":
         ## skipping this for now, as it seems like it's better for the feedback look to let cloudformation surface the errors
         import subprocess
         import tempfile
@@ -1506,7 +1621,7 @@ Please plan code changes that work towards achieving this GOAL:
 
 
 def get_cloudformation_file(config: SelfDriverConfig) -> Path:
-    return common.assert_exists(config.sandbox_root_dir / "cloudformation" / "infrastructure.yaml")
+    return common.assert_exists(config.sandbox_root_dir / "infrastructure.yaml")
 
 
 def get_relevant_code_files(
@@ -1520,14 +1635,9 @@ def get_relevant_code_files(
     if iteration_to_modify.deployment_failed():
         deployment_files: list[Path] = [
             config.sandbox_root_dir / "Dockerfile",
+            config.sandbox_root_dir / "infrastructure.yaml",
             config.sandbox_root_dir / "requirements.txt"
         ]
-        
-        # Include all .yaml files in the cloudformation directory
-        cloudformation_dir = config.sandbox_root_dir / "cloudformation"
-        if cloudformation_dir.exists():
-            for p in cloudformation_dir.glob("*.yaml"):
-                deployment_files.append(Path(p).relative_to(config.sandbox_root_dir))
         
         for f in deployment_files:
             try:
@@ -1552,6 +1662,15 @@ def get_relevant_code_files(
     
     iteration_code_files = set()
     iteration_code_versions = []
+    
+    test_file_path = config.self_driving_task.test_file_path
+    if test_file_path:
+        test_code_file = CodeFile.get(business=config.business, code_file_path=test_file_path)
+        iteration_code_versions.append(
+            test_code_file.get_version(iteration_to_modify)
+            or test_code_file.get_latest_version()
+            or test_code_file.init_from_codefile(iteration_to_modify, test_file_path)
+        )
     
     with transaction.atomic():
         code_file_path = get_cloudformation_file(config)
@@ -2020,7 +2139,7 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
 
 def get_file_structure_msg(root_dir: Path) -> LlmMessage:
     structure = {}
-    skip_dirs = {"env", "venv", "node_modules", "__pycache__"}
+    skip_dirs = {".git", "vendor", "img", "compiled", "artifacts", ".idea", "env", "venv", "node_modules", "__pycache__"}
     
     for path in sorted(root_dir.glob("**/*")):
         # Skip any path that contains a directory in skip_dirs

@@ -6,9 +6,12 @@ You receive:
 1. A **task description** (natural language)
 2. **Acceptance criteria** (functional expectations or success conditions)
 
+
 You output:
 - A valid Django-style Python test module that will execute as part of the test suite
 - The test must confirm that the GOAL has been achieved
+
+> Do not append summaries, usage explanations, or extended comments at the end of the file. The output must terminate after the final line of Python code.
 
 ---
 

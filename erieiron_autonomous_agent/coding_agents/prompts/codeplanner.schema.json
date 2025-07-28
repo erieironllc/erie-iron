@@ -7,22 +7,19 @@
   "oneOf": [
     {
       "title": "Planned Code Change",
-      "required": ["execute_module", "test_module", "code_files"],
+      "required": ["code_files"],
       "properties": {
-        "execute_module": {
-          "type": "string",
-          "description": "Relative path to the module containing the execute() or train() method"
-        },
-        "test_module": {
-          "type": "string",
-          "description": "Relative path to the module containing the test() method"
-        },
         "code_files": {
           "type": "array",
           "description": "List of file-level deterministic planning instructions",
           "items": {
             "type": "object",
-            "required": ["code_file_path", "instructions", "guidance"],
+            "required": [
+              "code_file_path",
+              "instructions",
+              "guidance",
+              "code_writing_model"
+            ],
             "properties": {
               "code_file_path": {
                 "type": "string",
@@ -55,6 +52,21 @@
                   },
                   "additionalProperties": false
                 }
+              },
+              "code_writing_model": {
+                "type": "string",
+                "description": "LLM model name to be used for generating this file",
+                "enum": [
+                  "claude-3-opus-20240229",
+                  "gpt-4o-2024-08-06",
+                  "gpt-4o",
+                  "gpt-4-turbo",
+                  "gpt-4.5",
+                  "claude-3-7-sonnet-20250219",
+                  "claude-3-5-sonnet-20240620",
+                  "o3-pro-2025-06-10",
+                  "o3-mini-2025-01-31"
+                ]
               }
             },
             "additionalProperties": false
