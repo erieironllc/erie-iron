@@ -193,7 +193,7 @@ def execute(task_id: str):
                         # pprint.pprint(planning_data)
                         
                         logging.info(f"PHASE - generate_code: {current_iteration.id}")
-                        code_review_exception = None
+                        cr_exception = None
                         for review_iteration_idx in range(5):
                             try:
                                 generate_code(
@@ -202,7 +202,7 @@ def execute(task_id: str):
                                     current_iteration,
                                     previous_iteration,
                                     iteration_to_modify,
-                                    code_review_exception
+                                    cr_exception
                                 )
                                 perform_code_review(
                                     config,
@@ -213,6 +213,7 @@ def execute(task_id: str):
                                 )
                                 break
                             except CodeReviewException as code_review_exception:
+                                cr_exception = code_review_exception
                                 if code_review_exception.bad_plan:
                                     raise BadPlan(
                                         f"Code Review failed - Reviewer thinks the plan is bad.  Need a new plan.  ",
@@ -272,7 +273,7 @@ Planning agent produced a bad plan:
 {traceback.format_exc()}
 
 planning data:
-{json.dumps(bad_plan_exception, indent=4)}
+{json.dumps(bad_plan_exception.plan_data, indent=4)}
                         """
                     )
                 current_iteration.refresh_from_db(fields=["log_content_execution"])
@@ -1330,7 +1331,7 @@ The previous iteration failed at the deployment stage.
         config,
         messages,
         model,
-        debug=True,
+        debug=False,
         output_schema=PROMPTS_DIR / "codeplanner.schema.json"
     ).json()
     
@@ -1480,7 +1481,7 @@ Please try writing the code again and avoid these errors
         config,
         messages,
         code_writing_model,
-        debug=True
+        debug=False
     ).text
     
     for i in range(5):
