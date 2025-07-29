@@ -1054,15 +1054,18 @@ class CodeVersion(BaseErieIronModel):
                     codebert_embedding=get_codebert_embedding(method_data["code"])
                 )
     
-    def get_llm_message(self):
-        from erieiron_common.llm_apis.llm_interface import LlmMessage
+    def get_llm_message_data(self, include_diff=True) -> dict:
         code_file = self.code_file
-        return LlmMessage.user({
+        d = {
             "file_path": code_file.file_path,
-            "modified_in_previous_iteration": False,
             "may_edit": "venv/" not in str(code_file.get_path()),
             "code": self.code,
-        })
+        }
+        
+        if include_diff:
+            d['diff_against_previous_version'] = self.get_diff()
+        
+        return d
 
 
 class CodeMethod(BaseErieIronModel):

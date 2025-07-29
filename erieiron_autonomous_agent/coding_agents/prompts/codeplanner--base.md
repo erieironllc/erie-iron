@@ -229,6 +229,7 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
                 - `action`: a short directive (e.g., "modify function `execute`")
                 - `details`: a complete, precise, and testable explanation of the code change. This must contain all necessary information the code writer will need, because the writer does not see logs, planner reasoning, or any context beyond this instruction. Include:
                     - The full logic of the change
+                    - If requesting the addition or modification of a method, detail the full signature - including input parameters with type and output data-structure definition
                     - If the change was motivated by error message(s) in the evaluation entries, include the full contents of the error message(s)
                     - Any assumptions, data structures, or function names involved
                     - Expected side effects, if relevant
