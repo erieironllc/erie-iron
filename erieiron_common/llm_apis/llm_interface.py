@@ -27,24 +27,24 @@ def chat(
     if output_schema and output_schema.exists():
         code_response = True
         messages = [LlmMessage.sys("The output json will be validated against this schema", output_schema)] + messages
-        
+    
     if not model:
         models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
     else:
         models = common.ensure_list(model)
-
+    
     for idx, model in enumerate(models):
         model = LlmModel(model)
-
+        
         try:
             impl = MODEL_TO_IMPL[LlmModel(model)]
-
+            
             messages = LlmMessage.parse_prompt(model, messages, code_response)
             json_messages = [m.get_message_json(model) for m in messages]
-
+            
             if debug:
                 debug_messages(model, messages)
-
+            
             start_time = time.time()
             resp = impl.chat(
                 json_messages,
@@ -54,15 +54,15 @@ def chat(
             chat_time = (time.time() - start_time) * 1000
             token_count = LlmMessage.get_total_token_count(model, messages)
             logging.info(f"chat with {model.value} took {chat_time:.2f}ms for {token_count} tokens")
-
+            
             response_text = post_process_response(resp)
-
+            
             price_total, price_input, price_output = LlmMessage.get_price(
                 model,
                 messages,
                 response_text
             )
-
+            
             resp = LlmResponse(
                 text=response_text,
                 model=model,
@@ -72,20 +72,20 @@ def chat(
                 token_count=token_count,
                 chat_millis=chat_time
             )
-
+            
             if output_schema:
                 output_schema = common.assert_exists(output_schema)
                 with open(output_schema, "r") as schema_file:
                     schema = json.load(schema_file)
-
+                
                 for i in range(5):
                     try:
                         jsonschema_validate(instance=resp.json(), schema=schema)
                         break
-                    except Exception:
+                    except Exception as e:
                         # Attempt to coerce JSON to schema using a cheaper model
-                        resp.parsed_json = coerce_json_to_schema(resp.text, schema)
-
+                        resp.parsed_json = coerce_json_to_schema(resp.text, schema, e)
+                
                 if debug:
                     print(f"""
 --------------------------------------
@@ -99,7 +99,7 @@ def chat(
 {model} response:
 {response_text}
 --------------------------------------""")
-
+            
             return resp
         except Exception as e:
             is_last = idx == len(models) - 1
@@ -127,7 +127,7 @@ def sanitize_prompt(raw_text: str) -> str:
         return json.dumps(raw_text, indent=4, cls=ErieIronJSONEncoder)
     else:
         return raw_text
-
+    
     # pii_entities = analyzer.analyze(text=raw_text, language="en")
     # operator_config = {
     #     "DEFAULT": OperatorConfig(
@@ -139,13 +139,13 @@ def sanitize_prompt(raw_text: str) -> str:
     #         },
     #     )
     # }
-
+    
     # sanitized = anonymizer.anonymize(
     #     text=raw_text,
     #     analyzer_results=pii_entities,
     #     operators=operator_config,
     # )
-
+    
     # return sanitized.text
 
 
@@ -159,11 +159,11 @@ class LlmResponse:
     token_count: int
     chat_millis: float
     parsed_json: Optional[dict] = None
-
+    
     def json(self) -> dict:
         if not self.parsed_json:
             self.parsed_json = ensure_parsable_json(self.text)
-
+        
         return self.parsed_json
 
 
@@ -172,15 +172,15 @@ class LlmMessage:
         if isinstance(text, Path) and text.exists():
             file = text
             text = None
-
+        
         self.message_type: LlmMessageType = LlmMessageType(message_type)
         self.file = file
-
+        
         if text and file:
             self.text = ""
             for line in text.split("\n"):
                 self.text += f"{common.comment_out_line(file, line)}\n"
-
+            
             self.text += common.comment_out_line(file, f"=============== start {file} contents ================")
             self.text += "\n"
             self.text += Path(file).read_text()
@@ -192,26 +192,26 @@ class LlmMessage:
             self.text = Path(file).read_text()
         else:
             raise Exception("inconceivable")
-
+    
     def __str__(self):
         return (f"""-----------------------
 {self.message_type.label()}  Message:
 {self.text}
 -----------------------""")
-
+    
     @staticmethod
     def get_price(model: LlmModel, input_messages: List['LlmMessage'], response_text: str) -> Tuple[float, float, float]:
         usd_per_million_input_token = MODEL_PRICE_USD_PER_MILLION_TOKENS[model]['input']
         usd_per_million_output_token = MODEL_PRICE_USD_PER_MILLION_TOKENS[model]['output']
-
+        
         price_input = LlmMessage.get_total_token_count(model, input_messages) * usd_per_million_input_token / 1_000_000
         price_output = LlmMessage._get_token_count(model, response_text) * usd_per_million_output_token / 1_000_000
-
+        
         return price_input + price_output, price_input, price_output
-
+    
     def get_message_json(self, model: LlmModel) -> dict:
         model = LlmModel(model)
-
+        
         role_str = self.message_type.value
         if model in [LlmModel.GEMINI_2_5_PRO, LlmModel.GEMINI_2_0_FLASH]:
             if LlmMessageType.SYSTEM.eq(self.message_type):
@@ -221,7 +221,7 @@ class LlmMessage:
         elif model in [LlmModel.CLAUDE_3_7, LlmModel.CLAUDE_3_5]:
             if LlmMessageType.SYSTEM.eq(self.message_type):
                 role_str = "user"
-
+        
         sanitized_text = sanitize_prompt(self.text)
         if model in [LlmModel.GEMINI_2_5_PRO, LlmModel.GEMINI_2_0_FLASH]:
             d = {
@@ -233,9 +233,9 @@ class LlmMessage:
                 "role": role_str,
                 "content": sanitized_text
             }
-
+        
         return d
-
+    
     @staticmethod
     def get_total_token_count(model: LlmModel, messages: List['LlmMessage']) -> int:
         messages_processed = []
@@ -244,28 +244,28 @@ class LlmMessage:
                 messages_processed.append(m)
             else:
                 messages_processed.append(LlmMessage.user(str(m)))
-
+        
         return sum([m.get_token_count(model) for m in messages_processed]) + (4 * len(messages_processed))
-
+    
     @staticmethod
     def _get_token_count(model: LlmModel, s: str) -> int:
         try:
             encoding = tiktoken.encoding_for_model(model.value)
         except KeyError:
             encoding = tiktoken.get_encoding("cl100k_base")
-
+        
         return len(encoding.encode(s))
-
+    
     def get_token_count(self, model: LlmModel) -> int:
         return LlmMessage._get_token_count(
             model,
             json.dumps(self.get_message_json(model), cls=ErieIronJSONEncoder)
         )
-
+    
     @staticmethod
     def parse_prompt(model, messages_in: list['LlmMessage'], code_response=False) -> List['LlmMessage']:
         messages_out = []
-
+        
         for m in common.filter_none(messages_in):
             if isinstance(m, str):
                 if m:
@@ -281,25 +281,25 @@ class LlmMessage:
                         messages_out.append(m)
             else:
                 raise ValueError(f"invalid message type {m}")
-
+        
         # if code_response:
         #     messages_out.append(
         #         LlmMessage(
         #             message_type=LlmMessageType.SYSTEM,
         #             text="""
-# respond only with valid code or JSON. do not include any markdown formatting, such as triple backticks or language tags.
-# if responding with JSON, the property names must be encosed in "double quotes"
-#                     """
-#                 )
-#             )
-
+        # respond only with valid code or JSON. do not include any markdown formatting, such as triple backticks or language tags.
+        # if responding with JSON, the property names must be encosed in "double quotes"
+        #                     """
+        #                 )
+        #             )
+        
         token_count = LlmMessage.get_total_token_count(model, messages_out)
         while token_count > MODEL_TO_MAX_TOKENS.get(model, sys.maxsize):
             messages_out = messages_out[1:]
             token_count = LlmMessage.get_total_token_count(model, messages_out)
-
+        
         return messages_out
-
+    
     @classmethod
     def assistant(cls, txt, file=None):
         return LlmMessage(
@@ -307,7 +307,7 @@ class LlmMessage:
             text=txt,
             file=file
         )
-
+    
     @classmethod
     def user(cls, txt, file=None):
         return LlmMessage(
@@ -315,7 +315,7 @@ class LlmMessage:
             text=txt,
             file=file
         )
-
+    
     @classmethod
     def sys(cls, txt, file=None):
         return LlmMessage(
@@ -323,7 +323,7 @@ class LlmMessage:
             text=txt,
             file=file
         )
-
+    
     @classmethod
     def log(cls, messages: list['LlmMessage']):
         for m in messages:
@@ -340,21 +340,21 @@ def ensure_parsable_json(json_text: str) -> dict:
     for i in range(5):
         if not json_text:
             raise Exception(f"json_text is empty")
-
+        
         while len(json_text) > 0 and json_text[0] != "{":
             json_text = json_text[1:]
-
+        
         while len(json_text) > 0 and json_text[-1] != "}":
             json_text = json_text[:-1]
-
+        
         if common.is_empty(json_text):
             raise Exception(f"unable to parse json\n{orig_json_text}")
-
+        
         try:
             return json.loads(json_text)
         except Exception as e:
             print(f"----------\n{json_text}\n\n{e}\n--------------")
-
+            
             last_e = e
             llm_response_reformat = chat(
                 f"""
@@ -374,7 +374,7 @@ resond only with parsable json.  do not include any comments, explanations, or n
                 code_response=True
             )
             json_text = llm_response_reformat.text
-
+    
     raise last_e
 
 
@@ -383,14 +383,14 @@ def debug_messages(model: LlmModel, messages: list[LlmMessage]):
 --------------- --------------- --------------- --------------- ---------------
 Begin chat with {model}
     """)
-
+    
     for m in common.ensure_list(messages):
-        print(f"\n\n\n{m}\n\n\n")
-
+        print(f"\n\n\n{common.truncate_text_lines(m)}\n\n\n")
+    
     print("--------------- --------------- --------------- --------------- ---------------")
 
 
-def coerce_json_to_schema(json_text: str, schema: dict) -> dict:
+def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
     prompt = f"""
 You are a helpful assistant that receives a JSON text and a JSON schema.
 Your task is to correct and coerce the JSON text so that it fully conforms to the provided JSON schema.
@@ -402,12 +402,16 @@ Here is the JSON text:
 Here is the JSON schema:
 {json.dumps(schema, indent=4)}
 
-Please provide the corrected JSON text:
+Here is the exception from the prevous attempt at validation:
+{e}
+
+Please provide the corrected JSON text
 """
-    last_exception = None
+    last_exception = e
     # Try up to 2 retries with OPENAI_GPT_3_5_TURBO
     for attempt in range(2):
         try:
+            logging.error(f"fixing invalid json - ({last_exception})")
             response = chat(
                 messages=[LlmMessage.user(prompt)],
                 model=LlmModel.OPENAI_GPT_3_5_TURBO,
@@ -418,8 +422,10 @@ Please provide the corrected JSON text:
             return coerced_json
         except Exception as e:
             last_exception = e
+    
     # Fallback once to OPENAI_GPT_4O
     try:
+        logging.error(f"fixing invalid json - ({last_exception})")
         response = chat(
             messages=[LlmMessage.user(prompt)],
             model=LlmModel.OPENAI_GPT_4o,
@@ -430,6 +436,6 @@ Please provide the corrected JSON text:
         return coerced_json
     except Exception as e:
         last_exception = e
-
+    
     # If all attempts fail, raise the last exception
     raise last_exception

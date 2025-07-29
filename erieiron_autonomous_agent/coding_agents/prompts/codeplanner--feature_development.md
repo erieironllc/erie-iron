@@ -28,17 +28,6 @@ This work may involve editing or creating multiple files across different parts 
   - CSS: `.css`
   - SQL: `.sql`
 
-
----
-
-#### Test Validation
-
-- All core functionality must be exercised by an automated test to ensure it does not regress.
-- All test classes must subclass `django.test.TestCase` and include the import `from django.test import TestCase`.
-- Test methods should be named `test_...` and placed in files discoverable by Django’s test runner.
-- Tests must operate only on test data (not production data) and validate all critical feature behavior.
-- If a test fails, it should raise an appropriate assertion error. Otherwise, it should pass silently.
-
 ---
 
 #### Context

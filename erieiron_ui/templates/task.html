@@ -185,6 +185,9 @@
                             </a>
                             </span>
                         </small>
+                        <small class="text-muted">
+                            <label>${{ iteration.price|floatformat:2 }} (${{ iteration.total_price|floatformat:2  }})</label>
+                        </small>
                         <form method="post" action="{% url 'action_delete_iteration' iteration.id %}"
                               class="d-inline ms-2">
                             {% csrf_token %}
@@ -196,24 +199,14 @@
                     </div>
                     <div class=" card-body">
                         <dl class="row">
-                            {% if iteration.evaluation_json %}
                                 <dt class="mt-2 col-sm-12">Evaluation</dt>
                                 <dd class="col-sm-12">
-                                    <ul>
-                                        {% for eval in iteration.evaluation_json.evaluation %}
-                                            <li>
-                                                {{ eval.summary }} {{ eval.details }}
-                                            </li>
-                                        {% endfor %}
-                                    </ul>
+                                    {% if iteration.evaluation_json %}
+                                        {{ iteration.evaluation_json.status_report }}
+                                    {% else %}
+                                        Iteration in progress
+                                    {% endif %}
                                 </dd>
-                            {% endif %}
-                            {% if iteration.log_content_execution %}
-                                <dt class="col-sm-12">Log Content</dt>
-                                <dd class="col-sm-12">
-                                    <pre>{{ iteration.log_content_execution }}</pre>
-                                </dd>
-                            {% endif %}
                         </dl>
                     </div>
                 </div>

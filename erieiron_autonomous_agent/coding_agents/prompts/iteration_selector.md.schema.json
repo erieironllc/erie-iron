@@ -6,14 +6,12 @@
   "type": "object",
   "required": [
     "best_iteration_id",
-    "iteration_id_to_modify",
-    "previous_iteration_count",
     "reason_for_best_iteration_id",
+    "iteration_id_to_modify",
     "reason_for_iteration_id_to_modify",
+    "previous_iteration_count",
     "multi_iteration_trend_summary",
-    "summary",
-    "status_report",
-    "evaluation"
+    "status_report"
   ],
   "properties": {
     "best_iteration_id": {
