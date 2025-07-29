@@ -20,7 +20,7 @@ You output:
 You do **not** need to understand the entire system. Your job is to write a test **only** for the described task.
 
 You must:
-- Write Python code using `unittest` or `pytest` conventions, depending on project context
+- Write Python code using `django.test.TestCase` as the base class for all test classes
 - Ensure the test is importable and executable by Django's test runner
 - Use the acceptance criteria as assertions
 - If the acceptance criteria are vague or missing, fail the test with a helpful message so future iterations will fix it
@@ -51,9 +51,8 @@ Output a single Python test file in a valid format for Django's test runner.
 Example:
 
 ```python
-import unittest
 from django.test import TestCase
-from myapp.email.parser import parse_email  # adjust as needed
+from core.email_parser import parse_email  # adjust as needed
 
 class EmailParserTests(TestCase):
     def test_extract_fields(self):
@@ -88,6 +87,7 @@ class TaskBehaviorTests(TestCase):
 - Always include at least one test per acceptance criterion.
 - Use deterministic data and outputs.
 - Prefer clarity over cleverness.
+- The tests **MUST** extend "from django.test import TestCase"
 
 ---
 

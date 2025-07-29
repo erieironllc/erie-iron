@@ -39,6 +39,7 @@ Iteration & Logging
 
 Code Quality
  • Remove unused imports.
+ • **AVOID python import errors AT ALL COSTS**  refer to the available modules in requirements.txt.  requirements.txt is in the context. The expectation of you as a Principal Engineer is that you will not write code that has import errors
  • Ensure all code is syntactically and functionally correct, including required imports.
  • Follow this style:
      • Use snake_case for variable and function names.

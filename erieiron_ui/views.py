@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
-from erieiron_autonomous_agent.models import Business
+from erieiron_autonomous_agent.models import Business, LlmRequest
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level
@@ -156,6 +156,19 @@ def view_task(request, task_id):
         iterations = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")
     else:
         iterations = []
+    
+    dict_iteration_llmsrequests = defaultdict(list)
+    for llm_request in LlmRequest.objects.filter(task_iteration__self_driving_task=self_driving_task):
+        dict_iteration_llmsrequests[llm_request.task_iteration_id].append(llm_request)
+    
+    llm_cost_total = 0
+    for iteration in sorted(iterations, key=lambda i:i.timestamp):
+        iteration_price = 0
+        for llm_request in dict_iteration_llmsrequests[iteration.id]:
+            llm_cost_total += llm_request.price
+            iteration_price += llm_request.price
+        iteration.price = iteration_price
+        iteration.total_price = llm_cost_total
 
     task_executions = list(task.taskexecution_set.order_by("-executed_time"))
 

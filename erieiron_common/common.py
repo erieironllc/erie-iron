@@ -1768,7 +1768,7 @@ def truncate_text_lines(text_blob: str) -> str:
         return text_blob
     
     processed_lines = []
-    for line in text_blob.splitlines():
+    for line in str(text_blob).splitlines():
         if len(line) > 1000:
             line = f"[TRUNCATED] {line[:300]}...[{len(line)} chars]...{line[-100:]}"
         processed_lines.append(line)

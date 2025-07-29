@@ -65,6 +65,14 @@ You will not have access to execution logs or raw test output — only high-leve
    - Be pragmatic, not theoretical—focus on observable progress from the current logs.
    - Think of `"status_report"` as the daily standup update you'd give if you were a human engineer on this codebase. It should reflect observable system state based on logs—not speculative planning.
 
+6. **Provide Strategic Guidance**
+   - **Field**: `strategic_guidance`
+   - Optionally provide structured recommendations for future planning based on trend analysis.
+   - Use when recurring issues or reliable improvements suggest clear next steps.
+   - Each recommendation should include:
+     - **suggested_action**: What to do next.
+     - **justification**: Why it's a good idea, with reference to trends or results.
+     - **confidence**: Your confidence score in this guidance (between 0 and 1).
 
 ---
 

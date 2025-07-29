@@ -600,6 +600,7 @@ class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     main_name = models.TextField(null=False)
     test_file_path = models.TextField(null=True)
+    design_doc_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
     cloudformation_stack_name = models.TextField(null=True)
     goal = models.TextField(null=False)
@@ -683,7 +684,7 @@ class SelfDrivingTask(BaseErieIronModel):
                 self_driving_task=self,
                 version_number=max_version + 1
             )
-            
+        
         if not iteration_to_modify:
             iteration_to_modify = current_iteration
         
@@ -892,8 +893,8 @@ class CodeFile(BaseErieIronModel):
         return self.codeversion_set.order_by("created_at").last()
     
     def get_version(
-            self, 
-            iteration: SelfDrivingTaskIteration, 
+            self,
+            iteration: SelfDrivingTaskIteration,
             default_to_latest=False
     ) -> Optional['CodeVersion']:
         code_version = self.codeversion_set.filter(
@@ -981,6 +982,14 @@ class CodeFile(BaseErieIronModel):
                 code=code,
                 code_instructions=code_instructions
             )
+    
+    def get_version_for_iteration(self, iteration: SelfDrivingTaskIteration) -> 'CodeVersion':
+        return (self.get_version(iteration)
+                or self.get_latest_version()
+                or self.init_from_codefile(
+                    iteration,
+                    common.assert_exists(Path(iteration.self_driving_task.sandbox_path) / self.file_path)
+                ))
 
 
 class CodeVersion(BaseErieIronModel):
@@ -993,7 +1002,13 @@ class CodeVersion(BaseErieIronModel):
     
     def get_diff(self) -> str:
         try:
-            previous_version = self.get_previous_by_created_at()
+            previous_version = (
+                CodeVersion.objects
+                .filter(code_file=self.code_file, created_at__lt=self.created_at)
+                .order_by('-created_at')
+                .first()
+            )
+            
             diff_lines = difflib.unified_diff(
                 common.default_str(previous_version.code).splitlines(),
                 common.default_str(self.code).splitlines(),

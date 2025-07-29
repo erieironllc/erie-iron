@@ -191,10 +191,16 @@ def prepare_stack_for_update(stack_name: str, cf_client):
 
 
 def ecr_authenticate_for_dockerfile(dockerfile, log_f):
-    with open(dockerfile) as f:
-        pattern = r'(?<=FROM\s)(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
-        for base_img in re.findall(pattern, f.read()):
-            ecr_login(base_img, log_f)
+    try:
+        with open(dockerfile) as f:
+            pattern = r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
+            #   FROM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
+            #   FROM --platform=$TARGETPLATFORM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
+            for base_img in re.findall(pattern, f.read(), flags=re.IGNORECASE):
+                ecr_login(base_img, log_f)
+    except Exception as e:
+        logging.exception(e)
+        raise e
 
 
 def ecr_login(ecr_repo_uri, log_f):
