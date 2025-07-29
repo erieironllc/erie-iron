@@ -24,9 +24,15 @@ def chat(
 ) -> 'LlmResponse':
     messages = common.ensure_list(messages)
     
-    if output_schema and output_schema.exists():
+    if messages and output_schema and output_schema.exists():
         code_response = True
-        messages = [LlmMessage.sys("The output json will be validated against this schema", output_schema)] + messages
+        messages = [
+            messages[0],
+            *common.ensure_list(
+                LlmMessage.sys_from_data("The output json will be validated against this schema", json.loads(output_schema.read_text()))
+            ),
+            *messages[1:]
+        ]
     
     if not model:
         models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
@@ -257,10 +263,14 @@ class LlmMessage:
         return len(encoding.encode(s))
     
     def get_token_count(self, model: LlmModel) -> int:
-        return LlmMessage._get_token_count(
-            model,
-            json.dumps(self.get_message_json(model), cls=ErieIronJSONEncoder)
-        )
+        try:
+            return LlmMessage._get_token_count(
+                model,
+                json.dumps(self.get_message_json(model), cls=ErieIronJSONEncoder)
+            )
+        except Exception as e:
+            logging.exception(e)
+            asdf = 1
     
     @staticmethod
     def parse_prompt(model, messages_in: list['LlmMessage'], code_response=False) -> List['LlmMessage']:
@@ -301,7 +311,7 @@ class LlmMessage:
         return messages_out
     
     @classmethod
-    def assistant(cls, txt, file=None):
+    def assistant(cls, txt, file=None) -> 'LlmMessage':
         return LlmMessage(
             message_type=LlmMessageType.ASSISTANT,
             text=txt,
@@ -309,7 +319,7 @@ class LlmMessage:
         )
     
     @classmethod
-    def user(cls, txt, file=None):
+    def user(cls, txt, file=None) -> 'LlmMessage':
         return LlmMessage(
             message_type=LlmMessageType.USER,
             text=txt,
@@ -317,12 +327,27 @@ class LlmMessage:
         )
     
     @classmethod
-    def sys(cls, txt, file=None):
+    def user_from_data(cls, title, data) -> list['LlmMessage']:
+        return [
+            LlmMessage.user(f"The content of the next message is:\n'''\n{title}\n'''"),
+            LlmMessage.user(json.dumps(data or {}, indent=4))
+        ]
+    
+    @classmethod
+    def sys(cls, txt, file=None) -> 'LlmMessage':
         return LlmMessage(
             message_type=LlmMessageType.SYSTEM,
             text=txt,
             file=file
+        
         )
+    
+    @classmethod
+    def sys_from_data(cls, title, data) -> list['LlmMessage']:
+        return [
+            LlmMessage.sys(f"The content of the next message is:\n'''\n{title}\n'''"),
+            LlmMessage.sys(json.dumps(data or {}, indent=4))
+        ]
     
     @classmethod
     def log(cls, messages: list['LlmMessage']):

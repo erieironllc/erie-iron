@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CodeReviewAgentOutput",
+  "type": "object",
+  "required": ["plan_quality", "blocking_issues", "non_blocking_warnings"],
+  "properties": {
+    "plan_quality": {
+      "type": "string",
+      "enum": ["VALID", "INVALID"],
+      "description": "Indicates whether the plan is sound or flawed"
+    },
+    "blocking_issues": {
+      "type": "array",
+      "description": "List of blocking issues that must be resolved before continuing",
+      "items": {
+        "type": "object",
+        "required": ["file", "issue", "recommendation"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The file path where the issue was found"
+          },
+          "line_hint": {
+            "type": "string",
+            "description": "Optional line reference or description of where the issue occurs"
+          },
+          "issue": {
+            "type": "string",
+            "description": "Description of the blocking issue"
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "Suggested fix or mitigation"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "non_blocking_warnings": {
+      "type": "array",
+      "description": "Warnings that are not critical but may indicate risk",
+      "items": {
+        "type": "object",
+        "required": ["file", "issue", "recommendation"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The file path where the warning was found"
+          },
+          "line_hint": {
+            "type": "string",
+            "description": "Optional line reference or description of where the issue occurs"
+          },
+          "issue": {
+            "type": "string",
+            "description": "Description of the warning"
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "Suggested improvement or caution"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

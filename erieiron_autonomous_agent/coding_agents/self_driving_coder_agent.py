@@ -51,7 +51,33 @@ class AgentBlocked(Exception):
 class BadPlan(Exception):
     def __init__(self, msg: str, plan_data):
         self.plan_data = plan_data
-        super(msg)
+        super().__init__(msg)
+
+
+class CodeReviewException(Exception):
+    def __init__(self, review_data):
+        self.bad_plan = review_data.get("plan_quality", []) != "VALID"
+        self.review_data = review_data
+        super().__init__("Code Review Failed")
+    
+    def get_issue_dicts(self) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+        return self.get_file_blockers_dict(), self.get_file_warnings_dict()
+    
+    def get_file_blockers_dict(self) -> dict[str, list[dict]]:
+        d = defaultdict(list)
+        
+        for i in common.ensure_list(self.review_data.get("blocking_issues", [])):
+            d[i['file']].append(i)
+        
+        return d
+    
+    def get_file_warnings_dict(self) -> dict[str, list[dict]]:
+        d = defaultdict(list)
+        
+        for i in common.ensure_list(self.review_data.get("non_blocking_warnings", [])):
+            d[i['file']].append(i)
+        
+        return d
 
 
 class SelfDriverConfig:
@@ -64,7 +90,7 @@ class SelfDriverConfig:
         self.business = Business.objects.get(initiative__tasks__id=self.task.id)
         self.guidance = LlmMessage.sys(self.task.guidance) if self.task.guidance else None
         self.sandbox_root_dir = Path(self.self_driving_task.sandbox_path)
-        self.current_iteration = None
+        self.current_iteration: SelfDrivingTaskIteration = None
         
         artifacts_root = self.sandbox_root_dir / ARTIFACTS
         artifacts_root.mkdir(parents=True, exist_ok=True)
@@ -167,13 +193,37 @@ def execute(task_id: str):
                         # pprint.pprint(planning_data)
                         
                         logging.info(f"PHASE - generate_code: {current_iteration.id}")
-                        generate_code(
-                            config,
-                            current_iteration,
-                            previous_iteration,
-                            iteration_to_modify,
-                            planning_data
-                        )
+                        code_review_exception = None
+                        for review_iteration_idx in range(5):
+                            try:
+                                generate_code(
+                                    config,
+                                    planning_data,
+                                    current_iteration,
+                                    previous_iteration,
+                                    iteration_to_modify,
+                                    code_review_exception
+                                )
+                                perform_code_review(
+                                    config,
+                                    planning_data,
+                                    current_iteration,
+                                    previous_iteration,
+                                    iteration_to_modify
+                                )
+                                break
+                            except CodeReviewException as code_review_exception:
+                                if code_review_exception.bad_plan:
+                                    raise BadPlan(
+                                        f"Code Review failed - Reviewer thinks the plan is bad.  Need a new plan.  ",
+                                        code_review_exception.review_data
+                                    )
+                                elif review_iteration_idx == 4:
+                                    # out of retries
+                                    raise BadPlan(
+                                        f"Code Review failed 5 times.  Need a new plan.  ",
+                                        code_review_exception.review_data
+                                    )
                 
                 try:
                     try:
@@ -217,8 +267,12 @@ def execute(task_id: str):
                 with transaction.atomic():
                     SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
                         log_content_execution=f"""
-                    Planning agent produced a bad plan:
-                    {traceback.format_exc()}
+Planning agent produced a bad plan:
+{bad_plan_exception}
+{traceback.format_exc()}
+
+planning data:
+{json.dumps(bad_plan_exception, indent=4)}
                         """
                     )
                 current_iteration.refresh_from_db(fields=["log_content_execution"])
@@ -522,6 +576,9 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
         with open(logfile, "w") as log_f:
             stop_tailing = start_log_tail_thread(logfile)
             
+            # if not iteration.codeversion_set.exists():
+            #     raise BadPlan("not code changes to deploy", planning_data)
+            
             try:
                 docker_file = config.sandbox_root_dir / "Dockerfile"
                 aws_utils.ecr_authenticate_for_dockerfile(
@@ -538,25 +595,32 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                 )
                 log_f.flush()  # Ensure Docker build logs are visible to tailing thread
                 
-                try:
-                    full_image_uri, ecr_arn = push_image_to_ecr(
-                        iteration,
+                infrastructure_code_version = iteration.codeversion_set.filter(
+                    code_file=CodeFile.get(config.business, "infrastructure.yaml")
+                ).first()
+                
+                if infrastructure_code_version and infrastructure_code_version.get_diff():
+                    # only push to ecr and deplor if infra has changed
+                    logging.info(f"pushing infrastructure change to ecr and cloud formation:\n{infrastructure_code_version.get_diff()}")
+                    try:
+                        full_image_uri, ecr_arn = push_image_to_ecr(
+                            iteration,
+                            environment,
+                            docker_image_tag,
+                            log_f
+                        )
+                    except Exception as e:
+                        raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+                    finally:
+                        log_f.flush()  # Ensure ECR push logs are visible to tailing thread
+                    
+                    deploy_cloudformation_stacks(
+                        config,
                         environment,
-                        docker_image_tag,
+                        ecr_arn,
                         log_f
                     )
-                except Exception as e:
-                    raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
-                finally:
-                    log_f.flush()  # Ensure ECR push logs are visible to tailing thread
-                
-                deploy_cloudformation_stacks(
-                    config,
-                    environment,
-                    ecr_arn,
-                    log_f
-                )
-                log_f.flush()  # Ensure CloudFormation deployment logs are visible to tailing thread
+                    log_f.flush()  # Ensure CloudFormation deployment logs are visible to tailing thread
                 
                 if TaskType.CODING_ML.eq(task_type):
                     run_docker_command(
@@ -568,15 +632,14 @@ def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIterat
                     )
                     log_f.flush()  # Ensure ML execution logs are visible to tailing thread
                 else:
-                    if not AwsEnv.PRODUCTION.eq(environment):
-                        run_docker_command(
-                            command_args="test",
-                            iteration=iteration,
-                            running_process=running_process,
-                            docker_image=docker_image_tag,
-                            log_f=log_f
-                        )
-                        log_f.flush()  # Ensure test execution logs are visible to tailing thread
+                    run_docker_command(
+                        command_args="test",
+                        iteration=iteration,
+                        running_process=running_process,
+                        docker_image=docker_image_tag,
+                        log_f=log_f
+                    )
+                    log_f.flush()  # Ensure test execution logs are visible to tailing thread
                     
                     if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
                         task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
@@ -865,17 +928,85 @@ def get_sys_prompt(
         return common.first(messages)
 
 
+def perform_code_review(
+        config: SelfDriverConfig,
+        planning_data,
+        current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration
+):
+    task = config.task
+    
+    messages = [
+        get_sys_prompt("codereviewer.md"),
+        # *common.ensure_list(
+        #     get_relevant_code_files(config, current_iteration, iteration_to_modify)
+        # ),
+        *common.ensure_list(
+            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.deployment_failed() else []
+        ),
+        *common.ensure_list(
+            config.guidance
+        ),
+        *common.ensure_list(
+            LlmMessage.user_from_data(
+                "Code Review Input: Proposed Code Changes for Current Iteration",
+                [
+                    cv.get_llm_message_data()
+                    for cv in current_iteration.codeversion_set.all()
+                
+                ]
+            )
+        ),
+        LlmMessage.user(f'''
+The code changes to review are in support of the following goal:
+
+# Goal
+{task.description}
+
+# Test Plan
+{task.test_plan or 'none'}
+
+# Risk Notes
+{task.risk_notes or 'none'}
+            '''),
+        LlmMessage.user("Please perform the code review")
+    ]
+    
+    code_review_data = llm_chat(
+        "Perform Code Review",
+        config,
+        messages,
+        LlmModel.OPENAI_GPT_4o,
+        debug=True,
+        output_schema=PROMPTS_DIR / "codereviewer.md.schema.json"
+    ).json()
+    
+    blocking_issues = code_review_data.get("blocking_issues", [])
+    non_blocking_warnings = code_review_data.get("non_blocking_warnings", [])
+    if blocking_issues:
+        raise CodeReviewException(code_review_data)
+    elif non_blocking_warnings:
+        logging.warning(json.dumps(non_blocking_warnings, indent=4))
+
+
 def generate_code(
         config: SelfDriverConfig,
+        planning_data: dict,
         current_iteration: SelfDrivingTaskIteration,
         previous_iteration: SelfDrivingTaskIteration,
         iteration_to_modify: SelfDrivingTaskIteration,
-        planning_data: dict
+        code_review_exception: CodeReviewException
 ) -> SelfDrivingTaskIteration:
     code_file_instructions = planning_data.get("code_files", [])
     if not code_file_instructions:
         raise BadPlan("no code files found", planning_data)
     
+    if code_review_exception:
+        code_review_file_blockers, code_review_file_warnings = code_review_exception.get_issue_dicts()
+    else:
+        code_review_file_blockers = code_review_file_warnings = defaultdict(list)
+
     code_file_instructions = (
             [cfi for cfi in code_file_instructions if cfi.get("code_file_path") == "requirements.txt"]
             +
@@ -887,7 +1018,7 @@ def generate_code(
     else:
         roll_back_reason = None
     
-    requirements_txt = CodeFile.get(config, "requirements.txt").get_latest_version().code
+    requirements_txt = CodeFile.get(config.business, "requirements.txt").get_latest_version().code
     
     for cfi in code_file_instructions:
         code_file_path_str: str = cfi.get("code_file_path")
@@ -896,6 +1027,9 @@ def generate_code(
         
         if code_file_path_str.startswith(str(config.sandbox_root_dir)):
             code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
+        
+        blocking_issues = code_review_file_blockers[code_file_path_str]
+        non_blocking_issues = code_review_file_warnings[code_file_path_str]
         
         code_file_path: Path = config.sandbox_root_dir / code_file_path_str
         if not code_file_path:
@@ -928,6 +1062,7 @@ def generate_code(
                         code_version_to_modify=code_version_to_modify,
                         instructions=instructions,
                         requirements_txt=requirements_txt,
+                        blocking_issues=blocking_issues,
                         code_writing_model=LlmModel(cfi.get("code_writing_model")),
                         current_iteration=current_iteration,
                         previous_iteration=previous_iteration,
@@ -1220,6 +1355,7 @@ def write_code(
         instructions,
         code_writing_model: LlmModel,
         requirements_txt: str,
+        blocking_issues: list[dict],
         current_iteration: SelfDrivingTaskIteration,
         previous_iteration: SelfDrivingTaskIteration = None,
         iteration_to_modify: SelfDrivingTaskIteration = None,
@@ -1273,7 +1409,25 @@ The python environment has the following packages installed.  The code you write
             )
     
     code_file_path = code_file.get_path()
-    if code_version_to_modify.code:
+    if blocking_issues:
+        LlmMessage.user(
+            f"""
+**Code Review Failure**
+This is code from your previous attempt to generate code based on the instruction set:
+============ BEGIN PREVIOUS CODE =============
+{code_file.get_latest_version().code}
+============ END PREVIOUS CODE ===============
+
+This code failed the Code Review step with the following error(s): 
+============ BEGIN CODE REVIEW ERRORS =============
+{json.dumps(blocking_issues, indent=4)}
+============ END CODE REVIEW ERRORS ===============
+
+**YOUR ONE AND ONLY TASK:**
+Write the code again using the instruction set and avoid these code review errors
+                            """
+        )
+    elif code_version_to_modify.code:
         print("modifying", code_file_path)
         
         messages.append(
@@ -1329,7 +1483,6 @@ Please try writing the code again and avoid these errors
         debug=True
     ).text
     
-    code_compilation_error = None
     for i in range(5):
         try:
             return validate_code(
@@ -1338,14 +1491,15 @@ Please try writing the code again and avoid these errors
             )
         except CodeCompilationError as code_compilation_error:
             logging.warning(f"Primary code failed validation. Attempting fix using cheaper model.  Fix attempt {i + 1} of 5")
-            code = fix_code_compilation(
-                config,
-                code_file_path,
-                code,
-                code_compilation_error
-            )
-    
-    raise code_compilation_error
+            if i == 4:
+                raise code_compilation_error
+            else:
+                code = fix_code_compilation(
+                    config,
+                    code_file_path,
+                    code,
+                    code_compilation_error
+                )
 
 
 def fix_code_compilation(config, code_file_path, code, e):
@@ -1601,8 +1755,7 @@ def get_relevant_code_files(
         current_iteration: SelfDrivingTaskIteration,
         iteration_to_modify: SelfDrivingTaskIteration
 ) -> list[LlmMessage]:
-    messages = []
-    
+    files = []
     ## deployment failed - just return deployment files
     if iteration_to_modify.deployment_failed():
         deployment_files: list[Path] = [
@@ -1627,175 +1780,167 @@ def get_relevant_code_files(
                 code_version = CodeFile.init_from_codefile(current_iteration, relative_file)
             
             if code_version and code_version.code:
-                messages.append(code_version.get_llm_message())
-            else:
-                print(f"??? {f}")
-        return messages
-    
-    required_files = [
-        config.self_driving_task.test_file_path,
-        config.self_driving_task.design_doc_path,
-        "infrastructure.yaml",
-        "requirements.txt"
-    ]
-    
-    iteration_code_files = set()
-    iteration_code_versions = []
-    for f in common.filter_none(required_files):
-        iteration_code_versions.append(
-            CodeFile.get(
-                business=config.business,
-                code_file_path=f
-            ).get_version_for_iteration(
-                iteration_to_modify
+                files.append(code_version.get_llm_message_data())
+    else:
+        required_files = [
+            config.self_driving_task.test_file_path,
+            config.self_driving_task.design_doc_path,
+            "infrastructure.yaml",
+            "requirements.txt"
+        ]
+        
+        iteration_code_files = set()
+        iteration_code_versions = []
+        for f in common.filter_none(required_files):
+            iteration_code_versions.append(
+                CodeFile.get(
+                    business=config.business,
+                    code_file_path=f
+                ).get_version_for_iteration(
+                    iteration_to_modify
+                )
             )
-        )
-    
-    iteration_code_versions += list(CodeVersion.objects.filter(
-        task_iteration=iteration_to_modify
-    ).exclude(
-        id__in=[cv.id for cv in iteration_code_versions]
-    ))
-    
-    for code_version in iteration_code_versions:
-        iteration_code_files.add(code_version.code_file_id)
         
-        file_path = code_version.code_file.file_path
-        code = code_version.code
-        was_modified = code_version.task_iteration_id == iteration_to_modify.id
+        iteration_code_versions += list(CodeVersion.objects.filter(
+            task_iteration=iteration_to_modify
+        ).exclude(
+            id__in=[cv.id for cv in iteration_code_versions]
+        ))
         
-        if code:
-            messages.append(LlmMessage.user({
-                "file_path": file_path,
-                "modified_in_previous_iteration": was_modified,
-                "may_edit": True,
-                "code": code,
-            }))
-    
-    # Step 1: Get the structured retrieval cues from the LLM
-    cues = llm_chat(
-        "Find relavant code",
-        config,
-        [
-            get_sys_prompt("codefinder.md"),
-            LlmMessage.user(config.self_driving_task.task.get_work_desc())
-        ],
-        LlmModel.OPENAI_GPT_3_5_TURBO,
-        output_schema=PROMPTS_DIR / "codefinder.md.schema.json",
-        code_response=True
-    ).json()
-    
-    semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
-    prompt_embedding = get_codebert_embedding(semantic_query).tolist()
-    
-    # Use a similarity threshold instead of top-k results
-    # Lower similarity scores indicate higher similarity (cosine distance)
-    # 0.3 is a reasonable threshold for similar code
-    similarity_threshold = 0.3
-    
-    # For Python and JavaScript files, retrieve CodeMethod models for more granular search
-    # For other file types, retrieve CodeVersion objects at the file level
-    
-    # First get code methods for Python and JavaScript files
-    erie_common_code_methods = (
-        CodeMethod.objects
-        .select_related("code_version", "code_version__code_file")
-        .filter(
-            code_version__code_file__business=config.business,
+        for code_version in iteration_code_versions:
+            iteration_code_files.add(code_version.code_file_id)
+            
+            file_path = code_version.code_file.file_path
+            code = code_version.code
+            was_modified = code_version.task_iteration_id == iteration_to_modify.id
+            
+            if code:
+                files.append(code_version.get_llm_message_data())
+        
+        # Step 1: Get the structured retrieval cues from the LLM
+        cues = llm_chat(
+            "Find relavant code",
+            config,
+            [
+                get_sys_prompt("codefinder.md"),
+                LlmMessage.user(config.self_driving_task.task.get_work_desc())
+            ],
+            LlmModel.OPENAI_GPT_3_5_TURBO,
+            output_schema=PROMPTS_DIR / "codefinder.md.schema.json",
+            code_response=True
+        ).json()
+        
+        semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
+        prompt_embedding = get_codebert_embedding(semantic_query).tolist()
+        
+        # Use a similarity threshold instead of top-k results
+        # Lower similarity scores indicate higher similarity (cosine distance)
+        # 0.3 is a reasonable threshold for similar code
+        similarity_threshold = 0.3
+        
+        # For Python and JavaScript files, retrieve CodeMethod models for more granular search
+        # For other file types, retrieve CodeVersion objects at the file level
+        
+        # First get code methods for Python and JavaScript files
+        erie_common_code_methods = (
+            CodeMethod.objects
+            .select_related("code_version", "code_version__code_file")
+            .filter(
+                code_version__code_file__business=config.business,
+            )
+            .filter(
+                Q(code_version__code_file__file_path__endswith=".py") |
+                Q(code_version__code_file__file_path__endswith=".js")
+            )
+            .exclude(
+                Q(code_version__code_file__file_path__startswith="env/") |
+                Q(code_version__code_file__file_path__startswith="venv/")
+            )
+            .annotate(
+                similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
+            )
+            .filter(similarity__lte=similarity_threshold)
+            .order_by("similarity")
         )
-        .filter(
-            Q(code_version__code_file__file_path__endswith=".py") |
-            Q(code_version__code_file__file_path__endswith=".js")
+        
+        # Find additional code methods that aren't from existing code files
+        additional_code_methods = (
+            CodeMethod.objects
+            .select_related("code_version", "code_version__code_file")
+            .filter(
+                code_version__code_file__business=config.business,
+            )
+            .filter(
+                Q(code_version__code_file__file_path__endswith=".py") |
+                Q(code_version__code_file__file_path__endswith=".js")
+            )
+            .exclude(
+                Q(code_version__code_file__file_path__startswith="env/") |
+                Q(code_version__code_file__file_path__startswith="venv/")
+            )
+            .exclude(code_version__code_file__id__in=iteration_code_files)
+            .annotate(
+                similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
+            )
+            .filter(similarity__lte=similarity_threshold)
+            .order_by("similarity")
         )
-        .exclude(
-            Q(code_version__code_file__file_path__startswith="env/") |
-            Q(code_version__code_file__file_path__startswith="venv/")
+        
+        # Keep track of which code files we've already included to ensure only latest version per file
+        processed_code_files = set()
+        methods_by_file = defaultdict(list)
+        for code_method in set(list(erie_common_code_methods) + list(additional_code_methods)):
+            code_file = code_method.code_version.code_file
+            if code_file.id in processed_code_files:
+                continue
+            methods_by_file[code_file].append(code_method)
+        
+        for code_file, methods in methods_by_file.items():
+            processed_code_files.add(code_file.id)
+            grouped_code = "\n\n".join([
+                f"# Method: {method.name}\n{method.code}" for method in methods
+            ])
+            files.append({
+                "file_path": code_file.file_path,
+                "may_edit": False,
+                "source": "imported_package",
+                "code": grouped_code,
+                "note": f"The following methods from an imported package may be referenced but not modified: {[m.name for m in methods]}"
+            })
+        
+        # Then get code versions for other file types (excluding Python and JavaScript)
+        # Also exclude files that are already included from previous iteration or code methods above
+        all_excluded_code_files = set(iteration_code_files) | processed_code_files
+        
+        code_versions_query = (
+            CodeVersion.objects
+            .exclude(code_file__id__in=all_excluded_code_files)
+            .filter(code_file__business=config.business)
+            .exclude(
+                Q(code_file__file_path__endswith=".py") |
+                Q(code_file__file_path__endswith=".js")
+            )
+            .annotate(
+                similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
+            )
+            .filter(similarity__lte=similarity_threshold)
+            .order_by("similarity")
         )
-        .annotate(
-            similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
-        )
-        .filter(similarity__lte=similarity_threshold)
-        .order_by("similarity")
-    )
+        
+        # Ensure only latest version per code file
+        latest_code_versions = {}
+        for cv in code_versions_query:
+            code_file_id = cv.code_file.id
+            if code_file_id not in latest_code_versions or cv.id > latest_code_versions[code_file_id].id:
+                latest_code_versions[code_file_id] = cv
+        
+        code_versions = list(latest_code_versions.values())
+        
+        for code_version in code_versions:
+            if code_version.code:
+                files.append(code_version.get_llm_message_data())
     
-    # Find additional code methods that aren't from existing code files
-    additional_code_methods = (
-        CodeMethod.objects
-        .select_related("code_version", "code_version__code_file")
-        .filter(
-            code_version__code_file__business=config.business,
-        )
-        .filter(
-            Q(code_version__code_file__file_path__endswith=".py") |
-            Q(code_version__code_file__file_path__endswith=".js")
-        )
-        .exclude(
-            Q(code_version__code_file__file_path__startswith="env/") |
-            Q(code_version__code_file__file_path__startswith="venv/")
-        )
-        .exclude(code_version__code_file__id__in=iteration_code_files)
-        .annotate(
-            similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
-        )
-        .filter(similarity__lte=similarity_threshold)
-        .order_by("similarity")
-    )
-    
-    # Keep track of which code files we've already included to ensure only latest version per file
-    processed_code_files = set()
-    methods_by_file = defaultdict(list)
-    for code_method in set(list(erie_common_code_methods) + list(additional_code_methods)):
-        code_file = code_method.code_version.code_file
-        if code_file.id in processed_code_files:
-            continue
-        methods_by_file[code_file].append(code_method)
-    
-    for code_file, methods in methods_by_file.items():
-        processed_code_files.add(code_file.id)
-        grouped_code = "\n\n".join([
-            f"# Method: {method.name}\n{method.code}" for method in methods
-        ])
-        messages.append(LlmMessage.user({
-            "file_path": code_file.file_path,
-            "may_edit": False,
-            "source": "imported_package",
-            "code": grouped_code,
-            "note": f"The following methods from an imported package may be referenced but not modified: {[m.name for m in methods]}"
-        }))
-    
-    # Then get code versions for other file types (excluding Python and JavaScript)
-    # Also exclude files that are already included from previous iteration or code methods above
-    all_excluded_code_files = set(iteration_code_files) | processed_code_files
-    
-    code_versions_query = (
-        CodeVersion.objects
-        .exclude(code_file__id__in=all_excluded_code_files)
-        .filter(code_file__business=config.business)
-        .exclude(
-            Q(code_file__file_path__endswith=".py") |
-            Q(code_file__file_path__endswith=".js")
-        )
-        .annotate(
-            similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
-        )
-        .filter(similarity__lte=similarity_threshold)
-        .order_by("similarity")
-    )
-    
-    # Ensure only latest version per code file
-    latest_code_versions = {}
-    for cv in code_versions_query:
-        code_file_id = cv.code_file.id
-        if code_file_id not in latest_code_versions or cv.id > latest_code_versions[code_file_id].id:
-            latest_code_versions[code_file_id] = cv
-    
-    code_versions = list(latest_code_versions.values())
-    
-    for code_version in code_versions:
-        if code_version.code:
-            messages.append(code_version.get_llm_message())
-    
-    return messages
+    return LlmMessage.user_from_data("Relevant Code Files", files)
 
 
 def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):
@@ -2107,7 +2252,7 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
     return db_creds
 
 
-def get_file_structure_msg(root_dir: Path) -> LlmMessage:
+def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
     structure = {}
     skip_dirs = {".git", "vendor", "img", "compiled", "artifacts", ".idea", "env", "venv", "node_modules", "__pycache__"}
     
@@ -2127,7 +2272,4 @@ def get_file_structure_msg(root_dir: Path) -> LlmMessage:
         else:
             current.setdefault(parts[-1], {})
     
-    return LlmMessage.user(f"""
-## Project File Structure (read-only reference for reuse planning)
-{json.dumps(structure, indent=4)}
-    """)
+    return LlmMessage.user_from_data("Project File Structure (read-only reference for reuse planning)", structure)
