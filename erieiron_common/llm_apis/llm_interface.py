@@ -133,26 +133,6 @@ def sanitize_prompt(raw_text: str) -> str:
         return json.dumps(raw_text, indent=4, cls=ErieIronJSONEncoder)
     else:
         return raw_text
-    
-    # pii_entities = analyzer.analyze(text=raw_text, language="en")
-    # operator_config = {
-    #     "DEFAULT": OperatorConfig(
-    #         "mask",
-    #         {
-    #             "masking_char": "*",
-    #             "chars_to_mask": 0,
-    #             "from_end": False,
-    #         },
-    #     )
-    # }
-    
-    # sanitized = anonymizer.anonymize(
-    #     text=raw_text,
-    #     analyzer_results=pii_entities,
-    #     operators=operator_config,
-    # )
-    
-    # return sanitized.text
 
 
 @dataclass
@@ -328,10 +308,12 @@ class LlmMessage:
     
     @classmethod
     def user_from_data(cls, title, data) -> list['LlmMessage']:
-        return [
-            LlmMessage.user(f"The content of the next message is:\n'''\n{title}\n'''"),
-            LlmMessage.user(json.dumps(data or {}, indent=4))
-        ]
+        if not data:
+            return []
+        
+        return [LlmMessage.user(
+            cls._get_data_string(title, data)
+        )]
     
     @classmethod
     def sys(cls, txt, file=None) -> 'LlmMessage':
@@ -344,10 +326,43 @@ class LlmMessage:
     
     @classmethod
     def sys_from_data(cls, title, data) -> list['LlmMessage']:
-        return [
-            LlmMessage.sys(f"The content of the next message is:\n'''\n{title}\n'''"),
-            LlmMessage.sys(json.dumps(data or {}, indent=4))
-        ]
+        if not data:
+            return []
+        
+        return [LlmMessage.sys(
+            cls._get_data_string(title, data)
+        )]
+    
+    @classmethod
+    def _get_data_string(cls, title, data):
+        from django.db.models import Model
+        if common.is_list_like(data):
+            data = {
+                "items": common.ensure_list(data)
+            }
+        elif isinstance(data, Model):
+            data = common.get_dict(data)
+        elif isinstance(data, Path):
+            label = "content"
+            path_str = str(data)
+            if any(path_str.endswith(s) for s in ["Dockerfile", "requirements.txt", ".json", ".yaml", ".html", ".py", ".js", ".css", ".sql"]):
+                label = "code"
+            
+            data = {
+                f"{label}": data.read_text() if data.exists() else f"{data} does not exist"
+            }
+        elif isinstance(data, dict):
+            ...
+        else:
+            data = {
+                "contents": str(data)
+            }
+        for title_name in ["description", "desc", "title", "name", "summary"]:
+            if title_name not in data:
+                data[title_name] = title
+                break
+        data_string = json.dumps(data, indent=4, cls=ErieIronJSONEncoder)
+        return data_string
     
     @classmethod
     def log(cls, messages: list['LlmMessage']):

@@ -14,6 +14,7 @@ Security & Scope Constraints
 ### Billing Safety
  • Avoid templates that can result in runaway cost or infinite execution cycles.
  • **Never** create AWS Lambda functions, Step Functions, or EventBridge Rules that can recursively trigger themselves.
+ • Do not specify GPU resources (g4dn.xlarge for example) unless GPU resources are absolutely necessary.  Specify the CHEAPEST aws resource that can do the job.
  • Use `ReservedConcurrentExecutions`, `MaximumRetryAttempts`, or timeout constraints to bound execution where applicable.
  • Do not create resources with unbounded scaling policies (e.g., autoscaling groups with no `MaxSize`).
  • Avoid `ScheduleExpression` or event triggers without clearly defined purpose and termination logic.

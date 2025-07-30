@@ -34,14 +34,13 @@ You will not have access to execution logs or raw test output — only high-leve
    - Choose the iteration that most effectively advances toward the GOAL with the fewest and least severe errors.
    - If the task were stopped now, this is the version of the code you would preserve as the best partial success.
    - If no iteration succeeds fully, choose the most promising failure.
-   - Include a detailed explanation in `reason_for_best_iteration_id`.
 
 2. **Choose the Iteration to Modify Next**
    - **Field**: `iteration_id_to_modify`
    - This tells the planner which iteration to use as the base for its next round of edits.
    - Use `"latest"` if the most recent iteration made progress and does not require rollback.
    - Use a prior iteration ID if recent changes introduced regressions.
-   - Justify your decision in `reason_for_iteration_id_to_modify`.
+   - If rolling back to a previous iteration, justify your decision in `rollback_reason`.
 
 3. **Set Scope of Planner Context**
    - **Field**: `previous_iteration_count`
@@ -49,14 +48,6 @@ You will not have access to execution logs or raw test output — only high-leve
    - For most tasks, use a small number to reduce noise and complexity.
    - For long-horizon tuning or debugging, use a larger number if recent context is insufficient.
 
-4. **Summarize Multi-Iteration Trends**
-   - **Field**: `multi_iteration_trend_summary`
-   - Help the planner understand systemic progress and pitfalls across all iterations.
-   - Include:
-     - **Changes that consistently improved performance** (e.g., architectural simplifications, error handling refactors)
-     - **Changes that frequently introduced regressions** (e.g., over-aggressive optimizations, redundant fallback logic)
-     - **Lessons learned across attempts** (e.g., repeated approaches that failed)
-     
 5. **Summarize Current Code Status**
    - **Field**: `status_report`
    - In a few sentences, describe the current state of the system from the perspective of an engineering team.
@@ -80,33 +71,11 @@ You will not have access to execution logs or raw test output — only high-leve
 
 ```json
 {
-   "status_report": "Parser logic present and invoked during test run. Email handler Lambda created but not invoked. CI/CD pipeline deployed infrastructure, but SES rule and ECS service did not fully start.",
+  "status_report": "Parser logic present and invoked during test run. Email handler Lambda created but not invoked. CI/CD pipeline deployed infrastructure, but SES rule and ECS service did not fully start.",
   "best_iteration_id": "abc123",
-  "reason_for_best_iteration_id": "This iteration fixed the core runtime error seen previously and passed all unit tests except one minor edge case. No regressions were introduced.",
   "iteration_id_to_modify": "latest",
-  "reason_for_iteration_id_to_modify": "The latest iteration improved stability and fixed 2/3 major bugs identified in the prior version, so continuing from it is most efficient.",
+  "rollback_reason": "The latest iteration improved stability and fixed 2/3 major bugs identified in the prior version, so continuing from it is most efficient.",
   "previous_iteration_count": 1,
-  "multi_iteration_trend_summary": "Architectural simplifications and dependency isolation consistently improved stability. Attempts to parallelize the task flow introduced regressions in I/O ordering. Log verbosity changes had no measurable effect. Future efforts should prioritize correctness and remove speculative optimizations.",
-  "multi_iteration_trend_analysis": [
-    {
-      "change_type": "Architectural simplification",
-      "effect": "Improved stability",
-      "confidence": 0.9,
-      "rationale": "Simplifying the architecture reduced complexity and potential points of failure, as seen in multiple iterations."
-    },
-    {
-      "change_type": "Parallelization attempts",
-      "effect": "Introduced regressions",
-      "confidence": 0.8,
-      "rationale": "Efforts to parallelize task flow caused I/O ordering issues, leading to instability."
-    },
-    {
-      "change_type": "Log verbosity changes",
-      "effect": "No measurable effect",
-      "confidence": 0.7,
-      "rationale": "Adjusting log verbosity did not impact performance or error rates significantly."
-    }
-  ],
   "strategic_guidance": [
     {
       "suggested_action": "Prioritize correctness over speculative optimizations",
@@ -126,11 +95,10 @@ You will not have access to execution logs or raw test output — only high-leve
 
 ## Guidelines
 
-- Clearly articulate the tradeoffs considered in your selections.
-- If all iterations are flawed, explain why one was still chosen as best or as the next to modify.
 - Justify any rollbacks or departures from the latest iteration.
 - Use specific references to evaluation output content (errors resolved, regressions introduced, stability gains, etc).
 - You can safely ignore this warning:  
   `"WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"`
 - In general, **ignore warnings unless they indicate functional failure** or break the task’s GOAL.
 - Do not attempt to fix safe warnings. Focus on actionable errors and failures instead.
+- If the previous attempt failed with Docker running out of disk space, you can assume this issue is manually cleaned up and do not need to suggest the planner fix it

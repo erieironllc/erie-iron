@@ -11,23 +11,29 @@ from typing import List, Optional
 
 import boto3
 from django.db import transaction
+from django.db.models import Func
 from django.db.models import Q
 from django.db.models.expressions import RawSQL
 from django.utils import timezone
+from sentence_transformers import SentenceTransformer
 
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile, AgentLesson
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv
 from erieiron_common.llm_apis import llm_interface
+from erieiron_common.llm_apis.llm_constants import MODEL_BACKUPS
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
+
+TASK_DESC_CODE_WRITING = "code writing"
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
+sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",
@@ -52,6 +58,10 @@ class BadPlan(Exception):
     def __init__(self, msg: str, plan_data):
         self.plan_data = plan_data
         super().__init__(msg)
+
+
+class RetryableException(Exception):
+    ...
 
 
 class CodeReviewException(Exception):
@@ -190,10 +200,11 @@ def execute(task_id: str):
                             iteration_to_modify,
                             relevant_code_files
                         )
-                        # pprint.pprint(planning_data)
+                        pprint.pprint(planning_data)
                         
                         logging.info(f"PHASE - generate_code: {current_iteration.id}")
                         cr_exception = None
+                        failed_code_reviews = []
                         for review_iteration_idx in range(5):
                             try:
                                 generate_code(
@@ -213,11 +224,21 @@ def execute(task_id: str):
                                 )
                                 break
                             except CodeReviewException as code_review_exception:
+                                extract_lessons(
+                                    config,
+                                    current_iteration,
+                                    TASK_DESC_CODE_WRITING,
+                                    code_review_exception.review_data
+                                )
+                                
+                                failed_code_reviews.append(code_review_exception.review_data)
                                 cr_exception = code_review_exception
                                 if code_review_exception.bad_plan:
                                     raise BadPlan(
-                                        f"Code Review failed - Reviewer thinks the plan is bad.  Need a new plan.  ",
-                                        code_review_exception.review_data
+                                        f"Code Review failed five times, time for a new plan.  this is all of code review blockers.",
+                                        {
+                                            "failed_code_reviews": failed_code_reviews
+                                        }
                                     )
                                 elif review_iteration_idx == 4:
                                     # out of retries
@@ -244,6 +265,7 @@ def execute(task_id: str):
                             )
                         finally:
                             if eval_data:
+                                ...
                                 pprint.pprint(eval_data)
                 
                 except GoalAchieved as goal_achieved:
@@ -261,7 +283,20 @@ def execute(task_id: str):
                             prod_deploy_iteration,
                             AwsEnv.PRODUCTION
                         )
+            except RetryableException as retryable_execution_exception:
+                logging.exception(retryable_execution_exception)
+                with transaction.atomic():
+                    SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+                        log_content_execution=f"""
+Execution Failed with 
+{retryable_execution_exception}
+{traceback.format_exc()}
             
+planning data:
+We should just try again - should be fixed next time around
+                        """
+                    )
+                current_iteration.refresh_from_db(fields=["log_content_execution"])
             except BadPlan as bad_plan_exception:
                 pprint.pprint(bad_plan_exception.plan_data)
                 logging.exception(bad_plan_exception)
@@ -413,6 +448,8 @@ def build_docker_image(
         docker_file: Path,
         log_f
 ) -> str:
+    subprocess.run(["docker", "system", "prune", "-f"], check=True)
+    
     self_driving_task = current_iteration.self_driving_task
     
     docker_image_tag = sanitize_aws_name([
@@ -766,17 +803,21 @@ def init_task_execution(iteration):
 def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration):
     iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=iteration.id)
     
+    if "no space left on device" in common.default_str(iteration.log_content_execution).lower():
+        subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
+        raise RetryableException(f"execution is failing with 'no space left on device'\n\n{iteration.log_content_execution}.  I just pruned docker, so should be cleared up now.")
+    
     eval_data = llm_chat(
         "Iteration Summarizer",
         config,
         [
             get_sys_prompt("iteration_summarizer.md"),
-            LlmMessage.user(f"""
-**Logs from iteration test output and execution**
-Base your evaluation on this log output
-========= BEGIN LOG OUTPUT =======================
-{iteration.log_content_execution}
-========= END LOG OUTPUT =======================""")
+            *LlmMessage.user_from_data(
+                f"**Logs from the iteration's test output and execution**\nBase your evaluation on this log output",
+                {
+                    "log_output": iteration.log_content_execution
+                }
+            )
         ],
         config.model_iteration_evaluation,
         output_schema=PROMPTS_DIR / "iteration_summarizer.md.schema.json"
@@ -791,22 +832,22 @@ Base your evaluation on this log output
     for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
             evaluation_json__isnull=False
     ).order_by("-timestamp")[:20][::-1]:
-        previous_iteration_evals.append(LlmMessage.user(f"""
-**Iteration Evaluation**
-{"This is the evaluation of the most iteration current iteration - this reflects the latest state of the code" if prev_iter == iteration else ""}
-iteration_evaluator output for iteration_id = '{prev_iter.id}'
-iteration timestamp: {prev_iter.timestamp}
-========= BEGIN iteration_id = '{prev_iter.id}' EVALUATION =======================
-{json.dumps(prev_iter.evaluation_json, indent=4)}
-========= END iteration_id = '{prev_iter.id}' EVALUATION =======================
-"""))
+        previous_iteration_evals.append({
+            "iteration_id": prev_iter.id,
+            "iteration_is_current_iteration": prev_iter == iteration,
+            "iteration_timestamp": prev_iter.timestamp,
+            "iteration_evaluation": prev_iter.evaluation_json,
+        })
     
     selection_data = llm_chat(
         "Iteration Selector",
         config,
         [
             get_sys_prompt("iteration_selector.md"),
-            *previous_iteration_evals
+            *LlmMessage.user_from_data(
+                f"**Iteration Evaluations**",
+                previous_iteration_evals
+            )
         ],
         config.model_iteration_evaluation,
         output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
@@ -825,6 +866,13 @@ iteration timestamp: {prev_iter.timestamp}
     
     if iteration.goal_achieved():
         raise GoalAchieved(eval_data)
+    
+    extract_lessons(
+        config,
+        iteration,
+        "code deploy and execution",
+        iteration.log_content_execution
+    )
     
     return eval_data
 
@@ -860,24 +908,6 @@ def build_previous_iteration_context_messages(
         iteration_to_modify
     )
     
-    # if previous_iteration and previous_iteration != iteration_to_modify:
-    #     messages.append(LlmMessage.user(f"""
-    # **Log Output**
-    # Log output from executing the PREVIOUS ITERATION (iteration_id = '{iteration_to_modify.id})'
-    # ========= BEGIN Log Output =======================
-    # {iteration_to_modify.log_content_execution}
-    # ========= END Log Output =======================
-    #             """))
-    
-    # if iteration_to_modify:
-    #     messages.append(LlmMessage.user(f"""
-    # **Log Output**
-    # Log output from executing the ITERATION WE ARE ROLLING THE CODE BACK TO (iteration_id = '{iteration_to_modify.id})'
-    # ========= BEGIN Log Output =======================
-    # {iteration_to_modify.log_content_execution}
-    # ========= END Log Output =======================
-    #         """))
-    
     return messages
 
 
@@ -886,28 +916,28 @@ def get_iteration_eval_llm_messages(
         previous_iteration: SelfDrivingTaskIteration = None,
         iteration_to_modify: SelfDrivingTaskIteration = None
 ) -> list[LlmMessage]:
-    return [
-        LlmMessage.user(f"""
-**iteration_evaluator Output**
-{"This is the evalutation of the execution of the previous iteration of the code" if iteration == previous_iteration and previous_iteration != iteration_to_modify else ""}
-{"We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code" if iteration == iteration_to_modify else ""}
-iteration_evaluator output for iteration_id = '{iteration.id}'
-iteration timestamp: {iteration.timestamp}
-========= BEGIN iteration_id = '{iteration.id}' EVALUATION =======================
-{
-        json.dumps(
-            {
-                "evaluation": iteration.evaluation_json.get("evaluation", "none"),
-                "strategic_guidance": iteration.evaluation_json.get("strategic_guidance", "none"),
-                
-            },
-            indent=4
-        )
-        }
-========= END iteration_id = '{iteration.id}' EVALUATION =======================
-        """)
-        for iteration in sorted(iterations, key=lambda i: i.timestamp)
-    ]
+    messages = []
+    
+    for iteration in sorted(iterations, key=lambda i: i.timestamp):
+        evaluation_json: dict = iteration.evaluation_json
+        if not evaluation_json:
+            continue
+        
+        description = ""
+        if iteration == previous_iteration and previous_iteration != iteration_to_modify:
+            description = "This is the evalutation of the execution of the previous iteration of the code"
+        elif iteration == iteration_to_modify:
+            description = "We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code"
+        
+        messages.append({
+            "iteration_id": iteration.id,
+            "description": description,
+            "iteration_timestamp": iteration.timestamp,
+            "evaluation": evaluation_json.get("evaluation", "none"),
+            "strategic_guidance": evaluation_json.get("strategic_guidance", "none"),
+        })
+    
+    return LlmMessage.user_from_data("**Output from iteration_evaluator agent**", messages)
 
 
 def get_sys_prompt(
@@ -921,12 +951,9 @@ def get_sys_prompt(
         msg = (PROMPTS_DIR / f).read_text()
         for look_for_str, replace_with_str in common.ensure_list(replacements):
             msg = msg.replace(look_for_str, replace_with_str)
-        messages.append(LlmMessage.sys(msg))
+        messages.append(msg)
     
-    if return_list:
-        return messages
-    else:
-        return common.first(messages)
+    return LlmMessage.sys("\n\n-------\n\n".join(messages))
 
 
 def perform_code_review(
@@ -945,6 +972,12 @@ def perform_code_review(
         # ),
         *common.ensure_list(
             get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.deployment_failed() else []
+        ),
+        *common.ensure_list(
+            LlmMessage.user_from_data(
+                "Relevant past lessons",
+                get_lessons(config)
+            )
         ),
         *common.ensure_list(
             config.guidance
@@ -979,9 +1012,11 @@ The code changes to review are in support of the following goal:
         config,
         messages,
         LlmModel.OPENAI_GPT_4o,
-        debug=True,
+        debug=False,
         output_schema=PROMPTS_DIR / "codereviewer.md.schema.json"
     ).json()
+    
+    pprint.pprint(code_review_data)
     
     blocking_issues = code_review_data.get("blocking_issues", [])
     non_blocking_warnings = code_review_data.get("non_blocking_warnings", [])
@@ -989,6 +1024,103 @@ The code changes to review are in support of the following goal:
         raise CodeReviewException(code_review_data)
     elif non_blocking_warnings:
         logging.warning(json.dumps(non_blocking_warnings, indent=4))
+
+
+def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True) -> list[dict]:
+    if all_lessons:
+        lessons_q = AgentLesson.objects.all()
+    else:
+        import numpy as np  # Ensure this is at the top of the file if not already imported
+        # Load embedding model (should ideally be cached/shared elsewhere)
+        query_embedding = sentence_transformer_model.encode(task_desc, normalize_embeddings=True)
+        query_embedding = np.array(query_embedding).flatten().tolist()
+        
+        # Define a custom Func for pgvector cosine distance
+        class CosineDistance(Func):
+            function = ''
+            template = '%(expressions)s <-> %s'
+        
+        # Query AgentLesson objects by vector similarity (cosine distance) using raw SQL to avoid Django's type system issues
+        lessons_q = (
+            AgentLesson.objects
+            .extra(
+                select={"distance": "embedding <-> %s::vector"},
+                select_params=[query_embedding]
+            ).extra(
+                where=["embedding <-> %s::vector <= 0.3"],
+                params=[query_embedding]
+            )
+            .order_by("distance")[:5]
+        )
+    
+    if exclude_invalid:
+        lessons_q = lessons_q.exclude(invalid_lesson=True)
+    
+    if task_desc:
+        lessons_q = lessons_q.filter(agent_step=task_desc)
+    
+    lessons = list(lessons_q)
+    
+    if not all_lessons:
+        # Deduplicate semantically similar lessons using embeddings
+        import numpy as np
+        from sentence_transformers import util
+        
+        # Generate text to embed
+        lesson_texts = [f"{a.pattern}. {a.trigger}. {a.lesson}" for a in lessons]
+        if lesson_texts:
+            lesson_embeddings = sentence_transformer_model.encode(lesson_texts, normalize_embeddings=True)
+        else:
+            lesson_embeddings = []
+        
+        # Deduplicate by semantic similarity
+        seen = []
+        unique_indices = []
+        
+        for i, emb in enumerate(lesson_embeddings):
+            if all(util.cos_sim(emb, lesson_embeddings[j]) < 0.92 for j in unique_indices):
+                unique_indices.append(i)
+        
+        lessons = [lessons[i] for i in unique_indices]
+    
+    return {
+        "important_quote": "Those who don't learn from history are doomed to repeat it",
+        "lessons": [
+            f"{a.lesson} - otherwise you'll see problems like this: {a.pattern} ({a.trigger})"
+            for a in lessons
+        ]
+    }
+
+
+def extract_lessons(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        agent_step: str,
+        log_content
+):
+    task = config.task
+    lessons_data = llm_chat(
+        "Extract Lessons",
+        config,
+        [
+            get_sys_prompt("lesson_extractor.md"),
+            LlmMessage.user(task.get_work_desc()),
+            *LlmMessage.user_from_data(f"Log Content from the '{agent_step}' step", log_content),
+            *LlmMessage.user_from_data(
+                "Existing Lessons (Don't repeat these)",
+                get_lessons(config, exclude_invalid=False)
+            )
+        ],
+        output_schema=PROMPTS_DIR / "lesson_extractor.md.schema.json",
+        model=LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE
+    ).json()
+    
+    for lesson_data in common.ensure_list(lessons_data.get("lessons", [])):
+        AgentLesson.create_from_data(
+            agent_step,
+            lesson_data,
+            current_iteration
+        )
 
 
 def generate_code(
@@ -1007,7 +1139,7 @@ def generate_code(
         code_review_file_blockers, code_review_file_warnings = code_review_exception.get_issue_dicts()
     else:
         code_review_file_blockers = code_review_file_warnings = defaultdict(list)
-
+    
     code_file_instructions = (
             [cfi for cfi in code_file_instructions if cfi.get("code_file_path") == "requirements.txt"]
             +
@@ -1015,7 +1147,7 @@ def generate_code(
     )
     
     if previous_iteration and (previous_iteration != iteration_to_modify):
-        roll_back_reason = planning_data.get("reason_for_iteration_id_to_modify")
+        roll_back_reason = planning_data.get("rollback_reason")
     else:
         roll_back_reason = None
     
@@ -1053,6 +1185,8 @@ def generate_code(
                 code_version_to_modify.code
             )
         else:
+            instruction_details = "\n".join([i.get("details") for i in instructions])
+            
             previous_exception = None
             code_str = None
             for i in range(3):
@@ -1074,6 +1208,27 @@ def generate_code(
                     
                     break
                 except CodeCompilationError as e:
+                    extract_lessons(
+                        config,
+                        current_iteration,
+                        TASK_DESC_CODE_WRITING,
+                        f"""
+the code written for {code_version_to_modify.code_file.file_path}:
+'''
+{e.code_str}
+'''
+
+written by following these instructions:
+'''
+{instructions}
+'''
+
+resulted in this validation error
+'''
+{traceback.format_exc()}
+'''
+                        """
+                    )
                     previous_exception = e
             
             if previous_exception:
@@ -1089,7 +1244,10 @@ def generate_code(
                 )
                 if code_file_path_str == "requirements.txt":
                     requirements_txt = code_str
+                
+                pprint.pprint(code_file.get_version(current_iteration, default_to_latest=True).get_diff())
     
+    config.git.add_files()
     return current_iteration
 
 
@@ -1215,6 +1373,7 @@ def write_initial_design(
         
         design_file_path = update_file_contents(
             config,
+            config.sandbox_root_dir / "docs" / "architecture.md",
             current_iteration,
             code
         )
@@ -1230,14 +1389,17 @@ def write_initial_design(
         previous_exception = e
 
 
-def update_file_contents(config, current_iteration, code):
-    docs_dir = config.sandbox_root_dir / "docs"
-    docs_dir.mkdir(parents=True, exist_ok=True)
-    test_file_path = docs_dir / "architecture.md"
-    test_file_path.write_text(code)
+def update_file_contents(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        file_path: Path,
+        code: str
+):
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(code)
     with transaction.atomic():
-        code_verson = current_iteration.get_code_version(test_file_path)
-    return test_file_path
+        code_verson = current_iteration.get_code_version(file_path)
+    return file_path
 
 
 def get_budget_message(config) -> LlmMessage:
@@ -1275,7 +1437,7 @@ def plan_code_changes(
         )
     
     messages = [
-        *common.ensure_list(get_sys_prompt(
+        get_sys_prompt(
             system_prompt_files,
             [
                 ("<test_file_path>", str(config.self_driving_task.test_file_path or "")),
@@ -1285,7 +1447,7 @@ def plan_code_changes(
                 ("<artifacts_directory>", str(config.artifacts_dir)),
                 ("<sandbox_dir>", str(config.sandbox_root_dir))
             ]
-        )),
+        ),
         *common.ensure_list(
             get_budget_message(config)
         ),
@@ -1311,6 +1473,12 @@ def plan_code_changes(
         ),
         *common.ensure_list(
             config.guidance
+        ),
+        *common.ensure_list(
+            LlmMessage.user_from_data(
+                "Do not repeat this mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                get_lessons(config)
+            )
         ),
         *common.ensure_list(
             LlmMessage.user(f"""
@@ -1365,116 +1533,80 @@ def write_code(
 ) -> str:
     code_file = code_version_to_modify.code_file
     code_file_path = code_file.get_path()
-    code_file_path = code_file_path
     code_file_name = code_file_path.name
     
-    prompt = get_codewriter_system_prompt(code_file_path)
-    
     messages: list[LlmMessage] = [
+        get_sys_prompt(
+            [
+                get_codewriter_system_prompt(code_file_path),
+                "codewriter--common.md"
+            ],
+            ("<sandbox_dir>", str(config.sandbox_root_dir))
+        ),
         *common.ensure_list(
-            get_sys_prompt(
-                prompt,
-                ("<sandbox_dir>", str(config.sandbox_root_dir))
-            ))
+            LlmMessage.sys(
+                "## Forbidden Actions\n• You **MUST NEVER** wrap the code in Markdown-style code fences such as ```<filetype>. Output must be raw code syntax only.")
+            if not code_file_name.endswith(".md") else []
+        )
     ]
     
     if code_file_name.endswith(".py"):
-        LlmMessage.user(
-            f"""
-The python environment has the following packages installed.  The code you write may only import from packages listed here
-========== begin requirements.txt ================
-{requirements_txt}
-========== end requirements.txt ================
-                """
-        )
+        messages += get_requirementstxt_msg(requirements_txt)
     
+    code_versions = {}
     if previous_iteration:
         previous_iteration_version = code_file.get_version(previous_iteration)
-        if previous_iteration_version:
-            prev_diff = previous_iteration_version.get_diff()
-            if prev_diff:
-                messages.append(
-                    LlmMessage.user(
-                        f"### PREVIOUS ITERATION DIFF for {code_file_path}:\n{prev_diff}"
-                    )
-                )
+        code_versions[previous_iteration_version.id] = (
+            "Previous Iteration's Code (your previous attempt at writing this code)",
+            previous_iteration_version
+        )
     
-    if iteration_to_modify and iteration_to_modify != previous_iteration:
-        # we are rolling back to a version that's not the previous version
-        code_version_to_modify_diff = code_version_to_modify.get_diff()
-        if code_version_to_modify_diff:
-            messages.append(
-                LlmMessage.user(
-                    f"### ROLLED-BACK ITERATION DIFF for {code_file_path} {roll_back_reason if roll_back_reason else ''}:\n{code_version_to_modify_diff}"
-                )
-            )
+    if code_version_to_modify and code_version_to_modify.code:
+        current_version_title = f"Contents of {code_file.file_path}.  THIS IS CODE YOU WILL MODIFY.  "
+        if roll_back_reason:
+            current_version_title += f"We rolled back to a previous version and are editing this rolled back version because of the following reason:\n'''\n{roll_back_reason}\n'''"
+        
+        code_versions[code_version_to_modify.id] = (
+            current_version_title,
+            code_version_to_modify
+        )
     
-    code_file_path = code_file.get_path()
+    messages += LlmMessage.user_from_data("Code Files", {
+        "code_file_versions": [
+            {
+                "file_description": title,
+                **code_version.get_llm_message_data()
+            } for title, code_version in code_versions.values() if code_version.code
+        ]
+    })
+    
+    coding_task_data = {
+        "instruction_steps": instructions
+    }
+    
+    lessons = get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
+    if lessons:
+        coding_task_data["lessons_learned"] = {
+            "description": "Lessons learned in previous iterations.  Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+            **lessons
+        }
+    
     if blocking_issues:
-        LlmMessage.user(
-            f"""
-**Code Review Failure**
-This is code from your previous attempt to generate code based on the instruction set:
-============ BEGIN PREVIOUS CODE =============
-{code_file.get_latest_version().code}
-============ END PREVIOUS CODE ===============
-
-This code failed the Code Review step with the following error(s): 
-============ BEGIN CODE REVIEW ERRORS =============
-{json.dumps(blocking_issues, indent=4)}
-============ END CODE REVIEW ERRORS ===============
-
-**YOUR ONE AND ONLY TASK:**
-Write the code again using the instruction set and avoid these code review errors
-                            """
-        )
-    elif code_version_to_modify.code:
-        print("modifying", code_file_path)
-        
-        messages.append(
-            LlmMessage.user(
-                f"iteration id={str(code_version_to_modify.task_iteration.id)} code_file_path {code_file_path}",
-                config.sandbox_root_dir / code_file.file_path
-            )
-        )
-        
-        messages.append(
-            LlmMessage.user(
-                f"""
-**YOUR ONE AND ONLY TASK:**
-Modify {code_file_path}, following each of these instructions exactly and in order, while avoiding repeating any previous erros (if applicable):
-
-{json.dumps(instructions, indent=4)}
-    """
-            )
-        )
-    
-    else:
-        messages.append(
-            LlmMessage.user(
-                f"""
-**YOUR ONE AND ONLY TASK:**
-Write the initial version of {code_file_path}, following each of these instructions exactly and in order:
-
-{json.dumps(instructions, indent=4)}
-        """
-            )
-        )
+        coding_task_data["code_review_errors"] = {
+            "description": "**Code Review Failure** Your previous attempt to generate code based on the instruction set resulted in these blocking code review errors.  **You must** avoid these errors in the next version of the code",
+            "blocking_codereview_errors": str(blocking_issues)
+        }
     
     if previous_exception:
-        messages.append(LlmMessage.user(f'''
-This is code from your previous attempt to generate code based on the instruction set:
-============ BEGIN PREVIOUS CODE =============
-{previous_exception.code_str}
-============ END PREVIOUS CODE ===============
-
-This code failed the validation step with the following error(s): 
-============ BEGIN VALIDATION EXCEPTION =============
-{str(previous_exception)}
-============ END VALIDATION EXCEPTION ===============
-
-Please try writing the code again and avoid these errors
-           '''))
+        coding_task_data["code_validation_errors"] = {
+            "description": "**Code Validation Failure** Your previous attempt to generate code based on the instruction set resulted in these validation errors.  **You must** avoid these errors in the next version of the code",
+            "error_log": str(previous_exception)
+        }
+    
+    messages += LlmMessage.user_from_data(
+        f"**YOUR ONE AND ONLY TASK:**\n{'Modify' if code_version_to_modify.code else 'Write the initial version of'} {code_file.file_path}, following each of these instruction steps exactly and in order, while avoiding repeating any previous errors or blocking_codereview_errors (if applicable) and applying the applicable lessons learned from previous attempts.",
+        coding_task_data
+    )
     
     code = llm_chat(
         f"Write code for {code_file_name}",
@@ -1501,6 +1633,17 @@ Please try writing the code again and avoid these errors
                     code,
                     code_compilation_error
                 )
+
+
+def get_requirementstxt_msg(requirements_txt, header="The python environment has the following packages installed.  The code you write may only import from packages listed here") -> list[LlmMessage]:
+    return LlmMessage.user_from_data(
+        header,
+        {
+            "file_path": "requirements.txt",
+            "may_edit": False,
+            "code": requirements_txt
+        }
+    )
 
 
 def fix_code_compilation(config, code_file_path, code, e):
@@ -1668,37 +1811,14 @@ def validate_code(code_file_path: Path, code: str) -> str:
     return code
 
 
-def get_dependencies_msg(config: SelfDriverConfig, for_planning: bool) -> LlmMessage:
+def get_dependencies_msg(config: SelfDriverConfig, for_planning: bool) -> list[LlmMessage]:
     header = "The python environment has the following packages installed"
     if for_planning:
         header += ".  If you need additional packages, you'll need to add them to the requirements.txt"
     
-    return LlmMessage.sys(
-        f"""
-{header}
-========== begin requirements.txt ================
-{(config.sandbox_root_dir / 'requirements.txt').read_text()}
-========== end requirements.txt ================
-"""
-    )
-
-
-def get_helper_methods_msg(config) -> LlmMessage:
-    return LlmMessage.sys(
-        f"""
-Helper Methods
-
-You may use the helper methods defined in agent_tools.py
-========== begin agent_tools.py ================
-{(Path(__file__).parent / "agent_tools_stub.py").read_text()}
-========== end agent_tools.py ================
-
-If you use any of these helper methods, you must import agent_tools with the following line of code:
-from erieiron_autonomous_agent.business_level_agents.self_driving_coder import agent_tools
-
-if a helper method has a parameter named 'business_id', use the following value for business_id: "{config.self_driving_task.business_id or None}"
-if a helper method has a parameter named 'task_id', use the following value for task_id: "{config.self_driving_task.task_id or None}"
-"""
+    return get_requirementstxt_msg(
+        (config.sandbox_root_dir / 'requirements.txt').read_text(),
+        header
     )
 
 
@@ -1708,24 +1828,22 @@ def get_docs_msg(config) -> list[LlmMessage]:
             return None
     
     files = []
-    # readme_path = config.sandbox_root_dir / "README.md"
-    # if readme_path.exists():
-    #     files.append(readme_path)
+    readme_path = config.sandbox_root_dir / "README.md"
+    if readme_path.exists():
+        files.append(readme_path)
     
     docs_dir = config.sandbox_root_dir / "docs"
     if docs_dir.exists():
         for md_file in docs_dir.glob("*.md"):
-            files.append(md_file)
+            files.append({
+                "file_path": md_file,
+                "contents": md_file.read_text()
+            })
     
-    return [
-        LlmMessage.user(f"""
-The following is the content of `./docs/{file.name}`, a Markdown documentation file. 
-It may contain high-level design notes, architecture explanations, or usage instructions useful to developers and future planning agents.
-
-{file.read_text()}
-        """)
-        for file in files
-    ]
+    return LlmMessage.user_from_data(
+        "The following are markdown documentation file(s). They may contain high-level design notes, architecture explanations, or usage instructions useful to developers and future planning agents.",
+        files
+    )
 
 
 def get_goal_msg(config):
@@ -1988,22 +2106,34 @@ def llm_chat(
         debug=False
 ) -> LlmResponse:
     token_count = LlmMessage.get_total_token_count(model, messages)
-    max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-    
-    if max_tokens:
-        print(f"{desc}: about to call out to {model}. {token_count:,}/{max_tokens:,} tokens used")
-    else:
-        print(f"{desc}: about to call out to {model}.  {token_count:,} tokens used")
-    
     log_llm_request(config, messages)
-    llm_resp = llm_interface.chat(
-        messages=messages,
-        model=model,
-        output_schema=output_schema,
-        code_response=code_response,
-        debug=debug
-    )
-    log_llm_response(config, llm_resp)
+    
+    llm_resp = None
+    for i in range(2):
+        try:
+            max_tokens = MODEL_TO_MAX_TOKENS.get(model)
+            
+            if max_tokens:
+                print(f"{desc}: about to call out to {model}. {token_count:,}/{max_tokens:,} tokens used")
+            else:
+                print(f"{desc}: about to call out to {model}.  {token_count:,} tokens used")
+            
+            llm_resp = llm_interface.chat(
+                messages=messages,
+                model=model,
+                output_schema=output_schema,
+                code_response=code_response,
+                debug=debug
+            )
+            log_llm_response(config, llm_resp)
+            break
+        except Exception as e:
+            logging.exception(e)
+            
+            if i == 1:
+                raise e
+            else:
+                model = MODEL_BACKUPS[model]
     
     print(f"{desc}: total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f} - total spend is ${config.self_driving_task.get_cost() :.2f} out a budget of ${config.budget :.2f}")
     
@@ -2273,4 +2403,8 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
         else:
             current.setdefault(parts[-1], {})
     
-    return LlmMessage.user_from_data("Project File Structure (read-only reference for reuse planning)", structure)
+    return LlmMessage.user_from_data(
+        "Existing Project File Structure (read-only reference for reuse planning)", {
+            "existing_file_structure": structure
+        }
+    )

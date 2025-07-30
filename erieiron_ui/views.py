@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
-from erieiron_autonomous_agent.models import Business, LlmRequest
+from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level
@@ -30,6 +30,7 @@ def view_businesses(request):
     return send_response(
         request, "businesses.html", {
             "erieiron_business": erieiron_business,
+            "agent_lessons": AgentLesson.objects.all().order_by("-timestamp"), #("agent_step", "invalid_lesson", "pattern"),
             "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at"),
             "all_running_processes": all_running_processes
         },
@@ -710,4 +711,26 @@ def action_delete_iteration(request, iteration_id):
         return redirect(reverse('view_businesses'))
     except Exception as e:
         messages.error(request, f'Error deleting iteration: {str(e)}')
+        return redirect(reverse('view_businesses'))
+
+
+def action_toggle_lesson_validity(request, lesson_id):
+    if request.method != 'POST':
+        raise Exception()
+    
+    try:
+        lesson = get_object_or_404(AgentLesson, pk=lesson_id)
+        
+        # Toggle the invalid_lesson value
+        lesson.invalid_lesson = not lesson.invalid_lesson
+        lesson.save()
+        
+        status = "invalid" if lesson.invalid_lesson else "valid" 
+        messages.success(request, f'Lesson marked as {status}!')
+        return redirect(reverse('view_businesses') + '#lessons')
+    except AgentLesson.DoesNotExist:
+        messages.error(request, 'Lesson not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error updating lesson: {str(e)}')
         return redirect(reverse('view_businesses'))

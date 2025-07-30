@@ -28,4 +28,6 @@ urlpatterns = [
 
     path("self_driver_iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
     path("iteration/delete/<uuid:iteration_id>", views.action_delete_iteration, name="action_delete_iteration"),
+    
+    path("lesson/toggle/<uuid:lesson_id>", views.action_toggle_lesson_validity, name="action_toggle_lesson_validity"),
 ]

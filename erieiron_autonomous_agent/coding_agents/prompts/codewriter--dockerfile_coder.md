@@ -28,3 +28,7 @@ Caching
  • Cache any external fetches or computed artifacts that are stable across runs.
  • Store all files in the directory "<sandbox_dir>"
  • Do not cache sensitive or temporary credentials
+
+
+Requirements that must always be met
+• The Dockerfile must always extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"

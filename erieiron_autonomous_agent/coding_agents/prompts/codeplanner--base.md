@@ -105,6 +105,24 @@ Use this context to assess existing implementation, surface failures, and detect
 
 ---
 
+### 8. **Previously Learned Lessons**
+If lessons learned from past planner failures are provided, you must treat them as authoritative and use them to guide your planning.
+
+- A lesson may describe:
+  - Patterns that have caused regressions
+  - Common pitfalls to avoid (e.g., creating duplicate files, forgetting dependencies)
+  - Fix strategies that previously failed and should not be repeated
+- Each lesson includes a `pattern`, `trigger`, `lesson`, and `context_tags`.
+
+**Your responsibility:**
+- Carefully review each lesson before proposing any plan.
+- Do not repeat mistakes previously codified in lessons.
+- If a proposed change would violate a prior lesson, stop and rethink your plan.
+- If the lesson applies but must be overridden, clearly document the rationale in the `guidance` field.
+
+Failing to heed prior lessons is treated as a regression and must be avoided.
+---
+
 ### General Planning Responsibilities
 
 1. **Understand the GOAL**
@@ -160,6 +178,7 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 - If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
+- The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 
 #### CloudFormation File Enforcement
@@ -181,6 +200,22 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 ---
 
 ## Output Fields
+ 
+### Optional Field: `lessons_applied`
+
+To increase transparency and encourage planner self-auditing, you may include a `lessons_applied` field at the top level of your output JSON.
+
+- This should be a list of the `pattern` fields (string) from past lessons that influenced your current plan.
+- Use this to document which previously learned constraints, safeguards, or architectural principles you honored while planning.
+- This is optional, but encouraged—especially when fixing regressions or implementing recurring infrastructure or test patterns.
+
+Example:
+```json
+"lessons_applied": [
+  "Do not create files that already exist",
+  "Always check required environment variables before execution"
+]
+```
  - `code_files`
     - A list of file-level edit plans. Each item must include:
         - `code_file_path`: the relative path to the file being created or modified
@@ -237,11 +272,7 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 
 ---
 
-## Output Example
-
-Here is an example of a complete output structure:
-
-```json
+## Output Example (**always** respond with parsable json)
 {
    "code_files": [
       {
@@ -270,7 +301,7 @@ Here is an example of a complete output structure:
       }
    ]
 }
-```
+
 ---
 
 ### Documentation Planning Guidelines
@@ -305,15 +336,12 @@ Use documentation to extend your memory across iterations and support faster, mo
 ### Blocked Output Example
 
 If unable to proceed due to ambiguity, missing context, or constraints, emit this structure:
-
-```json
 {
   "blocked": {
     "category": "task_def",
     "reason": "GOAL is ambiguous: does not specify whether output should be saved to disk or streamed"
   }
 }
-```
 
 ### When to Emit `blocked`
 Emit a `blocked` output only when:
