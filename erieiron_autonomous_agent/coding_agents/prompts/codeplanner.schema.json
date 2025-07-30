@@ -9,6 +9,13 @@
       "title": "Planned Code Change",
       "required": ["code_files"],
       "properties": {
+        "lessons_applied": {
+          "type": "array",
+          "description": "List of past lesson patterns that influenced this plan",
+          "items": {
+            "type": "string"
+          }
+        },
         "code_files": {
           "type": "array",
           "description": "List of file-level deterministic planning instructions",

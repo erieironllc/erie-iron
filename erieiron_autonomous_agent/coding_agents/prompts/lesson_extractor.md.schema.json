@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "lessons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pattern_description": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Short, human-readable description of the issue type"
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 3,
+            "description": "How the issue was detected or initiated"
+          },
+          "lesson": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Generalized advice to avoid the issue"
+          },
+          "context_tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Keywords to help with search and categorization"
+          }
+        },
+        "required": ["pattern_description", "trigger", "lesson", "context_tags"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["lessons"],
+  "additionalProperties": false
+}

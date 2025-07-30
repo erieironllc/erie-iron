@@ -40,12 +40,12 @@ MODEL_TO_IMPL = {
     LlmModel.OPENAI_GPT_4o: openai_chat_api,
     LlmModel.OPENAI_GPT_4o_20240806: openai_chat_api,
     LlmModel.OPENAI_GPT_4_TURBO: openai_chat_api,
-    LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: openai_chat_api,
+    # LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: openai_chat_api,
     LlmModel.OPENAI_GPT_3_5_TURBO: openai_chat_api,
     LlmModel.OPENAI_GPT_4_1: openai_chat_api,
     LlmModel.OPENAI_GPT_4_1_MINI: openai_chat_api,
     LlmModel.OPENAI_GPT_4_1_NANO: openai_chat_api,
-    LlmModel.OPENAI_GPT_4_5: openai_chat_api,
+    # LlmModel.OPENAI_GPT_4_5: openai_chat_api,
     LlmModel.OPENAI_O1: openai_chat_api,
     LlmModel.OPENAI_O1_MINI: openai_chat_api,
     LlmModel.OPENAI_O3: openai_chat_api,
@@ -63,17 +63,50 @@ MODEL_TO_IMPL = {
     LlmModel.DEEPSEEK_CHAT: deepseek_chat_api
 }
 
+MODEL_BACKUPS = {
+    # GPT family fallbacks
+    LlmModel.OPENAI_GPT_3_5_TURBO: LlmModel.CLAUDE_3_5,
+    LlmModel.OPENAI_GPT_4_1: LlmModel.CLAUDE_3_7,
+    LlmModel.OPENAI_GPT_4_1_MINI: LlmModel.OPENAI_O1_MINI,
+    LlmModel.OPENAI_GPT_4_1_NANO: LlmModel.OPENAI_O3_MINI,
+    # LlmModel.OPENAI_GPT_4_5: LlmModel.CLAUDE_3_7,
+    LlmModel.OPENAI_GPT_4_TURBO: LlmModel.OPENAI_O3_PRO,
+    LlmModel.OPENAI_GPT_4o: LlmModel.CLAUDE_3_7,
+    LlmModel.OPENAI_GPT_4o_20240806: LlmModel.CLAUDE_3_7,
+    # LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE,
+
+    # OpenAI 'O'-series fallbacks (prioritize variety)
+    LlmModel.OPENAI_O3_MINI: LlmModel.GEMINI_2_0_FLASH,
+    LlmModel.OPENAI_O3_PRO: LlmModel.GEMINI_2_5_PRO,
+    LlmModel.OPENAI_O1: LlmModel.CLAUDE_3_5,
+    LlmModel.OPENAI_O1_MINI: LlmModel.GEMINI_2_0_FLASH,
+    LlmModel.OPENAI_O3: LlmModel.CLAUDE_3_7,
+    LlmModel.OPENAI_O4: LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE,
+    LlmModel.OPENAI_O4_MINI: LlmModel.GEMINI_2_5_PRO,
+
+    # Claude and Gemini fallbacks
+    LlmModel.CLAUDE_3_7: LlmModel.OPENAI_GPT_4o,
+    LlmModel.CLAUDE_3_5: LlmModel.OPENAI_GPT_4_1,
+    LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE: LlmModel.OPENAI_GPT_4o,
+    LlmModel.GEMINI_2_5_PRO: LlmModel.OPENAI_GPT_4_TURBO,
+    LlmModel.GEMINI_2_0_FLASH: LlmModel.OPENAI_GPT_4_1_NANO,
+
+    # Specialized fallback models
+    LlmModel.DEEPSEEK_CODER: LlmModel.OPENAI_O3_PRO,
+    LlmModel.DEEPSEEK_CHAT: LlmModel.OPENAI_GPT_3_5_TURBO,
+}
+
 MODEL_TO_MAX_TOKENS = {
     LlmModel.OPENAI_O3_MINI: 200_000,
     LlmModel.OPENAI_GPT_4o: 128_000,
     LlmModel.OPENAI_GPT_4o_20240806: 128_000,
     LlmModel.OPENAI_GPT_4_TURBO: 128_000,
-    LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: 128_000,
+    # LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: 128_000,
     LlmModel.OPENAI_GPT_3_5_TURBO: 4_096,
     LlmModel.OPENAI_GPT_4_1: 1_000_000,
     LlmModel.OPENAI_GPT_4_1_MINI: 1_000_000,
     LlmModel.OPENAI_GPT_4_1_NANO: 1_000_000,
-    LlmModel.OPENAI_GPT_4_5: 128_000,
+    # LlmModel.OPENAI_GPT_4_5: 128_000,
     LlmModel.OPENAI_O1: 128_000,
     LlmModel.OPENAI_O1_MINI: 128_000,
     LlmModel.OPENAI_O3: 30_000,
@@ -92,10 +125,10 @@ MODEL_TO_MAX_TOKENS = {
 }
 
 MODEL_PRICE_USD_PER_MILLION_TOKENS = {
-    LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: {
-        "input": 75.00,
-        "output": 150.00,
-    },
+    # LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: {
+    #     "input": 75.00,
+    #     "output": 150.00,
+    # },
     LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE: {
         "input": 15.00,
         "output": 75.00,
@@ -132,10 +165,10 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
         "input": 0.05,
         "output": 0.20,
     },
-    LlmModel.OPENAI_GPT_4_5: {
-        "input": 75.00,
-        "output": 150.00,
-    },
+    # LlmModel.OPENAI_GPT_4_5: {
+    #     "input": 75.00,
+    #     "output": 150.00,
+    # },
     LlmModel.OPENAI_O1: {
         "input": 15.00,
         "output": 60.00,

@@ -18,11 +18,13 @@ Security & File Constraints
 Reusable Methods
  • Always check if a required function already exists.
  • This ensures consistent behavior, sandbox compliance, and observability.
+ • When editing an existing test file, reuse and modify current functions instead of rewriting from scratch, unless otherwise specified.
 
 
 Validation
  • Before returning the generated Python code, validate it using `compile(source_code, "<generated>", "exec")`. Raise a clear exception if compilation fails, including the syntax error message.
  • Log compilation success or failure using print statements for transparency.
+ • For any third-party library (e.g., moto), verify imports reflect the installed version listed in requirements.txt. If multiple import paths exist, prefer the one valid in the current version.
 
 Output Format
  • Your response must contain only raw, valid Python code. No explanations, no markdown formatting.
@@ -46,6 +48,7 @@ Code Quality
      • Comments should be lowercase and only used for non-obvious logic.
      • All tests must subclass `django.test.TestCase` and include the import `from django.test import TestCase`.
  • All generated tests will be executed using `python manage.py test`, so they must be structured for Django's test discovery system.
+ • If an earlier test failed due to missing module, syntax error, or broken import, correct the issue without introducing unrelated changes.
 
 Caching
  • Cache any external fetches or computed artifacts that are stable across runs.

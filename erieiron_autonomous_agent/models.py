@@ -1,4 +1,5 @@
 import difflib
+# Load model once at startup
 import logging
 import os
 import subprocess
@@ -12,6 +13,7 @@ from django.db.models import Sum
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from pgvector.django import VectorField
+from sentence_transformers import SentenceTransformer
 
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
 from erieiron_autonomous_agent.utils import codegen_utils
@@ -21,6 +23,8 @@ from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, In
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.models import BaseErieIronModel
+
+mini_lm_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 class Business(BaseErieIronModel):
@@ -1113,3 +1117,41 @@ def kill_running_processes_on_iteration_delete(sender, instance, **kwargs):
             logging.info(f"Killed running process {process.id} for iteration {instance.id}")
         except Exception as e:
             logging.warning(f"Failed to kill process {process.id} for iteration {instance.id}: {e}")
+
+
+class AgentLesson(BaseErieIronModel):
+    source_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True)
+    agent_step = models.TextField()
+    pattern = models.TextField()
+    invalid_lesson = models.BooleanField(default=False, null=True)
+    trigger = models.TextField()
+    lesson = models.TextField()
+    context_tags = models.JSONField(default=list)
+    embedding = VectorField(dimensions=384, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    @staticmethod
+    def create_from_data(agent_step, data: dict, source_iteration=None) -> 'AgentLesson':
+        tag_text = common.safe_join(data.get("context_tags", []), delim=",")
+        text = f'Step: {agent_step}. {data.get("pattern_description")}. {data.get("trigger")}. {data.get("lesson")}. Tags: {tag_text}'
+        embedding = mini_lm_model.encode(text, normalize_embeddings=True)
+        
+        lesson = AgentLesson.objects.create(
+            source_iteration=source_iteration,
+            agent_step=agent_step,
+            pattern=data.get("pattern_description"),
+            trigger=data.get("trigger"),
+            lesson=data.get("lesson"),
+            context_tags=data.get("context_tags"),
+            embedding=embedding
+        )
+    
+    def get_llm_data(self):
+        return {
+            "agent_step": self.agent_step,
+            "valid_lesson": not self.invalid_lesson,
+            "pattern": self.pattern,
+            "trigger": self.trigger,
+            "lesson": self.lesson,
+            "context_tags": self.context_tags
+        }

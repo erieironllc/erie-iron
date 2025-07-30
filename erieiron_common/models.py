@@ -1011,3 +1011,5 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
             PubSubHanderInstanceProcess.objects.filter(id__in=process_ids).update(
                 process_status=PubSubHandlerInstanceStatus.KILL_REQUESTED
             )
+
+

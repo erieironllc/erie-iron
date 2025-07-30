@@ -332,11 +332,13 @@ class LlmMessageType(ErieEnum):
 
 
 class LlmModel(ErieEnum):
+    # OPENAI_GPT_4_5 = "gpt-4.5"
+    # OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE = "gpt-4.5-preview-2025-02-27"
+    
     OPENAI_GPT_3_5_TURBO = "gpt-3.5-turbo"
     OPENAI_GPT_4_1 = "gpt-4.1"
     OPENAI_GPT_4_1_MINI = "gpt-4.1-mini"
     OPENAI_GPT_4_1_NANO = "gpt-4.1-nano"
-    OPENAI_GPT_4_5 = "gpt-4.5"
     OPENAI_GPT_4_TURBO = "gpt-4-turbo"
     OPENAI_GPT_4o = "gpt-4o"
     OPENAI_GPT_4o_20240806 = "gpt-4o-2024-08-06"
@@ -347,7 +349,6 @@ class LlmModel(ErieEnum):
     OPENAI_O3 = "o3"
     OPENAI_O4 = "o4"
     OPENAI_O4_MINI = "o4-mini"
-    OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE = "gpt-4.5-preview-2025-02-27"
 
     GEMINI_2_5_PRO = "gemini-2.5-pro-preview-03-25"
     GEMINI_2_0_FLASH = "gemini-2.0-flash"
