@@ -169,6 +169,26 @@ def execute(task_id: str):
                     )
                     current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
                     
+                    
+                    todo
+                    """
+Build a Failure Mode Router:
+When a stack trace hits, before planning anything, run a “failure triage agent” that:
+
+Classifies the error (syntax, version mismatch, missing import, etc.)
+
+Determines recovery path (e.g., suggest fix directly, escalate to planner, defer to human)
+
+Pulls relevant lessons or similar past failures from memory
+
+Limit scope in recovery:
+Don’t always “replan the task.” Sometimes, a surgical patch prompt is what’s needed:
+“Given this stack trace and the version of package X, what’s the fix?”
+
+Score your recovery agents:
+Track whether planner vs fixer vs human performed better—begin to learn from which agent recovers best from which class of failure.
+                    """
+                    
                     log_execution_only_headline(
                         config,
                         current_iteration
@@ -200,7 +220,7 @@ def execute(task_id: str):
                             iteration_to_modify,
                             relevant_code_files
                         )
-                        pprint.pprint(planning_data)
+                        # pprint.pprint(planning_data)
                         
                         logging.info(f"PHASE - generate_code: {current_iteration.id}")
                         cr_exception = None
@@ -265,7 +285,6 @@ def execute(task_id: str):
                             )
                         finally:
                             if eval_data:
-                                ...
                                 pprint.pprint(eval_data)
                 
                 except GoalAchieved as goal_achieved:
@@ -1112,7 +1131,7 @@ def extract_lessons(
             )
         ],
         output_schema=PROMPTS_DIR / "lesson_extractor.md.schema.json",
-        model=LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE
+        model=LlmModel.GEMINI_2_5_PRO
     ).json()
     
     for lesson_data in common.ensure_list(lessons_data.get("lessons", [])):
@@ -1245,7 +1264,7 @@ resulted in this validation error
                 if code_file_path_str == "requirements.txt":
                     requirements_txt = code_str
                 
-                pprint.pprint(code_file.get_version(current_iteration, default_to_latest=True).get_diff())
+                # pprint.pprint(code_file.get_version(current_iteration, default_to_latest=True).get_diff())
     
     config.git.add_files()
     return current_iteration
@@ -1608,6 +1627,8 @@ def write_code(
         coding_task_data
     )
     
+    # pprint.pprint(coding_task_data)
+    
     code = llm_chat(
         f"Write code for {code_file_name}",
         config,
@@ -1880,6 +1901,7 @@ def get_relevant_code_files(
         deployment_files: list[Path] = [
             config.sandbox_root_dir / "Dockerfile",
             config.sandbox_root_dir / "infrastructure.yaml",
+            config.sandbox_root_dir / "settings.py",
             config.sandbox_root_dir / "requirements.txt"
         ]
         

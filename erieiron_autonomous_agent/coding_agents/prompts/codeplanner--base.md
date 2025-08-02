@@ -159,6 +159,7 @@ Failing to heed prior lessons is treated as a regression and must be avoided.
         - What is known to work based on the evaluator logs or environment listing
         - A stable recent version if no other information is available
       - If unsure about the correct package name or version, include a `TODO:` comment explaining the uncertainty.
+    - Be alert to version mismatches between package declarations in `requirements.txt` and the codebase's actual usage patterns. If imports are structured in a way that only work with specific versions of a library (e.g., `from moto.s3 import mock_s3` is valid in moto 4.x but not 5.x), verify that the declared version supports the expected structure. If not, either change the import structure to match the version or downgrade the version to match the expected import. Do not blindly upgrade packages—always confirm compatibility with existing code.
 
 **5. Anticipate Secondary Consequences**
     - Treat each change not just as a patch, but as part of a system. Ask:
@@ -371,14 +372,20 @@ All plans must include diagnostic logging to support debugging and validation.
 
 ### Output Format Constraints
 
-Your output must be a single, well-formed JSON object. You must not emit:
+Your output **must be** a single, well-formed JSON object. 
 
+**You are forbidden to emit:**
 - Markdown headers or bullets
 - Natural language summaries or explanations
 - Raw code or pseudocode
 - Anything outside of the JSON structure
 
-Failure to return valid JSON will result in hard rejection of the plan.
+**You must return a single, well-formed JSON object.**
+- Do **not** write your response in markdown.
+- Do **not** use headers (`###`) or bullets (`-`) or any natural language commentary.
+- Do **not** return multiple sections (e.g., plan + guidance + JSON).
+- Do **not** format your plan as prose.
+- Any response that is not valid JSON will be discarded.
 
 ---
 
