@@ -71,3 +71,15 @@ Return a list of lessons, if applicable. If no meaningful lesson can be derived,
   - Deprecation warnings
   - Redundant logging
 - Fixing non-breaking warnings can often cause regressions. **Focus only on actionable, breaking issues.**
+
+---
+
+### Guidelines for Version Compatibility Errors
+- When failures are caused by *version-specific syntax* or *library structure differences* (e.g., an import path that exists in v4 but not v5), extract a lesson that captures:
+  - The **version dependency** of the failing behavior
+  - The **symptom** that reveals the mismatch (e.g., ImportError, AttributeError)
+  - The **generalizable guidance** (e.g., "Verify that the syntax used matches the declared package version")
+
+- These issues are materially different from "missing dependency" errors and should be extracted **even if a similar package is already in requirements.txt**.
+
+- Include `context_tags` like: `["versioning", "dependency_management", "python", "import_error"]`

@@ -9,7 +9,7 @@ If lessons learned from past planner failures are provided, you must treat them 
 - Each lesson includes a `pattern`, `trigger`, `lesson`, and `context_tags`.
 
 **Your responsibility:**
-- Carefully review each lesson before proposing any plan.
+- Carefully review each lesson before writing any code
 - Do not repeat mistakes previously codified in lessons.
 - If a proposed change would violate a prior lesson, stop and rethink your plan.
 - If the lesson applies but must be overridden, clearly document the rationale in the `guidance` field.
