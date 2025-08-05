@@ -28,7 +28,6 @@ Validation
 
 Output Format
  • Your response must contain only raw, valid Python code. No explanations, no markdown formatting.
- • Include a final summary print with any key metrics, totals, or decisions made.
  • Do not include a `if __name__ == '__main__':` block in the output.
 
 Iteration & Logging

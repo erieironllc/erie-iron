@@ -742,6 +742,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content_execution = models.TextField(null=True)
     log_content_coding = models.TextField(null=True)
     evaluation_json = models.JSONField(null=True)
+    routing_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     
     def get_latest_execution(self) -> TaskExecution:
@@ -803,8 +804,29 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         except:
             return None
     
-    def deployment_failed(self):
-        return common.parse_bool(common.get(self, ["evaluation_json", "deployment_failed"], False))
+    def has_error(self) -> bool:
+        if self.get_error()[0]:
+            return True
+        else:
+            return False
+    
+    def get_error(self) -> tuple[str, str]:
+        evaluation_json = self.evaluation_json
+        if evaluation_json is None:
+            return None, None
+        
+        evaluation_json = evaluation_json or {}
+        
+        if "error" in evaluation_json:
+            error_info = evaluation_json.get("error")
+            
+            return error_info.get("summary"), error_info.get("logs")
+        else:
+            error_info = common.first(evaluation_json.get("evaluation", []) )
+            if error_info:
+                return error_info.get("summary"), error_info.get("details")
+            else:
+                return "unknown", "unknown"
     
     def goal_achieved(self):
         return common.parse_bool(common.get(self, ["evaluation_json", "goal_achieved"], False))
@@ -1129,7 +1151,7 @@ class AgentLesson(BaseErieIronModel):
     context_tags = models.JSONField(default=list)
     embedding = VectorField(dimensions=384, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     @staticmethod
     def create_from_data(agent_step, data: dict, source_iteration=None) -> 'AgentLesson':
         tag_text = common.safe_join(data.get("context_tags", []), delim=",")

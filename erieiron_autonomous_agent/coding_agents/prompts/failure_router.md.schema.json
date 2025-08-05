@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FailureModeRouterOutput",
+  "type": "object",
+  "required": ["classification", "recovery_path", "related_lessons"],
+  "properties": {
+    "classification": {
+      "type": "string",
+      "enum": [
+        "SYNTAX_ERROR",
+        "IMPORT_ERROR",
+        "VERSION_MISMATCH",
+        "ATTRIBUTE_ERROR",
+        "MISSING_DEPENDENCY",
+        "CONFIGURATION_ERROR",
+        "NETWORK_ERROR",
+        "UNKNOWN"
+      ]
+    },
+    "recovery_path": {
+      "type": "string",
+      "enum": [
+        "DIRECT_FIX",
+        "ESCALATE_TO_PLANNER",
+        "ESCALATE_TO_HUMAN"
+      ]
+    },
+    "fix_prompt": {
+      "type": "string",
+      "description": "Only present when recovery_path is 'DIRECT_FIX'"
+    },
+    "context_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Relative paths of code files needed by the quick fix agent. Only present when recovery_path is 'DIRECT_FIX'."
+    },
+    "related_lessons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["lesson_title", "why_relevant"],
+        "properties": {
+          "lesson_title": {
+            "type": "string"
+          },
+          "why_relevant": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "recovery_path": { "const": "DIRECT_FIX" } }
+      },
+      "then": {
+        "required": ["fix_prompt", "context_files"]
+      },
+      "else": {
+        "not": {
+          "required": ["fix_prompt"]
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

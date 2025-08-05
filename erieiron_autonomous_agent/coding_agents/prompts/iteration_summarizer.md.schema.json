@@ -5,16 +5,11 @@
   "description": "Structured output from the iteration_evaluator agent.",
   "type": "object",
   "required": [
-    "deployment_failed",
     "goal_achieved",
     "summary",
-    "evaluation"
+    "error"
   ],
   "properties": {
-    "deployment_failed": {
-      "type": "boolean",
-      "description": "True if any infrastructure or deployment issue blocked execution (e.g., CloudFormation error, Docker build failure, service crash)."
-    },
     "goal_achieved": {
       "type": "boolean",
       "description": "True if the GOAL was successfully achieved, false otherwise."
@@ -23,21 +18,18 @@
       "type": "string",
       "description": "A multi-sentence high-level summary of the current iteration's behavior, including any overarching interpretations or theories."
     },
-    "evaluation": {
-      "type": "array",
-      "description": "List of diagnostic issues with the current or previous iterations.",
-      "items": {
-        "type": "object",
-        "required": ["summary", "details"],
-        "properties": {
-          "summary": {
-            "type": "string",
-            "description": "Short title or classification of the issue (e.g., 'throws KeyError')"
-          },
-          "details": {
-            "type": "string",
-            "description": "Log output or test results that support the summary."
-          }
+    "error": {
+      "type": "object",
+      "description": "The first critical error that prevented execution or testing from completing. If no such error occurred, this field should be omitted.",
+      "required": ["summary", "logs"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Short title or classification of the issue (e.g., 'throws KeyError')"
+        },
+        "logs": {
+          "type": "string",
+          "description": "Log output or test results that support the summary."
         }
       }
     }

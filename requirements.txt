@@ -57,5 +57,3 @@ torchvggish
 transformers
 tree-sitter<=0.20
 sentence-transformers==2.2.2
-scikit-learn
-huggingface_hub<0.15

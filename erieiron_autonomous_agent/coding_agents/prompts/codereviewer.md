@@ -67,6 +67,8 @@ In the Erie Iron system, test-driven development is a core principle. Removing o
 
 ## ⚠️ Non-Blocking Warnings
 
+- print() statements are allowed and should never be considered a blocking error
+
 Warn about these **only if they are likely to cause indirect failure**, or where the issue may degrade performance, resilience, or cost-efficiency in subtle or non-crashing ways:
 - Unbounded loops or long-running processes
 - ML jobs with no resource limit or cost cap

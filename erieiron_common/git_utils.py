@@ -9,7 +9,7 @@ from pathlib import Path
 
 import requests
 
-from erieiron_common import common
+from erieiron_common import common, aws_utils
 from erieiron_common.common import run_cmd
 
 
@@ -25,12 +25,15 @@ class GitWrapper:
         self.source_root = source_root
 
     def exec(self, *commands) -> 'GitWrapper':
+        github_token = get_github_token()
+        if not github_token:
+            raise Exception("unable to fetch github token from aws secrets")
+        
         cmd = ["git"] + list(commands)
         
         try:
             env = os.environ.copy()
-            if os.getenv("GITHUB_TOKEN"):
-                env["GITHUB_TOKEN"] = os.getenv("GITHUB_TOKEN")
+            env["GITHUB_TOKEN"] = github_token
             
             result = subprocess.run(
                 cmd,
@@ -107,7 +110,7 @@ class GitWrapper:
         response = requests.post(
             f"https://api.github.com/orgs/erieironllc/repos",
             headers={
-                "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
+                "Authorization": f"token {get_github_token()}",
                 "Accept": "application/vnd.github+json"
             },
             json={
@@ -126,7 +129,7 @@ class GitWrapper:
             )
     
     def wrap_url_with_token(self, repo_url: str) -> str:
-        token = os.getenv("GITHUB_TOKEN")
+        token = get_github_token()
         if not token:
             raise Exception("GITHUB_TOKEN not set in environment")
         return repo_url.replace("https://", f"https://{token}@")
@@ -152,3 +155,5 @@ class GitWrapper:
         return venv_path
     
    
+def get_github_token():
+    return aws_utils.get_secret("github-token").get("token")

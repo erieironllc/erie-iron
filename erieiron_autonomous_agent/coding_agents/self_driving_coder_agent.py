@@ -20,9 +20,9 @@ from sentence_transformers import SentenceTransformer
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile, AgentLesson
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
-from erieiron_common import common, aws_utils
+from erieiron_common import common, aws_utils, git_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_constants import MODEL_BACKUPS
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
@@ -116,6 +116,16 @@ class SelfDriverConfig:
         # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
 
 
+def validate_plan(planning_data):
+    if not planning_data.get("code_files", []):
+        raise BadPlan("no code files", planning_data)
+
+    for f in planning_data.get("code_files", []):
+        code_file_path = str(f.get("code_file_path"))
+        if code_file_path.endswith(".py") and "/" not in code_file_path[2:]:
+            raise BadPlan(f"python files cannot live in the root directory.  bad:  {code_file_path}", planning_data)
+
+
 def execute(task_id: str):
     self_driving_task = bootstrap_selfdriving_agent(task_id)
     
@@ -169,33 +179,13 @@ def execute(task_id: str):
                     )
                     current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
                     
-                    
-                    todo
-                    """
-Build a Failure Mode Router:
-When a stack trace hits, before planning anything, run a “failure triage agent” that:
-
-Classifies the error (syntax, version mismatch, missing import, etc.)
-
-Determines recovery path (e.g., suggest fix directly, escalate to planner, defer to human)
-
-Pulls relevant lessons or similar past failures from memory
-
-Limit scope in recovery:
-Don’t always “replan the task.” Sometimes, a surgical patch prompt is what’s needed:
-“Given this stack trace and the version of package X, what’s the fix?”
-
-Score your recovery agents:
-Track whether planner vs fixer vs human performed better—begin to learn from which agent recovers best from which class of failure.
-                    """
-                    
                     log_execution_only_headline(
                         config,
                         current_iteration
                     )
                 else:
                     current_iteration, previous_iteration, iteration_to_modify = self_driving_task.iterate()
-                    iteration_to_modify.write_to_disk()
+                    # iteration_to_modify.write_to_disk()
                     
                     log_iteration_headline(
                         config,
@@ -205,22 +195,32 @@ Track whether planner vs fixer vs human performed better—begin to learn from w
                     
                     coding_logfile = common.create_temp_file(f"iteration-{str(current_iteration.id)}", ".coding.log")
                     with open(coding_logfile, "w") as coding_log_f:
-                        logging.info(f"PHASE - get_relevant_code_files: {current_iteration.id}")
-                        relevant_code_files = get_relevant_code_files(
-                            config,
-                            current_iteration,
-                            iteration_to_modify
-                        )
-                        
-                        logging.info(f"PHASE - plan_code_changes: {current_iteration.id}")
-                        planning_data = plan_code_changes(
+                        route_to = route_code_changes(
                             config,
                             current_iteration,
                             previous_iteration,
-                            iteration_to_modify,
-                            relevant_code_files
+                            iteration_to_modify
                         )
-                        # pprint.pprint(planning_data)
+                        
+                        if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
+                            logging.info(f"PHASE - plan_code_changes: {current_iteration.id}")
+                            planning_data = plan_code_changes(
+                                config,
+                                current_iteration,
+                                previous_iteration,
+                                iteration_to_modify
+                            )
+                        elif DevelopmentRoutingPath.DIRECT_FIX.eq(route_to):
+                            planning_data = plan_direct_fix_code_changes(
+                                config,
+                                current_iteration,
+                                previous_iteration,
+                                iteration_to_modify
+                            )
+                        elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
+                            raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(current_iteration.routing_json, indent=4)}")
+                        
+                        validate_plan(planning_data)
                         
                         logging.info(f"PHASE - generate_code: {current_iteration.id}")
                         cr_exception = None
@@ -235,13 +235,16 @@ Track whether planner vs fixer vs human performed better—begin to learn from w
                                     iteration_to_modify,
                                     cr_exception
                                 )
-                                perform_code_review(
-                                    config,
-                                    planning_data,
-                                    current_iteration,
-                                    previous_iteration,
-                                    iteration_to_modify
-                                )
+                                
+                                if not previous_iteration.has_error():
+                                    perform_code_review(
+                                        config,
+                                        planning_data,
+                                        current_iteration,
+                                        previous_iteration,
+                                        iteration_to_modify
+                                    )
+                                    
                                 break
                             except CodeReviewException as code_review_exception:
                                 extract_lessons(
@@ -480,8 +483,13 @@ def build_docker_image(
     log_f.write(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
     sandbox_path = self_driving_task.sandbox_path
     
+    requirements_txt = Path(sandbox_path) / "requirements.txt"
+    if "moto==4.2.8" not in requirements_txt.read_text():
+        raise Exception("moto==4.2.8 is required")
+    
     env = os.environ.copy()
     env["DOCKER_BUILDKIT"] = "1"
+    env["GITHUB_TOKEN"] = git_utils.get_github_token()
     
     build_process = subprocess.Popen(
         common.strings([
@@ -839,7 +847,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
             )
         ],
         config.model_iteration_evaluation,
-        output_schema=PROMPTS_DIR / "iteration_summarizer.md.schema.json"
+        output_schema="iteration_summarizer.md.schema.json"
     ).json()
     
     with transaction.atomic():
@@ -869,8 +877,10 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
             )
         ],
         config.model_iteration_evaluation,
-        output_schema=PROMPTS_DIR / "iteration_selector.md.schema.json"
+        output_schema="iteration_selector.md.schema.json"
     ).json()
+    
+    selection_data['iteration_id_to_modify'] = 'latest'
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
@@ -933,10 +943,12 @@ def build_previous_iteration_context_messages(
 def get_iteration_eval_llm_messages(
         iterations: list[SelfDrivingTaskIteration],
         previous_iteration: SelfDrivingTaskIteration = None,
-        iteration_to_modify: SelfDrivingTaskIteration = None
+        iteration_to_modify: SelfDrivingTaskIteration = None,
+        title="**Output from iteration_evaluator agent**"
 ) -> list[LlmMessage]:
     messages = []
     
+    iterations = common.ensure_list(iterations)
     for iteration in sorted(iterations, key=lambda i: i.timestamp):
         evaluation_json: dict = iteration.evaluation_json
         if not evaluation_json:
@@ -956,7 +968,7 @@ def get_iteration_eval_llm_messages(
             "strategic_guidance": evaluation_json.get("strategic_guidance", "none"),
         })
     
-    return LlmMessage.user_from_data("**Output from iteration_evaluator agent**", messages)
+    return LlmMessage.user_from_data(title, messages)
 
 
 def get_sys_prompt(
@@ -990,7 +1002,7 @@ def perform_code_review(
         #     get_relevant_code_files(config, current_iteration, iteration_to_modify)
         # ),
         *common.ensure_list(
-            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.deployment_failed() else []
+            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.has_error() else []
         ),
         *common.ensure_list(
             LlmMessage.user_from_data(
@@ -1032,7 +1044,7 @@ The code changes to review are in support of the following goal:
         messages,
         LlmModel.OPENAI_GPT_4o,
         debug=False,
-        output_schema=PROMPTS_DIR / "codereviewer.md.schema.json"
+        output_schema="codereviewer.md.schema.json"
     ).json()
     
     pprint.pprint(code_review_data)
@@ -1130,7 +1142,7 @@ def extract_lessons(
                 get_lessons(config, exclude_invalid=False)
             )
         ],
-        output_schema=PROMPTS_DIR / "lesson_extractor.md.schema.json",
+        output_schema="lesson_extractor.md.schema.json",
         model=LlmModel.GEMINI_2_5_PRO
     ).json()
     
@@ -1432,13 +1444,125 @@ You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget
     """)
 
 
+def route_code_changes(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration
+) -> DevelopmentRoutingPath:
+    model = config.model_code_planning
+    business = config.self_driving_task.business
+    
+    if not iteration_to_modify.has_error():
+        return DevelopmentRoutingPath.ESCALATE_TO_PLANNER
+    else:
+        error_summary, error_logs = iteration_to_modify.get_error()
+        routing_data = llm_chat(
+            "Identify Development Route",
+            config,
+            [
+                *common.ensure_list(
+                    get_sys_prompt("failure_router.md"),
+                ),
+                *common.ensure_list(
+                    LlmMessage.user_from_data(
+                        "Error with previous code iteration",
+                        {
+                            "summary": error_summary,
+                            "logs": error_logs
+                        }
+                    )
+                ),
+                *common.ensure_list(
+                    LlmMessage.user_from_data(
+                        "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                        get_lessons(config)
+                    )
+                ),
+                *common.ensure_list(
+                    get_dependencies_msg(config, for_planning=True)
+                ),
+                "Please perform the routing analysis"
+            ],
+            model,
+            debug=False,
+            output_schema="failure_router.md.schema.json"
+        ).json()
+        
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+            routing_json=routing_data
+        )
+        current_iteration.refresh_from_db(fields=["routing_json"])
+        
+        return DevelopmentRoutingPath(routing_data.get("recovery_path"))
+
+
+def plan_direct_fix_code_changes(
+        config: SelfDriverConfig,
+        current_iteration: SelfDrivingTaskIteration,
+        previous_iteration: SelfDrivingTaskIteration,
+        iteration_to_modify: SelfDrivingTaskIteration
+):
+    routing_json = current_iteration.routing_json
+    
+    planning_data = llm_chat(
+        "Plan quick fix code changes",
+        config,
+        [
+            *common.ensure_list(
+                get_sys_prompt("codeplanner--quick_fix.md"),
+            ),
+            *common.ensure_list(
+                LlmMessage.user_from_data(
+                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                    get_lessons(config)
+                )
+            ),
+            *common.ensure_list(
+                get_iteration_eval_llm_messages(iteration_to_modify, title="structured error report")
+            ),
+            *common.ensure_list(
+                get_relevant_code_files(
+                    config,
+                    current_iteration,
+                    iteration_to_modify,
+                    routing_json.get("context_files", [])
+                )
+            ),
+            *common.ensure_list(
+                LlmMessage.user_from_data("structured failure triage object", routing_json)
+            )
+        ],
+        config.model_code_planning,
+        debug=False,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+            planning_model=config.model_code_planning
+        )
+        current_iteration.refresh_from_db(fields=["planning_model"])
+    
+    blocked_data = planning_data.get('blocked')
+    if blocked_data:
+        raise AgentBlocked(blocked_data)
+    
+    return planning_data
+
+
 def plan_code_changes(
         config: SelfDriverConfig,
         current_iteration: SelfDrivingTaskIteration,
         previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration,
-        relevant_code_files: list[LlmMessage]
+        iteration_to_modify: SelfDrivingTaskIteration
 ):
+    relevant_code_files = get_relevant_code_files(
+        config,
+        current_iteration,
+        iteration_to_modify
+    )
+    
     model = config.model_code_planning
     business = config.self_driving_task.business
     
@@ -1488,14 +1612,14 @@ def plan_code_changes(
             get_docs_msg(config)
         ),
         *common.ensure_list(
-            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.deployment_failed() else []
+            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.has_error() else []
         ),
         *common.ensure_list(
             config.guidance
         ),
         *common.ensure_list(
             LlmMessage.user_from_data(
-                "Do not repeat this mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                 get_lessons(config)
             )
         ),
@@ -1509,7 +1633,7 @@ The previous iteration failed at the deployment stage.
 
 **YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM**
             """)
-            if iteration_to_modify.deployment_failed() else get_goal_msg(config)
+            if iteration_to_modify.has_error() else get_goal_msg(config)
         )
     ]
     
@@ -1519,7 +1643,7 @@ The previous iteration failed at the deployment stage.
         messages,
         model,
         debug=False,
-        output_schema=PROMPTS_DIR / "codeplanner.schema.json"
+        output_schema="codeplanner.schema.json"
     ).json()
     
     with transaction.atomic():
@@ -1621,6 +1745,10 @@ def write_code(
             "description": "**Code Validation Failure** Your previous attempt to generate code based on the instruction set resulted in these validation errors.  **You must** avoid these errors in the next version of the code",
             "error_log": str(previous_exception)
         }
+    
+    fix_prompt = common.get(current_iteration, ["routing_json", "fix_prompt"])
+    if fix_prompt:
+        messages.append(LlmMessage.user(fix_prompt))
     
     messages += LlmMessage.user_from_data(
         f"**YOUR ONE AND ONLY TASK:**\n{'Modify' if code_version_to_modify.code else 'Write the initial version of'} {code_file.file_path}, following each of these instruction steps exactly and in order, while avoiding repeating any previous errors or blocking_codereview_errors (if applicable) and applying the applicable lessons learned from previous attempts.",
@@ -1819,6 +1947,9 @@ def validate_code(code_file_path: Path, code: str) -> str:
         # noinspection PyProtectedMember
         from pip._internal.exceptions import InstallationError
         
+        if "moto==4.2.8" not in code:
+            raise CodeCompilationError(code, f"moto==4.2.8 is required")
+        
         lines = code.splitlines()
         for i, line in enumerate(lines, start=1):
             line = line.strip()
@@ -1893,19 +2024,13 @@ def get_cloudformation_file(config: SelfDriverConfig) -> Path:
 def get_relevant_code_files(
         config: SelfDriverConfig,
         current_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
+        iteration_to_modify: SelfDrivingTaskIteration,
+        paths: list[Path] = None
 ) -> list[LlmMessage]:
     files = []
-    ## deployment failed - just return deployment files
-    if iteration_to_modify.deployment_failed():
-        deployment_files: list[Path] = [
-            config.sandbox_root_dir / "Dockerfile",
-            config.sandbox_root_dir / "infrastructure.yaml",
-            config.sandbox_root_dir / "settings.py",
-            config.sandbox_root_dir / "requirements.txt"
-        ]
-        
-        for f in deployment_files:
+    
+    if paths:
+        for f in paths:
             try:
                 relative_file = f.relative_to(config.sandbox_root_dir)
             except:
@@ -1967,7 +2092,7 @@ def get_relevant_code_files(
                 LlmMessage.user(config.self_driving_task.task.get_work_desc())
             ],
             LlmModel.OPENAI_GPT_3_5_TURBO,
-            output_schema=PROMPTS_DIR / "codefinder.md.schema.json",
+            output_schema="codefinder.md.schema.json",
             code_response=True
         ).json()
         
@@ -2143,7 +2268,7 @@ def llm_chat(
             llm_resp = llm_interface.chat(
                 messages=messages,
                 model=model,
-                output_schema=output_schema,
+                output_schema=PROMPTS_DIR / output_schema if output_schema else None,
                 code_response=code_response,
                 debug=debug
             )

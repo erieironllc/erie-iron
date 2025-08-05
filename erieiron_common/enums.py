@@ -8,67 +8,67 @@ class ErieEnum(StrEnum):
     # noinspection PyMethodParameters
     def _generate_next_value_(name, start, count, last_values):
         return name
-
+    
     @classmethod
     def to_dict(cls):
         return {str(key.name): str(key.value) for key in cls}
-
+    
     def label(self):
         return str(self.value).replace("_", " ").capitalize()
-
+    
     def neq(self, v):
         return not self.eq(v)
-
+    
     def eq(self, v):
         if v is None:
             return False
-
+        
         if self == v:
             return True
-
+        
         try:
             return self.__class__(v) == self
         except:
             return False
-
+    
     def __str__(self):
         return str(self.value)
-
+    
     @classmethod
     def to_list(cls, values):
         from erieiron_common import common
-
+        
         vals = []
         for s in common.ensure_list(values):
             if cls.valid(s):
                 vals.append(cls(s))
-
+        
         return vals
-
+    
     @classmethod
     def to_value_list(cls, values):
         from erieiron_common import common
-
+        
         return [cls(s).value for s in common.ensure_list(values) if cls.valid(s)]
-
+    
     @classmethod
     def valid(cls, value):
         try:
             return cls(value).value is not None
         except:
             return False
-
+    
     @classmethod
     def valid_or(cls, value, default_val=None):
         try:
             return cls(value)
         except:
             return default_val
-
+    
     @classmethod
     def random(cls):
         return random.choice([k for k in cls])
-
+    
     @classmethod
     def choices(cls):
         return [(key.value, key.label if isinstance(key.label, str) else key.label()) for key in cls if not key.name.startswith("_")]
@@ -84,10 +84,10 @@ class ComputeDevice(ErieEnum):
     CPU = "cpu"
     MPS = "mps"
     CUDA = "cuda"
-
+    
     def __str__(self):
         return self.value
-
+    
     @classmethod
     def has_gpu(cls, device: 'ComputeDevice'):
         return ComputeDevice.MPS.eq(device) or ComputeDevice.CUDA.eq(device)
@@ -108,7 +108,7 @@ class Role(ErieEnum):
     SUBSCRIBER = auto()
     FREE_USER = auto()
     BANNED = auto()
-
+    
     @staticmethod
     def roles_in_order():
         # each subsequent role inherits the privs of the previous role
@@ -122,7 +122,7 @@ class Role(ErieEnum):
             Role.DEVELOPER,
             Role.SYSTEM
         ]
-
+    
     @classmethod
     def choices(cls):
         return [(role.value, role.label()) for role in Role.roles_in_order()]
@@ -159,7 +159,7 @@ class PubSubMessageStatus(ErieEnum):
     FAILED = auto()
     OBSOLETE = auto()
     NO_CONSUMER = auto()
-
+    
     @staticmethod
     def inprog_statuses() -> List['PubSubMessageStatus']:
         return [PubSubMessageStatus.PENDING, PubSubMessageStatus.PROCESSING]
@@ -169,7 +169,7 @@ class PubSubMessagePriority(ErieEnum):
     HIGH = auto()
     NORMAL = auto()
     LOW = auto()
-
+    
     @staticmethod
     def get_priorities_in_order() -> 'PubSubMessagePriority':
         return [
@@ -177,7 +177,7 @@ class PubSubMessagePriority(ErieEnum):
             PubSubMessagePriority.NORMAL,
             PubSubMessagePriority.LOW,
         ]
-
+    
     @staticmethod
     def get_weighted_random_priorty() -> 'PubSubMessagePriority':
         weights = {
@@ -185,10 +185,10 @@ class PubSubMessagePriority(ErieEnum):
             (PubSubMessagePriority.NORMAL, .3),
             (PubSubMessagePriority.LOW, .25)
         }
-
+        
         # Use random.choices to select a priority based on weights
         return random.choices([w[0] for w in weights], weights=[w[1] for w in weights], k=1)[0]
-
+    
     @staticmethod
     def get_weighted_random_priorities() -> List['PubSubMessagePriority']:
         import math
@@ -198,10 +198,10 @@ class PubSubMessagePriority(ErieEnum):
             PubSubMessagePriority.NORMAL: 0.3,
             PubSubMessagePriority.LOW: 0.25
         }
-
+        
         scored_priorities = [(priority, -math.log(random.random()) / weight) for priority, weight in weights.items()]
         sorted_priorities = sorted(scored_priorities, key=lambda x: x[1])
-
+        
         return [priority for priority, _ in sorted_priorities]
 
 
@@ -214,12 +214,12 @@ class PubSubMessageType(ErieEnum):
     EVERY_HOUR = auto()
     EVERY_DAY = auto()
     EVERY_WEEK = auto()
-
+    
     CHAT_INTERACTION_INITIATED = auto()
     CHAT_CHANNEL_LLM = auto()
-
+    
     BUSINESS_IDEA_SUBMITTED = auto()
-
+    
     # Autonomous agent message types
     ANALYSIS_REQUESTED = auto()
     ANALYSIS_COMPLETED = auto()
@@ -227,9 +227,9 @@ class PubSubMessageType(ErieEnum):
     BOARD_GUIDANCE_REQUESTED = auto()
     BOARD_GUIDANCE_UPDATED = auto()
     BUSINESS_GUIDANCE_UPDATED = auto()
-
+    
     BUSINESS_BOOTSTRAP_REQUESTED = auto()
-
+    
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     RESOURCE_PLANNING_REQUESTED = auto()
@@ -254,16 +254,16 @@ class PubSubMessageType(ErieEnum):
     SELF_DRIVING_CODER_REQUESTED = auto()
     SELF_DRIVING_CODER_UPDATED = auto()
     SELF_DRIVING_CODER_COMPLETED = auto()
-
+    
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
         return {
         }
-
+    
     def get_namespace(self, namespace_id):
         if namespace_id is None:
             return self.__class__.__name__
-
+        
         return f"{self}_{namespace_id}"
 
 
@@ -301,10 +301,10 @@ class ReportingPeriod(ErieEnum):
     WEEK = "7"
     THIRTY_DAYS = "30"
     NINETY_DAYS = "90"
-
+    
     def get_start_date(self):
         return datetime.date.today() - datetime.timedelta(days=self.value)
-
+    
     def get_dates(self):
         dates = [
             datetime.date.today() - datetime.timedelta(days=i)
@@ -316,7 +316,7 @@ class ReportingPeriod(ErieEnum):
 
 class LlmRole(ErieEnum):
     ML_ENGINEER = auto()
-
+    
     @staticmethod
     def get_role_desc(role: 'LlmRole') -> str:
         if LlmRole.ML_ENGINEER.eq(role.value):
@@ -349,14 +349,14 @@ class LlmModel(ErieEnum):
     OPENAI_O3 = "o3"
     OPENAI_O4 = "o4"
     OPENAI_O4_MINI = "o4-mini"
-
+    
     GEMINI_2_5_PRO = "gemini-2.5-pro-preview-03-25"
     GEMINI_2_0_FLASH = "gemini-2.0-flash"
-
+    
     CLAUDE_3_7 = "claude-3-7-sonnet-20250219"
     CLAUDE_3_5 = "claude-3-5-sonnet-20240620"
     CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE = "claude-3-opus-20240229"
-
+    
     DEEPSEEK_CODER = "deepseek-coder"
     DEEPSEEK_CHAT = "deepseek-chat"
 
@@ -368,7 +368,7 @@ class S3Bucket(ErieEnum):
 class ConsentChoice(ErieEnum):
     ACCEPTED = auto()
     DECLINED = auto()
-
+    
     @staticmethod
     def from_bool(bool_val) -> "ConsentChoice":
         from erieiron_common import common
@@ -379,7 +379,7 @@ class Level(ErieEnum):
     HIGH = "100"
     MEDIUM = "050"
     LOW = "000"
-
+    
     @classmethod
     def valid_or(cls, value, default_val=None):
         value = (value or "").upper()
@@ -446,3 +446,20 @@ class AwsEnv(ErieEnum):
     
     def get_aws_region(self) -> str:
         return "us-west-2"
+
+
+class FailureClassification(ErieEnum):
+    SYNTAX_ERROR = auto()
+    IMPORT_ERROR = auto()
+    VERSION_MISMATCH = auto()
+    ATTRIBUTE_ERROR = auto()
+    MISSING_DEPENDENCY = auto()
+    CONFIGURATION_ERROR = auto()
+    NETWORK_ERROR = auto()
+    UNKNOWN = auto()
+
+
+class DevelopmentRoutingPath(ErieEnum):
+    DIRECT_FIX = auto()
+    ESCALATE_TO_PLANNER = auto()
+    ESCALATE_TO_HUMAN = auto()
