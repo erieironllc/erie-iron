@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-import pprint
+import re
 import subprocess
 import time
 import traceback
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import boto3
+import yaml
 from django.db import transaction
 from django.db.models import Func
 from django.db.models import Q
@@ -17,8 +18,9 @@ from django.db.models.expressions import RawSQL
 from django.utils import timezone
 from sentence_transformers import SentenceTransformer
 
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, Business, CodeFile, AgentLesson
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
 from erieiron_common import common, aws_utils, git_utils
 from erieiron_common.aws_utils import sanitize_aws_name
@@ -28,117 +30,18 @@ from erieiron_common.llm_apis.llm_constants import MODEL_BACKUPS
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
-TASK_DESC_CODE_WRITING = "code writing"
-
-PROMPTS_DIR = Path(__file__).parent / "prompts"
-
-COUNT_FULL_LOGS_IN_CONTEXT = 2
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-MAP_TASKTYPE_TO_PLANNING_PROMPT = {
-    TaskType.CODING_ML: "codeplanner--ml_trainer.md",
-    TaskType.CODING_APPLICATION: "codeplanner--feature_development.md",
-    TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
-}
-
-ARTIFACTS = "artifacts"
-
-
-class GoalAchieved(Exception):
-    def __init__(self, planning_data):
-        self.planning_data = planning_data
-
-
-class AgentBlocked(Exception):
-    def __init__(self, blocked_data):
-        self.blocked_data = blocked_data
-
-
-class BadPlan(Exception):
-    def __init__(self, msg: str, plan_data):
-        self.plan_data = plan_data
-        super().__init__(msg)
-
-
-class RetryableException(Exception):
-    ...
-
-
-class CodeReviewException(Exception):
-    def __init__(self, review_data):
-        self.bad_plan = review_data.get("plan_quality", []) != "VALID"
-        self.review_data = review_data
-        super().__init__("Code Review Failed")
-    
-    def get_issue_dicts(self) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
-        return self.get_file_blockers_dict(), self.get_file_warnings_dict()
-    
-    def get_file_blockers_dict(self) -> dict[str, list[dict]]:
-        d = defaultdict(list)
-        
-        for i in common.ensure_list(self.review_data.get("blocking_issues", [])):
-            d[i['file']].append(i)
-        
-        return d
-    
-    def get_file_warnings_dict(self) -> dict[str, list[dict]]:
-        d = defaultdict(list)
-        
-        for i in common.ensure_list(self.review_data.get("non_blocking_warnings", [])):
-            d[i['file']].append(i)
-        
-        return d
-
-
-class SelfDriverConfig:
-    def __init__(self, self_driving_task: SelfDrivingTask):
-        self.debug = True
-        self.self_driving_task: SelfDrivingTask = self_driving_task
-        self.task: Task = self_driving_task.task
-        self.task_type: TaskType = TaskType(self.task.task_type)
-        self.budget: float = self.task.max_budget_usd or 0
-        self.business = Business.objects.get(initiative__tasks__id=self.task.id)
-        self.guidance = LlmMessage.sys(self.task.guidance) if self.task.guidance else None
-        self.sandbox_root_dir = Path(self.self_driving_task.sandbox_path)
-        self.current_iteration: SelfDrivingTaskIteration = None
-        
-        artifacts_root = self.sandbox_root_dir / ARTIFACTS
-        artifacts_root.mkdir(parents=True, exist_ok=True)
-        self.artifacts_dir = artifacts_root
-        self.log_path = artifacts_root / f"{self.self_driving_task.id}.llm.output.log"
-        self.log_f = None
-        self.git = self.self_driving_task.get_git()
-        
-        self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o_20240806
-        self.model_code_planning = LlmModel.OPENAI_GPT_4o_20240806
-        
-        # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
-        # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
-
-
-def validate_plan(planning_data):
-    if not planning_data.get("code_files", []):
-        raise BadPlan("no code files", planning_data)
-
-    for f in planning_data.get("code_files", []):
-        code_file_path = str(f.get("code_file_path"))
-        if code_file_path.endswith(".py") and "/" not in code_file_path[2:]:
-            raise BadPlan(f"python files cannot live in the root directory.  bad:  {code_file_path}", planning_data)
 
 
 def execute(task_id: str):
     self_driving_task = bootstrap_selfdriving_agent(task_id)
     
     config = None
-    log_output = None
-    skip_code_modification = False
     stop_reason = ""
     supress_eval = False
     try:
         for i in range(100):
             config = SelfDriverConfig(self_driving_task)
-            current_iteration = None
-            skip_code_modification = False
             
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
@@ -146,110 +49,73 @@ def execute(task_id: str):
                     break
                 
                 if not (self_driving_task.design_doc_path and (config.sandbox_root_dir / self_driving_task.design_doc_path).exists()):
-                    current_iteration, _, _ = self_driving_task.iterate()
-                    write_initial_design(
-                        config,
-                        current_iteration
-                    )
+                    config.set_iteration(self_driving_task.iterate())
+                    config.set_phase(SdaPhase.CODING)
+                    write_initial_design(config)
                 
                 if not (self_driving_task.test_file_path and (config.sandbox_root_dir / self_driving_task.test_file_path).exists()):
-                    current_iteration, _, _ = self_driving_task.iterate()
+                    config.set_iteration(self_driving_task.iterate())
+                    
                     if not config.business.codefile_set.exists():
-                        config.business.snapshot_code(current_iteration, include_erie_common=True)
+                        config.business.snapshot_code(
+                            config.current_iteration,
+                            include_erie_common=True
+                        )
                     
-                    log_initial_test_only_headline(
-                        config,
-                        current_iteration
-                    )
-                    
-                    write_initial_test(
-                        config,
-                        current_iteration
-                    )
+                    log_initial_test_only_headline(config)
+                    config.set_phase(SdaPhase.CODING)
+                    write_initial_test(config)
                 
                 elif i == 0:
                     # we've re-started an self driving task - just execute on the first time around
-                    current_iteration = self_driving_task.get_most_recent_iteration()
-                    if not current_iteration:
-                        current_iteration, _, _ = self_driving_task.iterate()
+                    most_recent_iteration = self_driving_task.get_most_recent_iteration()
+                    if most_recent_iteration:
+                        config.set_iteration(most_recent_iteration)
+                    else:
+                        config.set_iteration(self_driving_task.iterate())
                     
-                    SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
                         log_content_execution="",
                         evaluation_json=None
                     )
-                    current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
+                    config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
                     
-                    log_execution_only_headline(
-                        config,
-                        current_iteration
-                    )
+                    log_execution_only_headline(config)
+                    
+                    if config.iteration_to_modify:
+                        config.iteration_to_modify.write_to_disk()
                 else:
-                    current_iteration, previous_iteration, iteration_to_modify = self_driving_task.iterate()
-                    # iteration_to_modify.write_to_disk()
-                    
-                    log_iteration_headline(
-                        config,
-                        current_iteration,
-                        iteration_to_modify
-                    )
-                    
-                    coding_logfile = common.create_temp_file(f"iteration-{str(current_iteration.id)}", ".coding.log")
-                    with open(coding_logfile, "w") as coding_log_f:
-                        route_to = route_code_changes(
-                            config,
-                            current_iteration,
-                            previous_iteration,
-                            iteration_to_modify
-                        )
+                    try:
+                        config.set_iteration(self_driving_task.iterate())
+                        config.set_phase(SdaPhase.PLANNING)
                         
-                        if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
-                            logging.info(f"PHASE - plan_code_changes: {current_iteration.id}")
-                            planning_data = plan_code_changes(
-                                config,
-                                current_iteration,
-                                previous_iteration,
-                                iteration_to_modify
-                            )
-                        elif DevelopmentRoutingPath.DIRECT_FIX.eq(route_to):
-                            planning_data = plan_direct_fix_code_changes(
-                                config,
-                                current_iteration,
-                                previous_iteration,
-                                iteration_to_modify
-                            )
-                        elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
-                            raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(current_iteration.routing_json, indent=4)}")
+                        if config.iteration_to_modify:
+                            config.iteration_to_modify.write_to_disk()
                         
-                        validate_plan(planning_data)
+                        log_iteration_headline(config)
                         
-                        logging.info(f"PHASE - generate_code: {current_iteration.id}")
+                        planning_data = plan_code_changes(config)
                         cr_exception = None
                         failed_code_reviews = []
+                        config.set_phase(SdaPhase.CODING)
                         for review_iteration_idx in range(5):
                             try:
                                 generate_code(
                                     config,
                                     planning_data,
-                                    current_iteration,
-                                    previous_iteration,
-                                    iteration_to_modify,
                                     cr_exception
                                 )
                                 
-                                if not previous_iteration.has_error():
+                                if not config.previous_iteration.has_error():
                                     perform_code_review(
                                         config,
-                                        planning_data,
-                                        current_iteration,
-                                        previous_iteration,
-                                        iteration_to_modify
+                                        planning_data
                                     )
-                                    
+                                
                                 break
                             except CodeReviewException as code_review_exception:
                                 extract_lessons(
                                     config,
-                                    current_iteration,
                                     TASK_DESC_CODE_WRITING,
                                     code_review_exception.review_data
                                 )
@@ -269,27 +135,20 @@ def execute(task_id: str):
                                         f"Code Review failed 5 times.  Need a new plan.  ",
                                         code_review_exception.review_data
                                     )
+                    finally:
+                        config.reset_log("Coding completed successfully.  proceeding to deploy and execute steps")
                 
                 try:
                     try:
-                        logging.info(f"PHASE - execute_iteration: {current_iteration.id}")
                         execute_iteration(
                             config,
-                            current_iteration,
                             AwsEnv.DEV
                         )
+                    except Exception as e:
+                        config.log(e)
                     finally:
-                        logging.info(f"PHASE - evaluate_iteration_execution: {current_iteration.id}")
-                        eval_data = None
-                        try:
-                            eval_data = evaluate_iteration_execution(
-                                config,
-                                current_iteration
-                            )
-                        finally:
-                            if eval_data:
-                                pprint.pprint(eval_data)
-                
+                        config.set_phase(SdaPhase.EVALUATE)
+                        evaluate_iteration_execution(config)
                 except GoalAchieved as goal_achieved:
                     if TaskType.CODING_ML.eq(config.task_type):
                         raise goal_achieved
@@ -299,16 +158,15 @@ def execute(task_id: str):
                         # for non-ml tasks, if all tasks are complete deploy to prod.  
                         # execute_and_evaluate will re-throw GoalAchieved if the prod deploy is successful
                         # perhaps think about moving this somewhere else - like listen to an event and then do this work in a separa message
-                        prod_deploy_iteration, _, _ = self_driving_task.iterate()
+                        config.set_iteration(self_driving_task.iterate())
                         execute_iteration(
                             config,
-                            prod_deploy_iteration,
                             AwsEnv.PRODUCTION
                         )
             except RetryableException as retryable_execution_exception:
-                logging.exception(retryable_execution_exception)
+                config.log(retryable_execution_exception)
                 with transaction.atomic():
-                    SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
                         log_content_execution=f"""
 Execution Failed with 
 {retryable_execution_exception}
@@ -316,14 +174,16 @@ Execution Failed with
             
 planning data:
 We should just try again - should be fixed next time around
+
+full logs:
+{config.get_log_content()}
                         """
                     )
-                current_iteration.refresh_from_db(fields=["log_content_execution"])
+                config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except BadPlan as bad_plan_exception:
-                pprint.pprint(bad_plan_exception.plan_data)
-                logging.exception(bad_plan_exception)
+                config.log(bad_plan_exception)
                 with transaction.atomic():
-                    SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
                         log_content_execution=f"""
 Planning agent produced a bad plan:
 {bad_plan_exception}
@@ -331,12 +191,15 @@ Planning agent produced a bad plan:
 
 planning data:
 {json.dumps(bad_plan_exception.plan_data, indent=4)}
+
+full logs:
+{config.get_log_content()}
                         """
                     )
-                current_iteration.refresh_from_db(fields=["log_content_execution"])
+                config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
-                logging.exception(agent_blocked)
-                pprint.pprint(agent_blocked.blocked_data)
+                config.log(agent_blocked)
+                
                 stop_reason = "Agent Blocked"
                 if config.self_driving_task.task_id:
                     with transaction.atomic():
@@ -366,6 +229,7 @@ planning data:
                 break
             except Exception as e:
                 logging.exception(e)
+                config.log(e)
                 config.supress_eval = True
                 if config.self_driving_task.task_id:
                     # PubSubManager.publish(
@@ -378,25 +242,70 @@ planning data:
                     ...
                 
                 break
+            finally:
+                config.cleanup_iteration()
     
     finally:
-        print("DIR", config.git.source_root)
+        config.log("DIR", config.git.source_root)
         # config.git.cleanup()
         
-        print("STOP REASON", stop_reason)
+        config.log("STOP REASON", stop_reason)
         if TaskType.CODING_ML.eq(config.task_type):
             from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
             package_ml_artifacts(config)
 
 
+def plan_code_changes(config):
+    planning_data = None
+    route_to = route_code_changes(config)
+    
+    if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
+        config.log(f"PHASE - plan_code_changes: {config.current_iteration.id}")
+        planning_data = plan_full_code_changes(config)
+    elif DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER.eq(route_to):
+        planning_data = plan_aws_provisioning_code_changes(config)
+    elif DevelopmentRoutingPath.DIRECT_FIX.eq(route_to):
+        planning_data = plan_direct_fix_code_changes(config)
+    elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
+        raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(config.current_iteration.routing_json, indent=4)}")
+    
+    validate_plan(planning_data)
+    
+    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+        planning_json=planning_data
+    )
+    
+    return planning_data
+
+
+def validate_plan(planning_data):
+    if not planning_data.get("code_files", []):
+        raise BadPlan("no code files", planning_data)
+    
+    for f in planning_data.get("code_files", []):
+        code_file_path = str(f.get("code_file_path"))
+        
+        if code_file_path.endswith("settings.py"):
+            continue
+
+        if code_file_path.endswith("manage.py"):
+            raise BadPlan(f"You may not edit manage.py.  If you need to modify django settings, modify settings.py instead", planning_data)
+
+        if code_file_path.endswith(".py") and "/" not in code_file_path[2:]:
+            raise BadPlan(f"python files cannot live in the root directory.  bad:  {code_file_path}", planning_data)
+    
+    return planning_data
+
+
 def log_iteration_headline(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
+        config: SelfDriverConfig
 ):
+    current_iteration = config.current_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
     iteration_to_modify_str = f"Modifying iteration {iteration_to_modify.id} (v{iteration_to_modify.version_number})" if iteration_to_modify else "initial version of code"
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    headline = f"""
+    config.log(f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
@@ -409,14 +318,13 @@ tail -f {os.path.abspath(config.log_path)}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
 --------------------------------------------------
-                                    """
-    print(headline)
-    log(config, headline)
+                                    """)
 
 
-def log_execution_only_headline(config: SelfDriverConfig, current_iteration: SelfDrivingTaskIteration):
+def log_execution_only_headline(config: SelfDriverConfig):
+    current_iteration = config.current_iteration
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    headline = f"""
+    config.log(f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
@@ -428,15 +336,12 @@ No coding - just gonna execute iteration {current_iteration.id} (v{current_itera
 tail -f {os.path.abspath(config.log_path)}
 
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
---------------------------------------------------
-                                    """
-    print(headline)
-    log(config, headline)
+-------------------------------------------------- """)
 
 
-def log_initial_test_only_headline(config: SelfDriverConfig, current_iteration: SelfDrivingTaskIteration):
+def log_initial_test_only_headline(config: SelfDriverConfig):
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    headline = f"""
+    config.log(f"""
 --------------------------------------------------
 {timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
 
@@ -450,8 +355,7 @@ tail -f {os.path.abspath(config.log_path)}
 https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
 --------------------------------------------------
                                     """
-    print(headline)
-    log(config, headline)
+               )
 
 
 def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
@@ -465,13 +369,13 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
 
 
 def build_docker_image(
-        current_iteration: SelfDrivingTaskIteration,
+        config: SelfDriverConfig,
         envinronment: AwsEnv,
-        docker_file: Path,
-        log_f
+        docker_file: Path
 ) -> str:
     subprocess.run(["docker", "system", "prune", "-f"], check=True)
     
+    current_iteration = config.current_iteration
     self_driving_task = current_iteration.self_driving_task
     
     docker_image_tag = sanitize_aws_name([
@@ -480,7 +384,7 @@ def build_docker_image(
         current_iteration.version_number
     ], max_length=128)
     
-    log_f.write(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
+    config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
     sandbox_path = self_driving_task.sandbox_path
     
     requirements_txt = Path(sandbox_path) / "requirements.txt"
@@ -500,7 +404,7 @@ def build_docker_image(
             "-f", docker_file,
             docker_file.parent
         ]),
-        stdout=log_f,
+        stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True,
         env=env
@@ -512,27 +416,50 @@ def build_docker_image(
     if build_process.returncode != 0:
         raise Exception(f"Docker build failed with return code: {build_process.returncode}")
     
-    log_f.write(f"======== COMPLETED DOCKER Build for {docker_image_tag}\n\n\n\n")
+    pip_install_proc = subprocess.Popen(
+        common.strings([
+            "docker", "run", "--rm",
+            "-e", "GITHUB_TOKEN",
+            "-v", f"{self_driving_task.sandbox_path}:/app",
+            "-w", "/app",
+            docker_image_tag,
+            "bash", "-c",
+            "grep -v erieiron-common requirements.txt > requirements.noerie.txt && pip install -r requirements.noerie.txt && rm requirements.noerie.txt"
+        ]),
+        text=True,
+        env=env
+    )
+    
+    pip_install_proc.wait()
+    if pip_install_proc.returncode != 0:
+        raise Exception(f"pip install in the Docker container failed with return code: {pip_install_proc.returncode}")
+    
+    config.log(f"""
+=========================================================
+if you want to debug the docker container, run this 
+
+docker run --rm -it -v {self_driving_task.sandbox_path}:/app -w /app {docker_image_tag} /bin/bash
+
+=========================================================
+        """)
     
     return docker_image_tag
 
 
 def push_image_to_ecr(
-        iteration: SelfDrivingTaskIteration,
+        config: SelfDriverConfig,
         envinronment: AwsEnv,
-        docker_image_tag: str,
-        log_f
+        docker_image_tag: str
 ):
     region = envinronment.get_aws_region()
     ecr_client = boto3.client("ecr", region_name=region)
     account_id = boto3.client("sts").get_caller_identity()["Account"]
     
-    repo_name = sanitize_aws_name(iteration.self_driving_task.business.service_token)
+    repo_name = sanitize_aws_name(config.business.service_token)
     ecr_repo_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}"
     
     full_image_uri = f"{ecr_repo_uri}:{docker_image_tag}"
-    log_f.write(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
-    log_f.flush()  # Ensure ECR auth logs are visible to tailing thread
+    config.log(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
     
     try:
         ecr_client.describe_repositories(repositoryNames=[repo_name])
@@ -545,7 +472,7 @@ def push_image_to_ecr(
     subprocess.run(
         ["docker", "tag", docker_image_tag, full_image_uri],
         check=True,
-        stdout=log_f,
+        stdout=config.log_f,
         stderr=subprocess.STDOUT
     )
     
@@ -557,29 +484,25 @@ def push_image_to_ecr(
     subprocess.run(
         ["docker", "push", full_image_uri],
         check=True,
-        stdout=log_f,
+        stdout=config.log_f,
         stderr=subprocess.STDOUT,
         env=env
     )
-    log_f.write(f"======== COMPLETED ECR Push to {full_image_uri}\n\n\n\n")
+    config.log(f"======== COMPLETED ECR Push to {full_image_uri}\n\n\n\n")
     
     return full_image_uri, ecr_arn
 
 
 def run_docker_command(
+        config: SelfDriverConfig,
         command_args: list[str],
-        iteration: SelfDrivingTaskIteration,
         running_process: RunningProcess,
-        docker_image: str,
-        log_f
+        docker_image: str
 ) -> None:
     task_execution = running_process.task_execution
+    iteration = config.current_iteration
     selfdriving_task = iteration.self_driving_task
     sandbox_path = iteration.self_driving_task.sandbox_path
-    
-    log_f.write("\n" + "=" * 50 + "\n")
-    log_f.write("=" * 50 + "\n")
-    log_f.flush()
     
     cmd = [
               "docker", "run", "--rm",
@@ -589,10 +512,13 @@ def run_docker_command(
               "python", "manage.py"
           ] + common.safe_strs(command_args)
     
-    log_f.write(f"RUNNING {' '.join(cmd)} in {sandbox_path}\n")
+    config.log("\n" + "=" * 50 + "\n")
+    config.log(f"RUNNING {' '.join(cmd)} in {sandbox_path}\n")
+    config.log("=" * 50 + "\n")
+    
     process = subprocess.Popen(
         cmd,
-        stdout=log_f,
+        stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True
     )
@@ -601,7 +527,7 @@ def run_docker_command(
     running_process.process_id = process.pid
     running_process.save(update_fields=['process_id'])
     
-    print(f"Docker {command_args[-1]} execution started with PID {process.pid}, iteration_id: {iteration.id}")
+    config.log(f"Docker {command_args[-1]} execution started with PID {process.pid}, iteration_id: {iteration.id}")
     
     # Wait for completion
     while process.poll() is None:
@@ -609,200 +535,130 @@ def run_docker_command(
         time.sleep(2)
     
     return_code = process.returncode
-    log_f.write(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
-    log_f.flush()
+    config.log(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
     
     running_process.update_log_tail()
     
     if return_code != 0:
-        with open(running_process.log_file_path, "r") as log_read:
-            error_output = log_read.read()
-        task_execution.error_msg = error_output
+        task_execution.error_msg = config.get_log_content()
         task_execution.save()
         raise Exception(f"Docker execution failed - return code: {return_code}")
 
 
-def execute_iteration(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration, environment: AwsEnv) -> str:
-    logfile = common.create_temp_file(f"iteration-{str(iteration.id)}", ".execution.log")
+def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
     running_process = None
     
+    iteration = config.current_iteration
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
     task_type = TaskType(task.task_type)
     task_execution = init_task_execution(iteration)
     
     try:
+        config.set_phase(SdaPhase.DEPLOY)
         running_process, _ = RunningProcess.objects.update_or_create(
             task_execution=task_execution,
             execution_type='docker',
-            log_file_path=str(logfile)
+            log_file_path=str(config.log_path)
         )
         
-        with open(logfile, "w") as log_f:
-            stop_tailing = start_log_tail_thread(logfile)
-            
-            # if not iteration.codeversion_set.exists():
-            #     raise BadPlan("not code changes to deploy", planning_data)
-            
+        # if not iteration.codeversion_set.exists():
+        #     raise BadPlan("not code changes to deploy", planning_data)
+        
+        docker_file = config.sandbox_root_dir / "Dockerfile"
+        ecr_authenticate_for_dockerfile(
+            config,
+            docker_file
+        )
+        
+        docker_image_tag = build_docker_image(
+            config,
+            environment,
+            docker_file
+        )
+        
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            docker_tag=docker_image_tag
+        )
+        iteration.refresh_from_db(fields=["docker_tag"])
+        
+        infrastructure_code_version = iteration.codeversion_set.filter(
+            code_file=CodeFile.get(config.business, "infrastructure.yaml")
+        ).first()
+        
+        if infrastructure_code_version and infrastructure_code_version.get_diff():
+            # only push to ecr and deplor if infra has changed
+            config.log(f"pushing infrastructure change to ecr and cloud formation:\n{infrastructure_code_version.get_diff()}")
             try:
-                docker_file = config.sandbox_root_dir / "Dockerfile"
-                aws_utils.ecr_authenticate_for_dockerfile(
-                    docker_file,
-                    log_f
-                )
-                log_f.flush()  # Ensure ECR auth logs are visible to tailing thread
-                
-                docker_image_tag = build_docker_image(
-                    iteration,
+                full_image_uri, ecr_arn = push_image_to_ecr(
+                    config,
                     environment,
-                    docker_file,
-                    log_f
+                    docker_image_tag
                 )
-                log_f.flush()  # Ensure Docker build logs are visible to tailing thread
-                
-                infrastructure_code_version = iteration.codeversion_set.filter(
-                    code_file=CodeFile.get(config.business, "infrastructure.yaml")
-                ).first()
-                
-                if infrastructure_code_version and infrastructure_code_version.get_diff():
-                    # only push to ecr and deplor if infra has changed
-                    logging.info(f"pushing infrastructure change to ecr and cloud formation:\n{infrastructure_code_version.get_diff()}")
-                    try:
-                        full_image_uri, ecr_arn = push_image_to_ecr(
-                            iteration,
-                            environment,
-                            docker_image_tag,
-                            log_f
-                        )
-                    except Exception as e:
-                        raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
-                    finally:
-                        log_f.flush()  # Ensure ECR push logs are visible to tailing thread
-                    
-                    deploy_cloudformation_stacks(
-                        config,
-                        environment,
-                        ecr_arn,
-                        log_f
-                    )
-                    log_f.flush()  # Ensure CloudFormation deployment logs are visible to tailing thread
-                
-                if TaskType.CODING_ML.eq(task_type):
-                    run_docker_command(
-                        command_args=self_driving_task.main_name,
-                        iteration=iteration,
-                        running_process=running_process,
-                        docker_image=docker_image_tag,
-                        log_f=log_f
-                    )
-                    log_f.flush()  # Ensure ML execution logs are visible to tailing thread
-                else:
-                    run_docker_command(
-                        command_args="test",
-                        iteration=iteration,
-                        running_process=running_process,
-                        docker_image=docker_image_tag,
-                        log_f=log_f
-                    )
-                    log_f.flush()  # Ensure test execution logs are visible to tailing thread
-                    
-                    if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
-                        task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
-                        task_io_dir.mkdir(parents=True, exist_ok=True)
-                        
-                        input_file = task_io_dir / f"{task.id}-input.json"
-                        common.write_json(input_file, task.get_upstream_outputs())
-                        
-                        output_file = task_io_dir / f"{task.id}-output.json"
-                        
-                        run_docker_command(
-                            command_args=[
-                                self_driving_task.main_name,
-                                "--input_file", input_file,
-                                "--output_file", output_file
-                            ],
-                            iteration=iteration,
-                            running_process=running_process,
-                            docker_image=docker_image_tag,
-                            log_f=log_f
-                        )
-                        log_f.flush()  # Ensure task execution logs are visible to tailing thread
-                
-                running_process.update_log_tail()
-                running_process.is_running = False
-                running_process.terminated_at = common.get_now()
-                running_process.save(update_fields=['is_running', 'terminated_at'])
-            finally:
-                # Stop the tailing thread
-                stop_tailing.set()
+            except Exception as e:
+                raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+            
+            deploy_cloudformation_stacks(
+                config,
+                environment,
+                ecr_arn
+            )
         
-        log_output = logfile.read_text()
-        log(config, log_output, f"iteration-{iteration.id}")
+        config.set_phase(SdaPhase.EXECUTION)
+        if TaskType.CODING_ML.eq(task_type):
+            run_docker_command(
+                config=config,
+                command_args=self_driving_task.main_name,
+                running_process=running_process,
+                docker_image=docker_image_tag
+            )
+            config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
+        else:
+            run_docker_command(
+                config=config,
+                command_args="test",
+                running_process=running_process,
+                docker_image=docker_image_tag
+            )
+            
+            if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
+                task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
+                task_io_dir.mkdir(parents=True, exist_ok=True)
+                
+                input_file = task_io_dir / f"{task.id}-input.json"
+                common.write_json(input_file, task.get_upstream_outputs())
+                
+                output_file = task_io_dir / f"{task.id}-output.json"
+                
+                run_docker_command(
+                    config=config,
+                    command_args=[
+                        self_driving_task.main_name,
+                        "--input_file", input_file,
+                        "--output_file", output_file
+                    ],
+                    running_process=running_process,
+                    docker_image=docker_image_tag
+                )
         
-        print(f"Docker execution finished, log: {logfile}, iteration_id: {iteration.id}")
+        running_process.update_log_tail()
+        running_process.is_running = False
+        running_process.terminated_at = common.get_now()
+        running_process.save(update_fields=['is_running', 'terminated_at'])
         
-        return log_output
+        config.log("Docker execution finished")
     except Exception as e:
+        config.log(e)
         # Mark process as failed if it exists
         if running_process and running_process.is_running:
             running_process.is_running = False
             running_process.terminated_at = common.get_now()
             running_process.save(update_fields=['is_running', 'terminated_at'])
-        
-        log_output = logfile.read_text()
-        log(config, log_output, f"iteration-{iteration.id}")
+    
     finally:
-        # Ensure tailing thread is stopped if it exists
-        if 'stop_tailing' in locals():
-            stop_tailing.set()
-        
         config.business.snapshot_code(iteration, include_erie_common=False)
-        with transaction.atomic():
-            SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-                log_content_execution=common.truncate_text_lines(logfile.read_text())
-            )
-        common.quietly_delete(logfile)
         subprocess.run(["docker", "system", "prune", "-f"], check=True)
-        print("PRUNING COMPLETE")
-
-
-def start_log_tail_thread(logfile):
-    # Start a background thread to tail the logfile contents to logging.info()
-    import threading
-    stop_tailing = threading.Event()
-    
-    def tail_logfile():
-        """Tail the logfile and stream new content to logging.info()"""
-        try:
-            last_position = 0
-            while not stop_tailing.is_set():
-                try:
-                    # Check if file exists and get its current size
-                    if logfile.exists():
-                        current_size = logfile.stat().st_size
-                        if current_size > last_position:
-                            # File has grown, read new content
-                            with open(logfile, "r") as tail_f:
-                                tail_f.seek(last_position)
-                                new_content = tail_f.read(current_size - last_position)
-                                if new_content:
-                                    # Split into lines and log each one
-                                    for line in new_content.splitlines():
-                                        if line.strip():  # Only log non-empty lines
-                                            logging.info(f"[Docker Execution] {line}")
-                            last_position = current_size
-                    
-                    # Wait before checking again
-                    time.sleep(0.2)
-                except (FileNotFoundError, OSError):
-                    # File might not exist yet or be temporarily unavailable
-                    time.sleep(0.5)
-        except Exception as e:
-            logging.error(f"Error tailing logfile: {e}")
-    
-    tail_thread = threading.Thread(target=tail_logfile, daemon=True)
-    tail_thread.start()
-    return stop_tailing
+        config.log("PRUNING COMPLETE")
 
 
 def init_task_execution(iteration):
@@ -827,12 +683,14 @@ def init_task_execution(iteration):
     )
 
 
-def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivingTaskIteration):
-    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=iteration.id)
+def evaluate_iteration_execution(config: SelfDriverConfig):
+    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
     
-    if "no space left on device" in common.default_str(iteration.log_content_execution).lower():
+    log_output = iteration.log_content_execution
+    
+    if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
-        raise RetryableException(f"execution is failing with 'no space left on device'\n\n{iteration.log_content_execution}.  I just pruned docker, so should be cleared up now.")
+        raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
     
     eval_data = llm_chat(
         "Iteration Summarizer",
@@ -842,7 +700,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
             *LlmMessage.user_from_data(
                 f"**Logs from the iteration's test output and execution**\nBase your evaluation on this log output",
                 {
-                    "log_output": iteration.log_content_execution
+                    "log_output": log_output
                 }
             )
         ],
@@ -858,7 +716,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
     previous_iteration_evals = []
     for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
             evaluation_json__isnull=False
-    ).order_by("-timestamp")[:20][::-1]:
+    ).order_by("-timestamp")[:3][::-1]:
         previous_iteration_evals.append({
             "iteration_id": prev_iter.id,
             "iteration_is_current_iteration": prev_iter == iteration,
@@ -880,7 +738,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
         output_schema="iteration_selector.md.schema.json"
     ).json()
     
-    selection_data['iteration_id_to_modify'] = 'latest'
+    selection_data['iteration_id_to_modify'] = selection_data.get("iteration_id_to_modify")
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
@@ -898,12 +756,170 @@ def evaluate_iteration_execution(config: SelfDriverConfig, iteration: SelfDrivin
     
     extract_lessons(
         config,
-        iteration,
         "code deploy and execution",
-        iteration.log_content_execution
+        log_output
     )
     
     return eval_data
+
+
+def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_client):
+    for i in range(5):
+        matching_stack = get_stack(stack_name, cf_client)
+        if not matching_stack:
+            return
+        
+        try:
+            status = matching_stack["StackStatus"]
+            if 'ROLLBACK' in status:
+                config.log(f"Deleting broken stack: {stack_name} (status: {status}) attempt {i + 1}\n")
+                
+                try:
+                    resources = cf_client.describe_stack_resources(StackName=stack_name)['StackResources']
+                    for r in resources:
+                        if r['ResourceStatus'] == 'DELETE_FAILED':
+                            config.log(f"Resource {r['LogicalResourceId']} stuck in DELETE_FAILED. Manual cleanup may be required.\n")
+                            # Optional: custom cleanup logic could go here
+                except Exception as e:
+                    config.log(f"Failed to describe stack resources: {e}\n")
+                cf_client.delete_stack(StackName=stack_name)
+            
+            cloudformation_wait(config, cf_client, stack_name)
+        except cf_client.exceptions.ClientError as e:
+            if "does not exist" in str(e):
+                ...
+            else:
+                config.log(traceback.format_exc())
+                raise
+
+
+def cloudformation_wait(
+        config: SelfDriverConfig,
+        cf_client,
+        stack_name,
+        timeout=1200,
+        poll_interval=10,
+        throw_on_fail=False
+):
+    start_time = time.time()
+    
+    while True:
+        time.sleep(poll_interval)
+        
+        stack = get_stack(stack_name, cf_client)
+        if not stack:
+            return
+        
+        status = stack['StackStatus']
+        if throw_on_fail:
+            if not status.startswith("ROLLBACK_"):
+                break
+        
+        if not status.endswith("_IN_PROGRESS"):
+            break
+        
+        if time.time() - start_time > timeout:
+            raise TimeoutError(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
+        
+        config.log(f"waiting on {stack_name}.  status: {status}")
+    
+    if throw_on_fail:
+        assert_cloudformation_stack_valid(stack_name, cf_client)
+
+
+def get_stack(stack_name, cf_client):
+    try:
+        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])
+    except:
+        return None
+
+
+def extract_cloudformation_params(cfn_file: Path):
+    # Extract Parameters block using indentation-aware parsing
+    lines = cfn_file.read_text().splitlines()
+    start_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == "Parameters:":
+            start_idx = i
+            break
+    if start_idx is None:
+        return set(), {}
+    
+    param_lines = [lines[start_idx]]
+    base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
+    for line in lines[start_idx + 1:]:
+        if not line.strip():
+            param_lines.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent:
+            break
+        param_lines.append(line)
+    
+    param_block_str = "\n".join(param_lines)
+    parsed = yaml.safe_load(param_block_str)
+    
+    param_metadata = parsed.get("Parameters", {})
+    required_params = {
+        name for name, meta in param_metadata.items()
+        if "Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower()
+    }
+    
+    return required_params, param_metadata
+
+
+def push_cloudformation(
+        config: SelfDriverConfig,
+        stack_name: str,
+        environment: AwsEnv,
+        cfn_file: Path,
+        param_list: list
+):
+    config.log(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
+    cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
+    template_body = cfn_file.read_text()
+    
+    if get_stack(stack_name, cf_client):
+        assert_cloudformation_stack_valid(stack_name, cf_client)
+        
+        config.log(f"Updating existing stack: {stack_name}\n")
+        try:
+            cf_client.update_stack(
+                StackName=stack_name,
+                TemplateBody=template_body,
+                Parameters=param_list,
+                Capabilities=["CAPABILITY_NAMED_IAM"]
+            )
+        except Exception as deploy_exception:
+            if "No updates are to be performed" not in str(deploy_exception):
+                raise deploy_exception
+    else:
+        config.log(f"Creating new stack: {stack_name}\n")
+        cf_client.create_stack(
+            StackName=stack_name,
+            TemplateBody=template_body,
+            Parameters=param_list,
+            Capabilities=["CAPABILITY_NAMED_IAM"]
+        )
+    
+    cloudformation_wait(
+        config,
+        cf_client,
+        stack_name,
+        throw_on_fail=True
+    )
+    
+    config.log(f"CloudFormation stack {stack_name} deployed successfully.\n")
+
+
+def assert_cloudformation_stack_valid(stack_name, cf_client):
+    matching_stack = get_stack(stack_name, cf_client)
+    if not matching_stack:
+        raise RuntimeError(f"CloudFormation stack {stack_name} doesn't exist")
+    
+    status = matching_stack['StackStatus']
+    if "FAILED" in status or "ROLLBACK" in status:
+        raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
 
 
 def build_previous_iteration_context_messages(
@@ -946,10 +962,13 @@ def get_iteration_eval_llm_messages(
         iteration_to_modify: SelfDrivingTaskIteration = None,
         title="**Output from iteration_evaluator agent**"
 ) -> list[LlmMessage]:
-    messages = []
+    all_iteration_ids = [i.id for i in common.filter_none(common.ensure_list(iterations) + [
+        previous_iteration,
+        iteration_to_modify
+    ])]
     
-    iterations = common.ensure_list(iterations)
-    for iteration in sorted(iterations, key=lambda i: i.timestamp):
+    messages = []
+    for iteration in SelfDrivingTaskIteration.objects.filter(id__in=all_iteration_ids).order_by("-timestamp"):
         evaluation_json: dict = iteration.evaluation_json
         if not evaluation_json:
             continue
@@ -989,11 +1008,11 @@ def get_sys_prompt(
 
 def perform_code_review(
         config: SelfDriverConfig,
-        planning_data,
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
+        planning_data
 ):
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
     task = config.task
     
     messages = [
@@ -1043,18 +1062,17 @@ The code changes to review are in support of the following goal:
         config,
         messages,
         LlmModel.OPENAI_GPT_4o,
-        debug=False,
         output_schema="codereviewer.md.schema.json"
     ).json()
     
-    pprint.pprint(code_review_data)
+    config.log(code_review_data)
     
     blocking_issues = code_review_data.get("blocking_issues", [])
     non_blocking_warnings = code_review_data.get("non_blocking_warnings", [])
     if blocking_issues:
         raise CodeReviewException(code_review_data)
     elif non_blocking_warnings:
-        logging.warning(json.dumps(non_blocking_warnings, indent=4))
+        config.log(non_blocking_warnings)
 
 
 def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True) -> list[dict]:
@@ -1125,10 +1143,10 @@ def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True) 
 
 def extract_lessons(
         config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
         agent_step: str,
         log_content
 ):
+    current_iteration = config.current_iteration
     task = config.task
     lessons_data = llm_chat(
         "Extract Lessons",
@@ -1146,7 +1164,7 @@ def extract_lessons(
         model=LlmModel.GEMINI_2_5_PRO
     ).json()
     
-    for lesson_data in common.ensure_list(lessons_data.get("lessons", [])):
+    for lesson_data in common.ensure_list(common.get(lessons_data, "lessons", [])):
         AgentLesson.create_from_data(
             agent_step,
             lesson_data,
@@ -1157,11 +1175,11 @@ def extract_lessons(
 def generate_code(
         config: SelfDriverConfig,
         planning_data: dict,
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration,
         code_review_exception: CodeReviewException
 ) -> SelfDrivingTaskIteration:
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
     code_file_instructions = planning_data.get("code_files", [])
     if not code_file_instructions:
         raise BadPlan("no code files found", planning_data)
@@ -1210,7 +1228,7 @@ def generate_code(
         
         instructions = cfi.get("instructions", [])
         if not instructions:
-            print(f"no modifications for {code_file_path}")
+            config.log(f"no modifications for {code_file_path}")
             code_file.update(
                 current_iteration,
                 code_version_to_modify.code
@@ -1230,9 +1248,6 @@ def generate_code(
                         requirements_txt=requirements_txt,
                         blocking_issues=blocking_issues,
                         code_writing_model=LlmModel(cfi.get("code_writing_model")),
-                        current_iteration=current_iteration,
-                        previous_iteration=previous_iteration,
-                        iteration_to_modify=iteration_to_modify,
                         roll_back_reason=roll_back_reason,
                         previous_exception=previous_exception
                     )
@@ -1241,7 +1256,6 @@ def generate_code(
                 except CodeCompilationError as e:
                     extract_lessons(
                         config,
-                        current_iteration,
                         TASK_DESC_CODE_WRITING,
                         f"""
 the code written for {code_version_to_modify.code_file.file_path}:
@@ -1265,7 +1279,7 @@ resulted in this validation error
             if previous_exception:
                 # validation failed three times.  keep going, if it fails in deployment or execution we'll have another 
                 # chances at the feedback loop
-                logging.exception(previous_exception)
+                config.log(previous_exception)
             
             if code_str:
                 code_file.update(
@@ -1275,17 +1289,12 @@ resulted in this validation error
                 )
                 if code_file_path_str == "requirements.txt":
                     requirements_txt = code_str
-                
-                # pprint.pprint(code_file.get_version(current_iteration, default_to_latest=True).get_diff())
     
     config.git.add_files()
     return current_iteration
 
 
-def write_initial_test(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration
-):
+def write_initial_test(config: SelfDriverConfig):
     task = config.task
     
     previous_exception = None
@@ -1336,12 +1345,13 @@ def write_initial_test(
                         raise CodeCompilationError(code, f"The tests **MUST** extend from \n'''\nfrom django.test import TestCase\n'''")
                     
                     validate_code(
+                        config,
                         test_file_path,
                         code
                     )
                     break
                 except CodeCompilationError as code_compilation_error:
-                    logging.warning(f"Code failed validation. Attempting fix using cheaper model.  Fix attempt {code_validation_idx + 1} of 5")
+                    config.log(f"Code failed validation. Attempting fix using cheaper model.  Fix attempt {code_validation_idx + 1} of 5")
                     if code_validation_idx == 5:
                         raise code_compilation_error
                     else:
@@ -1355,7 +1365,7 @@ def write_initial_test(
             test_file_path.write_text(code)
             
             with transaction.atomic():
-                code_verson = current_iteration.get_code_version(test_file_path)
+                code_verson = config.current_iteration.get_code_version(test_file_path)
                 SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
                     test_file_path=test_file_path.relative_to(config.sandbox_root_dir)
                 )
@@ -1363,49 +1373,40 @@ def write_initial_test(
             
             return test_file_path
         except Exception as e:
-            logging.exception(e)
+            config.log(e)
             previous_exception = e
     
     raise previous_exception
 
 
 def write_initial_design(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration
+        config: SelfDriverConfig
 ):
     task = config.task
     
     try:
-        messages = [
-            get_sys_prompt("codewriter--initial_design.md"),
-            LlmMessage.user(f'''
-        **Please write a markdown-formatted high-level design document for this task.**
-
-        This document will serve as the roadmap for the code planner and future iterations. 
-        Do not write implementation code or tests. Focus on describing architecture, assumptions, data flow, interfaces, and potential risks.
-
-        # Goal
-        {task.description}
-
-        # Acceptance Criteria
-        {task.test_plan or 'none'}
-
-        # Risk Notes
-        {task.risk_notes or 'none'}
-            ''')
-        ]
-        
         code = llm_chat(
             "Write initial design doc",
             config,
-            messages,
+            [
+                get_sys_prompt("codewriter--initial_design.md"),
+                *LlmMessage.user_from_data("Business Initiative Description", {
+                    "business_description": config.business.summary,
+                    "initiative_description": config.self_driving_task.task.initiative.description
+                }),
+                *LlmMessage.user_from_data("Task Description", {
+                    "goal": task.description,
+                    "acceptance_criteria": task.test_plan or "none",
+                    "risk_notes": task.risk_notes or "none"
+                }),
+                "Please write a markdown-formatted high-level design document for this task."
+            ],
             LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE
         ).text
         
         design_file_path = update_file_contents(
             config,
             config.sandbox_root_dir / "docs" / "architecture.md",
-            current_iteration,
             code
         )
         
@@ -1416,20 +1417,19 @@ def write_initial_design(
         
         return design_file_path
     except Exception as e:
-        logging.exception(e)
+        config.log(e)
         previous_exception = e
 
 
 def update_file_contents(
         config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
         file_path: Path,
         code: str
 ):
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(code)
     with transaction.atomic():
-        code_verson = current_iteration.get_code_version(file_path)
+        code_verson = config.current_iteration.get_code_version(file_path)
     return file_path
 
 
@@ -1444,14 +1444,12 @@ You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget
     """)
 
 
-def route_code_changes(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
-) -> DevelopmentRoutingPath:
+def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
     model = config.model_code_planning
     business = config.self_driving_task.business
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
     
     if not iteration_to_modify.has_error():
         return DevelopmentRoutingPath.ESCALATE_TO_PLANNER
@@ -1464,6 +1462,7 @@ def route_code_changes(
                 *common.ensure_list(
                     get_sys_prompt("failure_router.md"),
                 ),
+                *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
                 *common.ensure_list(
                     LlmMessage.user_from_data(
                         "Error with previous code iteration",
@@ -1485,7 +1484,6 @@ def route_code_changes(
                 "Please perform the routing analysis"
             ],
             model,
-            debug=False,
             output_schema="failure_router.md.schema.json"
         ).json()
         
@@ -1497,20 +1495,32 @@ def route_code_changes(
         return DevelopmentRoutingPath(routing_data.get("recovery_path"))
 
 
-def plan_direct_fix_code_changes(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
-):
+def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
     routing_json = current_iteration.routing_json
     
+    context_files = routing_json.get("context_files", []) + [
+        "Dockerfile",
+        config.self_driving_task.design_doc_path,
+        "infrastructure.yaml"
+    ]
+    
     planning_data = llm_chat(
-        "Plan quick fix code changes",
+        "Plan aws provisioning code changes",
         config,
         [
             *common.ensure_list(
-                get_sys_prompt("codeplanner--quick_fix.md"),
+                get_sys_prompt(
+                    [
+                        "codeplanner--common.md",
+                        "codeplanner--aws_provisioning.md"
+                    ], replacements=[
+                        ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
+                        ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION))
+                    ]
+                ),
             ),
             *common.ensure_list(
                 LlmMessage.user_from_data(
@@ -1519,22 +1529,22 @@ def plan_direct_fix_code_changes(
                 )
             ),
             *common.ensure_list(
-                get_iteration_eval_llm_messages(iteration_to_modify, title="structured error report")
-            ),
-            *common.ensure_list(
-                get_relevant_code_files(
-                    config,
-                    current_iteration,
-                    iteration_to_modify,
-                    routing_json.get("context_files", [])
+                get_iteration_eval_llm_messages(
+                    [previous_iteration, iteration_to_modify],
+                    iteration_to_modify=iteration_to_modify,
+                    title="structured error report"
                 )
             ),
             *common.ensure_list(
+                get_relevant_code_files(config, context_files)
+            ),
+            *common.ensure_list(
                 LlmMessage.user_from_data("structured failure triage object", routing_json)
-            )
+            ),
+            "Please produce a development plan that addresses this issue"
+        
         ],
         config.model_code_planning,
-        debug=False,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -1551,17 +1561,63 @@ def plan_direct_fix_code_changes(
     return planning_data
 
 
-def plan_code_changes(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
-):
-    relevant_code_files = get_relevant_code_files(
+def plan_direct_fix_code_changes(config: SelfDriverConfig):
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    routing_json = current_iteration.routing_json
+    
+    planning_data = llm_chat(
+        "Plan quick fix code changes",
         config,
-        current_iteration,
-        iteration_to_modify
-    )
+        [
+            *common.ensure_list(
+                get_sys_prompt(["codeplanner--common.md", "codeplanner--quick_fix.md"]),
+            ),
+            *common.ensure_list(
+                LlmMessage.user_from_data(
+                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                    get_lessons(config)
+                )
+            ),
+            *common.ensure_list(
+                get_iteration_eval_llm_messages(
+                    [previous_iteration, iteration_to_modify],
+                    iteration_to_modify=iteration_to_modify,
+                    title="structured error report"
+                )
+            ),
+            *common.ensure_list(
+                get_relevant_code_files(config, routing_json.get("context_files", []))
+            ),
+            *common.ensure_list(
+                LlmMessage.user_from_data("structured failure triage object", routing_json)
+            ),
+            "Please produce a development plan that addresses this issue"
+        ],
+        config.model_code_planning,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+            planning_model=config.model_code_planning
+        )
+        current_iteration.refresh_from_db(fields=["planning_model"])
+    
+    blocked_data = planning_data.get('blocked')
+    if blocked_data:
+        raise AgentBlocked(blocked_data)
+    
+    return planning_data
+
+
+def plan_full_code_changes(config: SelfDriverConfig):
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
+    relevant_code_files = get_relevant_code_files(config)
     
     model = config.model_code_planning
     business = config.self_driving_task.business
@@ -1570,6 +1626,7 @@ def plan_code_changes(
     task_type = TaskType(task.task_type)
     
     system_prompt_files = [
+        "codeplanner--common.md",
         "codeplanner--base.md",
         MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type]
     ]
@@ -1642,7 +1699,6 @@ The previous iteration failed at the deployment stage.
         config,
         messages,
         model,
-        debug=False,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -1668,12 +1724,13 @@ def write_code(
         code_writing_model: LlmModel,
         requirements_txt: str,
         blocking_issues: list[dict],
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration = None,
-        iteration_to_modify: SelfDrivingTaskIteration = None,
         roll_back_reason: str = None,
         previous_exception: Optional[CodeCompilationError] = None
 ) -> str:
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
     code_file = code_version_to_modify.code_file
     code_file_path = code_file.get_path()
     code_file_name = code_file_path.name
@@ -1755,24 +1812,22 @@ def write_code(
         coding_task_data
     )
     
-    # pprint.pprint(coding_task_data)
-    
     code = llm_chat(
         f"Write code for {code_file_name}",
         config,
         messages,
         code_writing_model,
-        debug=False
     ).text
     
     for i in range(5):
         try:
             return validate_code(
+                config,
                 code_file_path,
                 code
             )
         except CodeCompilationError as code_compilation_error:
-            logging.warning(f"Primary code failed validation. Attempting fix using cheaper model.  Fix attempt {i + 1} of 5")
+            config.log(f"Primary code failed validation. Attempting fix using cheaper model.  Fix attempt {i + 1} of 5")
             if i == 4:
                 raise code_compilation_error
             else:
@@ -1849,7 +1904,11 @@ def get_codewriter_system_prompt(code_file_path):
     return prompt
 
 
-def validate_code(code_file_path: Path, code: str) -> str:
+def validate_code(
+        config: SelfDriverConfig,
+        code_file_path: Path,
+        code: str
+) -> str:
     code_file_name = code_file_path.name.lower()
     if code_file_name.endswith(".js"):
         import subprocess
@@ -1930,7 +1989,7 @@ def validate_code(code_file_path: Path, code: str) -> str:
                         error_msgs = "\n".join(f"Line {f['Location']['Start']['LineNumber']}: {f['Message']}" for f in errors_only)
                         raise CodeCompilationError(code, f"CloudFormation lint errors:\n{error_msgs}")
                 except Exception as cf_lint_e:
-                    logging.exception(cf_lint_e)
+                    config.log(cf_lint_e)
                     raise CodeCompilationError(code, f"CloudFormation lint errors:\n{result.stdout.strip()}")
         finally:
             os.remove(tmp.name)
@@ -1941,6 +2000,7 @@ def validate_code(code_file_path: Path, code: str) -> str:
             ast.parse(code)
         except SyntaxError as e:
             raise CodeCompilationError(code, f"Syntax error in Python file '{code_file_name}': {e}")
+    
     elif code_file_name == "requirements.txt":
         # noinspection PyProtectedMember
         from pip._internal.req.constructors import install_req_from_line
@@ -2023,14 +2083,14 @@ def get_cloudformation_file(config: SelfDriverConfig) -> Path:
 
 def get_relevant_code_files(
         config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration,
         paths: list[Path] = None
 ) -> list[LlmMessage]:
+    current_iteration = config.current_iteration
+    iteration_to_modify = config.iteration_to_modify
     files = []
     
     if paths:
-        for f in paths:
+        for f in set(paths):
             try:
                 relative_file = f.relative_to(config.sandbox_root_dir)
             except:
@@ -2043,7 +2103,12 @@ def get_relevant_code_files(
             
             code_version = code_file.get_version(iteration_to_modify, default_to_latest=True)
             if not code_version:
-                code_version = CodeFile.init_from_codefile(current_iteration, relative_file)
+                try:
+                    code_version = CodeFile.init_from_codefile(current_iteration, relative_file)
+                except Exception as e:
+                    config.log(f"failed to fetch {relative_file}")
+                    config.log(e)
+                    continue
             
             if code_version and code_version.code:
                 files.append(code_version.get_llm_message_data())
@@ -2209,51 +2274,15 @@ def get_relevant_code_files(
     return LlmMessage.user_from_data("Relevant Code Files", files)
 
 
-def log_llm_request(config: SelfDriverConfig, llm_messages: list[LlmMessage]):
-    config.log_path.touch(exist_ok=True)
-    log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    log(config, f"LlmRequest")
-    for m in common.ensure_list(llm_messages):
-        log(config, m, prefix="\t")
-        log(config, "\n")
-    log(config, ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-
-
-def log_llm_response(config, llm_response: LlmResponse, suppress_log=False):
-    LlmRequest.objects.create(
-        task_iteration=config.self_driving_task.get_most_recent_iteration(),
-        token_count=llm_response.token_count,
-        price=llm_response.price_total
-    )
-    
-    if not suppress_log:
-        config.log_path.touch(exist_ok=True)
-        log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
-        log(config, f"Response from {llm_response.model.label()}")
-        log(config, llm_response.text, prefix="\t")
-        log(config, "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
-        log(config, "\n")
-
-
-def log(config: SelfDriverConfig, s: str, prefix: str = None):
-    prefix = prefix or ""
-    config.log_path.touch(exist_ok=True)
-    with open(config.log_path, 'a') as messages_log:
-        for line in common.safe_split(s, "\n"):
-            messages_log.write(f"{prefix}{line}\n")
-
-
 def llm_chat(
         desc: str,
         config: SelfDriverConfig,
         messages: list[LlmMessage],
         model: LlmModel,
         output_schema: Path = None,
-        code_response=False,
-        debug=False
+        code_response=False
 ) -> LlmResponse:
     token_count = LlmMessage.get_total_token_count(model, messages)
-    log_llm_request(config, messages)
     
     llm_resp = None
     for i in range(2):
@@ -2261,28 +2290,50 @@ def llm_chat(
             max_tokens = MODEL_TO_MAX_TOKENS.get(model)
             
             if max_tokens:
-                print(f"{desc}: about to call out to {model}. {token_count:,}/{max_tokens:,} tokens used")
+                config.log(f"{desc}: about to call out to {model}. {token_count:,}/{max_tokens:,} tokens used")
             else:
-                print(f"{desc}: about to call out to {model}.  {token_count:,} tokens used")
+                config.log(f"{desc}: about to call out to {model}.  {token_count:,} tokens used")
+            
+            config.log(LlmMessage.dumps(
+                LlmMessage.parse_prompt(model, messages, code_response=code_response))
+            )
             
             llm_resp = llm_interface.chat(
                 messages=messages,
                 model=model,
                 output_schema=PROMPTS_DIR / output_schema if output_schema else None,
                 code_response=code_response,
-                debug=debug
+                debug=False
             )
-            log_llm_response(config, llm_resp)
+            
             break
         except Exception as e:
-            logging.exception(e)
+            config.log(e)
             
             if i == 1:
                 raise e
             else:
                 model = MODEL_BACKUPS[model]
+        finally:
+            if llm_resp:
+                LlmRequest.objects.create(
+                    task_iteration=config.self_driving_task.get_most_recent_iteration(),
+                    token_count=llm_resp.token_count,
+                    price=llm_resp.price_total
+                )
     
-    print(f"{desc}: total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f} - total spend is ${config.self_driving_task.get_cost() :.2f} out a budget of ${config.budget :.2f}")
+    if llm_resp:
+        config.log(f"""
+=====================================================
+========= RESPONSE from {model} for {desc} ==========
+{llm_resp.text}
+=====================================================
+=====================================================
+""")
+    else:
+        config.log(f"No Response from {model} for {desc}! prob should investigate what this is")
+    
+    config.log(f"{desc}: total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f} - total spend is ${config.self_driving_task.get_cost() :.2f} out a budget of ${config.budget :.2f}")
     
     return llm_resp
 
@@ -2290,8 +2341,7 @@ def llm_chat(
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
         environment: AwsEnv,
-        ecr_arn: str,
-        log_f,
+        ecr_arn: str
 ):
     cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
     
@@ -2300,19 +2350,20 @@ def deploy_cloudformation_stacks(
     
     cfn_file = get_cloudformation_file(config)
     stack_name = self_driving_task.get_cloudformation_stack_name(environment)
-    log_f.write(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
+    config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
     
     start_time = time.time()
     try:
         
-        aws_utils.prepare_stack_for_update(
+        prepare_stack_for_update(
+            config,
             stack_name,
             cf_client
         )
         
         try:
-            if aws_utils.get_stack(stack_name, cf_client):
-                aws_utils.assert_cloudformation_stack_valid(
+            if get_stack(stack_name, cf_client):
+                assert_cloudformation_stack_valid(
                     stack_name,
                     cf_client
                 )
@@ -2320,24 +2371,23 @@ def deploy_cloudformation_stacks(
             raise AgentBlocked(f"cloudformation stack {stack_name} in {environment.get_aws_region()} is wedged and cannot be autonomously fixed.  JJ or a Human needs to clean up manually")
         
         cloudformation_params = get_stack_parameters(
-            self_driving_task,
+            config,
             environment,
             cfn_file,
-            ecr_arn,
-            log_f
+            ecr_arn
         )
         
-        aws_utils.push_cloudformation(
+        push_cloudformation(
+            config,
             stack_name,
             environment,
             cfn_file,
-            cloudformation_params,
-            log_f
+            cloudformation_params
         )
-        log_f.write(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
+        config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
     except Exception as deploy_exception:
-        log_f.write(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
-        log_f.write(traceback.format_exc())
+        config.log(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
+        config.log(traceback.format_exc())
         try:
             events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
             # Filter events to only include those that occurred after deployment start_time
@@ -2354,26 +2404,26 @@ def deploy_cloudformation_stacks(
                 f"{e['Timestamp']} | Stack: {e['StackName']} | {e['LogicalResourceId']} ({e['ResourceType']}) | Status: {e['ResourceStatus']} | Reason: {e.get('ResourceStatusReason', '')} | PhysicalId: {e.get('PhysicalResourceId', '')} | Token: {e.get('ClientRequestToken', '')}"
                 for e in recent_events if "FAILED" in e["ResourceStatus"]
             ]
-            log_f.write("CloudFormation failure events:\n")
-            log_f.write("\n".join(failed_events) + "\n")
+            config.log("CloudFormation failure events:\n")
+            config.log("\n".join(failed_events) + "\n")
             
             # Also describe the top 3 failed resources in more detail
             failed_logical_ids = [e["LogicalResourceId"] for e in recent_events if "FAILED" in e["ResourceStatus"]]
-            log_f.write("\nDetailed resource descriptions for top failures:\n")
+            config.log("\nDetailed resource descriptions for top failures:\n")
             for logical_id in failed_logical_ids[:3]:
                 try:
                     resource_details = cf_client.describe_stack_resource(
                         StackName=stack_name,
                         LogicalResourceId=logical_id
                     )
-                    log_f.write(json.dumps(resource_details, indent=2, default=str) + "\n")
+                    config.log(json.dumps(resource_details, indent=2, default=str) + "\n")
                 except Exception as ex:
-                    log_f.write(f"Failed to describe resource {logical_id}: {ex}\n")
+                    config.log(f"Failed to describe resource {logical_id}: {ex}\n")
         except Exception as event_ex:
-            log_f.write(f"Failed to fetch stack events: {event_ex}\n")
+            config.log(f"Failed to fetch stack events: {event_ex}\n")
         
         from datetime import datetime, timedelta
-        log_f.write("\nRecent CloudTrail events in this region (last 15 min):\n")
+        config.log("\nRecent CloudTrail events in this region (last 15 min):\n")
         try:
             ct_client = boto3.client("cloudtrail", region_name=environment.get_aws_region())
             end_time = common.get_now()
@@ -2405,22 +2455,22 @@ def deploy_cloudformation_stacks(
                     if error_message.lower().startswith("stack with id") and error_message.lower().endswith("does not exist"):
                         continue
                     
-                    log_f.write(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
-                    log_f.write(json.dumps(cloudtrain_event_data, indent=4))
+                    config.log(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
+                    config.log(json.dumps(cloudtrain_event_data, indent=4))
         
         except Exception as ct_ex:
-            log_f.write(f"Failed to fetch CloudTrail events: {ct_ex}\n")
+            config.log(f"Failed to fetch CloudTrail events: {ct_ex}\n")
         
         raise deploy_exception
 
 
 def get_stack_parameters(
-        self_driving_task: SelfDrivingTask,
+        config: SelfDriverConfig,
         environment: AwsEnv,
         cfn_file: Path,
-        ecr_arn: str,
-        log_f
+        ecr_arn: str
 ):
+    self_driving_task = config.self_driving_task
     project_name = aws_utils.sanitize_aws_name(self_driving_task.business.service_token, max_length=64)
     secrets_key = f"/erieiron/{project_name}/{environment.value}"
     
@@ -2442,10 +2492,10 @@ def get_stack_parameters(
         }
         secret_params = json.loads(response["SecretString"])
     except aws_secrets_client.exceptions.ResourceNotFoundException as rnfe:
-        # logging.info(f"no secrets found for {secrets_key}")
+        # config.log(f"no secrets found for {secrets_key}")
         ...
     
-    required_parameters, parameters_metadata = aws_utils.extract_cloudformation_params(cfn_file)
+    required_parameters, parameters_metadata = extract_cloudformation_params(cfn_file)
     missing = set()
     for param in required_parameters:
         param_meta = parameters_metadata.get(param, {})
@@ -2528,6 +2578,40 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
         })
     
     return db_creds
+
+
+def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):
+    try:
+        with open(dockerfile) as f:
+            pattern = r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
+            #   FROM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
+            #   FROM --platform=$TARGETPLATFORM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
+            for base_img in re.findall(pattern, f.read(), flags=re.IGNORECASE):
+                ecr_login(config, base_img)
+    except Exception as e:
+        config.log(e)
+        raise e
+
+
+def ecr_login(config: SelfDriverConfig, ecr_repo_uri):
+    region = parse_region_from_ecr_uri(ecr_repo_uri)
+    subprocess.run(
+        f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo_uri}",
+        shell=True,
+        check=True,
+        stdout=config.log_f,
+        stderr=subprocess.STDOUT
+    )
+
+
+def parse_region_from_ecr_uri(image_uri: str) -> str:
+    try:
+        parts = image_uri.split(".")
+        if "ecr" in parts and len(parts) >= 4:
+            return parts[3]  # region is always the 4th part
+    except Exception:
+        pass
+    raise ValueError(f"Could not parse region from ECR URI: {image_uri}")
 
 
 def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:

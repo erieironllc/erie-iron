@@ -186,7 +186,8 @@
                             </span>
                         </small>
                         <small class="text-muted">
-                            <label>${{ iteration.price|floatformat:2 }} (${{ iteration.total_price|floatformat:2  }})</label>
+                            <label>${{ iteration.price|floatformat:2 }}
+                                (${{ iteration.total_price|floatformat:2 }})</label>
                         </small>
                         <form method="post" action="{% url 'action_delete_iteration' iteration.id %}"
                               class="d-inline ms-2">
@@ -199,14 +200,18 @@
                     </div>
                     <div class=" card-body">
                         <dl class="row">
+                            {% if iteration.evaluation_json %}
                                 <dt class="mt-2 col-sm-12">Evaluation</dt>
                                 <dd class="col-sm-12">
-                                    {% if iteration.evaluation_json %}
-                                        {{ iteration.evaluation_json.status_report }}
-                                    {% else %}
-                                        Iteration in progress
-                                    {% endif %}
+                                    {{ iteration.evaluation_json.status_report }}
                                 </dd>
+                            {% elif iteration.routing_json %}
+                                <dt class="mt-2 col-sm-12">Routing</dt>
+                                <dd class="col-sm-12">
+                                    {{ iteration.routing_json.recovery_path }}: {{ iteration.routing_json.fix_prompt }}
+                                    {{ iteration.evaluation_json.status_report }}
+                                </dd>
+                            {% endif %}
                         </dl>
                     </div>
                 </div>
@@ -291,89 +296,102 @@
                     <div class="col-md-6">
                         <div class="mb-3">
                             <label for="description" class="form-label">Description</label>
-                            <textarea name="description" id="description" class="form-control" rows="3">{{ task.description }}</textarea>
+                            <textarea name="description" id="description" class="form-control"
+                                      rows="3">{{ task.description }}</textarea>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="risk_notes" class="form-label">Risk Notes</label>
-                            <textarea name="risk_notes" id="risk_notes" class="form-control" rows="3">{{ task.risk_notes }}</textarea>
+                            <textarea name="risk_notes" id="risk_notes" class="form-control"
+                                      rows="3">{{ task.risk_notes }}</textarea>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="test_plan" class="form-label">Test Plan</label>
-                            <textarea name="test_plan" id="test_plan" class="form-control" rows="3">{{ task.test_plan }}</textarea>
+                            <textarea name="test_plan" id="test_plan" class="form-control"
+                                      rows="3">{{ task.test_plan }}</textarea>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
-                            <input type="number" name="timeout_seconds" id="timeout_seconds" class="form-control" value="{{ task.timeout_seconds|default:'' }}">
+                            <input type="number" name="timeout_seconds" id="timeout_seconds" class="form-control"
+                                   value="{{ task.timeout_seconds|default:'' }}">
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="max_budget_usd" class="form-label">Max Budget (USD)</label>
-                            <input type="number" step="0.01" name="max_budget_usd" id="max_budget_usd" class="form-control" value="{{ task.max_budget_usd|default:'' }}">
+                            <input type="number" step="0.01" name="max_budget_usd" id="max_budget_usd"
+                                   class="form-control" value="{{ task.max_budget_usd|default:'' }}">
                         </div>
                     </div>
-                    
+
                     <div class="col-md-6">
                         <div class="mb-3">
                             <label for="status" class="form-label">Status</label>
                             <select name="status" id="status" class="form-select">
                                 {% for value, label in task_status_choices %}
-                                    <option value="{{ value }}" {% if task.status == value %}selected{% endif %}>{{ label }}</option>
+                                    <option value="{{ value }}"
+                                            {% if task.status == value %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="role_assignee" class="form-label">Role Assignee</label>
                             <select name="role_assignee" id="role_assignee" class="form-select">
                                 {% for value, label in task_assignee_choices %}
-                                    <option value="{{ value }}" {% if task.role_assignee == value %}selected{% endif %}>{{ label }}</option>
+                                    <option value="{{ value }}"
+                                            {% if task.role_assignee == value %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="phase" class="form-label">Phase</label>
                             <select name="phase" id="phase" class="form-select">
                                 {% for value, label in task_phase_choices %}
-                                    <option value="{{ value }}" {% if task.phase == value %}selected{% endif %}>{{ label }}</option>
+                                    <option value="{{ value }}"
+                                            {% if task.phase == value %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="task_type" class="form-label">Task Type</label>
                             <select name="task_type" id="task_type" class="form-select">
                                 {% for value, label in task_type_choices %}
-                                    <option value="{{ value }}" {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
+                                    <option value="{{ value }}"
+                                            {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="execution_schedule" class="form-label">Execution Schedule</label>
                             <select name="execution_schedule" id="execution_schedule" class="form-select">
                                 {% for value, label in task_execution_schedule_choices %}
-                                    <option value="{{ value }}" {% if task.execution_schedule == value %}selected{% endif %}>{{ label }}</option>
+                                    <option value="{{ value }}"
+                                            {% if task.execution_schedule == value %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        
+
                         <div class="mb-3">
                             <label for="execution_start_time" class="form-label">Execution Start Time</label>
-                            <input type="datetime-local" name="execution_start_time" id="execution_start_time" class="form-control" 
-                                   value="{% if task.execution_start_time %}{{ task.execution_start_time|date:'Y-m-d\TH:i' }}{% endif %}">
+                            <input type="datetime-local" name="execution_start_time" id="execution_start_time"
+                                   class="form-control"
+                                   value="
+                                           {% if task.execution_start_time %}{{ task.execution_start_time|date:'Y-m-d\TH:i' }}{% endif %}">
                         </div>
-                        
+
                         <div class="mb-3 form-check">
-                            <input type="checkbox" name="requires_test" id="requires_test" class="form-check-input" {% if task.requires_test %}checked{% endif %}>
+                            <input type="checkbox" name="requires_test" id="requires_test" class="form-check-input"
+                                   {% if task.requires_test %}checked{% endif %}>
                             <label for="requires_test" class="form-check-label">Requires Test</label>
                         </div>
                     </div>
                 </div>
-                
+
                 <button type="submit" class="btn btn-primary">Save Changes</button>
                 <a href="{% url 'view_task' task.id %}" class="btn btn-secondary ms-2">Cancel</a>
             </form>

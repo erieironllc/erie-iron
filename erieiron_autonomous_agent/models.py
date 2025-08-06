@@ -739,8 +739,12 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     execute_module = models.TextField(null=True)
     planning_model = models.TextField()
     coding_model = models.TextField()
+    docker_tag = models.TextField(null=True)
     log_content_execution = models.TextField(null=True)
     log_content_coding = models.TextField(null=True)
+    log_content_evaluation = models.TextField(null=True)
+    log_content_init = models.TextField(null=True)
+    planning_json = models.JSONField(null=True)
     evaluation_json = models.JSONField(null=True)
     routing_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
@@ -765,6 +769,10 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         
         business = self.self_driving_task.business
         for code_file in list(business.codefile_set.all().order_by("file_path")):
+            if code_file.file_path.startswith(str(os.getcwd())):
+                logging.error(f"erie iron code got indexed!: {code_file.file_path}")
+                continue
+
             code_version = code_file.get_version(self)
             if code_version:
                 code_version.write_to_disk(sandbox_path)
@@ -1035,11 +1043,13 @@ class CodeVersion(BaseErieIronModel):
                 .first()
             )
             
+            file_name = os.path.basename(self.code_file.get_path())
+            
             diff_lines = difflib.unified_diff(
                 common.default_str(previous_version.code).splitlines(),
                 common.default_str(self.code).splitlines(),
-                fromfile="old.py",
-                tofile="new.py",
+                fromfile=f"old_{file_name}",
+                tofile=f"new_{file_name}",
                 lineterm=""
             )
             return "\n".join(diff_lines)

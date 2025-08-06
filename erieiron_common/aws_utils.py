@@ -3,11 +3,8 @@ import datetime
 import json
 import logging
 import os
-import re
-import subprocess
 import threading
 import time
-import traceback
 import urllib
 import uuid
 from functools import lru_cache
@@ -18,210 +15,14 @@ from urllib.parse import unquote_plus
 
 import boto3
 import rsa
-import yaml
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from erieiron_common import common
 from erieiron_common import settings_common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
-from erieiron_common.enums import AwsEnv
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
-
-
-def extract_cloudformation_params(cfn_file: Path):
-    # Extract Parameters block using indentation-aware parsing
-    lines = cfn_file.read_text().splitlines()
-    start_idx = None
-    for i, line in enumerate(lines):
-        if line.strip() == "Parameters:":
-            start_idx = i
-            break
-    if start_idx is None:
-        return set(), {}
-    
-    param_lines = [lines[start_idx]]
-    base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
-    for line in lines[start_idx + 1:]:
-        if not line.strip():
-            param_lines.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= base_indent:
-            break
-        param_lines.append(line)
-    
-    param_block_str = "\n".join(param_lines)
-    parsed = yaml.safe_load(param_block_str)
-    
-    param_metadata = parsed.get("Parameters", {})
-    required_params = {
-        name for name, meta in param_metadata.items()
-        if "Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower()
-    }
-    
-    return required_params, param_metadata
-
-
-def push_cloudformation(
-        stack_name: str,
-        environment: AwsEnv,
-        cfn_file: Path,
-        param_list: list,
-        log_f
-):
-    logging.info(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
-    cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
-    template_body = cfn_file.read_text()
-    
-    if get_stack(stack_name, cf_client):
-        assert_cloudformation_stack_valid(stack_name, cf_client)
-        
-        log_f.write(f"Updating existing stack: {stack_name}\n")
-        logging.info(f"Updating existing stack: {stack_name}\n")
-        try:
-            cf_client.update_stack(
-                StackName=stack_name,
-                TemplateBody=template_body,
-                Parameters=param_list,
-                Capabilities=["CAPABILITY_NAMED_IAM"]
-            )
-        except Exception as deploy_exception:
-            if "No updates are to be performed" not in str(deploy_exception):
-                raise deploy_exception
-    else:
-        log_f.write(f"Creating new stack: {stack_name}\n")
-        logging.info(f"Creating new stack: {stack_name}\n")
-        cf_client.create_stack(
-            StackName=stack_name,
-            TemplateBody=template_body,
-            Parameters=param_list,
-            Capabilities=["CAPABILITY_NAMED_IAM"]
-        )
-    
-    cloudformation_wait(
-        cf_client,
-        stack_name,
-        throw_on_fail=True
-    )
-    
-    log_f.write(f"CloudFormation stack {stack_name} deployed successfully.\n")
-    logging.info(f"CloudFormation stack {stack_name} deployed successfully.\n")
-
-
-def cloudformation_wait(
-        cf_client,
-        stack_name,
-        timeout=1200,
-        poll_interval=10,
-        throw_on_fail=False
-):
-    start_time = time.time()
-    
-    while True:
-        time.sleep(poll_interval)
-        
-        stack = get_stack(stack_name, cf_client)
-        if not stack:
-            return
-        
-        status = stack['StackStatus']
-        if throw_on_fail:
-            if not status.startswith("ROLLBACK_"):
-                break
-        
-        if not status.endswith("_IN_PROGRESS"):
-            break
-        
-        if time.time() - start_time > timeout:
-            raise TimeoutError(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
-        
-        logging.info(f"waiting on {stack_name}.  status: {status}")
-    
-    if throw_on_fail:
-        assert_cloudformation_stack_valid(stack_name, cf_client)
-
-
-def get_stack(stack_name, cf_client):
-    try:
-        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])
-    except:
-        return None
-
-
-def assert_cloudformation_stack_valid(stack_name, cf_client):
-    matching_stack = get_stack(stack_name, cf_client)
-    if not matching_stack:
-        raise RuntimeError(f"CloudFormation stack {stack_name} doesn't exist")
-    
-    status = matching_stack['StackStatus']
-    if "FAILED" in status or "ROLLBACK" in status:
-        raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
-
-
-def prepare_stack_for_update(stack_name: str, cf_client):
-    for i in range(5):
-        matching_stack = get_stack(stack_name, cf_client)
-        if not matching_stack:
-            return
-        
-        try:
-            status = matching_stack["StackStatus"]
-            if 'ROLLBACK' in status:
-                logging.info(f"Deleting broken stack: {stack_name} (status: {status}) attempt {i + 1}\n")
-                
-                try:
-                    resources = cf_client.describe_stack_resources(StackName=stack_name)['StackResources']
-                    for r in resources:
-                        if r['ResourceStatus'] == 'DELETE_FAILED':
-                            logging.info(f"Resource {r['LogicalResourceId']} stuck in DELETE_FAILED. Manual cleanup may be required.\n")
-                            # Optional: custom cleanup logic could go here
-                except Exception as e:
-                    logging.info(f"Failed to describe stack resources: {e}\n")
-                cf_client.delete_stack(StackName=stack_name)
-            
-            cloudformation_wait(cf_client, stack_name)
-        except cf_client.exceptions.ClientError as e:
-            if "does not exist" in str(e):
-                ...
-            else:
-                logging.info(traceback.format_exc())
-                raise
-
-
-def ecr_authenticate_for_dockerfile(dockerfile, log_f):
-    try:
-        with open(dockerfile) as f:
-            pattern = r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
-            #   FROM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
-            #   FROM --platform=$TARGETPLATFORM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
-            for base_img in re.findall(pattern, f.read(), flags=re.IGNORECASE):
-                ecr_login(base_img, log_f)
-    except Exception as e:
-        logging.exception(e)
-        raise e
-
-
-def ecr_login(ecr_repo_uri, log_f):
-    region = parse_region_from_ecr_uri(ecr_repo_uri)
-    subprocess.run(
-        f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo_uri}",
-        shell=True,
-        check=True,
-        stdout=log_f,
-        stderr=subprocess.STDOUT
-    )
-
-
-def parse_region_from_ecr_uri(image_uri: str) -> str:
-    try:
-        parts = image_uri.split(".")
-        if "ecr" in parts and len(parts) >= 4:
-            return parts[3]  # region is always the 4th part
-    except Exception:
-        pass
-    raise ValueError(f"Could not parse region from ECR URI: {image_uri}")
 
 
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:

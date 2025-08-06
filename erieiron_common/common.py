@@ -566,6 +566,19 @@ def last(vals):
         return None
 
 
+def flatten(items) -> list:
+    def _flatten(items):
+        for item in items:
+            if isinstance(item, (list, tuple)):
+                yield from _flatten(item)
+            elif is_list_like(item):
+                yield from _flatten(item)
+            else:
+                yield item
+    
+    return list(_flatten(items))
+
+
 def first(vals):
     vals = filter_none(ensure_list(vals))
     if len(vals) > 0:

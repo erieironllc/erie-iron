@@ -2,6 +2,12 @@
 {% load humanize %}
 {% load erieiron_common_tags %}
 {% block content %}
+    <style>
+        pre {
+            max-width: calc(100vw - 20rem);
+        }
+    </style>
+
 
 
     <div class="d-flex justify-content-between align-items-center">
@@ -38,20 +44,53 @@
     <!-- Nav tabs -->
     <ul class="nav nav-tabs" id="iterationTab" role="tablist">
         <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="evaluation-tab" data-bs-toggle="tab" data-bs-target="#evaluation"
+            <button class="nav-link active" id="routing-tab" data-bs-toggle="tab" data-bs-target="#routing"
                     type="button" role="tab">
-                Evaluation of previous Iteration
+                Routing
             </button>
         </li>
+
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="planning-tab" data-bs-toggle="tab" data-bs-target="#planning"
+                    type="button" role="tab">
+                Planning
+            </button>
+        </li>
+        {% if iteration.log_content_coding|length > 200 %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="codelog-tab" data-bs-toggle="tab" data-bs-target="#codelog"
+                        type="button" role="tab">
+                    Logs - Coding
+                </button>
+            </li>
+        {% endif %}
+
         {% if iteration.codeversion_set.exists %}
             <li class="nav-item " role="presentation">
                 <button class="nav-link " id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
                         role="tab">
-                    Code Changes
+                    Code
                 </button>
             </li>
         {% endif %}
-        {% if running_processes %}
+        {% if iteration.log_content_execution %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="execlog-tab" data-bs-toggle="tab" data-bs-target="#execlog"
+                        type="button" role="tab">
+                    Logs - Deploy and Execution
+                </button>
+            </li>
+        {% endif %}
+        {% if iteration.evaluation_json %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="evaluation-tab" data-bs-toggle="tab" data-bs-target="#evaluation"
+                        type="button" role="tab">
+                    Iteration Evaluation
+                </button>
+            </li>
+        {% endif %}
+
+        {% if False and running_processes %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="processes-tab" data-bs-toggle="tab" data-bs-target="#processes"
                         type="button"
@@ -63,29 +102,78 @@
                 </button>
             </li>
         {% endif %}
-        {% if iteration.log_content_execution %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs"
-                        type="button" role="tab">
-                    Execution Output
-                </button>
-            </li>
-        {% endif %}
     </ul>
 
     <div class="tab-content pt-3" id="iterationTabContent">
-        <div class="tab-pane active show" id="evaluation" role="tabpanel" aria-labelledby="evaluation-tab">
-            {% if previous_evaluations %}
-                <ul class="mt-3">
-                    {% for eval in previous_evaluations %}
-                        <li class="mb-3">
-                            <b>{{ eval.summary }}</b><br>{{ eval.details }}
-                        </li>
-                    {% endfor %}
-                </ul>
+        <div class="tab-pane active show" id="routing" role="tabpanel" aria-labelledby="routing-tab">
+            {% if iteration.routing_json %}
+                <table class="table table-striped">
+                    <tr>
+                        <td>Classification</td>
+                        <td>{{ iteration.routing_json.classification }}</td>
+                    </tr>
+                    <tr>
+                        <td>Route</td>
+                        <td>{{ iteration.routing_json.recovery_path }}</td>
+                    </tr>
+                    <tr>
+                        <td>Explanation</td>
+                        <td>
+                            {% if previous_iteration %}
+                                <p>Reviewing results from <a
+                                        href="{% url 'view_self_driver_iteration' previous_iteration.id %}#evaluation">{{ previous_iteration.id }}</a>
+                                </p>
+                            {% endif %}
+                            <p>
+                                {{ iteration.routing_json.recovery_path_explanation }}
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Fix Prompt</td>
+                        <td>{{ iteration.routing_json.fix_prompt }}</td>
+                    </tr>
+                    <tr>
+                        <td>Related Files</td>
+                        <td>{{ iteration.routing_json.context_files|pprint_json }}</td>
+                    </tr>
+                </table>
             {% else %}
-                <label>No previous evaluation</label>
+                No routing info - likely skipped to execution
             {% endif %}
+        </div>
+
+        <div class="tab-pane " id="planning" role="tabpanel" aria-labelledby="planning-tab">
+            {% for code_file in iteration.planning_json.code_files %}
+                <div class="card mb-4 iteration_card">
+                    <div class="card-header d-flex justify-content-between">
+                        <small class="text-muted">
+                            {{ code_file.code_file_path }}
+                        </small>
+                        <small class="text-muted">
+                            use {{ code_file.code_writing_model }}
+                        </small>
+                    </div>
+                    <div class="card-body">
+                        <dl class="row">
+                            <label>{{ code_file.guidance }}</label>
+                            <dd>
+                                {% if code_file.instructions|dictsort:"step_number" %}
+                                    <ol>
+                                        {% for instruction in code_file.instructions|dictsort:"step_number" %}
+                                            <li class="mt-3">
+                                                <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
+                                            </li>
+                                        {% endfor %}
+                                    </ol>
+                                {% else %}
+                                    <pre>{{ code_version.code_instructions }}</pre>
+                                {% endif %}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            {% endfor %}
         </div>
 
         <div class="tab-pane " id="code" role="tabpanel" aria-labelledby="code-tab">
@@ -99,14 +187,13 @@
                         </div>
                         <div class="card-body">
                             <dl class="row">
-                                <dt>Instructions:</dt>
                                 <dd>
                                     {% if code_version.code_instructions %}
                                         {% if code_version.code_instructions|dictsort:"step_number" %}
 
                                             <ol>
                                                 {% for instruction in code_version.code_instructions|dictsort:"step_number" %}
-                                                    <li>
+                                                    <li class="mb-3">
                                                         <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
                                                     </li>
                                                 {% endfor %}
@@ -136,8 +223,68 @@
                 {% endif %}
             {% endfor %}
         </div>
-        <div class="tab-pane " id="logs" role="tabpanel" aria-labelledby="logs-tab">
-            <pre style="font-size: 8pt">{{ iteration.log_content_execution }}</pre>
+
+        <div class="tab-pane" id="evaluation" role="tabpanel" aria-labelledby="evaluation-tab">
+            <table class="table table-striped ">
+                <tr>
+                    <td>Achieved Goal</td>
+                    <td>{{ iteration.evaluation_json.goal_achieved }}</td>
+                </tr>
+                <tr>
+                    <td>Summary</td>
+                    <td>{{ iteration.evaluation_json.summary }}</td>
+                </tr>
+                <tr>
+                    <td>Running Status Report</td>
+                    <td>{{ iteration.evaluation_json.status_report }}</td>
+                </tr>
+                {% if iteration.evaluation_json.best_iteration_id %}
+                    <tr>
+                        <td>Best Iteration So Far</td>
+                        <td>
+                            <a href="{% url 'view_self_driver_iteration' iteration.evaluation_json.best_iteration_id %}">{{ iteration.evaluation_json.best_iteration_id }}</a>
+                            {% if iteration.evaluation_json.best_iteration_id|eq:iteration.id %} (this one) {% endif %}
+                        </td>
+                    </tr>
+                {% endif %}
+                {% if iteration.evaluation_json.iteration_id_to_modify and iteration.evaluation_json.iteration_id_to_modify|not_eq:iteration.id %}
+                    <tr>
+                        <td>Iteration to Modify</td>
+                        <td>
+                            {% if iteration.evaluation_json.iteration_id_to_modify == 'latest' %}
+                                This Iteration - {{ iteration.evaluation_json.rollback_reason }}
+                            {% else %}
+                                <a href="{% url 'view_self_driver_iteration' iteration.evaluation_json.iteration_id_to_modify %}">{{ iteration.evaluation_json.iteration_id_to_modify }}</a>
+                                - {{ iteration.evaluation_json.rollback_reason }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endif %}
+                {% if iteration.evaluation_json.error %}
+                    <tr>
+                        <td>Error Summary</td>
+                        <td>
+                            <label class="mb-3">{{ iteration.evaluation_json.error.summary }}:</label>
+                            <pre>{{ iteration.evaluation_json.error.logs }}</pre>
+                        </td>
+                    </tr>
+                {% endif %}
+                <tr>
+                    <td>strategic_guidance</td>
+                    <td>
+                        <pre>{{ iteration.evaluation_json.strategic_guidance|pprint_json }}</pre>
+                    </td>
+                </tr>
+            </table>
+
+        </div>
+
+        <div class="tab-pane " id="codelog" role="tabpanel" aria-labelledby="codelog-tab">
+            <pre style="font-size: 8pt">{{ iteration.log_content_coding|default_if_none:"" }}</pre>
+        </div>
+
+        <div class="tab-pane" id="execlog" role="tabpanel" aria-labelledby="execlog-tab">
+            <pre style="font-size: 8pt">{{ iteration.log_content_execution|default_if_none:"" }}</pre>
         </div>
 
         <div class="tab-pane  " id="processes" role="tabpanel" aria-labelledby="processes-tab">

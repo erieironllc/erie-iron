@@ -59,7 +59,8 @@ Return a list of lessons, if applicable. If no meaningful lesson can be derived,
 - Use `trigger` to describe how the issue is detected
 - Use `lesson` to describe what to avoid or do differently
 - Add meaningful `context_tags` to help retrieve this later
-- **You are provided with previously extracted lessons.** You must make a strong effort to avoid duplicating them. If a new insight is **even semantically similar** to an existing lesson, you must not include it again. Only extract lessons that are **novel**, **non-overlapping**, and materially different in framing or focus.
+- When extracting a lesson, always take a step back and ask: what is the **general principle** that would prevent this class of error? Avoid surface-level or overly specific phrasing that ties the lesson too tightly to one error instance. Your job is not just to describe what went wrong, but to encode a reusable insight that would help the system avoid similar mistakes in the future.
+- **You are provided with previously extracted lessons.** You must not extract a new lesson if the insight is already covered — even partially — by an existing lesson. If a proposed lesson is even semantically similar to any existing one, do not emit it. It is perfectly acceptable — and preferred — to return an empty list if all the root causes of the failure are already addressed in the existing lessons. Only emit lessons that are completely novel, generalized in scope, substantively different in focus, and not inferable from existing guidance.
 
 ---
 

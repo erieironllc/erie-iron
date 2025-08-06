@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "FailureModeRouterOutput",
   "type": "object",
-  "required": ["classification", "recovery_path", "related_lessons"],
+  "required": ["classification", "recovery_path", "recovery_path_explanation", "fix_prompt"],
   "properties": {
     "classification": {
       "type": "string",
@@ -22,51 +22,25 @@
       "enum": [
         "DIRECT_FIX",
         "ESCALATE_TO_PLANNER",
+        "AWS_PROVISIONING_PLANNER",
         "ESCALATE_TO_HUMAN"
       ]
     },
+    "recovery_path_explanation": {
+      "type": "string",
+      "description": "Your reasoning for why you chose the recovery path"
+    },
     "fix_prompt": {
       "type": "string",
-      "description": "Only present when recovery_path is 'DIRECT_FIX'"
+      "description": "A suggested next step or command to fix the issue"
     },
     "context_files": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "Relative paths of code files needed by the quick fix agent. Only present when recovery_path is 'DIRECT_FIX'."
-    },
-    "related_lessons": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["lesson_title", "why_relevant"],
-        "properties": {
-          "lesson_title": {
-            "type": "string"
-          },
-          "why_relevant": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      }
+      "description": "Relative paths of code files needed by the quick fix agent"
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": { "recovery_path": { "const": "DIRECT_FIX" } }
-      },
-      "then": {
-        "required": ["fix_prompt", "context_files"]
-      },
-      "else": {
-        "not": {
-          "required": ["fix_prompt"]
-        }
-      }
-    }
-  ],
   "additionalProperties": false
 }

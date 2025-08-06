@@ -1,0 +1,255 @@
+import json
+import logging
+import pprint
+import time
+import traceback
+from collections import defaultdict
+from enum import auto
+from pathlib import Path
+
+from django.db import transaction
+
+from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business
+from erieiron_common import common, ErieIronJSONEncoder
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum
+from erieiron_common.llm_apis.llm_interface import LlmMessage
+
+TASK_DESC_CODE_WRITING = "code writing"
+
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+COUNT_FULL_LOGS_IN_CONTEXT = 2
+
+MAP_TASKTYPE_TO_PLANNING_PROMPT = {
+    TaskType.CODING_ML: "codeplanner--ml_trainer.md",
+    TaskType.CODING_APPLICATION: "codeplanner--feature_development.md",
+    TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
+}
+
+ARTIFACTS = "artifacts"
+
+
+class CodeReviewException(Exception):
+    def __init__(self, review_data):
+        self.bad_plan = review_data.get("plan_quality", []) != "VALID"
+        self.review_data = review_data
+        super().__init__("Code Review Failed")
+    
+    def get_issue_dicts(self) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+        return self.get_file_blockers_dict(), self.get_file_warnings_dict()
+    
+    def get_file_blockers_dict(self) -> dict[str, list[dict]]:
+        d = defaultdict(list)
+        
+        for i in common.ensure_list(self.review_data.get("blocking_issues", [])):
+            d[i['file']].append(i)
+        
+        return d
+    
+    def get_file_warnings_dict(self) -> dict[str, list[dict]]:
+        d = defaultdict(list)
+        
+        for i in common.ensure_list(self.review_data.get("non_blocking_warnings", [])):
+            d[i['file']].append(i)
+        
+        return d
+
+
+class SelfDriverConfig:
+    def __init__(self, self_driving_task: SelfDrivingTask):
+        self.debug = True
+        self.self_driving_task: SelfDrivingTask = self_driving_task
+        self.task: Task = self_driving_task.task
+        self.task_type: TaskType = TaskType(self.task.task_type)
+        self.budget: float = self.task.max_budget_usd or 0
+        self.business = Business.objects.get(initiative__tasks__id=self.task.id)
+        self.guidance = LlmMessage.sys(self.task.guidance) if self.task.guidance else None
+        self.sandbox_root_dir = Path(self.self_driving_task.sandbox_path)
+        self.current_iteration: SelfDrivingTaskIteration = None
+        self.previous_iteration: SelfDrivingTaskIteration = None
+        self.iteration_to_modify: SelfDrivingTaskIteration = None
+        self.log_path: Path = None
+        self.log_f = None
+        self.stop_tailing = None
+        self.phase = SdaPhase.INIT
+        
+        artifacts_root = self.sandbox_root_dir / ARTIFACTS
+        artifacts_root.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir = artifacts_root
+        self.git = self.self_driving_task.get_git()
+        
+        self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o_20240806
+        self.model_code_planning = LlmModel.OPENAI_GPT_4o_20240806
+        
+        # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
+        # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
+    
+    def set_phase(self, phase: 'SdaPhase'):
+        self.phase = phase
+        self.log(f"\n\n\n======Phase Change ============")
+        if self.current_iteration:
+            self.log(f"Phase: {phase}; iteration_id: {self.current_iteration.id} (v{self.current_iteration.version_number})")
+        else:
+            self.log(f"Phase: {phase}")
+    
+    def set_iteration(self, *args):
+        args = common.flatten(args)
+        
+        self.current_iteration: SelfDrivingTaskIteration = common.first(args)
+        if not self.current_iteration:
+            raise "current_iteration cannot be None"
+        
+        self.previous_iteration: SelfDrivingTaskIteration = common.first(args[1:])
+        if not self.previous_iteration:
+            self.previous_iteration = self.current_iteration.get_previous_iteration()
+        
+        self.iteration_to_modify: SelfDrivingTaskIteration = common.first(args[2:])
+        if not self.iteration_to_modify:
+            self.iteration_to_modify = self.previous_iteration
+        
+        self.reset_log(f"Iteration Initialization.  iteration id {self.current_iteration.id}")
+    
+    def init_log(self):
+        self.log_path = self.artifacts_dir / f"{self.self_driving_task.id}.log"
+        common.quietly_delete(self.log_path)
+        
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.touch(exist_ok=True)
+        
+        self.log_f = open(self.log_path, "w")
+        self.stop_tailing = self.start_log_tail_thread()
+    
+    def reset_log(self, reason: str):
+        self.close_log()
+        self.init_log()
+        self.log(f"resetting log.  reason: {reason}")
+    
+    def close_log(self):
+        try:
+            self.log_f.flush()
+            self.log_f.close()
+        except:
+            ...
+        if self.stop_tailing:
+            self.stop_tailing.set()
+    
+    def cleanup_iteration(self):
+        self.close_log()
+        self.current_iteration = self.previous_iteration = self.iteration_to_modify = self.log_path = self.log_f = self.stop_tailing = None
+    
+    def start_log_tail_thread(self):
+        # Start a background thread to tail the logfile contents to logging.info()
+        import threading
+        stop_tailing = threading.Event()
+        
+        def tail_logfile():
+            """Tail the logfile and stream new content to logging.info()"""
+            try:
+                last_position = 0
+                while not stop_tailing.is_set():
+                    try:
+                        self.log_f.flush()
+                    except:
+                        ...
+                    
+                    try:
+                        # Check if file exists and get its current size
+                        if self.log_path.exists():
+                            current_size = self.log_path.stat().st_size
+                            if current_size > last_position:
+                                # File has grown, read new content
+                                with open(self.log_path, "r") as tail_f:
+                                    tail_f.seek(last_position)
+                                    new_content = tail_f.read(current_size - last_position)
+                                    if new_content:
+                                        new_content = common.truncate_text_lines(new_content)
+                                        for line in new_content.splitlines():
+                                            logging.info(line)
+                                
+                                last_position = current_size
+                        
+                        # Wait before checking again
+                        time.sleep(0.2)
+                    except (FileNotFoundError, OSError):
+                        # File might not exist yet or be temporarily unavailable
+                        time.sleep(0.5)
+            except Exception as e:
+                logging.error(f"Error tailing logfile: {e}")
+        
+        tail_thread = threading.Thread(target=tail_logfile, daemon=True)
+        tail_thread.start()
+        return stop_tailing
+    
+    def log(self, *args):
+        parts = []
+        for arg in common.flatten(args):
+            if isinstance(arg, dict):
+                parts.append(json.dumps(arg, indent=4, cls=ErieIronJSONEncoder))
+            elif isinstance(arg, Exception):
+                parts.append(common.get_stack_trace_as_string(arg))
+            else:
+                parts.append(arg)
+        
+        s = common.safe_join(parts)
+        if self.log_f:
+            for line in common.safe_split(s, "\n", strip=False):
+                self.log_f.write(f"{line}\n")
+            self.log_f.flush()
+        else:
+            logging.info(s)
+        
+        if self.current_iteration:
+            with transaction.atomic():
+                truncated_log = common.truncate_text_lines(self.get_log_content())
+                
+                if self.phase in [SdaPhase.PLANNING, SdaPhase.CODING]:
+                    SelfDrivingTaskIteration.objects.filter(id=self.current_iteration.id).update(
+                        log_content_coding=truncated_log
+                    )
+                elif self.phase in [SdaPhase.DEPLOY, SdaPhase.EXECUTION]:
+                    SelfDrivingTaskIteration.objects.filter(id=self.current_iteration.id).update(
+                        log_content_execution=truncated_log
+                    )
+                elif SdaPhase.EVALUATE.eq(self.phase):
+                    SelfDrivingTaskIteration.objects.filter(id=self.current_iteration.id).update(
+                        log_content_evaluation=truncated_log
+                    )
+    
+    def get_log_content(self):
+        try:
+            self.log_f.flush()
+            return self.log_path.read_text()
+        except Exception:
+            return traceback.format_exc()
+
+
+class GoalAchieved(Exception):
+    def __init__(self, planning_data):
+        pprint.pprint(planning_data)
+        self.planning_data = planning_data
+
+
+class AgentBlocked(Exception):
+    def __init__(self, blocked_data):
+        pprint.pprint(blocked_data)
+        self.blocked_data = blocked_data
+
+
+class BadPlan(Exception):
+    def __init__(self, msg: str, plan_data):
+        pprint.pprint(plan_data)
+        self.plan_data = plan_data
+        super().__init__(msg)
+
+
+class RetryableException(Exception):
+    ...
+
+
+class SdaPhase(ErieEnum):
+    INIT = auto()
+    PLANNING = auto()
+    CODING = auto()
+    DEPLOY = auto()
+    EXECUTION = auto()
+    EVALUATE = auto()

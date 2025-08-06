@@ -47,17 +47,17 @@ def dictsort_case_insensitive(value, arg):
 def timestamp_static(orig_filename):
     static_dir_root = Path.cwd() / settings_common.STATIC_COMPILED_DIR
     filename, ext = common.get_filename_and_extension(f"{static_dir_root}/{orig_filename}")
-
+    
     files_with_time = []
-
+    
     for file_path in glob.glob(os.path.join(static_dir_root, f"{filename}-*.{ext}")):
         base_name = os.path.basename(file_path)
         timestamp = base_name.split('-')[1].split('.')[0]
         file_time_tuple = (file_path, int(timestamp))
         files_with_time.append(file_time_tuple)
-
+    
     files_with_time.sort(key=lambda x: x[1], reverse=True)
-
+    
     latest_matching_file = orig_filename  # default to the orig name in the case it's not timestamped
     for idx, file_time_tuple in enumerate(files_with_time):
         file = file_time_tuple[0]
@@ -65,7 +65,7 @@ def timestamp_static(orig_filename):
             latest_matching_file = os.path.basename(file)
         else:
             common.quietly_delete(file)
-
+    
     return f"/static/{static_dir_root.name}/{latest_matching_file}"
 
 
@@ -83,7 +83,7 @@ def to_json(s):
 @register.filter
 def cloudwatch_url(d):
     d = date_utils.ensure_datetime(d)
-
+    
     return mark_safe(f'<a style="white-space: nowrap" href="{get_cloudwatch_url(d)}">{date_utils.format_with_time(d)}</a>')
 
 
@@ -173,6 +173,16 @@ def endswith(value, arg):
 @register.filter(name='startswith')
 def startswith(value, arg):
     return value.startswith(arg)
+
+
+@register.filter(name="not_eq")
+def not_eq(v1, v2):
+    return not eq(v1, v2)
+
+
+@register.filter(name="eq")
+def eq(v1, v2):
+    return str(v1) == str(v2)
 
 
 @register.filter(name="not")

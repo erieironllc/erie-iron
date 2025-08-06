@@ -363,14 +363,20 @@ class LlmMessage:
                 break
         data_string = json.dumps(data, indent=4, cls=ErieIronJSONEncoder)
         return data_string
-    
+        
     @classmethod
-    def log(cls, messages: list['LlmMessage']):
-        for m in messages:
-            print(f"""
+    def dumps(cls, messages: list['LlmMessage']):
+        strings = []
+        for m in common.ensure_list(messages):
+            strings.append(f"""
 ========= Message Type: {m.message_type.label()} ==========
 {m.text}
             """)
+        return "\n\n".join(strings)
+
+    @classmethod
+    def log(cls, messages: list['LlmMessage']):
+        print(cls.dumps(messages))
 
 
 def ensure_parsable_json(json_text: str) -> dict:
