@@ -12,7 +12,6 @@ from django.db.models import QuerySet
 from django.utils import timezone
 
 from erieiron_common import common, settings_common
-from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.common import get_minutes_ago, get_now
 from erieiron_common.enums import Role, ConsentChoice, PromptIntent, PubSubHandlerInstanceStatus, SystemCapacity, PubSubMessagePriority, PubSubMessageType, PubSubMessageStatus, AutoScalingGroup, ScaleAction, PersonAuthStatus, ComputeDevice
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -320,6 +319,7 @@ class PubSubMessage(BaseErieIronModel):
         return hash(self.id)
 
     def to_dict(self):
+        from erieiron_common.aws_utils import get_cloudwatch_url
         d = self.__dict__
 
         d['person'] = None

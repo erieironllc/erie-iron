@@ -463,3 +463,4 @@ class DevelopmentRoutingPath(ErieEnum):
     DIRECT_FIX = auto()
     ESCALATE_TO_PLANNER = auto()
     ESCALATE_TO_HUMAN = auto()
+    AWS_PROVISIONING_PLANNER = auto()

@@ -235,7 +235,8 @@ def view_self_driver_iteration(request, iteration_id):
         next_iteration = None
 
     return send_response(
-        request, "iteration.html",
+        request, 
+        "iteration.html",
         {
             "iteration": iteration,
             "previous_iteration": previous_iteration,
