@@ -46,9 +46,12 @@ If acceptance criteria are ambiguous or incomplete, the test must fail clearly t
 
 ## Output Format
 
-Output a single Python test file in a valid format for Django's test runner.
+**Output Requirements**
+- Output **must be** a single Python test file in a valid format for Django's test runner.
+- Output **only** valid Python source code. 
+- **Do not** include Markdown formatting, triple backticks, or explanatory comments. 
 
-Example:
+Example Output (do not wrap in ```python - this is only for mardown prompt readability):
 
 ```python
 from django.test import TestCase
@@ -68,7 +71,7 @@ class EmailParserTests(TestCase):
         self.assertIsNone(result.get("subject"))
 ```
 
-If context is insufficient, output a scaffolded test with this pattern:
+If context is insufficient, output a scaffolded test with this pattern  (do not wrap in ```python - this is only for mardown prompt readability)::
 
 ```python
 from django.test import TestCase

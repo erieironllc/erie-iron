@@ -16,6 +16,8 @@ Each lesson should be:
 
 Return a list of lessons, if applicable. If no meaningful lesson can be derived, return an empty list.
 
+Extracting too many lessons can overwhelm downstream prompts. Limit output to only the most significant or broadly applicable insights.
+
 ---
 
 ## Input Format

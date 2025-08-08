@@ -16,9 +16,76 @@
             "type": "string"
           }
         },
+        "dsl_plan": {
+          "type": "array",
+          "description": "Structured plan using DSL format for multi-file coordination",
+          "items": {
+            "type": "object",
+            "required": ["file", "action", "language", "description"],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Path to the file to modify"
+              },
+              "action": {
+                "type": "string",
+                "description": "The action type, such as add_env_variable, read_env_variable, etc."
+              },
+              "language": {
+                "type": "string",
+                "description": "Programming or config language (e.g., python, dockerfile, yaml)"
+              },
+              "description": {
+                "type": "string",
+                "description": "Natural language description of the intent"
+              },
+              "variable": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": ["build_arg", "env", "static"]
+              },
+              "default": {
+                "type": ["string", "null"]
+              },
+              "assign_to": {
+                "type": "string"
+              },
+              "fallback": {
+                "type": "string"
+              },
+              "function_name": {
+                "type": "string"
+              },
+              "signature": {
+                "type": "string"
+              },
+              "body": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "insert_after": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "old_value": {},
+              "new_value": {},
+              "package": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
         "code_files": {
           "type": "array",
-          "description": "List of file-level deterministic planning instructions",
+          "description": "Ordered list of file-level deterministic planning instructions. A single file may appear multiple times if edits must occur in interleaved stages due to dependencies.",
           "items": {
             "type": "object",
             "required": [
@@ -60,6 +127,69 @@
                   "additionalProperties": false
                 }
               },
+              "dsl_instructions": {
+                "type": "array",
+                "description": "Structured instructions using Erie Iron DSL format for this specific file",
+                "items": {
+                  "type": "object",
+                  "required": ["action", "language", "description"],
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "description": "DSL action type (e.g., add_env_variable, read_env_variable, etc.)"
+                    },
+                    "language": {
+                      "type": "string",
+                      "description": "Programming or config language"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Explanation of the change"
+                    },
+                    "variable": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": ["build_arg", "env", "static"]
+                    },
+                    "default": {
+                      "type": ["string", "null"]
+                    },
+                    "assign_to": {
+                      "type": "string"
+                    },
+                    "fallback": {
+                      "type": "string"
+                    },
+                    "function_name": {
+                      "type": "string"
+                    },
+                    "signature": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "insert_after": {
+                      "type": "string"
+                    },
+                    "key": {
+                      "type": "string"
+                    },
+                    "old_value": {},
+                    "new_value": {},
+                    "package": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
               "code_writing_model": {
                 "type": "string",
                 "description": "LLM model name to be used for generating this file",
@@ -73,6 +203,13 @@
                   "o3-pro-2025-06-10",
                   "o3-mini-2025-01-31"
                 ]
+              },
+              "related_code_file_paths": {
+                "type": "array",
+                "description": "Other files being modified in this iteration that may be useful for context. Read-only. Do not edit these files.  Files must be expressed as relative to the code-root directory.  Must not start with a '/'",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "additionalProperties": false

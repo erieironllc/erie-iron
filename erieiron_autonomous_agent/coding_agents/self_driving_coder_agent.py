@@ -18,10 +18,11 @@ from django.db.models.expressions import RawSQL
 from django.utils import timezone
 from sentence_transformers import SentenceTransformer
 
+import settings
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson
-from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
+from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, git_utils
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath
@@ -31,6 +32,14 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKE
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+READONLY_FILES = [
+    {
+        "path": "manage.py",
+        "alternatives": "settings.py",
+        "description": "Django's core management script"
+    }
+]
 
 
 def execute(task_id: str):
@@ -136,7 +145,7 @@ def execute(task_id: str):
                                         code_review_exception.review_data
                                     )
                     finally:
-                        config.reset_log("Coding completed successfully.  proceeding to deploy and execute steps")
+                        config.reset_log()
                 
                 try:
                     try:
@@ -282,15 +291,27 @@ def validate_plan(planning_data):
     if not planning_data.get("code_files", []):
         raise BadPlan("no code files", planning_data)
     
+    readonly_paths = {
+        f['path']: f
+        for f in READONLY_FILES
+    }
+    
     for f in planning_data.get("code_files", []):
         code_file_path = str(f.get("code_file_path"))
         
         if code_file_path.endswith("settings.py"):
             continue
-
+        
+        if code_file_path.startswith("erieiron_common"):
+            raise BadPlan(f"You may not add or edit any file in erieiron_common.  These are readonly library files.", planning_data)
+        
+        if code_file_path in readonly_paths:
+            readonly_data = readonly_paths[code_file_path]
+            raise BadPlan(f"You may not edit {code_file_path}. {readonly_data['description']}  If you think you need to modify {code_file_path}, you might need to modify {readonly_data['alternatives']} instead", planning_data)
+        
         if code_file_path.endswith("manage.py"):
             raise BadPlan(f"You may not edit manage.py.  If you need to modify django settings, modify settings.py instead", planning_data)
-
+        
         if code_file_path.endswith(".py") and "/" not in code_file_path[2:]:
             raise BadPlan(f"python files cannot live in the root directory.  bad:  {code_file_path}", planning_data)
     
@@ -393,13 +414,12 @@ def build_docker_image(
     
     env = os.environ.copy()
     env["DOCKER_BUILDKIT"] = "1"
-    env["GITHUB_TOKEN"] = git_utils.get_github_token()
-    
+    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
+
     build_process = subprocess.Popen(
         common.strings([
             "docker",
             "build",
-            "--secret", "id=github_token,env=GITHUB_TOKEN",
             "-t", docker_image_tag,
             "-f", docker_file,
             docker_file.parent
@@ -419,7 +439,6 @@ def build_docker_image(
     pip_install_proc = subprocess.Popen(
         common.strings([
             "docker", "run", "--rm",
-            "-e", "GITHUB_TOKEN",
             "-v", f"{self_driving_task.sandbox_path}:/app",
             "-w", "/app",
             docker_image_tag,
@@ -504,6 +523,10 @@ def run_docker_command(
     selfdriving_task = iteration.self_driving_task
     sandbox_path = iteration.self_driving_task.sandbox_path
     
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
+    
     cmd = [
               "docker", "run", "--rm",
               "-v", f"{sandbox_path}:/app",
@@ -519,6 +542,7 @@ def run_docker_command(
     process = subprocess.Popen(
         cmd,
         stdout=config.log_f,
+        env=env,
         stderr=subprocess.STDOUT,
         text=True
     )
@@ -714,9 +738,17 @@ def evaluate_iteration_execution(config: SelfDriverConfig):
         )
     
     previous_iteration_evals = []
-    for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
+    if config.iteration_to_modify and config.iteration_to_modify != config.previous_iteration:
+        previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
+            evaluation_json__isnull=False,
+            timestamp__gte=config.iteration_to_modify.timestamp
+        ).order_by("timestamp")
+    else:
+        previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
             evaluation_json__isnull=False
-    ).order_by("-timestamp")[:3][::-1]:
+        ).order_by("-timestamp")[:3][::-1]
+    
+    for prev_iter in previous_iterations:
         previous_iteration_evals.append({
             "iteration_id": prev_iter.id,
             "iteration_is_current_iteration": prev_iter == iteration,
@@ -738,7 +770,16 @@ def evaluate_iteration_execution(config: SelfDriverConfig):
         output_schema="iteration_selector.md.schema.json"
     ).json()
     
-    selection_data['iteration_id_to_modify'] = selection_data.get("iteration_id_to_modify")
+    iteration_id_to_modify = selection_data.get("iteration_id_to_modify")
+    if iteration_id_to_modify == 'latest':
+        selection_data['iteration_id_to_modify'] = 'latest'
+    else:
+        count_prevous_attempts = SelfDrivingTaskIteration.objects.filter(start_iteration_id=iteration_id_to_modify).count()
+        if count_prevous_attempts < 10:
+            selection_data['iteration_id_to_modify'] = iteration_id_to_modify
+        else:
+            # we've tried too many times.  go with the latest to see if this improves
+            selection_data['iteration_id_to_modify'] = 'latest'
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
@@ -922,12 +963,11 @@ def assert_cloudformation_stack_valid(stack_name, cf_client):
         raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
 
 
-def build_previous_iteration_context_messages(
-        config: SelfDriverConfig,
-        current_iteration: SelfDrivingTaskIteration,
-        previous_iteration: SelfDrivingTaskIteration,
-        iteration_to_modify: SelfDrivingTaskIteration
-) -> List[LlmMessage]:
+def build_previous_iteration_context_messages(config: SelfDriverConfig, title=None) -> List[LlmMessage]:
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
     eval_json = config.self_driving_task.get_most_recent_iteration().evaluation_json or {}
     
     previous_iteration_count = eval_json.get("previous_iteration_count", 1)
@@ -948,20 +988,35 @@ def build_previous_iteration_context_messages(
         previous_iterations.append(previous_iteration)
     
     messages = get_iteration_eval_llm_messages(
+        config,
         previous_iterations,
-        previous_iteration,
-        iteration_to_modify
+        title=title
     )
+    
+    if iteration_to_modify and iteration_to_modify != previous_iteration:
+        # iteration_to_modify.id
+        previous_attempts = SelfDrivingTaskIteration.objects.filter(
+            start_iteration=iteration_to_modify
+        ).order_by("timestamp")
+        
+        messages += get_iteration_eval_llm_messages(
+            config,
+            previous_attempts,
+            title=f"You have made {previous_attempts.count()} attempt(s) to make progress on iteration {iteration_to_modify.id}.  Here are the results of these previous failed attempts at making progress.  Learn from historic failures and don't repeat these mistakes"
+        )
     
     return messages
 
 
 def get_iteration_eval_llm_messages(
+        config: SelfDriverConfig,
         iterations: list[SelfDrivingTaskIteration],
-        previous_iteration: SelfDrivingTaskIteration = None,
-        iteration_to_modify: SelfDrivingTaskIteration = None,
-        title="**Output from iteration_evaluator agent**"
+        title=None
 ) -> list[LlmMessage]:
+    title = title or "**Output from iteration_evaluator agent**"
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
     all_iteration_ids = [i.id for i in common.filter_none(common.ensure_list(iterations) + [
         previous_iteration,
         iteration_to_modify
@@ -975,19 +1030,31 @@ def get_iteration_eval_llm_messages(
         
         description = ""
         if iteration == previous_iteration and previous_iteration != iteration_to_modify:
-            description = "This is the evalutation of the execution of the previous iteration of the code"
+            description = "This is the evalutation of the execution of a previous iteration of the code"
         elif iteration == iteration_to_modify:
             description = "We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code"
         
+        evaluation_parts = [
+            evaluation_json.get("summary"),
+        ]
+        error_summary, error_logs = iteration.get_error()
+        if error_summary:
+            evaluation_parts.append(f"""
+{error_summary}
+
+# Log Output
+{error_logs}
+            """)
+        
         messages.append({
             "iteration_id": iteration.id,
-            "description": description,
             "iteration_timestamp": iteration.timestamp,
-            "evaluation": evaluation_json.get("evaluation", "none"),
+            "description": description,
+            "evaluation": common.safe_join(evaluation_parts, "\n"),
             "strategic_guidance": evaluation_json.get("strategic_guidance", "none"),
         })
     
-    return LlmMessage.user_from_data(title, messages)
+    return LlmMessage.user_from_data(title, messages, item_name="previous_iteration_analyses")
 
 
 def get_sys_prompt(
@@ -1211,6 +1278,10 @@ def generate_code(
             code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
         
         blocking_issues = code_review_file_blockers[code_file_path_str]
+        if code_review_exception and not blocking_issues:
+            # we are fixing a codereview exception, but no changes to this file
+            continue
+            
         non_blocking_issues = code_review_file_warnings[code_file_path_str]
         
         code_file_path: Path = config.sandbox_root_dir / code_file_path_str
@@ -1227,15 +1298,14 @@ def generate_code(
         code_file = code_version_to_modify.code_file
         
         instructions = cfi.get("instructions", [])
-        if not instructions:
+        dsl_instructions = cfi.get("dsl_instructions", [])
+        if not (instructions or dsl_instructions):
             config.log(f"no modifications for {code_file_path}")
             code_file.update(
                 current_iteration,
                 code_version_to_modify.code
             )
         else:
-            instruction_details = "\n".join([i.get("details") for i in instructions])
-            
             previous_exception = None
             code_str = None
             for i in range(3):
@@ -1244,7 +1314,7 @@ def generate_code(
                     code_str = write_code(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
-                        instructions=instructions,
+                        code_file_data=cfi,
                         requirements_txt=requirements_txt,
                         blocking_issues=blocking_issues,
                         code_writing_model=LlmModel(cfi.get("code_writing_model")),
@@ -1302,21 +1372,18 @@ def write_initial_test(config: SelfDriverConfig):
     for i in range(3):
         try:
             messages = [
-                get_sys_prompt("codewriter--initial_test.md"),
-                # Insert strict Python-only output message at the top:
-                LlmMessage.user("Please output only valid Python source code. Do not include Markdown formatting, triple backticks, or explanatory comments. The output must be a single Python file that can be executed directly."),
-                LlmMessage.user(f'''
-**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**
-
-# Goal
-{task.description}
-
-# Test Plan
-{task.test_plan or 'none'}
-
-# Risk Notes
-{task.risk_notes or 'none'}
-        ''')
+                get_sys_prompt([
+                    "codewriter--initial_test.md",
+                    "codewriter--common.md"
+                ]),
+                *LlmMessage.user_from_data(
+                    "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
+                    {
+                        "GOAL": task.description,
+                        "test_plan": task.test_plan,
+                        "risk_notes": task.risk_notes
+                    }
+                )
             ]
             
             if previous_exception:
@@ -1460,7 +1527,9 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
             config,
             [
                 *common.ensure_list(
-                    get_sys_prompt("failure_router.md"),
+                    get_sys_prompt("failure_router.md", replacements=[
+                        get_readonly_files_replacement()
+                    ]),
                 ),
                 *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
                 *common.ensure_list(
@@ -1514,11 +1583,12 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
             *common.ensure_list(
                 get_sys_prompt(
                     [
-                        "codeplanner--common.md",
-                        "codeplanner--aws_provisioning.md"
+                        "codeplanner--aws_provisioning.md",
+                        "codeplanner--common.md"
                     ], replacements=[
                         ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
-                        ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION))
+                        ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
+                        get_readonly_files_replacement()
                     ]
                 ),
             ),
@@ -1529,11 +1599,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 )
             ),
             *common.ensure_list(
-                get_iteration_eval_llm_messages(
-                    [previous_iteration, iteration_to_modify],
-                    iteration_to_modify=iteration_to_modify,
-                    title="structured error report"
-                )
+                build_previous_iteration_context_messages(config, title="structured error reports")
             ),
             *common.ensure_list(
                 get_relevant_code_files(config, context_files)
@@ -1561,6 +1627,14 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     return planning_data
 
 
+def get_readonly_files_replacement() -> tuple[str, str]:
+    parts = []
+    for f in READONLY_FILES:
+        parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
+        
+    return "<read_only_files>", "\n".join(parts)
+
+
 def plan_direct_fix_code_changes(config: SelfDriverConfig):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
@@ -1572,7 +1646,12 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
         config,
         [
             *common.ensure_list(
-                get_sys_prompt(["codeplanner--common.md", "codeplanner--quick_fix.md"]),
+                get_sys_prompt([
+                    "codeplanner--quick_fix.md",
+                    "codeplanner--common.md"
+                ], replacements=[
+                    get_readonly_files_replacement()
+                ]),
             ),
             *common.ensure_list(
                 LlmMessage.user_from_data(
@@ -1581,12 +1660,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 )
             ),
             *common.ensure_list(
-                get_iteration_eval_llm_messages(
-                    [previous_iteration, iteration_to_modify],
-                    iteration_to_modify=iteration_to_modify,
-                    title="structured error report"
-                )
-            ),
+                build_previous_iteration_context_messages(config, title="structured error reports")),
             *common.ensure_list(
                 get_relevant_code_files(config, routing_json.get("context_files", []))
             ),
@@ -1626,9 +1700,9 @@ def plan_full_code_changes(config: SelfDriverConfig):
     task_type = TaskType(task.task_type)
     
     system_prompt_files = [
-        "codeplanner--common.md",
         "codeplanner--base.md",
-        MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type]
+        MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
+        "codeplanner--common.md",
     ]
     
     if config.self_driving_task.test_file_path:
@@ -1645,19 +1719,15 @@ def plan_full_code_changes(config: SelfDriverConfig):
                 ("<db_name>", str(business.service_token)),
                 ("<iam_role_name>", str(business.get_iam_role_name())),
                 ("<artifacts_directory>", str(config.artifacts_dir)),
-                ("<sandbox_dir>", str(config.sandbox_root_dir))
+                ("<sandbox_dir>", str(config.sandbox_root_dir)),
+                get_readonly_files_replacement()
             ]
         ),
         *common.ensure_list(
             get_budget_message(config)
         ),
         *common.ensure_list(
-            build_previous_iteration_context_messages(
-                config,
-                current_iteration,
-                previous_iteration,
-                iteration_to_modify
-            )
+            build_previous_iteration_context_messages(config)
         ),
         *common.ensure_list(
             get_dependencies_msg(config, for_planning=True)
@@ -1720,13 +1790,15 @@ The previous iteration failed at the deployment stage.
 def write_code(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
-        instructions,
+        code_file_data: dict,
         code_writing_model: LlmModel,
         requirements_txt: str,
         blocking_issues: list[dict],
         roll_back_reason: str = None,
         previous_exception: Optional[CodeCompilationError] = None
 ) -> str:
+    # instruction = "\n".join([i.get("details") for i in instructions])
+    
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -1743,6 +1815,10 @@ def write_code(
             ],
             ("<sandbox_dir>", str(config.sandbox_root_dir))
         ),
+        *build_previous_iteration_context_messages(
+            config,
+            title="previous iteration evaluations - learn from these past attempts. **you must not repeat these errors**"
+        ),
         *common.ensure_list(
             LlmMessage.sys(
                 "## Forbidden Actions\n• You **MUST NEVER** wrap the code in Markdown-style code fences such as ```<filetype>. Output must be raw code syntax only.")
@@ -1750,11 +1826,40 @@ def write_code(
         )
     ]
     
+    related_code_file_versions = []
+    for cfp in code_file_data.get("related_code_file_paths", []):
+        if not CodeFile.objects.filter(business=config.business, file_path=cfp).exists():
+            config.log(f"ERROR: related_code_file_path {cfp} does not exist")
+            continue
+        
+        if cfp == code_file_data.get("code_file_path"):
+            config.log(f"ERROR: related_code_file_path {cfp} is the same as the file to be edited")
+            continue
+        
+        related_code_file_versions.append(
+            CodeFile.get(business=config.business, code_file_path=cfp).get_version(
+                current_iteration,
+                default_to_latest=True
+            ).get_llm_message_data()
+        )
+    
+    if related_code_file_versions:
+        messages += LlmMessage.user_from_data(
+            title="Related Code File Context",
+            data=related_code_file_versions,
+            item_name="related_code_files"
+        )
+    
     if code_file_name.endswith(".py"):
         messages += get_requirementstxt_msg(requirements_txt)
     
     code_versions = {}
     if previous_iteration:
+        messages += get_iteration_eval_llm_messages(
+            config,
+            previous_iteration
+        )
+        
         previous_iteration_version = code_file.get_version(previous_iteration)
         code_versions[previous_iteration_version.id] = (
             "Previous Iteration's Code (your previous attempt at writing this code)",
@@ -1780,11 +1885,22 @@ def write_code(
         ]
     })
     
+    fix_prompt = common.get(current_iteration, ["routing_json", "fix_prompt"])
+    if fix_prompt:
+        messages.append(LlmMessage.user(f"suggested prompt to assist in fixing the issue:  {fix_prompt}"))
+    
     coding_task_data = {
-        "instruction_steps": instructions
+        "guidance": code_file_data.get("guidance"),
     }
     
-    lessons = get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
+    if "dsl_instructions" in code_file_data:
+        coding_task_data["dsl_instructions"] = code_file_data.get("dsl_instructions")
+    elif "instructions" in code_file_data:
+        coding_task_data["instructions"] = code_file_data.get("instructions")
+    else:
+        raise Exception(f"no instructions in {json.dumps(coding_task_data, indent=4)}")
+    
+    lessons = None  # get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
     if lessons:
         coding_task_data["lessons_learned"] = {
             "description": "Lessons learned in previous iterations.  Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
@@ -1802,10 +1918,6 @@ def write_code(
             "description": "**Code Validation Failure** Your previous attempt to generate code based on the instruction set resulted in these validation errors.  **You must** avoid these errors in the next version of the code",
             "error_log": str(previous_exception)
         }
-    
-    fix_prompt = common.get(current_iteration, ["routing_json", "fix_prompt"])
-    if fix_prompt:
-        messages.append(LlmMessage.user(fix_prompt))
     
     messages += LlmMessage.user_from_data(
         f"**YOUR ONE AND ONLY TASK:**\n{'Modify' if code_version_to_modify.code else 'Write the initial version of'} {code_file.file_path}, following each of these instruction steps exactly and in order, while avoiding repeating any previous errors or blocking_codereview_errors (if applicable) and applying the applicable lessons learned from previous attempts.",
@@ -1844,7 +1956,6 @@ def get_requirementstxt_msg(requirements_txt, header="The python environment has
         header,
         {
             "file_path": "requirements.txt",
-            "may_edit": False,
             "code": requirements_txt
         }
     )
@@ -1899,6 +2010,8 @@ def get_codewriter_system_prompt(code_file_path):
         prompt = "codewriter--html_coder.md"
     elif code_file_name_lower.endswith(".css"):
         prompt = "codewriter--css_coder.md"
+    elif code_file_name_lower.startswith(".env"):
+        prompt = "codewriter--decouple_env.md"
     else:
         raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
     return prompt
@@ -1950,22 +2063,11 @@ def validate_code(
         except Exception as e:
             raise CodeCompilationError(code, f"json parse error:\n{e}")
     
-    elif code_file_name.startswith("Dockerfile"):
-        import subprocess
-        import tempfile
-        try:
-            with tempfile.NamedTemporaryFile(mode='w+', suffix="", delete=False) as tmp:
-                tmp.write(code)
-                tmp.flush()
-                result = subprocess.run(
-                    ["hadolint", tmp.name],
-                    capture_output=True,
-                    text=True
-                )
-            if result.returncode != 0:
-                raise CodeCompilationError(code, f"Dockerfile lint errors:\n{result.stdout.strip()}")
-        finally:
-            os.remove(tmp.name)
+    elif "Dockerfile" in code_file_name:
+        validate_dockerfile(
+            config.sandbox_root_dir,
+            code_file_name
+        )
     
     elif False and code_file_name == "infrastructure.yaml":
         ## skipping this for now, as it seems like it's better for the feedback look to let cloudformation surface the errors
@@ -2233,7 +2335,6 @@ def get_relevant_code_files(
             ])
             files.append({
                 "file_path": code_file.file_path,
-                "may_edit": False,
                 "source": "imported_package",
                 "code": grouped_code,
                 "note": f"The following methods from an imported package may be referenced but not modified: {[m.name for m in methods]}"
@@ -2271,7 +2372,11 @@ def get_relevant_code_files(
             if code_version.code:
                 files.append(code_version.get_llm_message_data())
     
-    return LlmMessage.user_from_data("Relevant Code Files", files)
+    files_unique = {
+        f.get("file_path"): f
+        for f in files
+    }
+    return LlmMessage.user_from_data("Relevant Code Files", files_unique.values())
 
 
 def llm_chat(
@@ -2284,19 +2389,25 @@ def llm_chat(
 ) -> LlmResponse:
     token_count = LlmMessage.get_total_token_count(model, messages)
     
+    config.log(f"""
+    
+    
+    
+====== START LLM CHAT {desc} ===============================================================
+""")
+    
     llm_resp = None
     for i in range(2):
         try:
-            max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-            
-            if max_tokens:
-                config.log(f"{desc}: about to call out to {model}. {token_count:,}/{max_tokens:,} tokens used")
-            else:
-                config.log(f"{desc}: about to call out to {model}.  {token_count:,} tokens used")
-            
             config.log(LlmMessage.dumps(
                 LlmMessage.parse_prompt(model, messages, code_response=code_response))
             )
+            
+            max_tokens = MODEL_TO_MAX_TOKENS.get(model)
+            if max_tokens:
+                config.log(f"about to call out to {model} for {desc}... ({token_count:,}/{max_tokens:,} tokens used)")
+            else:
+                config.log(f"about to call out to {model} for {desc}...  ({token_count:,} tokens used)")
             
             llm_resp = llm_interface.chat(
                 messages=messages,
@@ -2323,17 +2434,25 @@ def llm_chat(
                 )
     
     if llm_resp:
+        header_str = f"----------- RESPONSE from {model} for {desc} ------------"
+        footer_str = "-" * len(header_str)
         config.log(f"""
-=====================================================
-========= RESPONSE from {model} for {desc} ==========
+{header_str}
 {llm_resp.text}
-=====================================================
-=====================================================
+
+{footer_str}
 """)
     else:
         config.log(f"No Response from {model} for {desc}! prob should investigate what this is")
     
-    config.log(f"{desc}: total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f} - total spend is ${config.self_driving_task.get_cost() :.2f} out a budget of ${config.budget :.2f}")
+    config.log(f"total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f} - total spend is ${config.self_driving_task.get_cost() :.2f} out a budget of ${config.budget :.2f}")
+    
+    config.log(f"""
+====== END LLM CHAT {desc} ===============================================================
+    
+    
+    
+    """)
     
     return llm_resp
 
@@ -2477,6 +2596,7 @@ def get_stack_parameters(
     known_params = {
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(environment),
         "ECRRepositoryArn": ecr_arn,
+        "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         **get_rds_credentials(project_name, environment, secrets_key, self_driving_task),
         **get_admin_credentials(project_name, environment, secrets_key, self_driving_task)
     }
@@ -2572,6 +2692,7 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
                 environment
             ], max_length=50)
         
+        db_name = common.strip_non_alphanumeric(db_name)
         db_creds = set_secret(aws_secrets_client, rds_secrets_key, {
             "DBPassword": common.random_string(20),
             "DBName": db_name

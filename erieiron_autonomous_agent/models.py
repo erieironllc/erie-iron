@@ -692,6 +692,10 @@ class SelfDrivingTask(BaseErieIronModel):
         if not iteration_to_modify:
             iteration_to_modify = current_iteration
         
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+            start_iteration=iteration_to_modify if iteration_to_modify.id != current_iteration.id else None
+        )
+        
         return current_iteration, most_recent_iteration, iteration_to_modify
     
     def get_require_tests(self) -> bool:
@@ -733,6 +737,7 @@ class SelfDrivingTask(BaseErieIronModel):
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
     self_driving_task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
+    start_iteration = models.ForeignKey('SelfDrivingTaskIteration', on_delete=models.CASCADE, null=True)
     achieved_goal = models.BooleanField(null=False, default=False)
     version_number = models.IntegerField(null=False, default=0)
     test_module = models.TextField(null=True)
@@ -1094,7 +1099,6 @@ class CodeVersion(BaseErieIronModel):
         code_file = self.code_file
         d = {
             "file_path": code_file.file_path,
-            "may_edit": "venv/" not in str(code_file.get_path()),
             "code": self.code,
         }
         

@@ -105,9 +105,12 @@ class SelfDriverConfig:
         
         self.iteration_to_modify: SelfDrivingTaskIteration = common.first(args[2:])
         if not self.iteration_to_modify:
+            self.iteration_to_modify = self.current_iteration.start_iteration
+            
+        if not self.iteration_to_modify:
             self.iteration_to_modify = self.previous_iteration
         
-        self.reset_log(f"Iteration Initialization.  iteration id {self.current_iteration.id}")
+        self.reset_log()
     
     def init_log(self):
         self.log_path = self.artifacts_dir / f"{self.self_driving_task.id}.log"
@@ -119,10 +122,9 @@ class SelfDriverConfig:
         self.log_f = open(self.log_path, "w")
         self.stop_tailing = self.start_log_tail_thread()
     
-    def reset_log(self, reason: str):
+    def reset_log(self):
         self.close_log()
         self.init_log()
-        self.log(f"resetting log.  reason: {reason}")
     
     def close_log(self):
         try:
