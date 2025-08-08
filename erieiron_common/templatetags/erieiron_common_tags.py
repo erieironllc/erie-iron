@@ -109,6 +109,18 @@ def format_millis_to_seconds(millis, decimal_places=0):
 
 
 @register.filter
+def swizzle_current(s: str):
+    replacements = [
+        ("current", "previous")
+    ]
+    output = s
+    for prev, next in replacements:
+        output = output.replace(prev, next)
+        output = output.replace(prev.capitalize(), next.capitalize())
+    return output
+
+
+@register.filter
 def replace_dashes(s: str):
     return str(s).replace("-", "_")
 

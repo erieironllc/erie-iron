@@ -38,9 +38,10 @@ You will not have access to execution logs or raw test output — only high-leve
 2. **Choose the Iteration to Modify Next**
    - **Field**: `iteration_id_to_modify`
    - This tells the planner which iteration to use as the base for its next round of edits.
-   - Use `"latest"` if the most recent iteration made progress and does not require rollback.
    - Use a prior iteration ID if recent changes introduced regressions.
    - If rolling back to a previous iteration, justify your decision in `rollback_reason`.
+   - Use `"latest"` if the most recent iteration made progress and does not require rollback.
+      - **Valuable Tip!**:  If there have been a lot of attempts based on the same previous iteration and it seems like we are **stuck**, try going forward with the latest version to see if that helps get us unstuck
 
 3. **Set Scope of Planner Context**
    - **Field**: `previous_iteration_count`

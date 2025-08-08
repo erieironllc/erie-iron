@@ -6,8 +6,8 @@ from erieiron_autonomous_agent.models import CodeFile, SelfDrivingTaskIteration,
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
-        ...
         SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id="task_implement_email_processor_lambda").delete()
         CodeFile.objects.all().delete()
         # SelfDrivingTask.objects.filter(task_id="task_implement_email_processor_lambda").update(test_file_path=None)
         Task.objects.filter(id="task_implement_email_processor_lambda").update(status=TaskStatus.IN_PROGRESS)
+

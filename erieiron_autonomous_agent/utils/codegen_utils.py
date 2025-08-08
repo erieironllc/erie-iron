@@ -1,5 +1,6 @@
 import ast
 import os
+from pathlib import Path
 
 import black
 import torch
@@ -143,3 +144,20 @@ def get_method_parameters(source_code, node, language):
         if param_node:
             return get_node_text(source_code, param_node)[1:-1].strip()  # Strip parentheses
     return ''
+
+
+def validate_dockerfile(context_dir, dockerfile_path):
+    import subprocess
+    dockerfile_path = Path(dockerfile_path)
+    
+    result = subprocess.run(
+        ["docker", "build", "-f", dockerfile_path, "--no-cache", "--pull", "--quiet", context_dir],
+        capture_output=True,
+        text=True
+    )
+    
+    if result.returncode != 0:
+        raise CodeCompilationError(
+            dockerfile_path.read_text(),
+            f"Dockerfile has errors:\n {result.stderr}"
+        )

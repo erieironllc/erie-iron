@@ -307,12 +307,12 @@ class LlmMessage:
         )
     
     @classmethod
-    def user_from_data(cls, title, data) -> list['LlmMessage']:
+    def user_from_data(cls, title, data, item_name=None) -> list['LlmMessage']:
         if not data:
             return []
         
         return [LlmMessage.user(
-            cls._get_data_string(title, data)
+            cls._get_data_string(title, data, item_name=None)
         )]
     
     @classmethod
@@ -334,19 +334,19 @@ class LlmMessage:
         )]
     
     @classmethod
-    def _get_data_string(cls, title, data):
+    def _get_data_string(cls, title, data, item_name=None):
         from django.db.models import Model
         if common.is_list_like(data):
             data = {
-                "items": common.ensure_list(data)
+                f"{item_name or 'items'}": common.ensure_list(data)
             }
         elif isinstance(data, Model):
             data = common.get_dict(data)
         elif isinstance(data, Path):
-            label = "content"
+            label = item_name or "content"
             path_str = str(data)
             if any(path_str.endswith(s) for s in ["Dockerfile", "requirements.txt", ".json", ".yaml", ".html", ".py", ".js", ".css", ".sql"]):
-                label = "code"
+                label = item_name or "code"
             
             data = {
                 f"{label}": data.read_text() if data.exists() else f"{data} does not exist"
@@ -355,13 +355,18 @@ class LlmMessage:
             ...
         else:
             data = {
-                "contents": str(data)
+                f"{item_name or 'contents'}": str(data)
             }
+        
         for title_name in ["description", "desc", "title", "name", "summary"]:
             if title_name not in data:
-                data[title_name] = title
                 break
-        data_string = json.dumps(data, indent=4, cls=ErieIronJSONEncoder)
+                
+        data_string = json.dumps({
+            f"{title_name}": title,
+            **data
+        }, indent=4, cls=ErieIronJSONEncoder)
+        
         return data_string
         
     @classmethod

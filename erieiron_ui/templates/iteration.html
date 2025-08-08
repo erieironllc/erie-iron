@@ -35,7 +35,9 @@
         {% endif %}
         {% if next_iteration %}
             <a class="me-3" href="{% url 'view_self_driver_iteration' next_iteration.id %}">Next Iteration</a>
+            <a class="me-3" href="{% url 'view_self_driver_iteration' last_iteration.id %}">Last Iteration</a>
         {% else %}
+            <span class="me-3">Next Iteration</span>
             <span class="me-3">Last Iteration</span>
         {% endif %}
     </div>
@@ -50,26 +52,27 @@
             </button>
         </li>
 
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="planning-tab" data-bs-toggle="tab" data-bs-target="#planning"
-                    type="button" role="tab">
-                Planning
-            </button>
-        </li>
         {% if iteration.log_content_coding|length > 200 %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="codelog-tab" data-bs-toggle="tab" data-bs-target="#codelog"
                         type="button" role="tab">
-                    Logs - Coding
+                    Logs - Coding Phase
                 </button>
             </li>
         {% endif %}
 
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="planning-tab" data-bs-toggle="tab" data-bs-target="#planning"
+                    type="button" role="tab">
+                Code Planning
+            </button>
+        </li>
+    
         {% if iteration.codeversion_set.exists %}
             <li class="nav-item " role="presentation">
                 <button class="nav-link " id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
                         role="tab">
-                    Code
+                    Code Writing
                 </button>
             </li>
         {% endif %}
@@ -106,8 +109,23 @@
 
     <div class="tab-content pt-3" id="iterationTabContent">
         <div class="tab-pane active show" id="routing" role="tabpanel" aria-labelledby="routing-tab">
+            {% if iteration_to_modify %}
+                {% if iteration_to_modify.id|not_eq:iteration.id %}
+                    <p>To start, we are <b>rolling back to <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation">
+                        version {{ iteration_to_modify.version_number }}
+                    </a></b>.  {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
+                {% else %}
+                    <p>Starting with the latest code from the previous iteration.  {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
+                {% endif %}
+                <hr>
+                <p><b>Output from version {{ iteration_to_modify.version_number }}</b>: {{  iteration_to_modify.evaluation_json.error.summary }} </p>
+                <pre style="max-height: 8rem"> {{  iteration_to_modify.evaluation_json.error.logs }} </pre>
+            {% endif %}
+        
             {% if iteration.routing_json %}
-                <table class="table table-striped">
+                <hr>
+                <b >Routing based on version {{ iteration_to_modify.version_number }}'s output:</b>
+                <table class="table table-striped mt-3">
                     <tr>
                         <td>Classification</td>
                         <td>{{ iteration.routing_json.classification }}</td>
@@ -119,11 +137,6 @@
                     <tr>
                         <td>Explanation</td>
                         <td>
-                            {% if previous_iteration %}
-                                <p>Reviewing results from <a
-                                        href="{% url 'view_self_driver_iteration' previous_iteration.id %}#evaluation">{{ previous_iteration.id }}</a>
-                                </p>
-                            {% endif %}
                             <p>
                                 {{ iteration.routing_json.recovery_path_explanation }}
                             </p>
