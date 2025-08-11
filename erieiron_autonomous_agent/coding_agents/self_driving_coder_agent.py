@@ -19,6 +19,7 @@ from django.utils import timezone
 from sentence_transformers import SentenceTransformer
 
 import settings
+from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson
@@ -42,7 +43,7 @@ READONLY_FILES = [
 ]
 
 
-def execute(task_id: str):
+def execute(task_id: str, quick_debug=False):
     self_driving_task = bootstrap_selfdriving_agent(task_id)
     
     config = None
@@ -75,7 +76,7 @@ def execute(task_id: str):
                     config.set_phase(SdaPhase.CODING)
                     write_initial_test(config)
                 
-                elif i == 0:
+                elif not quick_debug and i == 0:
                     # we've re-started an self driving task - just execute on the first time around
                     most_recent_iteration = self_driving_task.get_most_recent_iteration()
                     if most_recent_iteration:
@@ -90,15 +91,17 @@ def execute(task_id: str):
                     config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
                     
                     log_execution_only_headline(config)
-                    
-                    if config.iteration_to_modify:
-                        config.iteration_to_modify.write_to_disk()
                 else:
                     try:
-                        config.set_iteration(self_driving_task.iterate())
+                        most_recent_iteration = self_driving_task.get_most_recent_iteration()
+                        if quick_debug and most_recent_iteration:
+                            config.set_iteration(most_recent_iteration)
+                        else:
+                            config.set_iteration(self_driving_task.iterate())
+                        
                         config.set_phase(SdaPhase.PLANNING)
                         
-                        if config.iteration_to_modify:
+                        if not quick_debug and config.iteration_to_modify:
                             config.iteration_to_modify.write_to_disk()
                         
                         log_iteration_headline(config)
@@ -153,6 +156,10 @@ def execute(task_id: str):
                             config,
                             AwsEnv.DEV
                         )
+                    except BadPlan as bpe:
+                        raise bpe
+                    except AgentBlocked as abe:
+                        raise abe
                     except Exception as e:
                         config.log(e)
                     finally:
@@ -283,6 +290,7 @@ def plan_code_changes(config):
     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
         planning_json=planning_data
     )
+    config.current_iteration.refresh_from_db(fields=["planning_json"])
     
     return planning_data
 
@@ -392,6 +400,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
 def build_docker_image(
         config: SelfDriverConfig,
         envinronment: AwsEnv,
+        envvar_secretarn_list: list[tuple[str:str]],
         docker_file: Path
 ) -> str:
     subprocess.run(["docker", "system", "prune", "-f"], check=True)
@@ -412,14 +421,13 @@ def build_docker_image(
     if "moto==4.2.8" not in requirements_txt.read_text():
         raise Exception("moto==4.2.8 is required")
     
-    env = os.environ.copy()
-    env["DOCKER_BUILDKIT"] = "1"
-    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
-
+    env = build_env(envvar_secretarn_list)
+    
     build_process = subprocess.Popen(
         common.strings([
             "docker",
             "build",
+            "--secret", "id=github_token,env=GITHUB_TOKEN",
             "-t", docker_image_tag,
             "-f", docker_file,
             docker_file.parent
@@ -463,6 +471,18 @@ docker run --rm -it -v {self_driving_task.sandbox_path}:/app -w /app {docker_ima
         """)
     
     return docker_image_tag
+
+
+def build_env(var_val_list: list[tuple[str:str]]):
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+    env["GITHUB_TOKEN"] = git_utils.get_github_token()
+    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
+    
+    for envvar_name, val in var_val_list:
+        env[envvar_name] = val
+    
+    return env
 
 
 def push_image_to_ecr(
@@ -515,6 +535,7 @@ def push_image_to_ecr(
 def run_docker_command(
         config: SelfDriverConfig,
         command_args: list[str],
+        envvar_secretarn_list: list[tuple[str:str]],
         running_process: RunningProcess,
         docker_image: str
 ) -> None:
@@ -522,10 +543,6 @@ def run_docker_command(
     iteration = config.current_iteration
     selfdriving_task = iteration.self_driving_task
     sandbox_path = iteration.self_driving_task.sandbox_path
-    
-    env = os.environ.copy()
-    env["DOCKER_BUILDKIT"] = "1"
-    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
     
     cmd = [
               "docker", "run", "--rm",
@@ -542,7 +559,7 @@ def run_docker_command(
     process = subprocess.Popen(
         cmd,
         stdout=config.log_f,
-        env=env,
+        env=build_env(envvar_secretarn_list),
         stderr=subprocess.STDOUT,
         text=True
     )
@@ -569,7 +586,7 @@ def run_docker_command(
         raise Exception(f"Docker execution failed - return code: {return_code}")
 
 
-def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
+def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
     running_process = None
     
     iteration = config.current_iteration
@@ -586,8 +603,10 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
             log_file_path=str(config.log_path)
         )
         
-        # if not iteration.codeversion_set.exists():
-        #     raise BadPlan("not code changes to deploy", planning_data)
+        envvar_secretarn_list = manage_required_credentials(
+            config,
+            aws_env
+        )
         
         docker_file = config.sandbox_root_dir / "Dockerfile"
         ecr_authenticate_for_dockerfile(
@@ -597,7 +616,8 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
         
         docker_image_tag = build_docker_image(
             config,
-            environment,
+            aws_env,
+            envvar_secretarn_list,
             docker_file
         )
         
@@ -616,7 +636,7 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
             try:
                 full_image_uri, ecr_arn = push_image_to_ecr(
                     config,
-                    environment,
+                    aws_env,
                     docker_image_tag
                 )
             except Exception as e:
@@ -624,7 +644,8 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
             
             deploy_cloudformation_stacks(
                 config,
-                environment,
+                aws_env,
+                envvar_secretarn_list,
                 ecr_arn
             )
         
@@ -632,6 +653,7 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
         if TaskType.CODING_ML.eq(task_type):
             run_docker_command(
                 config=config,
+                envvar_secretarn_list=envvar_secretarn_list,
                 command_args=self_driving_task.main_name,
                 running_process=running_process,
                 docker_image=docker_image_tag
@@ -640,6 +662,7 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
         else:
             run_docker_command(
                 config=config,
+                envvar_secretarn_list=envvar_secretarn_list,
                 command_args="test",
                 running_process=running_process,
                 docker_image=docker_image_tag
@@ -656,6 +679,7 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
                 
                 run_docker_command(
                     config=config,
+                    envvar_secretarn_list=envvar_secretarn_list,
                     command_args=[
                         self_driving_task.main_name,
                         "--input_file", input_file,
@@ -665,24 +689,16 @@ def execute_iteration(config: SelfDriverConfig, environment: AwsEnv) -> str:
                     docker_image=docker_image_tag
                 )
         
-        running_process.update_log_tail()
-        running_process.is_running = False
-        running_process.terminated_at = common.get_now()
-        running_process.save(update_fields=['is_running', 'terminated_at'])
-        
         config.log("Docker execution finished")
-    except Exception as e:
-        config.log(e)
-        # Mark process as failed if it exists
+    finally:
         if running_process and running_process.is_running:
+            running_process.update_log_tail()
             running_process.is_running = False
             running_process.terminated_at = common.get_now()
             running_process.save(update_fields=['is_running', 'terminated_at'])
-    
-    finally:
+        
         config.business.snapshot_code(iteration, include_erie_common=False)
         subprocess.run(["docker", "system", "prune", "-f"], check=True)
-        config.log("PRUNING COMPLETE")
 
 
 def init_task_execution(iteration):
@@ -728,7 +744,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig):
                 }
             )
         ],
-        config.model_iteration_evaluation,
+        LlmModel.OPENAI_GPT_5_NANO,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
     
@@ -766,7 +782,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig):
                 previous_iteration_evals
             )
         ],
-        config.model_iteration_evaluation,
+        LlmModel.OPENAI_GPT_5_MINI,
         output_schema="iteration_selector.md.schema.json"
     ).json()
     
@@ -1128,7 +1144,7 @@ The code changes to review are in support of the following goal:
         "Perform Code Review",
         config,
         messages,
-        LlmModel.OPENAI_GPT_4o,
+        LlmModel.OPENAI_GPT_5,
         output_schema="codereviewer.md.schema.json"
     ).json()
     
@@ -1228,7 +1244,7 @@ def extract_lessons(
             )
         ],
         output_schema="lesson_extractor.md.schema.json",
-        model=LlmModel.GEMINI_2_5_PRO
+        model=LlmModel.OPENAI_GPT_5
     ).json()
     
     for lesson_data in common.ensure_list(common.get(lessons_data, "lessons", [])):
@@ -1281,7 +1297,7 @@ def generate_code(
         if code_review_exception and not blocking_issues:
             # we are fixing a codereview exception, but no changes to this file
             continue
-            
+        
         non_blocking_issues = code_review_file_warnings[code_file_path_str]
         
         code_file_path: Path = config.sandbox_root_dir / code_file_path_str
@@ -1398,7 +1414,7 @@ def write_initial_test(config: SelfDriverConfig):
                 "Write initial test",
                 config,
                 messages,
-                LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE
+                LlmModel.OPENAI_GPT_5
             ).text
             
             test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
@@ -1468,7 +1484,7 @@ def write_initial_design(
                 }),
                 "Please write a markdown-formatted high-level design document for this task."
             ],
-            LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE
+            LlmModel.OPENAI_GPT_5
         ).text
         
         design_file_path = update_file_contents(
@@ -1512,7 +1528,6 @@ You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget
 
 
 def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
-    model = config.model_code_planning
     business = config.self_driving_task.business
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
@@ -1552,7 +1567,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                 ),
                 "Please perform the routing analysis"
             ],
-            model,
+            LlmModel.OPENAI_GPT_5,
             output_schema="failure_router.md.schema.json"
         ).json()
         
@@ -1586,6 +1601,8 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                         "codeplanner--aws_provisioning.md",
                         "codeplanner--common.md"
                     ], replacements=[
+                        ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                        ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                         ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
                         ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
                         get_readonly_files_replacement()
@@ -1631,7 +1648,7 @@ def get_readonly_files_replacement() -> tuple[str, str]:
     parts = []
     for f in READONLY_FILES:
         parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
-        
+    
     return "<read_only_files>", "\n".join(parts)
 
 
@@ -1650,6 +1667,8 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                     "codeplanner--quick_fix.md",
                     "codeplanner--common.md"
                 ], replacements=[
+                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                     get_readonly_files_replacement()
                 ]),
             ),
@@ -1693,7 +1712,6 @@ def plan_full_code_changes(config: SelfDriverConfig):
     
     relevant_code_files = get_relevant_code_files(config)
     
-    model = config.model_code_planning
     business = config.self_driving_task.business
     
     task = config.self_driving_task.task
@@ -1714,6 +1732,8 @@ def plan_full_code_changes(config: SelfDriverConfig):
         get_sys_prompt(
             system_prompt_files,
             [
+                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                 ("<test_file_path>", str(config.self_driving_task.test_file_path or "")),
                 ("<aws_tag>", str(business.service_token)),
                 ("<db_name>", str(business.service_token)),
@@ -1768,13 +1788,13 @@ The previous iteration failed at the deployment stage.
         "Plan code changes",
         config,
         messages,
-        model,
+        config.model_code_planning,
         output_schema="codeplanner.schema.json"
     ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=model,
+            planning_model=config.model_code_planning,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
         )
@@ -1810,7 +1830,7 @@ def write_code(
     messages: list[LlmMessage] = [
         get_sys_prompt(
             [
-                get_codewriter_system_prompt(code_file_path),
+                *get_codewriter_system_prompt(code_file_path),
                 "codewriter--common.md"
             ],
             ("<sandbox_dir>", str(config.sandbox_root_dir))
@@ -1836,11 +1856,13 @@ def write_code(
             config.log(f"ERROR: related_code_file_path {cfp} is the same as the file to be edited")
             continue
         
+        version = CodeFile.get(business=config.business, code_file_path=cfp).get_version(current_iteration, default_to_latest=True)
+        if not version:
+            config.log(f"ERROR: not version for {cfp} exists")
+            continue
+        
         related_code_file_versions.append(
-            CodeFile.get(business=config.business, code_file_path=cfp).get_version(
-                current_iteration,
-                default_to_latest=True
-            ).get_llm_message_data()
+            version.get_llm_message_data()
         )
     
     if related_code_file_versions:
@@ -1979,17 +2001,19 @@ Here is the exception message:
 Please return only the corrected version of the code. No explanation, no formatting.
 """)
         ],
-        model=LlmModel.OPENAI_GPT_3_5_TURBO,
+        model=LlmModel.OPENAI_GPT_5_MINI,
         code_response=True
     ).text
     return code
 
 
-def get_codewriter_system_prompt(code_file_path):
+def get_codewriter_system_prompt(code_file_path) -> list[str]:
     code_file_name = code_file_path.name
     code_file_name_lower = code_file_name.lower()
     if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
         prompt = "codewriter--requirements.txt.md"
+    elif code_file_name_lower == "settings.py":
+        prompt = ["codewriter--python_coder.md", "codewriter--django_settings.md"]
     elif code_file_name_lower.endswith(".json"):
         prompt = "codewriter--json_coder.md"
     elif code_file_name_lower.endswith(".eml"):
@@ -2014,7 +2038,7 @@ def get_codewriter_system_prompt(code_file_path):
         prompt = "codewriter--decouple_env.md"
     else:
         raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
-    return prompt
+    return common.ensure_list(prompt)
 
 
 def validate_code(
@@ -2258,7 +2282,7 @@ def get_relevant_code_files(
                 get_sys_prompt("codefinder.md"),
                 LlmMessage.user(config.self_driving_task.task.get_work_desc())
             ],
-            LlmModel.OPENAI_GPT_3_5_TURBO,
+            LlmModel.OPENAI_GPT_5_MINI,
             output_schema="codefinder.md.schema.json",
             code_response=True
         ).json()
@@ -2460,6 +2484,7 @@ def llm_chat(
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
         environment: AwsEnv,
+        envvar_secretarn_list: list[tuple[str:str]],
         ecr_arn: str
 ):
     cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
@@ -2473,7 +2498,6 @@ def deploy_cloudformation_stacks(
     
     start_time = time.time()
     try:
-        
         prepare_stack_for_update(
             config,
             stack_name,
@@ -2492,6 +2516,7 @@ def deploy_cloudformation_stacks(
         cloudformation_params = get_stack_parameters(
             config,
             environment,
+            envvar_secretarn_list,
             cfn_file,
             ecr_arn
         )
@@ -2504,6 +2529,12 @@ def deploy_cloudformation_stacks(
             cloudformation_params
         )
         config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
+    except BadPlan as bpe:
+        raise bpe
+    
+    except AgentBlocked as abe:
+        raise abe
+    
     except Exception as deploy_exception:
         config.log(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
         config.log(traceback.format_exc())
@@ -2581,41 +2612,74 @@ def deploy_cloudformation_stacks(
             config.log(f"Failed to fetch CloudTrail events: {ct_ex}\n")
         
         raise deploy_exception
+    finally:
+        asdf = 1
+        ...
 
 
 def get_stack_parameters(
         config: SelfDriverConfig,
         environment: AwsEnv,
+        envvar_secretarn_list: list[tuple[str, str]],
         cfn_file: Path,
         ecr_arn: str
 ):
+    """
+    Build the CloudFormation Parameters array for this stack.
+    - Pulls required parameters from the template
+    - Injects standard params (StackIdentifier, ECRRepositoryArn, AWS_ACCOUNT_ID)
+    - Resolves the RDS Secret ARN from the provided envvar->ARN pairs and planner output
+    """
     self_driving_task = config.self_driving_task
-    project_name = aws_utils.sanitize_aws_name(self_driving_task.business.service_token, max_length=64)
-    secrets_key = f"/erieiron/{project_name}/{environment.value}"
+    secrets_key = config.business.get_secrets_root_key(environment)
+    
+    # Map of ENV_VAR_NAME -> Secret ARN as provided by downstream credential management
+    envvar_to_arn = dict(envvar_secretarn_list or [])
+    
+    required_parameters, parameters_metadata = extract_cloudformation_params(
+        cfn_file
+    )
     
     known_params = {
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(environment),
         "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
-        **get_rds_credentials(project_name, environment, secrets_key, self_driving_task),
-        **get_admin_credentials(project_name, environment, secrets_key, self_driving_task)
+        
+        # Intentionally DO NOT include legacy username/password params; use ARN pattern instead
+        **get_admin_credentials(
+            environment,
+            secrets_key
+        )
     }
     
+    arn_param_bindings = []  # list of (param_name, envvar_name, arn)
+    planning_required_creds = common.get(config.current_iteration, ["planning_json", "required_credentials"], default_val={})
+    for svc_name, svc_spec in planning_required_creds.items():
+        cfn_param = svc_spec.get("secret_arn_cfn_parameter")
+        if not cfn_param:
+            # this credential is not passed via CFN
+            continue
+        
+        envvar_name = svc_spec.get("secret_arn_env_var")
+        if (arn := envvar_to_arn.get(envvar_name)) is not None:
+            arn_param_bindings.append((cfn_param, envvar_name, arn))
+    
+    # Inject known ARNs for any required CFN params
+    for param_name, envvar_name, arn in arn_param_bindings:
+        if param_name in required_parameters and arn:
+            known_params[param_name] = arn
+    
+    # Optionally pull additional params from a shared secret JSON at `secrets_key`
     aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
     try:
-        response = aws_secrets_client.get_secret_value(
-            SecretId=secrets_key
-        )
-        known_params = {
-            **known_params,
-            **json.loads(response["SecretString"]),
-        }
-        secret_params = json.loads(response["SecretString"])
-    except aws_secrets_client.exceptions.ResourceNotFoundException as rnfe:
-        # config.log(f"no secrets found for {secrets_key}")
+        response = aws_secrets_client.get_secret_value(SecretId=secrets_key)
+        secret_params = json.loads(response.get("SecretString", "{}") or "{}")
+        if isinstance(secret_params, dict):
+            known_params = {**known_params, **secret_params}
+    except aws_secrets_client.exceptions.ResourceNotFoundException:
         ...
     
-    required_parameters, parameters_metadata = extract_cloudformation_params(cfn_file)
+    # Compute missing required params (ignoring those with defaults or marked optional)
     missing = set()
     for param in required_parameters:
         param_meta = parameters_metadata.get(param, {})
@@ -2625,24 +2689,43 @@ def get_stack_parameters(
         if param not in known_params and not is_optional:
             missing.add(param)
     
+    # Provide targeted hints for any missing secret-ARN CFN parameters
+    missing_secret_params = [
+        {"parameter": p, "expected_env_var": envvar_name, "resolved_arn": arn}
+        for (p, envvar_name, arn) in arn_param_bindings
+        if (p in required_parameters) and (p not in known_params)
+    ]
+    
+    if missing_secret_params:
+        raise BadPlan(json.dumps({
+            "desc": "Missing required secret ARN CloudFormation parameter(s).",
+            "file": cfn_file.name,
+            "missing_secret_params": missing_secret_params,
+            "available_env_vars": sorted(list(envvar_to_arn.keys())),
+            "message": "Ensure credential_manager returned ARNs for these secrets and that they were passed into get_stack_parameters(envvar_secretarn_list=...)"
+        }, indent=4), config.current_iteration.planning_json)
+    
     if missing:
-        raise AgentBlocked({
-            "desc": "Missing required CloudFormation parameters",
+        raise BadPlan(json.dumps({
+            "desc": "infrastructure.yaml specifies the following parameters, but agent unable to supply them.  Either the parameters are invalid (likely) or the agent needs to be modified (not likely)",
             "missing_parameters": sorted(missing),
             "file": cfn_file.name,
-            "secret_hint": f"/erieiron/{project_name}/{environment.value}/cloudformation"
-        })
+            "secret_hint": f"{secrets_key}/cloudformation"
+        }, indent=4), config.current_iteration.planning_json)
     
     return [
         {
             "ParameterKey": k,
-            "ParameterValue": str(known_params[k])
+            "ParameterValue": str(known_params.get(k, ""))
         }
         for k in required_parameters
     ]
 
 
-def get_admin_credentials(project_name, environment, secrets_key, self_driving_task):
+def get_admin_credentials(
+        environment,
+        secrets_key
+):
     aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
     admin_secrets_key = f"{secrets_key}/appadmin"
     
@@ -2699,6 +2782,35 @@ def get_rds_credentials(project_name, environment, secrets_key, self_driving_tas
         })
     
     return db_creds
+
+
+def manage_required_credentials(
+        config: SelfDriverConfig,
+        env: AwsEnv
+) -> list[tuple[str:str]]:
+    required_credentials = common.get(
+        config.current_iteration,
+        ["planning_json", "required_credentials"],
+        default_val={}
+    )
+    
+    envvar_secretarn_list = []
+    
+    for credential_service_name, cred_def in required_credentials.items():
+        secret_arn_env_var = cred_def.get("secret_arn_env_var")
+        secrent_arn = credential_manager.manage_credentials(
+            env,
+            config.business,
+            config.task,
+            credential_service_name,
+            cred_def
+        )
+        
+        envvar_secretarn_list.append(
+            (secret_arn_env_var, secrent_arn)
+        )
+    
+    return envvar_secretarn_list
 
 
 def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):

@@ -291,6 +291,12 @@ class Business(BaseErieIronModel):
                         (sandbox_path / relative_file_path),
                         instructions
                     )
+    
+    def get_secrets_root_key(self, environment:AwsEnv):
+        from erieiron_common import aws_utils
+        project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
+        return f"/erieiron/{project_name}/{environment.value}"
+        
 
 
 class BusinessAnalysis(BaseErieIronModel):

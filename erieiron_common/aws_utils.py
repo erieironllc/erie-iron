@@ -127,6 +127,90 @@ def get_cloudwatch_url(around_time: datetime.datetime):
     )
 
 
+def get_secret_arn(secret_name: str):
+    """Resolve and return the full ARN for a Secrets Manager secret.
+
+    If `secret_name` is already an ARN, it is returned unchanged. Otherwise,
+    this will call DescribeSecret to look up and return the ARN.
+    """
+    if not secret_name:
+        raise ValueError("missing secret_name")
+    
+    # If caller passed an ARN already, just return it
+    if isinstance(secret_name, str) and secret_name.startswith("arn:aws:secretsmanager:"):
+        return secret_name
+    
+    client = boto3.client(
+        'secretsmanager',
+        region_name=os.getenv('AWS_REGION', 'us-west-2')
+    )
+    
+    try:
+        resp = client.describe_secret(SecretId=secret_name)
+        arn = resp.get('ARN')
+        if not arn:
+            raise RuntimeError(f"DescribeSecret returned no ARN for {secret_name}")
+        return arn
+    except ClientError as e:
+        code = e.response.get('Error', {}).get('Code')
+        if code == 'ResourceNotFoundException':
+            raise ValueError(f"Secret not found: {secret_name}") from e
+        raise
+
+
+def put_secret(secret_name: str, val: dict):
+    """
+    Create or update a secret in AWS Secrets Manager.
+
+    `secret_name` may be a Secrets Manager name or full ARN.
+    `val` must be a dict and will be stored as a JSON SecretString.
+    Returns a dict with arn and version_id when available.
+    """
+    if not isinstance(val, dict):
+        raise ValueError("put_secret expects `val` to be a dict")
+    
+    client = boto3.client(
+        'secretsmanager',
+        region_name=os.getenv("AWS_REGION", "us-west-2")
+    )
+    
+    secret_string = json.dumps(val)
+    
+    try:
+        # Check if the secret exists
+        try:
+            client.describe_secret(SecretId=secret_name)
+            exists = True
+        except ClientError as e:
+            err = e.response.get('Error', {}).get('Code')
+            if err in ("ResourceNotFoundException",):
+                exists = False
+            else:
+                raise
+        
+        if exists:
+            resp = client.put_secret_value(
+                SecretId=secret_name,
+                SecretString=secret_string
+            )
+            logging.info(f"Updated secret value for {secret_name}")
+        else:
+            resp = client.create_secret(
+                Name=secret_name,
+                SecretString=secret_string
+            )
+            logging.info(f"Created secret {secret_name}")
+        
+        # Normalize return
+        arn = resp.get('ARN') if 'ARN' in resp else resp.get('ARN', None)
+        version_id = resp.get('VersionId') if 'VersionId' in resp else resp.get('VersionId', None)
+        
+        return arn
+    except ClientError as e:
+        logging.exception(e)
+        raise
+
+
 def get_secret(secret_name: str):
     # Create a Secrets Manager client
     session = boto3.session.Session()

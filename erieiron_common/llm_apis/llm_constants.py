@@ -35,6 +35,10 @@ CODE_PLANNING_MODELS_IN_ORDER = [
 ]
 
 MODEL_TO_IMPL = {
+    LlmModel.OPENAI_GPT_5: openai_chat_api,
+    LlmModel.OPENAI_GPT_5_MINI: openai_chat_api,
+    LlmModel.OPENAI_GPT_5_NANO: openai_chat_api,
+    
     LlmModel.OPENAI_O3_MINI: openai_chat_api,
     LlmModel.OPENAI_O3_PRO: openai_chat_api,
     LlmModel.OPENAI_GPT_4o: openai_chat_api,
@@ -64,6 +68,10 @@ MODEL_TO_IMPL = {
 }
 
 MODEL_BACKUPS = {
+    LlmModel.OPENAI_GPT_5: LlmModel.GEMINI_2_5_PRO,
+    LlmModel.OPENAI_GPT_5_MINI: LlmModel.CLAUDE_3_7,
+    LlmModel.OPENAI_GPT_5_NANO: LlmModel.CLAUDE_3_5,
+    
     # GPT family fallbacks
     LlmModel.OPENAI_GPT_3_5_TURBO: LlmModel.CLAUDE_3_5,
     LlmModel.OPENAI_GPT_4_1: LlmModel.CLAUDE_3_7,
@@ -97,6 +105,10 @@ MODEL_BACKUPS = {
 }
 
 MODEL_TO_MAX_TOKENS = {
+    LlmModel.OPENAI_GPT_5: 400_000,
+    LlmModel.OPENAI_GPT_5_MINI: 400_000,
+    LlmModel.OPENAI_GPT_5_NANO: 400_000,
+    
     LlmModel.OPENAI_O3_MINI: 200_000,
     LlmModel.OPENAI_GPT_4o: 128_000,
     LlmModel.OPENAI_GPT_4o_20240806: 128_000,
@@ -125,6 +137,19 @@ MODEL_TO_MAX_TOKENS = {
 }
 
 MODEL_PRICE_USD_PER_MILLION_TOKENS = {
+    LlmModel.OPENAI_GPT_5: {
+        "input": 1.00,
+        "output": 10.00,
+    },
+    LlmModel.OPENAI_GPT_5_MINI: {
+        "input": 0.20,
+        "output": 2.00,
+    },
+    LlmModel.OPENAI_GPT_5_NANO: {
+        "input": 0.05,
+        "output": 0.40,
+    },
+    
     # LlmModel.OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE: {
     #     "input": 75.00,
     #     "output": 150.00,

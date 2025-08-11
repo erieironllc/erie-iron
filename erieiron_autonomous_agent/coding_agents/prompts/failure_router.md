@@ -58,7 +58,7 @@ Then:
   - classify as `CONFIGURATION_ERROR`
   - set recovery_path to `DIRECT_FIX`
   - suggest adding a fallback in code or defining the variable in infrastructure configuration
-- If the variable name suggests a secret or sensitive config, escalate to `ESCALATE_TO_HUMAN`
+- If the variable name suggests a secret or sensitive config, route to `AWS_PROVISIONING_PLANNER` (missing credentials will be handled by downstream agents, not escalated to human)
 
 Special rule for provisioning-related errors: If the error involves missing AWS resources or cloud infrastructure, select AWS_PROVISIONING_PLANNER, even if the stack trace includes code-level errors.
 Example indicators: AccessDenied for arn:aws:iam, ResourceNotFound, ValidationError, or messages referencing missing S3 buckets or default VPCs.
@@ -112,3 +112,4 @@ The following files are system-managed and must be treated as **read-only**. Do 
 
 ## Additional Guidance
 - The Django settings.py file **always** lives in the application root directory - as a peer of manage.py
+- **Never** fall back to sqllite or a non-RDS datbase if the RDS credentials are missing.  You must create and use credential to connect to RDS 
