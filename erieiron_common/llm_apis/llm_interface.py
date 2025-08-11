@@ -465,7 +465,7 @@ Please provide the corrected JSON text
             logging.error(f"fixing invalid json - ({last_exception})")
             response = chat(
                 messages=[LlmMessage.user(prompt)],
-                model=LlmModel.OPENAI_GPT_3_5_TURBO,
+                model=LlmModel.OPENAI_GPT_5_MINI,
                 code_response=True
             )
             coerced_text = response.text

@@ -332,6 +332,10 @@ class LlmMessageType(ErieEnum):
 
 
 class LlmModel(ErieEnum):
+    OPENAI_GPT_5 = "gpt-5"
+    OPENAI_GPT_5_MINI = "gpt-5-mini"
+    OPENAI_GPT_5_NANO = "gpt-5-nano"
+
     # OPENAI_GPT_4_5 = "gpt-4.5"
     # OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE = "gpt-4.5-preview-2025-02-27"
     
@@ -464,3 +468,14 @@ class DevelopmentRoutingPath(ErieEnum):
     ESCALATE_TO_PLANNER = auto()
     ESCALATE_TO_HUMAN = auto()
     AWS_PROVISIONING_PLANNER = auto()
+
+
+class CredentialService(ErieEnum):
+    RDS = auto()
+    
+    def get_desc(self):
+        if CredentialService.RDS.eq(self):
+            return "AWS RDS"
+        else:
+            return self.title()
+

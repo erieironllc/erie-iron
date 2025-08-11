@@ -1,54 +1,53 @@
-import base64
+import json
 import os
-import pprint
-import subprocess
 import sys
-import uuid
-from typing import Optional, List
+from functools import lru_cache
 
 import boto3
-from botocore.exceptions import BotoCoreError, NoCredentialsError
+from botocore.exceptions import ClientError
 
-from erieiron_common import settings_common
 from erieiron_common.enums import LlmMessageType, PubSubMessageType
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
-class CommandExecutionError(Exception):
-    """
-    Raised when a shell command executed by the system fails to complete successfully.
-
-    This error wraps the failure reason and optionally the original exception raised
-    by the underlying `subprocess` module.
-
-    Attributes:
-        message (str): A description of the error or failed command.
-        original_exception (Optional[Exception]): The exception that was raised, if available.
-    """
+@lru_cache(maxsize=1)
+def get_secret_json(secret_arn: str) -> dict:
+    """Fetch and parse a JSON secret from AWS Secrets Manager. Fails fast on errors."""
+    client = boto3.client("secretsmanager")  # Region from env/IMDS unless overridden elsewhere
+    try:
+        resp = client.get_secret_value(SecretId=secret_arn)
+    except ClientError as e:
+        raise RuntimeError(f"Failed to fetch RDS secret {secret_arn}: {e}") from e
     
-    def __init__(self, message: str, original_exception: Optional[Exception] = None):
-        super().__init__(f"{message}. Original exception: {original_exception}")
-        self.message = f"{message}. Original exception: {original_exception}"
-        self.original_exception = original_exception
+    secret_str = resp.get("SecretString")
+    if not secret_str:
+        raise RuntimeError(f"Secret {secret_arn} returned empty SecretString")
+    
+    try:
+        data = json.loads(secret_str)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Secret {secret_arn} is not valid JSON: {e}") from e
+    
+    required_keys = ["username", "password", "host", "port", "database"]
+    missing = [k for k in required_keys if k not in data]
+    if missing:
+        raise RuntimeError(f"Secret {secret_arn} missing keys: {missing}")
+    
+    return data
 
 
-def debug_payload(payload):
-    """
-    Pretty-prints the provided payload using Python's built-in pprint module.
-
-    This function is primarily intended for debugging purposes to visually inspect
-    the contents of nested or complex data structures in a human-readable format.
-
-    Args:
-        payload (Any): The object or data structure to be printed. Can be any Python object,
-                       including dictionaries, lists, or custom class instances.
-
-    Returns:
-        None
-    """
-    pprint.pprint(payload)
+def get_secret_from_env_arn(env_var_name):
+    secret_arn = os.getenv(env_var_name)
+    if not secret_arn:
+        raise ValueError(f"no env var found for {env_var_name}")
+    
+    secret_json = get_secret_json(secret_arn)
+    if not secret_json:
+        raise ValueError(f"no secret data found for {secret_arn}")
+    
+    return secret_json
 
 
 def llm_chat_text_response(task_id: str, messages: list[tuple[str, str]]) -> str:
@@ -133,264 +132,3 @@ def llm_chat_json_response(task_id: str, messages: list[tuple[str, str]]) -> dic
         )
     
     return llm_response.json()
-
-
-def get_boto3_client(
-        service: str,
-        region: str = "us-west-2",
-        role_arn_to_assume: Optional[str] = None,
-        role_session_name: str = "ErieIronSession",
-) -> "boto3.client":
-    """
-    Creates and returns a boto3 client for the specified AWS service and region.
-    Optionally assumes an IAM role before creating the client.
-
-    Args:
-        service (str): The AWS service name (e.g., "s3", "ecs", "lambda").
-        region (str, optional): AWS region name. Defaults to "us-west-2".
-        role_arn_to_assume (Optional[str], optional): If provided, assume this role before creating the client.
-        role_session_name (str, optional): The session name to use when assuming the role.
-
-    Returns:
-        boto3.client: A configured client object for the specified AWS service.
-
-    Raises:
-        RuntimeError: If no valid AWS credentials are found or the client initialization fails.
-    """
-    try:
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        if not credentials or not credentials.access_key or not credentials.secret_key:
-            raise RuntimeError("No valid AWS credentials found. Please configure your AWS credentials.")
-        if role_arn_to_assume:
-            import botocore
-            sts_client = session.client("sts", region_name=region)
-            response = sts_client.assume_role(
-                RoleArn=role_arn_to_assume,
-                RoleSessionName=role_session_name,
-            )
-            
-            assumed_creds = response["Credentials"]
-            return boto3.client(
-                service,
-                region_name=region,
-                aws_access_key_id=assumed_creds["AccessKeyId"],
-                aws_secret_access_key=assumed_creds["SecretAccessKey"],
-                aws_session_token=assumed_creds["SessionToken"],
-            )
-        return session.client(service, region_name=region)
-    except (BotoCoreError, NoCredentialsError) as e:
-        raise RuntimeError(f"Failed to create boto3 client for {service}: {e}")
-
-
-def aws_cli(business_id: uuid.UUID, command: list[str], input_data: str | None = None, role_arn_to_assume: str | None = None) -> str:
-    """
-    Executes an AWS CLI command within the business's sandbox context.
-
-    The command is validated to ensure all filesystem-related arguments stay within
-    the business's sandbox directory. The command is executed as a subprocess,
-    with optional input piped to its stdin.
-
-    Args:
-        business_id (uuid.UUID): Unique ID of the business issuing the command.
-        command (list[str]): AWS CLI command and arguments (e.g., ["s3", "ls"]).
-        input_data (str | None): Optional string to pass to stdin.
-        role_arn_to_assume (str | None): Optional IAM role ARN to assume for the command execution.
-
-    Returns:
-        str: Trimmed stdout output from the command.
-
-    Raises:
-        CommandExecutionError: If the command fails or violates sandbox constraints.
-    """
-    full_cmd = ["aws"] + command
-    
-    # If role assumption is requested, set up the environment variable
-    env_backup = None
-    if role_arn_to_assume:
-        env_backup = os.environ.get("AWS_ROLE_ARN")
-        os.environ["AWS_ROLE_ARN"] = role_arn_to_assume
-    
-    try:
-        return run_shell_command(business_id, full_cmd, input_data=input_data)
-    finally:
-        # Restore original environment state
-        if role_arn_to_assume:
-            if env_backup is not None:
-                os.environ["AWS_ROLE_ARN"] = env_backup
-            else:
-                os.environ.pop("AWS_ROLE_ARN", None)
-
-
-def aws_ecr_login(
-        business_id: uuid.UUID,
-        aws_region: str,
-        aws_account_id: str,
-        role_arn_to_assume: Optional[str] = None
-) -> None:
-    """
-    Authenticates Docker with AWS Elastic Container Registry (ECR).
-
-    This function retrieves an ECR authorization token using boto3 with optional role assumption,
-    then logs Docker into the ECR registry for the specified AWS account and region.
-    All shell commands are sandboxed using the business's designated directory.
-
-    Args:
-        business_id (uuid.UUID): Unique ID of the business performing the login.
-        aws_region (str): AWS region for the ECR registry (e.g., "us-west-2").
-        aws_account_id (str): AWS account ID hosting the ECR registry.
-        role_arn_to_assume (Optional[str]): Optional IAM role ARN to assume for authentication.
-
-    Raises:
-        CommandExecutionError: If retrieving the ECR login password or the Docker login fails.
-    """
-    # Get ECR client with optional role assumption
-    ecr_client = get_boto3_client('ecr', region=aws_region, role_arn_to_assume=role_arn_to_assume)
-    
-    # Get authorization token
-    auth_data = ecr_client.get_authorization_token()["authorizationData"][0]
-    token = base64.b64decode(auth_data["authorizationToken"]).decode("utf-8")
-    username, password = token.split(":", 1)
-    
-    print("retrieved aws ecr login password")
-    
-    docker_login_cmd = [
-        "docker", "login",
-        "--username", "AWS",
-        "--password-stdin",
-        f"{aws_account_id}.dkr.ecr.{aws_region}.amazonaws.com",
-    ]
-    run_shell_command(business_id, docker_login_cmd, input_data=password)
-    print("docker login successful")
-
-
-def run_shell_command(business_id: uuid.UUID, command: List[str], input_data: Optional[str] = None) -> str:
-    """
-    Executes a shell command and captures its output.
-
-    Parameters:
-        business_id (uuid): The id of the Business issuing this command
-        command (List[str]): The command to run, provided as a list of arguments.
-        input_data (Optional[str]): Optional string data to pass to the command's standard input.
-
-    Returns:
-        str: The trimmed standard output of the command if it executes successfully.
-
-    Raises:
-        CommandExecutionError: If the command exits with a non-zero status or if a subprocess error occurs.
-
-    If `sandbox_path` is provided, any command argument that appears to be a path will be checked
-    to ensure it remains within the sandbox directory. If a path is detected outside the sandbox,
-    the command will be blocked and a CommandExecutionError raised.
-    """
-    
-    # if not (command[0] == "docker" or command[0] == "aws"):
-    # sandbox_path = Business.objects.get(id=business_id).get_sandbox_dir()
-    # for arg in command[1:]:
-    #     if os.path.isabs(arg) or os.path.exists(arg) or "/" in arg:
-    #         common.assert_in_sandbox(sandbox_path, arg)
-    
-    try:
-        print("executing command:", " ".join(command))
-        
-        # Handle input data - keep as string for text mode
-        stdin_input = None
-        use_text_mode = True
-        if input_data is not None:
-            if isinstance(input_data, str):
-                stdin_input = input_data
-                use_text_mode = True
-            elif isinstance(input_data, bytes):
-                stdin_input = input_data.decode("utf-8")
-                use_text_mode = True
-            else:
-                stdin_input = str(input_data)
-                use_text_mode = True
-        
-        result = subprocess.run(
-            command,
-            input=stdin_input,
-            capture_output=True,
-            text=use_text_mode,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise CommandExecutionError(
-                f"command '{' '.join(command)}' failed with return code {result.returncode}. stdout: {result.stdout.strip()} stderr: {result.stderr.strip()}"
-            )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        raise CommandExecutionError(f"command '{' '.join(command)}' failed", e)
-
-
-def get_aws_metadata() -> dict:
-    """
-    Returns a dictionary containing the AWS account metadata used by the application.
-
-    This includes the AWS account ID and default region, as defined in the application settings.
-
-    Returns:
-        dict: A dictionary with the following keys:
-            - "aws_account_id" (str): The AWS account identifier.
-            - "aws_region" (str): The default AWS region (e.g., "us-west-2").
-
-    Example:
-        >>> get_aws_metadata()
-        {'aws_account_id': '123456789012', 'aws_region': 'us-west-2'}
-    """
-    return {
-        "aws_account_id": settings_common.AWS_ACCOUNT_ID,
-        "aws_region": settings_common.AWS_DEFAULT_REGION_NAME
-    }
-
-
-# --- IAM and permission escalation utilities ---
-
-
-def extract_action_from_error(error: Exception) -> str:
-    """
-    Attempts to extract the missing IAM action from an AWS AccessDenied error message.
-
-    Args:
-        error (Exception): The exception raised during AWS operation.
-
-    Returns:
-        str: The missing IAM action, if detectable; otherwise 'unknown'.
-    """
-    message = str(error)
-    # Simplified pattern matching, can be extended with regex if needed
-    if "ecr:GetAuthorizationToken" in message:
-        return "ecr:GetAuthorizationToken"
-    return "unknown"
-
-
-def infer_resource_from_context() -> str:
-    """
-    Provides a generic resource ARN based on the current AWS context.
-
-    Returns:
-        str: A guessed resource ARN, defaulting to wildcard if not determinable.
-    """
-    try:
-        meta = get_aws_metadata()
-        return f"arn:aws:ecr:{meta['aws_region']}:{meta['aws_account_id']}:repository/*"
-    except Exception:
-        return "*"
-
-
-def aws_iam_get_current_user() -> str:
-    """
-    Retrieves the current AWS IAM user or role making requests.
-
-    Returns:
-        str: The IAM user or role ARN.
-
-    Raises:
-        RuntimeError: If the IAM caller identity cannot be determined.
-    """
-    try:
-        client = get_boto3_client("sts")
-        identity = client.get_caller_identity()
-        return identity["Arn"]
-    except Exception as e:
-        raise RuntimeError(f"Failed to retrieve IAM caller identity: {e}")

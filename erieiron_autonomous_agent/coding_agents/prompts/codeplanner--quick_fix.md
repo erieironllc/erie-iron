@@ -122,21 +122,16 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
             - All file paths must be relative. Any path starting with `/` is invalid.
         - `code_writing_model`: 
             - The LLM model that will be used to write the code based on the instructions. **Must be one of**:
-                - claude-3-opus-20240229
-                - gpt-4o-2024-08-06
-                - gpt-4o
-                - gpt-4-turbo
-                - claude-3-7-sonnet-20250219
-                - claude-3-5-sonnet-20240620
-                - o3-pro-2025-06-10
-                - o3-mini-2025-01-31
+                - gpt-5
+                - gpt-5-mini
+                - gpt-5-nano
             - The selection of `code_writing_model` must be done carefully and thoughtfully to optimize for both effectiveness and cost. Follow these guidelines:
-            - Use lower-cost models (e.g., `o3-mini-2025-01-31`, `claude-3-5-sonnet-20240620`, `gpt-4o`) for simple, isolated changes such as:
+            - Use lower-cost models (e.g., `gpt-5-nano`, `gpt-5-mini`) for simple, isolated changes such as:
                 - Small function edits
                 - Logging adjustments
                 - Static content updates
                 - Markdown or documentation generation
-            - Use more powerful models (e.g., `claude-3-opus-20240229`, `gpt-4o-2024-08-06`) for:
+            - Use more powerful models (e.g., `gpt-5`) for:
                 - Multi-file logic coordination
                 - Complex branching, parsing, or concurrency
                 - AWS infrastructure, IAM policies, or CloudFormation generation
@@ -180,7 +175,7 @@ The following is an example of what your output should look like. It is shown af
       {
          "code_file_path": "infrastructure.yaml",
          "guidance": "The evaluator shows that the Lambda failed to initialize due to a missing AWS region. This is a common configuration error when Boto3 is used without setting `AWS_DEFAULT_REGION`. Be sure to place the environment variable inside the correct Lambda resource's `Properties.Environment.Variables` block, and double-check that no other parameters are affected. Avoid adding this to global config blocks that don't get inherited by Lambda functions.",
-         "code_writing_model": "gpt-4o-2024-08-06",
+         "code_writing_model": "gpt-5-mini",
          "instructions": [
             {
                "step_number": 1,

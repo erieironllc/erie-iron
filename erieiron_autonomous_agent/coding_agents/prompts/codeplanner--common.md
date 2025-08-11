@@ -61,12 +61,27 @@ Always:
 
 - All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `infrastructure.yaml`.
 - All infrastructure must be defined in `infrastructure.yaml` to ensure coherent, atomic stack deployment and teardown.
-- If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
+    - If 'infrastructure.yaml' defines required parameters that not used, remove the unused parameters
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
+- If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
-- 
+
+## Credentials Management
+- **Never** fall back to sqlite or a non-RDS database if the RDS credentials are missing. You must create and use credentials to connect to RDS.
+- The codeplanner must identify all required credentials in a structured format keyed by service name whenever credentials are needed for a plan. Instead of outputting raw credential objects or example key/value pairs, the codeplanner **must output, for each service:**
+    - `secret_arn_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets Manager secret ARN for this service at runtime. This ARN will be provisioned and set externally, not created by the planner.
+    - `schema`: a list of expected keys inside the secret, with metadata for each key. `schema` must always be an array of objects, even if there is only one key:
+        - `key`: (string, required) Name of the credential field.
+        - `type`: (string, required) Data type (valid values are JSON Schema types such as 'string', 'number', 'boolean', 'object').
+        - `required`: (boolean, required) Whether this field is required.
+        - `description`: (string, required) What this credential value is for.
+
+  - **Runtime contract:** Code must read the value of `secret_arn_env_var` from the environment, treat it as a Secrets Manager ARN, call `secretsmanager:GetSecretValue` to fetch the secret JSON, and parse keys according to `schema`. Do not construct secret names or paths in code; do not log secret contents; fail fast if the env var is missing or invalid.
+
+**Do not include any real or placeholder secret values — only the field definitions and metadata. The schema must be sufficient for secret creation and validation.**
+
 ---
 
 ## CloudFormation File Enforcement
@@ -87,8 +102,23 @@ Always:
 
 ---
 
-## Output Fields
-
+``- `required_credentials`
+  - An object keyed by service name, specifying the credentials required to accomplish the planned changes. For each service, provide:
+    - `secret_arn_env_var`: (string, required) The AWS Secrets Manager secret name to be used for this service.  The secret name **must** start with the prefix <>
+    - `secret_arn_cfn_parameter`: (string, optional) Name of the CloudFormation parameter that should receive this secret's ARN during stack deployment. If present, the plan must include infrastructure.yaml edits to add this parameter, wire it into resources using dynamic references, and attach the secret if applicable.
+    - `schema`: (array, required) List of objects, each describing a required key in the secret. See Credentials Management above for full guidance; this section repeats the required output format for convenience.
+      - `key`: (string, required) Name of the credential field.
+      - `type`: (string, required) Data type (valid values are JSON Schema types such as 'string', 'number', 'boolean', 'object').
+      - `required`: (boolean, required) Whether this field is required.
+      - `description`: (string, required) What this credential value is for.
+ `` - Do not include any real or placeholder secret values — only the field definitions and metadata. The schema must be sufficient for secret creation and validation. See the "Credentials Management" section above for detailed guidance and examples.
+  - Existing service names: <credential_manager_existing_services>
+    - If credentials are required for a service listed here, you must use the exact service name provided above.
+    - If credentials are required for a service not listed here, that is acceptable — it will be handled downstream.
+    - If you use an existing credential service, you **must** use the schema defined here:
+```json existing credential service schema definitions
+<credential_manager_existing_service_schemas>
+```
 - `code_files`
     - A list of file-level edit plans. Each item must include:
     - `code_file_path`: the relative path to the file being created or modified
@@ -102,25 +132,20 @@ Always:
         - Format: list of relative paths to peer files in this iteration. Do not include the file named in `code_file_path` itself.
     - `code_writing_model`: 
         - The LLM model that will be used to write the code based on the instructions. **Must be one of**:
-            - claude-3-opus-20240229
-            - gpt-4o-2024-08-06
-            - gpt-4o
-            - gpt-4-turbo
-            - claude-3-7-sonnet-20250219
-            - claude-3-5-sonnet-20240620
-            - o3-pro-2025-06-10
-            - o3-mini-2025-01-31
+            - gpt-5
+            - gpt-5-mini
+            - gpt-5-nano
         - The selection of `code_writing_model` must be done carefully and thoughtfully to optimize for both effectiveness and cost. Follow these guidelines:
-        - Use lower-cost models (e.g., `o3-mini-2025-01-31`, `claude-3-5-sonnet-20240620`, `gpt-4o`) for simple, isolated changes such as:
-            - Small function edits
-            - Logging adjustments
-            - Static content updates
-            - Markdown or documentation generation
-        - Use more powerful models (e.g., `claude-3-opus-20240229`, `gpt-4o-2024-08-06`) for:
-            - Multi-file logic coordination
-            - Complex branching, parsing, or concurrency
-            - AWS infrastructure, IAM policies, or CloudFormation generation
-            - Tasks where lower-power models have failed in recent iterations
+            - Use lower-cost models (e.g., `gpt-5-nano`, `gpt-5-mini`) for simple, isolated changes such as:
+                - Small function edits
+                - Logging adjustments
+                - Static content updates
+                - Markdown or documentation generation
+            - Use more powerful models (e.g., `gpt-5`) for:
+                - Multi-file logic coordination
+                - Complex branching, parsing, or concurrency
+                - AWS infrastructure, IAM policies, or CloudFormation generation
+                - Tasks where lower-power models have failed in recent iterations
         - You should escalate model complexity only when previous attempts failed or when the planning complexity clearly warrants it. Repeated use of expensive models without justification may deplete the task budget and force human escalation — this must be avoided.
     - `guidance`: **Required high-level advice for the code writer.** This field provides strategic context that falls outside of any individual instruction step. It should help the code writer make sound implementation decisions by surfacing:
         - Common pitfalls to avoid (especially ones seen in prior iterations)
@@ -183,11 +208,59 @@ To increase transparency and encourage planner self-auditing, you may include a 
 
 ## Output Example (**always** respond with parsable json)
 {
+    "required_credentials": {
+      "rds": {
+        "secret_arn_env_var": "SECRET_ARN_AWS_RDS",
+        "schema": [
+          {
+            "key": "username",
+            "type": "string",
+            "required": true,
+            "description": "Database username for the application"
+          },
+          {
+            "key": "password",
+            "type": "string",
+            "required": true,
+            "description": "Database password for the application"
+          },
+          {
+            "key": "host",
+            "type": "string",
+            "required": true,
+            "description": "RDS instance endpoint"
+          },
+          {
+            "key": "port",
+            "type": "int",
+            "required": true,
+            "description": "RDS instance port"
+          },
+          {
+            "key": "database",
+            "type": "string",
+            "required": true,
+            "description": "Database name"
+          }
+        ]
+      },
+      "stripe": {
+        "secret_arn_env_var": "SECRET_ARN_STRIPE"
+        "schema": [
+          {
+            "key": "api_key",
+            "type": "string",
+            "required": true,
+            "description": "Secret Stripe API key for live transactions"
+          }
+        ]
+      }
+    },
   "code_files": [
     {
       "code_file_path": "Dockerfile",
       "related_code_file_paths": ["settings.py"],
-      "code_writing_model": "claude-3-5-sonnet-20240620",
+      "code_writing_model": "gpt-5-nano",
       "guidance": "Ensure that the Dockerfile exposes all required build arguments as environment variables for downstream consumption. When adding new build args, be sure to set a sensible default if possible to avoid build failures. If the variable is not used in this Dockerfile, comment its purpose for future maintainers.",
       "dsl_instructions": [
         {
@@ -207,7 +280,7 @@ To increase transparency and encourage planner self-auditing, you may include a 
     {
       "code_file_path": "settings.py",
       "related_code_file_paths": ["Dockerfile"],
-      "code_writing_model": "gpt-4o-2024-08-06",
+      "code_writing_model": "gpt-5-mini",
       "guidance": "Wire environment variables into Django settings using os.environ.get with a fallback. Log the value at startup for diagnostics, but do not print secrets. If the variable is not present, ensure the fallback is safe for the environment.",
       "dsl_instructions": [
         {
@@ -224,7 +297,7 @@ To increase transparency and encourage planner self-auditing, you may include a 
       "code_file_path": "core/main.py",
       "related_code_file_paths": ["core/common.py"],
       "guidance": "This file previously failed due to an IndexError when accessing a list. Ensure bounds checking is added before list access. Also, log the list length and the accessed index to aid in debugging if the issue recurs. Avoid using try/except to suppress the error silently—this bug needs visibility if it occurs again.",
-      "code_writing_model": "claude-3-5-sonnet-20240620",
+      "code_writing_model": "gpt-5-nano",
       "instructions": [
         {
           "step_number": 1,
@@ -236,7 +309,7 @@ To increase transparency and encourage planner self-auditing, you may include a 
     {
       "code_file_path": "infrastructure.yaml",
       "guidance": "The evaluator shows that the Lambda failed to initialize due to a missing AWS region. This is a common configuration error when Boto3 is used without setting `AWS_DEFAULT_REGION`. Be sure to place the environment variable inside the correct Lambda resource's `Properties.Environment.Variables` block, and double-check that no other parameters are affected. Avoid adding this to global config blocks that don't get inherited by Lambda functions.",
-      "code_writing_model": "gpt-4o-2024-08-06",
+      "code_writing_model": "gpt-5-mini",
       "instructions": [
         {
           "step_number": 1,
@@ -311,6 +384,8 @@ All plans must include diagnostic logging to support debugging and validation.
 ## Output Format Constraints
 
 Your output **must be** a single, well-formed JSON object. 
+
+All examples in this document are illustrative. In your actual output, only include the keys and structure required; never include example services unless they are part of the task.
 
 **You are forbidden to emit:**
 - Markdown headers or bullets

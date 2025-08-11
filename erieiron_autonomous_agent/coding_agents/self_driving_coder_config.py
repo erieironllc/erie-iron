@@ -78,10 +78,8 @@ class SelfDriverConfig:
         self.artifacts_dir = artifacts_root
         self.git = self.self_driving_task.get_git()
         
-        self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4o_20240806
-        self.model_code_planning = LlmModel.OPENAI_GPT_4o_20240806
+        self.model_code_planning = LlmModel.OPENAI_GPT_5
         
-        # self.model_iteration_evaluation = LlmModel.OPENAI_GPT_4_1_MINI
         # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
     
     def set_phase(self, phase: 'SdaPhase'):
@@ -166,8 +164,9 @@ class SelfDriverConfig:
                                     if new_content:
                                         new_content = common.truncate_text_lines(new_content)
                                         for line in new_content.splitlines():
-                                            logging.info(line)
-                                
+                                            # logging.info(line)
+                                            print(line)
+
                                 last_position = current_size
                         
                         # Wait before checking again

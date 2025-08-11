@@ -8,10 +8,17 @@ class Command(BaseCommand):
         parser.add_argument(
             '--task_id',
             type=str,
+            required=True
+        )
+        
+        parser.add_argument(
+            '--quick_debug',
+            type=bool,
             required=False
         )
     
     def handle(self, *args, **options):
         self_driving_coder_agent.execute(
-            options.get("task_id")
+            options.get("task_id"),
+            options.get("quick_debug")
         )

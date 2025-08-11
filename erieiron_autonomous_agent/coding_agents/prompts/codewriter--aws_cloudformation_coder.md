@@ -11,7 +11,7 @@ You are an expert AWS infrastructure engineer responsible for producing valid, s
  • Do not include hardcoded secrets or keys. Reference parameters or use `AWS::SecretsManager` where applicable.
  • Only generate resources within the boundaries defined by the assigned task. Avoid creating global infrastructure unless explicitly required.
  • **Do not** apply `DeletionPolicy: Retain`. Stacks must support clean deletion without manual cleanup.
-
+ • When provisioning RDS, if the planner specifies an `RdsSecretArn` parameter, do not create the secret in the template. Use the ARN parameter with dynamic references for master username and password, and attach the secret to the DB instance with `AWS::SecretsManager::SecretTargetAttachment`. Avoid `ManageMasterUserPassword: true` in this pattern.
 ---
 
 ## Billing Safety
@@ -44,6 +44,7 @@ You are an expert AWS infrastructure engineer responsible for producing valid, s
 The name of all of the AWS service instances will be unique based on environment and other factors.  The unique name prefix is defined at deploy time and passed to cloudformation as a parameter named 'StackIdentifier'.  as such:
 - The full name of a service **must never** be hardcoded in the infrastructure.yaml file.  
 - The service name **must** always be prefixed using the StackIdentifier in infrastructure.yaml
+- `RdsSecretArn` is an externally supplied Secrets Manager ARN and must not be modified or prefixed with `StackIdentifier`.
 
 ---
 
@@ -77,6 +78,9 @@ Any output that is not valid YAML is a hard failure and will be rejected.
  • Follow best practices from AWS Well-Architected Framework.
  • Use `DependsOn`, `Condition`, and `Fn::Sub` wisely to control execution flow and simplify customization.
  • Use logical and predictable naming for each resource.
+ • When using `RdsSecretArn`, source `MasterUsername` and `MasterUserPassword` in the DB instance with:
+   - `MasterUsername: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::username}}"`
+   - `MasterUserPassword: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::password}}"`
 
 ---
 
