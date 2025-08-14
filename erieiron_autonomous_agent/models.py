@@ -292,11 +292,10 @@ class Business(BaseErieIronModel):
                         instructions
                     )
     
-    def get_secrets_root_key(self, environment:AwsEnv):
+    def get_secrets_root_key(self, environment: AwsEnv):
         from erieiron_common import aws_utils
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
         return f"/erieiron/{project_name}/{environment.value}"
-        
 
 
 class BusinessAnalysis(BaseErieIronModel):
@@ -757,6 +756,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content_init = models.TextField(null=True)
     planning_json = models.JSONField(null=True)
     evaluation_json = models.JSONField(null=True)
+    slowest_cloudformation_resources = models.JSONField(null=True)
     routing_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     
@@ -783,7 +783,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             if code_file.file_path.startswith(str(os.getcwd())):
                 logging.error(f"erie iron code got indexed!: {code_file.file_path}")
                 continue
-
+            
             code_version = code_file.get_version(self)
             if code_version:
                 code_version.write_to_disk(sandbox_path)
@@ -841,7 +841,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             
             return error_info.get("summary"), error_info.get("logs")
         else:
-            error_info = common.first(evaluation_json.get("evaluation", []) )
+            error_info = common.first(evaluation_json.get("evaluation", []))
             if error_info:
                 return error_info.get("summary"), error_info.get("details")
             else:
@@ -849,6 +849,11 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     
     def goal_achieved(self):
         return common.parse_bool(common.get(self, ["evaluation_json", "goal_achieved"], False))
+    
+    def get_all_code_versions(self):
+        return {
+            cv.code_file_id: cv for cv in self.codeversion_set.all().order_by("created_at")
+        }.values()
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):
@@ -908,8 +913,12 @@ class RunningProcess(BaseErieIronModel):
 class LlmRequest(BaseErieIronModel):
     task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
     token_count = models.IntegerField()
+    title = models.TextField(null=True, default="Unknown")
     price = models.FloatField()
+    llm_model = models.TextField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
+    input_messages = models.JSONField(null=True)
+    response = models.TextField(null=True)
 
 
 class CodeFile(BaseErieIronModel):

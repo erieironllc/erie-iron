@@ -161,3 +161,143 @@ def validate_dockerfile(context_dir, dockerfile_path):
             dockerfile_path.read_text(),
             f"Dockerfile has errors:\n {result.stderr}"
         )
+
+
+def looks_like_unified_diff(text: str) -> bool:
+    """
+    Heuristic check for a unified git diff. We keep it intentionally simple:
+    must start with '--- ' (after leading whitespace), contain a '+++' header and at least one '@@' hunk.
+    """
+    if not isinstance(text, str):
+        return False
+    t = text.lstrip()
+    return t.startswith('--- ') and '\n+++' in t and '\n@@' in t
+
+
+def apply_unified_diff_to_text(original_text: str, patch_text: str, expected_relpath: str | None = None) -> str:
+    """
+    Apply a single-file unified diff to original_text and return the patched text.
+    This is a minimal, in-memory applier that supports standard unified diff hunks.
+    It does not support file renames; callers should treat renames as delete+add.
+
+    Raises ValueError if the patch cannot be applied cleanly.
+    """
+    import re
+    
+    lines = original_text.splitlines(keepends=True)
+    patch_lines = patch_text.splitlines(keepends=False)
+    
+    # Parse headers
+    i = 0
+    # Skip any leading blank/prologue lines the model might include
+    while i < len(patch_lines) and not patch_lines[i].startswith('--- '):
+        i += 1
+    if i >= len(patch_lines) or not patch_lines[i].startswith('--- '):
+        raise ValueError('Missing --- header in unified diff')
+    old_hdr = patch_lines[i];
+    i += 1
+    if i >= len(patch_lines) or not patch_lines[i].startswith('+++ '):
+        raise ValueError('Missing +++ header in unified diff')
+    new_hdr = patch_lines[i];
+    i += 1
+    
+    # Optional path sanity check
+    def _extract_path(h):
+        # headers look like: '--- a/path' or '--- /dev/null'
+        parts = h.split(maxsplit=1)
+        return parts[1].strip() if len(parts) > 1 else ''
+    
+    old_path = _extract_path(old_hdr)[2:] if _extract_path(old_hdr).startswith('a/') else _extract_path(old_hdr)
+    new_path = _extract_path(new_hdr)[2:] if _extract_path(new_hdr).startswith('b/') else _extract_path(new_hdr)
+    
+    if expected_relpath:
+        exp = expected_relpath.lstrip('./')
+        # Allow either old or new header to match expected path (new files use /dev/null in old header)
+        header_paths = {old_path.lstrip('./'), new_path.lstrip('./')}
+        # If headers contain absolute or sandboxed paths, only compare the tail
+        header_tails = {p.split('/')[-len(exp.split('/')):] for p in header_paths if p}
+        # Quick tail match
+        if exp not in header_paths and not any('/'.join(tail) == exp for tail in header_tails):
+            # Do not fail hard; models sometimes emit slightly different prefixes. Continue.
+            pass
+    
+    # Pattern for hunk header: @@ -l,s +l,s @@
+    hunk_re = re.compile(r'^@@ -(?P<old_start>\d+)(,(?P<old_count>\d+))? \+(?P<new_start>\d+)(,(?P<new_count>\d+))? @@')
+    
+    # Work on a mutable copy
+    out = lines[:]
+    # Offset adjustment as we apply hunks
+    line_offset = 0
+    
+    while i < len(patch_lines):
+        if not patch_lines[i].startswith('@@ '):
+            # Skip non-hunk lines (e.g., file metadata) until next hunk
+            i += 1
+            continue
+        
+        m = hunk_re.match(patch_lines[i])
+        if not m:
+            raise ValueError(f'Invalid hunk header: {patch_lines[i]}')
+        i += 1
+        
+        old_start = int(m.group('old_start'))
+        old_count = int(m.group('old_count') or '0')
+        new_start = int(m.group('new_start'))
+        # new_count unused for application
+        
+        # Convert 1-based to 0-based index into 'out' with current offset
+        idx = old_start - 1 + line_offset
+        
+        # Build the replacement block from hunk lines
+        removal_count = 0
+        addition_block = []
+        
+        # We'll also validate context lines against current 'out'
+        probe_idx = idx
+        
+        while i < len(patch_lines) and not patch_lines[i].startswith('@@ '):
+            line = patch_lines[i]
+            if line.startswith('--- ') or line.startswith('+++ '):
+                # Next file header - single-file patch expected; stop processing
+                break
+            sign = line[:1] if line else ''
+            content = line[1:] if len(line) > 0 else ''
+            
+            if sign == ' ':
+                # Context: must match existing
+                if probe_idx >= len(out) or out[probe_idx] != content + ('\n' if not out[probe_idx].endswith('\n') and content != '' else '') and out[probe_idx].rstrip('\n') != content:
+                    # Be tolerant of LF/CRLF variations
+                    if out[probe_idx].replace('\r\n', '\n').rstrip('\n') != content:
+                        raise ValueError('Context mismatch while applying hunk')
+                addition_block.append(out[probe_idx])
+                probe_idx += 1
+            elif sign == '-':
+                # Removal: must match existing
+                if probe_idx >= len(out) or out[probe_idx].replace('\r\n', '\n').rstrip('\n') != content:
+                    raise ValueError('Removal mismatch while applying hunk')
+                removal_count += 1
+                probe_idx += 1
+            elif sign == '+':
+                # Addition: append with newline
+                addition_block.append(content + '\n')
+            elif line == r'\ No newline at end of file':
+                # Ignore standard marker
+                pass
+            else:
+                # Unknown marker - treat as error
+                raise ValueError(f'Unknown hunk line prefix: {sign!r}')
+            i += 1
+            if i >= len(patch_lines):
+                break
+        
+        # Apply: replace the slice [idx, idx + removed) with addition_block
+        out[idx:idx + removal_count] = addition_block
+        # Update offset for subsequent hunks: new_len - old_len
+        line_offset += len(addition_block) - removal_count
+        
+        # Stop if another file header appears (we only support single-file patches here)
+        if i < len(patch_lines) and (patch_lines[i].startswith('--- ') or patch_lines[i].startswith('+++ ')):
+            break
+    
+    return ''.join(out)
+

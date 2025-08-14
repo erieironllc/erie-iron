@@ -256,6 +256,8 @@ def view_self_driver_iteration(request, iteration_id):
     except:
         last_iteration = None
     
+    llm_requests = list(iteration.llmrequest_set.all().order_by("timestamp"))
+    
     return send_response(
         request,
         "iteration.html",
@@ -271,6 +273,7 @@ def view_self_driver_iteration(request, iteration_id):
             "task": task,
             "initiative": initiative,
             "business": business,
+            "llm_requests": llm_requests,
             
             "total_price": total_price,
             "total_tokens": total_tokens,

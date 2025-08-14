@@ -2,7 +2,7 @@ import json
 import secrets
 import string
 
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import AgentBlocked
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import AgentBlocked, SelfDriverConfig
 from erieiron_autonomous_agent.models import Business, Task
 from erieiron_common import aws_utils, common
 from erieiron_common.enums import CredentialService, AwsEnv
@@ -60,12 +60,14 @@ def get_existing_service_schema_desc() -> str:
 
 
 def manage_credentials(
+        config:SelfDriverConfig,
         env: AwsEnv,
-        business: Business,
-        task: Task,
         credential_service_name: str,
         cred_def: dict
 ) -> str:
+    business = config.business
+    task = config.task
+    
     if not CredentialService.valid(credential_service_name):
         raise AgentBlocked(f"""Blocked by unsupported credential service: {credential_service_name}
 
@@ -79,8 +81,8 @@ Secret Def:
 """)
     
     aws_secret_key, secret_dict = get_credential_secret(
-        env,
         business,
+        env,
         task,
         credential_service_name
     )
@@ -112,7 +114,34 @@ Secret Def:
     return secret_arn
 
 
-def get_credential_secret(env, business, task, credential_service_name):
+def get_aws_role_name(
+        config:SelfDriverConfig,
+        env: AwsEnv
+):
+    business = config.business
+    task = config.task
+    
+    role_name = f"{business.service_token}-{env}"
+    if AwsEnv.PRODUCTION.DEV.eq(env):
+        chars_avail = 63 - len(role_name)
+        if chars_avail > 5:
+            task_suffix = f"-{task.id[0:chars_avail]}"
+        else:
+            # let the sanitizer figure it out
+            task_suffix = f"-{task.id}"
+        role_name += task_suffix
+
+    role_name = aws_utils.sanitize_aws_name(role_name, 64)
+    
+    return role_name
+
+
+def get_credential_secret(
+        business: Business,
+        env: AwsEnv,
+        task: Task,
+        credential_service_name: str
+):
     prefix = business.get_secrets_root_key(env)
     aws_secret_key = f"{prefix}/{credential_service_name}"
     

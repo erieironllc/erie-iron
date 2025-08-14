@@ -101,12 +101,18 @@ class SelfDriverConfig:
         if not self.previous_iteration:
             self.previous_iteration = self.current_iteration.get_previous_iteration()
         
+        if not self.previous_iteration:
+            self.previous_iteration = self.current_iteration
+        
         self.iteration_to_modify: SelfDrivingTaskIteration = common.first(args[2:])
         if not self.iteration_to_modify:
             self.iteration_to_modify = self.current_iteration.start_iteration
-            
+        
         if not self.iteration_to_modify:
             self.iteration_to_modify = self.previous_iteration
+        
+        if not self.iteration_to_modify:
+            self.iteration_to_modify = self.current_iteration
         
         self.reset_log()
     
@@ -166,7 +172,7 @@ class SelfDriverConfig:
                                         for line in new_content.splitlines():
                                             # logging.info(line)
                                             print(line)
-
+                                
                                 last_position = current_size
                         
                         # Wait before checking again
@@ -237,8 +243,10 @@ class AgentBlocked(Exception):
 
 
 class BadPlan(Exception):
-    def __init__(self, msg: str, plan_data):
-        pprint.pprint(plan_data)
+    def __init__(self, msg: str, plan_data: dict = None):
+        if not plan_data:
+            plan_data = {}
+            
         self.plan_data = plan_data
         super().__init__(msg)
 

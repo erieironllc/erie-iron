@@ -22,9 +22,15 @@
             </form>
         </div>
     </div>
-    <p><span
-            class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
-        &nbsp;Owner: {{ task.role_assignee|label }}</p>
+    <p>
+        <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">
+            {{ task.status }}
+        </span>
+        {% if task.role_assignee %}
+            &nbsp;Owner: {{ task.role_assignee|label }}
+        {% endif %}
+        <a class="ms-3" href="{% url 'view_self_driver_latest_iteration' task.id %}">Latest Iteration</a>
+    </p>
 
     <ul class="nav nav-tabs" id="initiativeTab" role="tablist">
         <li class="nav-item" role="presentation">

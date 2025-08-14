@@ -25,6 +25,50 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
 
+def ensure_iam_role_exists_and_get_arn(role_name: str) -> str:
+    iam = boto3.client("iam")
+    
+    try:
+        role = iam.get_role(RoleName=role_name)["Role"]
+        return role["Arn"]
+    except iam.exceptions.NoSuchEntityException:
+        pass
+    
+    role = iam.create_role(**{
+        "RoleName": role_name,
+        "Description": f"Erie Iron role for {role_name}",
+        "AssumeRolePolicyDocument": json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "ecs-tasks.amazonaws.com"},
+                    "Action": "sts:AssumeRole"
+                },
+                {
+                    "Effect": "Allow",
+                    "Principal": {"Service": "lambda.amazonaws.com"},
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }, indent=4)
+    })["Role"]
+    
+    iam.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+    )
+    
+    for _ in range(30):
+        try:
+            role = iam.get_role(RoleName=role_name)["Role"]
+            return role["Arn"]
+        except Exception:
+            time.sleep(1)
+    
+    raise Exception(f"timed out creating role {role_name}")
+
+
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:
     if common.is_list_like(name):
         name = common.safe_join(name, "-")

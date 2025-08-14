@@ -52,6 +52,15 @@
             </button>
         </li>
 
+        {% if llm_requests %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="llmrequests-tab" data-bs-toggle="tab" data-bs-target="#llmrequests"
+                        type="button" role="tab">
+                    LLM Requests
+                </button>
+            </li>
+        {% endif %}
+
         {% if iteration.log_content_coding|length > 200 %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="codelog-tab" data-bs-toggle="tab" data-bs-target="#codelog"
@@ -67,7 +76,7 @@
                 Code Planning
             </button>
         </li>
-    
+
         {% if iteration.codeversion_set.exists %}
             <li class="nav-item " role="presentation">
                 <button class="nav-link " id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
@@ -113,18 +122,20 @@
                 {% if iteration_to_modify.id|not_eq:iteration.id %}
                     <p>To start, we are <b>rolling back to <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation">
                         version {{ iteration_to_modify.version_number }}
-                    </a></b>.  {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
+                    </a></b>. {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
                 {% else %}
                     <p>Starting with the latest code from the previous iteration.  {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
                 {% endif %}
                 <hr>
-                <p><b>Output from version {{ iteration_to_modify.version_number }}</b>: {{  iteration_to_modify.evaluation_json.error.summary }} </p>
-                <pre style="max-height: 8rem"> {{  iteration_to_modify.evaluation_json.error.logs }} </pre>
+                <p><b>Output from
+                    version {{ iteration_to_modify.version_number }}</b>: {{ iteration_to_modify.evaluation_json.error.summary }}
+                </p>
+                <pre style="max-height: 8rem"> {{ iteration_to_modify.evaluation_json.error.logs }} </pre>
             {% endif %}
-        
+
             {% if iteration.routing_json %}
                 <hr>
-                <b >Routing based on version {{ iteration_to_modify.version_number }}'s output:</b>
+                <b>Routing based on version {{ iteration_to_modify.version_number }}'s output:</b>
                 <table class="table table-striped mt-3">
                     <tr>
                         <td>Classification</td>
@@ -292,6 +303,56 @@
 
         </div>
 
+        <div class="tab-pane " id="llmrequests" role="tabpanel" aria-labelledby="llmrequests-tab">
+            {% for llm_request in llm_requests %}
+                <div class="card mb-4 iteration_card">
+                    <div class="card-header d-flex justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#llmrequest-{{ forloop.counter }}" aria-expanded="false" style="cursor: pointer;">
+                        <div class="d-flex align-items-center">
+                            <i class="fas fa-chevron-right me-2 collapse-icon"></i>
+                            <small class="text-muted">
+                                {{ llm_request.title }} ({{ llm_request.timestamp }})
+                            </small>
+                        </div>
+                        <div class="d-flex justify-content-end align-items-center">
+                            <small class="text-muted ms-3">
+                                {{ llm_request.model }}
+                            </small>
+                            <small class="text-muted ms-3">
+                                {{ llm_request.token_count }} tokens
+                            </small>
+                            <small class="text-muted ms-3">
+                                ${{ llm_request.price|floatformat:2 }}
+                            </small>
+                            <button class="btn btn-sm btn-outline-secondary ms-3 copy-btn" 
+                                    data-target="#llmrequest-content-{{ forloop.counter }}" 
+                                    onclick="event.stopPropagation();" 
+                                    title="Copy to clipboard">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
+                        <dl class="row">
+                            <pre id="llmrequest-content-{{ forloop.counter }}">
+                                {% for inp_msg in llm_request.input_messages %}
+=============================================
+Role: {{ input_msg.role }} 
+                                    
+{{ inp_msg.content }}
+=============================================
+                                {% endfor %}
+=============================================
+Response from {{ llm_request.model }}
+                                    
+{{ llm_request.response }}
+=============================================
+                            </pre>
+                        </dl>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+
         <div class="tab-pane " id="codelog" role="tabpanel" aria-labelledby="codelog-tab">
             <pre style="font-size: 8pt">{{ iteration.log_content_coding|default_if_none:"" }}</pre>
         </div>
@@ -320,6 +381,37 @@
             } else {
                 window.iteration_view.initialize();
             }
+            
+            // Handle chevron rotation for collapsible LLM requests
+            $('.card-header[data-bs-toggle="collapse"]').on('click', function() {
+                const chevron = $(this).find('.collapse-icon');
+                const target = $($(this).data('bs-target'));
+                
+                if (target.hasClass('show')) {
+                    chevron.removeClass('fa-chevron-down').addClass('fa-chevron-right');
+                } else {
+                    chevron.removeClass('fa-chevron-right').addClass('fa-chevron-down');
+                }
+            });
+            
+            // Handle copy to clipboard functionality
+            $('.copy-btn').on('click', function() {
+                const targetSelector = $(this).data('target');
+                const content = $(targetSelector).text();
+                
+                navigator.clipboard.writeText(content).then(function() {
+                    // Show temporary success feedback
+                    const btn = $(this);
+                    const originalIcon = btn.find('i');
+                    originalIcon.removeClass('fa-copy').addClass('fa-check');
+                    setTimeout(function() {
+                        originalIcon.removeClass('fa-check').addClass('fa-copy');
+                    }, 2000);
+                }.bind(this)).catch(function(err) {
+                    console.error('Failed to copy text: ', err);
+                    alert('Failed to copy to clipboard');
+                });
+            });
         });
     </script>
 {% endblock %}

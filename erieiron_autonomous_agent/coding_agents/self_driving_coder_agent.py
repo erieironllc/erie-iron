@@ -22,9 +22,10 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone
+from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, git_utils
+from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath
 from erieiron_common.llm_apis import llm_interface
@@ -590,6 +591,9 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
     running_process = None
     
     iteration = config.current_iteration
+    if not iteration.planning_json:
+        raise BadPlan(f"current iteration has no planning data.  need to go back and replan", {})
+    
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
     task_type = TaskType(task.task_type)
@@ -630,9 +634,9 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
             code_file=CodeFile.get(config.business, "infrastructure.yaml")
         ).first()
         
-        if infrastructure_code_version and infrastructure_code_version.get_diff():
+        if True:  # infrastructure_code_version and infrastructure_code_version.get_diff():
             # only push to ecr and deplor if infra has changed
-            config.log(f"pushing infrastructure change to ecr and cloud formation:\n{infrastructure_code_version.get_diff()}")
+            # config.log(f"pushing infrastructure change to ecr and cloud formation:\n{infrastructure_code_version.get_diff()}")
             try:
                 full_image_uri, ecr_arn = push_image_to_ecr(
                     config,
@@ -932,41 +936,117 @@ def push_cloudformation(
         cfn_file: Path,
         param_list: list
 ):
-    config.log(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
+    start_time = time.time()
     cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
-    template_body = cfn_file.read_text()
-    
-    if get_stack(stack_name, cf_client):
-        assert_cloudformation_stack_valid(stack_name, cf_client)
+    try:
+        config.log(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
+        template_body = cfn_file.read_text()
         
-        config.log(f"Updating existing stack: {stack_name}\n")
-        try:
-            cf_client.update_stack(
+        if get_stack(stack_name, cf_client):
+            assert_cloudformation_stack_valid(stack_name, cf_client)
+            
+            config.log(f"Updating existing stack: {stack_name}\n")
+            try:
+                cf_client.update_stack(
+                    StackName=stack_name,
+                    TemplateBody=template_body,
+                    Parameters=param_list,
+                    Capabilities=["CAPABILITY_NAMED_IAM"]
+                )
+            except Exception as deploy_exception:
+                if "No updates are to be performed" not in str(deploy_exception):
+                    raise deploy_exception
+        else:
+            config.log(f"Creating new stack: {stack_name}\n")
+            cf_client.create_stack(
                 StackName=stack_name,
                 TemplateBody=template_body,
                 Parameters=param_list,
                 Capabilities=["CAPABILITY_NAMED_IAM"]
             )
-        except Exception as deploy_exception:
-            if "No updates are to be performed" not in str(deploy_exception):
-                raise deploy_exception
-    else:
-        config.log(f"Creating new stack: {stack_name}\n")
-        cf_client.create_stack(
-            StackName=stack_name,
-            TemplateBody=template_body,
-            Parameters=param_list,
-            Capabilities=["CAPABILITY_NAMED_IAM"]
+        
+        cloudformation_wait(
+            config,
+            cf_client,
+            stack_name,
+            throw_on_fail=True
         )
+        
+        config.log(f"CloudFormation stack {stack_name} deployed successfully.\n")
+    finally:
+        compute_cfn_resource_durations(
+            config,
+            cf_client,
+            stack_name,
+            stack_name
+        )
+        
+        push_time_mins = (time.time() - start_time) / 60
+        if push_time_mins > 10:
+            config.log(f"ERROR! cloudformation deploy for {stack_name} took {push_time_mins} minutes, which is too long!  CODE PLANNER:  think of ways to make cloudformation updates faster\n\n\n\n")
+
+
+def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_name, deployment_start_datetime):
+    try:
+        events = cf_client.describe_stack_events(StackName=stack_name).get('StackEvents', [])
+    except Exception:
+        return []
     
-    cloudformation_wait(
-        config,
-        cf_client,
-        stack_name,
-        throw_on_fail=True
+    recent_events = [e for e in events if e.get('Timestamp') and e['Timestamp'] >= deployment_start_datetime]
+    recent_events.sort(key=lambda x: x['Timestamp'])
+    
+    events_by_logical = defaultdict(list)
+    for e in recent_events:
+        # Some events can be for the stack itself (LogicalResourceId == stack name)
+        logical_id = e.get('LogicalResourceId')
+        if not logical_id:
+            continue
+        events_by_logical[logical_id].append(e)
+    
+    durations = []
+    for logical_id, evs in events_by_logical.items():
+        # Scan sequences: find segments from *_IN_PROGRESS to next terminal status
+        longest_seconds = None
+        best_pair = None
+        i = 0
+        n = len(evs)
+        while i < n:
+            status_i = evs[i].get('ResourceStatus', '')
+            if status_i.endswith('IN_PROGRESS'):
+                start_ev = evs[i]
+                j = i + 1
+                # Find the next terminal event for this resource
+                while j < n:
+                    status_j = evs[j].get('ResourceStatus', '')
+                    if not status_j.endswith('IN_PROGRESS'):
+                        end_ev = evs[j]
+                        delta_sec = (end_ev['Timestamp'] - start_ev['Timestamp']).total_seconds()
+                        if longest_seconds is None or delta_sec > longest_seconds:
+                            longest_seconds = delta_sec
+                            best_pair = (start_ev, end_ev)
+                        break
+                    j += 1
+                i = j
+                continue
+            i += 1
+        
+        if longest_seconds is not None and best_pair:
+            # Prefer resource_type from terminal event, fall back to start event
+            res_type = best_pair[1].get('ResourceType') or best_pair[0].get('ResourceType')
+            durations.append({
+                'logical_id': logical_id,
+                'resource_type': res_type,
+                'seconds': round(float(longest_seconds), 3)
+            })
+    
+    durations.sort(key=lambda d: d['seconds'], reverse=True)
+    
+    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+        slowest_cloudformation_resources=durations
     )
+    config.current_iteration.refresh_from_db(fields=["slowest_cloudformation_resources"])
     
-    config.log(f"CloudFormation stack {stack_name} deployed successfully.\n")
+    return durations
 
 
 def assert_cloudformation_stack_valid(stack_name, cf_client):
@@ -977,6 +1057,19 @@ def assert_cloudformation_stack_valid(stack_name, cf_client):
     status = matching_stack['StackStatus']
     if "FAILED" in status or "ROLLBACK" in status:
         raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
+
+
+def build_cloudformation_durations_context_messages(config: SelfDriverConfig, title=None) -> List[LlmMessage]:
+    iteration_to_modify = config.iteration_to_modify
+    if not (iteration_to_modify and iteration_to_modify.slowest_cloudformation_resources):
+        return []
+    
+    return LlmMessage.user_from_data(
+        "Slowest CloudFormation Resources",
+        {
+            "cloudformation_durations": iteration_to_modify.slowest_cloudformation_resources
+        }
+    )
 
 
 def build_previous_iteration_context_messages(config: SelfDriverConfig, title=None) -> List[LlmMessage]:
@@ -1120,8 +1213,7 @@ def perform_code_review(
                 "Code Review Input: Proposed Code Changes for Current Iteration",
                 [
                     cv.get_llm_message_data()
-                    for cv in current_iteration.codeversion_set.all()
-                
+                    for cv in current_iteration.get_all_code_versions()
                 ]
             )
         ),
@@ -1255,7 +1347,7 @@ def extract_lessons(
         )
 
 
-def generate_code(
+def implement_code_changes(
         config: SelfDriverConfig,
         planning_data: dict,
         code_review_exception: CodeReviewException
@@ -1327,7 +1419,7 @@ def generate_code(
             for i in range(3):
                 try:
                     previous_exception = None
-                    code_str = write_code(
+                    code_str = write_code_file(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
                         code_file_data=cfi,
@@ -1367,6 +1459,12 @@ resulted in this validation error
                 # chances at the feedback loop
                 config.log(previous_exception)
             
+            # Detect and handle git patch vs full-file outputs from the code writer
+            code_str = post_process_code_ouput(
+                code_str,
+                code_version_to_modify
+            )
+            
             if code_str:
                 code_file.update(
                     current_iteration,
@@ -1378,6 +1476,35 @@ resulted in this validation error
     
     config.git.add_files()
     return current_iteration
+
+
+def post_process_code_ouput(code_str: str, code_version_to_modify: CodeVersion) -> str:
+    if not code_str:
+        return code_str
+    
+    code_file_path_str = code_version_to_modify.code_file.get_path()
+    
+    # FULL_FILE: <path> header support
+    stripped = code_str.lstrip()
+    if stripped.startswith('FULL_FILE:'):
+        # Drop the header line and keep the remainder as the file contents
+        newline_idx = stripped.find('\n')
+        code_str = '' if newline_idx == -1 else stripped[newline_idx + 1:]
+    elif codegen_utils.looks_like_unified_diff(code_str):
+        try:
+            # Apply patch against the current version of the file
+            code_str = codegen_utils.apply_unified_diff_to_text(
+                code_version_to_modify.code,
+                code_str,
+                expected_relpath=code_file_path_str
+            )
+        except Exception as patch_e:
+            # Surface a structured error that preserves context for lesson extraction
+            raise CodeCompilationError(
+                code_version_to_modify.code,
+                f"Failed to apply git patch to {code_file_path_str}: {patch_e}"
+            )
+    return code_str
 
 
 def write_initial_test(config: SelfDriverConfig):
@@ -1598,8 +1725,10 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
             *common.ensure_list(
                 get_sys_prompt(
                     [
-                        "codeplanner--aws_provisioning.md",
-                        "codeplanner--common.md"
+                        "codeplanner--common.md",
+                        "common--infrastructure_rules.md",
+                        "common--credentials_architecture.md",
+                        "codeplanner--aws_provisioning.md"
                     ], replacements=[
                         ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                         ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
@@ -1614,6 +1743,9 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                     get_lessons(config)
                 )
+            ),
+            *common.ensure_list(
+                build_cloudformation_durations_context_messages(config)
             ),
             *common.ensure_list(
                 build_previous_iteration_context_messages(config, title="structured error reports")
@@ -1664,8 +1796,10 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
         [
             *common.ensure_list(
                 get_sys_prompt([
-                    "codeplanner--quick_fix.md",
-                    "codeplanner--common.md"
+                    "codeplanner--common.md",
+                    "common--credentials_architecture.md",
+                    "common--infrastructure_rules.md",
+                    "codeplanner--quick_fix.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
@@ -1677,6 +1811,9 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                     get_lessons(config)
                 )
+            ),
+            *common.ensure_list(
+                build_cloudformation_durations_context_messages(config)
             ),
             *common.ensure_list(
                 build_previous_iteration_context_messages(config, title="structured error reports")),
@@ -1745,6 +1882,9 @@ def plan_full_code_changes(config: SelfDriverConfig):
         ),
         *common.ensure_list(
             get_budget_message(config)
+        ),
+        *common.ensure_list(
+            build_cloudformation_durations_context_messages(config)
         ),
         *common.ensure_list(
             build_previous_iteration_context_messages(config)
@@ -1845,6 +1985,8 @@ def write_code(
             if not code_file_name.endswith(".md") else []
         )
     ]
+    if code_file_name == "infrastructure.yaml":
+        messages += build_cloudformation_durations_context_messages(config)
     
     related_code_file_versions = []
     for cfp in code_file_data.get("related_code_file_paths", []):
@@ -2422,11 +2564,10 @@ def llm_chat(
     
     llm_resp = None
     for i in range(2):
+        llm_messages = LlmMessage.parse_prompt(model, messages, code_response=code_response)
+        config.log(LlmMessage.dumps(llm_messages))
+        
         try:
-            config.log(LlmMessage.dumps(
-                LlmMessage.parse_prompt(model, messages, code_response=code_response))
-            )
-            
             max_tokens = MODEL_TO_MAX_TOKENS.get(model)
             if max_tokens:
                 config.log(f"about to call out to {model} for {desc}... ({token_count:,}/{max_tokens:,} tokens used)")
@@ -2434,7 +2575,7 @@ def llm_chat(
                 config.log(f"about to call out to {model} for {desc}...  ({token_count:,} tokens used)")
             
             llm_resp = llm_interface.chat(
-                messages=messages,
+                messages=llm_messages,
                 model=model,
                 output_schema=PROMPTS_DIR / output_schema if output_schema else None,
                 code_response=code_response,
@@ -2452,8 +2593,15 @@ def llm_chat(
         finally:
             if llm_resp:
                 LlmRequest.objects.create(
-                    task_iteration=config.self_driving_task.get_most_recent_iteration(),
+                    title=desc,
+                    task_iteration=config.current_iteration,
                     token_count=llm_resp.token_count,
+                    llm_model=model.value,
+                    input_messages=[{
+                        "role": m.message_type.value,
+                        "content": llm_interface.sanitize_prompt(m.text)
+                    } for m in llm_messages],
+                    response=llm_resp.text,
                     price=llm_resp.price_total
                 )
     
@@ -2483,17 +2631,17 @@ def llm_chat(
 
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
-        environment: AwsEnv,
+        aws_env: AwsEnv,
         envvar_secretarn_list: list[tuple[str:str]],
         ecr_arn: str
 ):
-    cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
     
     self_driving_task = config.self_driving_task
     sandbox_path = Path(config.sandbox_root_dir)
     
     cfn_file = get_cloudformation_file(config)
-    stack_name = self_driving_task.get_cloudformation_stack_name(environment)
+    stack_name = self_driving_task.get_cloudformation_stack_name(aws_env)
     config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
     
     start_time = time.time()
@@ -2515,7 +2663,7 @@ def deploy_cloudformation_stacks(
         
         cloudformation_params = get_stack_parameters(
             config,
-            environment,
+            aws_env,
             envvar_secretarn_list,
             cfn_file,
             ecr_arn
@@ -2524,7 +2672,7 @@ def deploy_cloudformation_stacks(
         push_cloudformation(
             config,
             stack_name,
-            environment,
+            aws_env,
             cfn_file,
             cloudformation_params
         )
@@ -2575,7 +2723,7 @@ def deploy_cloudformation_stacks(
         from datetime import datetime, timedelta
         config.log("\nRecent CloudTrail events in this region (last 15 min):\n")
         try:
-            ct_client = boto3.client("cloudtrail", region_name=environment.get_aws_region())
+            ct_client = boto3.client("cloudtrail", region_name=aws_env.get_aws_region())
             end_time = common.get_now()
             ct_query_start_time = end_time - timedelta(minutes=15)
             
@@ -2619,7 +2767,7 @@ def deploy_cloudformation_stacks(
 
 def get_stack_parameters(
         config: SelfDriverConfig,
-        environment: AwsEnv,
+        aws_env: AwsEnv,
         envvar_secretarn_list: list[tuple[str, str]],
         cfn_file: Path,
         ecr_arn: str
@@ -2631,7 +2779,7 @@ def get_stack_parameters(
     - Resolves the RDS Secret ARN from the provided envvar->ARN pairs and planner output
     """
     self_driving_task = config.self_driving_task
-    secrets_key = config.business.get_secrets_root_key(environment)
+    secrets_key = config.business.get_secrets_root_key(aws_env)
     
     # Map of ENV_VAR_NAME -> Secret ARN as provided by downstream credential management
     envvar_to_arn = dict(envvar_secretarn_list or [])
@@ -2640,14 +2788,24 @@ def get_stack_parameters(
         cfn_file
     )
     
+    if "DBName" in required_parameters:
+        raise BadPlan("infrastructure.yaml has a parameter named 'DBName'. **NEVER** add a parameter to infrastructure.yaml named 'DBName'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the RdsSecretArn parameter", config.current_iteration.planning_json)
+    
+    if "DBPassword" in required_parameters:
+        raise BadPlan("infrastructure.yaml has a parameter named 'DBPassword'. **NEVER** add a parameter to infrastructure.yaml named 'DBPassword'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the RdsSecretArn parameter", config.current_iteration.planning_json)
+    
+    role_name = credential_manager.get_aws_role_name(config, aws_env)
+    role_arn = aws_utils.ensure_iam_role_exists_and_get_arn(role_name)
+    
     known_params = {
-        "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(environment),
+        "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
+        "TaskRoleArn": role_arn,
         "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         
         # Intentionally DO NOT include legacy username/password params; use ARN pattern instead
         **get_admin_credentials(
-            environment,
+            aws_env,
             secrets_key
         )
     }
@@ -2670,7 +2828,7 @@ def get_stack_parameters(
             known_params[param_name] = arn
     
     # Optionally pull additional params from a shared secret JSON at `secrets_key`
-    aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
+    aws_secrets_client = boto3.client("secretsmanager", region_name=aws_env.get_aws_region())
     try:
         response = aws_secrets_client.get_secret_value(SecretId=secrets_key)
         secret_params = json.loads(response.get("SecretString", "{}") or "{}")
@@ -2799,9 +2957,8 @@ def manage_required_credentials(
     for credential_service_name, cred_def in required_credentials.items():
         secret_arn_env_var = cred_def.get("secret_arn_env_var")
         secrent_arn = credential_manager.manage_credentials(
+            config,
             env,
-            config.business,
-            config.task,
             credential_service_name,
             cred_def
         )
