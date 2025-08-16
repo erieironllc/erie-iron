@@ -18,11 +18,91 @@ import rsa
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+import settings
 from erieiron_common import common
 from erieiron_common import settings_common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
+
+
+def ensure_network_access(
+        db_host: str,
+        aws_region=settings.AWS_DEFAULT_REGION_NAME
+):
+    rds = boto3.client("rds", region_name=aws_region)
+    ec2 = boto3.client("ec2", region_name=aws_region)
+    
+    my_cidr = common.get_ip_address()
+    db_instance, db_cluster = get_db_instance_and_cluster(db_host, aws_region)
+    sg_ids = get_securitygroup_ids(db_cluster, db_instance)
+    if not sg_ids:
+        raise Exception(f"unable to fetch security group ids for {db_host} in region {settings.AWS_DEFAULT_REGION_NAME} ")
+    
+    for sg_id in sg_ids:
+        sg_desc = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"][0]
+        
+        has_rule = False
+        for perm in sg_desc.get("IpPermissions", []):
+            if perm.get("IpProtocol") == "tcp" and perm.get("FromPort") == 5432 and perm.get("ToPort") == 5432:
+                if any(r.get("CidrIp") == my_cidr for r in perm.get("IpRanges", [])):
+                    has_rule = True
+                    break
+        
+        if has_rule:
+            continue
+        
+        try:
+            ec2.authorize_security_group_ingress(
+                GroupId=sg_id,
+                IpPermissions=[{
+                    "IpProtocol": "tcp",
+                    "FromPort": 5432,
+                    "ToPort": 5432,
+                    "IpRanges": [{"CidrIp": my_cidr, "Description": "jj laptop postgres access"}],
+                }]
+            )
+        except ClientError as ce:
+            if ce.response.get("Error", {}).get("Code") != "InvalidPermission.Duplicate":
+                raise
+
+
+def get_db_instance_and_cluster(
+        db_host: str,
+        aws_region: str
+) -> tuple:
+    db_instance = None
+    db_cluster = None
+    
+    rds = boto3.client("rds", region_name=aws_region)
+    paginator = rds.get_paginator("describe_db_instances")
+    for page in paginator.paginate():
+        for inst in page.get("DBInstances", []):
+            ep = (inst.get("Endpoint") or {}).get("Address")
+            if ep and ep == db_host:
+                db_instance = inst
+    
+    paginator = rds.get_paginator("describe_db_clusters")
+    for page in paginator.paginate():
+        for cl in page.get("DBClusters", []):
+            endpoints = set(filter(None, [
+                cl.get("Endpoint"),
+                cl.get("ReaderEndpoint"),
+                cl.get("CustomEndpoints", []),
+            ] if isinstance(cl.get("CustomEndpoints"), list) else [cl.get("Endpoint"), cl.get("ReaderEndpoint")]))
+            if db_host in endpoints:
+                db_cluster = cl
+    
+    return db_instance, db_cluster
+
+
+def get_securitygroup_ids(db_cluster, db_instance):
+    sg_ids = []
+    if db_instance:
+        sg_ids = [v["VpcSecurityGroupId"] for v in db_instance.get("VpcSecurityGroups", []) if v.get("VpcSecurityGroupId")]
+    elif db_cluster:
+        sg_ids = [v["VpcSecurityGroupId"] for v in db_cluster.get("VpcSecurityGroups", []) if v.get("VpcSecurityGroupId")]
+    return sg_ids
 
 
 def ensure_iam_role_exists_and_get_arn(role_name: str) -> str:

@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import List, Optional
 
 import boto3
+import botocore.session
 import yaml
 from django.db import transaction
 from django.db.models import Func
 from django.db.models import Q
 from django.db.models.expressions import RawSQL
-from django.utils import timezone
+from erieiron_public import agent_tools
 from sentence_transformers import SentenceTransformer
 
 import settings
@@ -27,11 +28,11 @@ from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_constants import MODEL_BACKUPS
 from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
-from erieiron_common.message_queue.pubsub_manager import PubSubManager
+from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -42,6 +43,14 @@ READONLY_FILES = [
         "description": "Django's core management script"
     }
 ]
+
+
+@pubsub_workflow
+def initialize_workflow(pubsub_manager: PubSubManager):
+    pubsub_manager.on(
+        PubSubMessageType.RESET_TASK_TEST,
+        on_reset_task_test
+    )
 
 
 def execute(task_id: str, quick_debug=False):
@@ -73,7 +82,6 @@ def execute(task_id: str, quick_debug=False):
                             include_erie_common=True
                         )
                     
-                    log_initial_test_only_headline(config)
                     config.set_phase(SdaPhase.CODING)
                     write_initial_test(config)
                 
@@ -90,8 +98,6 @@ def execute(task_id: str, quick_debug=False):
                         evaluation_json=None
                     )
                     config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
-                    
-                    log_execution_only_headline(config)
                 else:
                     try:
                         most_recent_iteration = self_driving_task.get_most_recent_iteration()
@@ -105,15 +111,13 @@ def execute(task_id: str, quick_debug=False):
                         if not quick_debug and config.iteration_to_modify:
                             config.iteration_to_modify.write_to_disk()
                         
-                        log_iteration_headline(config)
-                        
                         planning_data = plan_code_changes(config)
                         cr_exception = None
                         failed_code_reviews = []
                         config.set_phase(SdaPhase.CODING)
                         for review_iteration_idx in range(5):
                             try:
-                                generate_code(
+                                implement_code_changes(
                                     config,
                                     planning_data,
                                     cr_exception
@@ -158,6 +162,7 @@ def execute(task_id: str, quick_debug=False):
                             AwsEnv.DEV
                         )
                     except BadPlan as bpe:
+                        config.log(bpe)
                         raise bpe
                     except AgentBlocked as abe:
                         raise abe
@@ -260,6 +265,7 @@ full logs:
                 
                 break
             finally:
+                quick_debug = False
                 config.cleanup_iteration()
     
     finally:
@@ -270,6 +276,13 @@ full logs:
         if TaskType.CODING_ML.eq(config.task_type):
             from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
             package_ml_artifacts(config)
+
+
+def on_reset_task_test(task_id):
+    task = Task.objects.get(id=task_id)
+    self_driving_task = task.selfdrivingtask
+    config = SelfDriverConfig(self_driving_task)
+    write_initial_test(config)
 
 
 def plan_code_changes(config):
@@ -292,6 +305,15 @@ def plan_code_changes(config):
         planning_json=planning_data
     )
     config.current_iteration.refresh_from_db(fields=["planning_json"])
+    
+    for tombstone_data in common.get_list(planning_data, ["deprecation_plan", "tombstones"]):
+        AgentTombstone.objects.update_or_create(
+            business=config.business,
+            name=tombstone_data.get("name"),
+            defaults={
+                "data_json": tombstone_data
+            }
+        )
     
     return planning_data
 
@@ -327,67 +349,6 @@ def validate_plan(planning_data):
     return planning_data
 
 
-def log_iteration_headline(
-        config: SelfDriverConfig
-):
-    current_iteration = config.current_iteration
-    iteration_to_modify = config.iteration_to_modify
-    
-    iteration_to_modify_str = f"Modifying iteration {iteration_to_modify.id} (v{iteration_to_modify.version_number})" if iteration_to_modify else "initial version of code"
-    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    config.log(f"""
---------------------------------------------------
-{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
-
-Task id {config.task.id} 
-iteration id {current_iteration.id} (v{iteration_count})
-{iteration_to_modify_str}
-sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
-total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
-tail -f {os.path.abspath(config.log_path)}
-
-https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
---------------------------------------------------
-                                    """)
-
-
-def log_execution_only_headline(config: SelfDriverConfig):
-    current_iteration = config.current_iteration
-    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    config.log(f"""
---------------------------------------------------
-{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
-
-Task id {config.task.id} 
-sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
-total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
-
-No coding - just gonna execute iteration {current_iteration.id} (v{current_iteration.version_number})
-tail -f {os.path.abspath(config.log_path)}
-
-https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
--------------------------------------------------- """)
-
-
-def log_initial_test_only_headline(config: SelfDriverConfig):
-    iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
-    config.log(f"""
---------------------------------------------------
-{timezone.now().strftime("%m/%d/%Y %H:%M:%S")}
-
-Task id {config.task.id} 
-sandbox root dir: {os.path.abspath(config.sandbox_root_dir)}  
-total spend: ${config.self_driving_task.get_cost() :.2f}/${config.budget :.2f}
-
-First execution - will write the test for test driven development
-tail -f {os.path.abspath(config.log_path)}
-
-https://www.youtube.com/watch?v=-Ca-2FRsTx8&t=281s
---------------------------------------------------
-                                    """
-               )
-
-
 def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
     self_driving_task = task.create_self_driving_env()
@@ -395,13 +356,60 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     git = self_driving_task.get_git()
     git.pull()
     
+    if not self_driving_task.selfdrivingtaskiteration_set.exists():
+        generate_first_iteration(self_driving_task)
+    
     return self_driving_task
+
+
+def generate_first_iteration(self_driving_task):
+    first_iteration = self_driving_task.iterate()
+    config = SelfDriverConfig(self_driving_task)
+    planning_json = llm_chat(
+        "Create First Iteration",
+        config,
+        [
+            get_sys_prompt(
+                [
+                    "codeplanner--common.md",
+                    "common--infrastructure_rules.md",
+                    "common--credentials_architecture.md"
+                ], replacements=[
+                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                    ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
+                    ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
+                    get_readonly_files_replacement()
+                ]
+            ),
+            *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
+            LlmMessage.sys("""
+This is the first iteration on this code.  
+
+## Requirements:
+- Do not make any changes to the code_files.  
+    - The value of code_files must be []
+- Review the architecture document and specify values for 
+    1.  required_credentials (required)
+    2.  tombstones (optional) 
+                """)
+        ],
+        config.model_code_planning,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=first_iteration.id).update(
+            planning_json=planning_json
+        )
+        first_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
 
 
 def build_docker_image(
         config: SelfDriverConfig,
         envinronment: AwsEnv,
-        envvar_secretarn_list: list[tuple[str:str]],
+        docker_env: dict,
         docker_file: Path
 ) -> str:
     subprocess.run(["docker", "system", "prune", "-f"], check=True)
@@ -422,21 +430,21 @@ def build_docker_image(
     if "moto==4.2.8" not in requirements_txt.read_text():
         raise Exception("moto==4.2.8 is required")
     
-    env = build_env(envvar_secretarn_list)
+    docker_build_cmd = common.strings([
+        "docker",
+        "build",
+        "-t", docker_image_tag,
+        "-f", docker_file,
+        docker_file.parent
+    ])
     
+    config.log(f"\n\nstarting docker build with the command:\n{' '.join(docker_build_cmd)}\n\n")
     build_process = subprocess.Popen(
-        common.strings([
-            "docker",
-            "build",
-            "--secret", "id=github_token,env=GITHUB_TOKEN",
-            "-t", docker_image_tag,
-            "-f", docker_file,
-            docker_file.parent
-        ]),
+        docker_build_cmd,
         stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True,
-        env=env
+        env=docker_env
     )
     
     while build_process.poll() is None:
@@ -444,23 +452,6 @@ def build_docker_image(
     
     if build_process.returncode != 0:
         raise Exception(f"Docker build failed with return code: {build_process.returncode}")
-    
-    pip_install_proc = subprocess.Popen(
-        common.strings([
-            "docker", "run", "--rm",
-            "-v", f"{self_driving_task.sandbox_path}:/app",
-            "-w", "/app",
-            docker_image_tag,
-            "bash", "-c",
-            "grep -v erieiron-common requirements.txt > requirements.noerie.txt && pip install -r requirements.noerie.txt && rm requirements.noerie.txt"
-        ]),
-        text=True,
-        env=env
-    )
-    
-    pip_install_proc.wait()
-    if pip_install_proc.returncode != 0:
-        raise Exception(f"pip install in the Docker container failed with return code: {pip_install_proc.returncode}")
     
     config.log(f"""
 =========================================================
@@ -474,16 +465,101 @@ docker run --rm -it -v {self_driving_task.sandbox_path}:/app -w /app {docker_ima
     return docker_image_tag
 
 
-def build_env(var_val_list: list[tuple[str:str]]):
-    env = os.environ.copy()
-    env["DOCKER_BUILDKIT"] = "1"
-    env["GITHUB_TOKEN"] = git_utils.get_github_token()
-    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
+def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv, os_env: dict):
+    stack_name = config.self_driving_task.get_cloudformation_stack_name(aws_env)
+    if not stack_name:
+        raise AgentBlocked("unable to determine stack name")
     
-    for envvar_name, val in var_val_list:
-        env[envvar_name] = val
+    region = os_env.get("AWS_REGION") or os_env.get("AWS_DEFAULT_REGION") or settings.AWS_DEFAULT_REGION_NAME
+    if not region:
+        raise AgentBlocked("unable to determine regions")
+    
+    stack_descriptions = boto3.client(
+        "cloudformation",
+        region_name=region
+    ).describe_stacks(
+        StackName=stack_name
+    ).get("Stacks")
+    if not stack_descriptions:
+        raise AgentBlocked(f"no stack descriptions found for {stack_name}")
+    
+    outputs = common.ensure_list(common.first(stack_descriptions).get("Outputs"))
+    if not outputs:
+        raise AgentBlocked(f"no stack outputs found for {stack_name}")
+    
+    role_arn = None
+    # Prefer explicit key, else fall back to anything that looks like a task role arn
+    for o in outputs:
+        if o.get("OutputKey") == "DjangoEcsTaskRoleArn" and o.get("OutputValue"):
+            role_arn = o["OutputValue"]
+            break
+    
+    if not role_arn:
+        for o in outputs:
+            val = o.get("OutputValue", "")
+            if ":role/" in val:
+                role_arn = val
+                break
+    if role_arn:
+        logging.info(f"Resolved role to assume from CloudFormation outputs: {role_arn}")
+    
+    if not role_arn:
+        # Nothing to do; caller may rely on container-provided identity (e.g., ECS task role)
+        raise BadPlan("infrastructure.yaml does not define a ")
+    
+    return role_arn
+
+
+def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
+    env = {}
+    
+    required_credentials = common.get(
+        config.current_iteration,
+        ["planning_json", "required_credentials"],
+        default_val={}
+    )
+    
+    for credential_service_name, cred_def in required_credentials.items():
+        secret_arn_env_var = cred_def.get("secret_arn_env_var")
+        secrent_arn = credential_manager.manage_credentials(
+            config,
+            aws_env,
+            credential_service_name,
+            cred_def
+        )
+        env[secret_arn_env_var] = secrent_arn
+    
+    aws_credentials = botocore.session.Session(
+        profile=os.environ.get("AWS_PROFILE")
+    ).get_credentials()
+    frozen = aws_credentials.get_frozen_credentials()
+    
+    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
+    env["AWS_ACCESS_KEY_ID"] = frozen.access_key
+    env["AWS_DEFAULT_REGION"] = settings.AWS_DEFAULT_REGION_NAME
+    env["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
+    env["AWS_SESSION_TOKEN"] = frozen.token
+    env["DOCKER_BUILDKIT"] = "1"
+    env["PATH"] = os.getenv("PATH")
+    
+    for k in list(env.keys()):
+        if env.get(k) is None:
+            env.pop(k, None)
     
     return env
+
+
+def build_env_flags(env):
+    env_flags: list[str] = []
+    for k in list(env.keys()):
+        if k in ["PATH"]:
+            continue
+        
+        val = env.get(k)
+        if val:
+            env_flags += ["-e", f"{k}={val}"]
+    
+    return env_flags
 
 
 def push_image_to_ecr(
@@ -535,23 +611,27 @@ def push_image_to_ecr(
 
 def run_docker_command(
         config: SelfDriverConfig,
+        aws_env: AwsEnv,
         command_args: list[str],
-        envvar_secretarn_list: list[tuple[str:str]],
+        docker_env: dict,
         running_process: RunningProcess,
         docker_image: str
 ) -> None:
+    command_args = common.ensure_list(command_args)
     task_execution = running_process.task_execution
     iteration = config.current_iteration
     selfdriving_task = iteration.self_driving_task
     sandbox_path = iteration.self_driving_task.sandbox_path
     
     cmd = [
-              "docker", "run", "--rm",
-              "-v", f"{sandbox_path}:/app",
-              "-w", "/app",
-              docker_image,
-              "python", "manage.py"
-          ] + common.safe_strs(command_args)
+        "docker", "run", "--rm",
+        "-v", f"{sandbox_path}:/app",
+        "-w", "/app",
+        *build_env_flags(docker_env),
+        docker_image,
+        "python", "manage.py",
+        *common.safe_strs(command_args)
+    ]
     
     config.log("\n" + "=" * 50 + "\n")
     config.log(f"RUNNING {' '.join(cmd)} in {sandbox_path}\n")
@@ -560,7 +640,7 @@ def run_docker_command(
     process = subprocess.Popen(
         cmd,
         stdout=config.log_f,
-        env=build_env(envvar_secretarn_list),
+        env=docker_env,
         stderr=subprocess.STDOUT,
         text=True
     )
@@ -594,22 +674,24 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
     if not iteration.planning_json:
         raise BadPlan(f"current iteration has no planning data.  need to go back and replan", {})
     
+    if not common.get(iteration.planning_json, "required_credentials"):
+        raise BadPlan(f"current iteration has no required_credentials.  need to go back and replan and add required_credentials", {})
+    
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
     task_type = TaskType(task.task_type)
     task_execution = init_task_execution(iteration)
     
     try:
+        
         config.set_phase(SdaPhase.DEPLOY)
+        
+        docker_env = build_env(config, aws_env)
+        
         running_process, _ = RunningProcess.objects.update_or_create(
             task_execution=task_execution,
             execution_type='docker',
             log_file_path=str(config.log_path)
-        )
-        
-        envvar_secretarn_list = manage_required_credentials(
-            config,
-            aws_env
         )
         
         docker_file = config.sandbox_root_dir / "Dockerfile"
@@ -621,7 +703,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         docker_image_tag = build_docker_image(
             config,
             aws_env,
-            envvar_secretarn_list,
+            docker_env,
             docker_file
         )
         
@@ -634,9 +716,10 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
             code_file=CodeFile.get(config.business, "infrastructure.yaml")
         ).first()
         
-        if True:  # infrastructure_code_version and infrastructure_code_version.get_diff():
-            # only push to ecr and deplor if infra has changed
-            # config.log(f"pushing infrastructure change to ecr and cloud formation:\n{infrastructure_code_version.get_diff()}")
+        if not stack_exists(config, aws_env, docker_env) or (
+                infrastructure_code_version
+                and infrastructure_code_version.get_diff()
+        ):
             try:
                 full_image_uri, ecr_arn = push_image_to_ecr(
                     config,
@@ -649,15 +732,24 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
             deploy_cloudformation_stacks(
                 config,
                 aws_env,
-                envvar_secretarn_list,
+                docker_env,
                 ecr_arn
             )
+        
+        manage_db(
+            config,
+            aws_env,
+            docker_env,
+            docker_image_tag,
+            running_process
+        )
         
         config.set_phase(SdaPhase.EXECUTION)
         if TaskType.CODING_ML.eq(task_type):
             run_docker_command(
                 config=config,
-                envvar_secretarn_list=envvar_secretarn_list,
+                aws_env=aws_env,
+                docker_env=docker_env,
                 command_args=self_driving_task.main_name,
                 running_process=running_process,
                 docker_image=docker_image_tag
@@ -666,7 +758,8 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         else:
             run_docker_command(
                 config=config,
-                envvar_secretarn_list=envvar_secretarn_list,
+                aws_env=aws_env,
+                docker_env=docker_env,
                 command_args="test",
                 running_process=running_process,
                 docker_image=docker_image_tag
@@ -683,7 +776,8 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
                 
                 run_docker_command(
                     config=config,
-                    envvar_secretarn_list=envvar_secretarn_list,
+                    aws_env=aws_env,
+                    docker_env=docker_env,
                     command_args=[
                         self_driving_task.main_name,
                         "--input_file", input_file,
@@ -703,6 +797,46 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         
         config.business.snapshot_code(iteration, include_erie_common=False)
         subprocess.run(["docker", "system", "prune", "-f"], check=True)
+
+
+def stack_exists(config: SelfDriverConfig, aws_env: AwsEnv, docker_env: dict) -> bool:
+    try:
+        matching_stack = get_stack(
+            config.self_driving_task.get_cloudformation_stack_name(aws_env),
+            boto3.client("cloudformation", region_name=docker_env['AWS_DEFAULT_REGION'])
+        )
+        return matching_stack != None
+    except:
+        return False
+
+
+def manage_db(
+        config: SelfDriverConfig,
+        aws_env: AwsEnv,
+        docker_env: dict,
+        docker_image_tag: str,
+        running_process: RunningProcess
+):
+    aws_region_name = docker_env["AWS_DEFAULT_REGION"]
+    
+    rds_secret = agent_tools.get_secret_json(
+        docker_env["RDS_SECRET_ARN"],
+        aws_region_name
+    )
+    
+    # aws_utils.ensure_network_access(
+    #     rds_secret["host"],
+    #     aws_region_name
+    # )
+    
+    run_docker_command(
+        config=config,
+        aws_env=aws_env,
+        docker_env=docker_env,
+        command_args="migrate",
+        running_process=running_process,
+        docker_image=docker_image_tag
+    )
 
 
 def init_task_execution(iteration):
@@ -730,7 +864,7 @@ def init_task_execution(iteration):
 def evaluate_iteration_execution(config: SelfDriverConfig):
     iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
     
-    log_output = iteration.log_content_execution
+    log_output = config.log_path.read_text()
     
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
@@ -2177,7 +2311,7 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
     elif code_file_name_lower.endswith(".css"):
         prompt = "codewriter--css_coder.md"
     elif code_file_name_lower.startswith(".env"):
-        prompt = "codewriter--decouple_env.md"
+        raise BadPlan("All env vars must be fetched from the os environment.  Do not use .env files or decouple")
     else:
         raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
     return common.ensure_list(prompt)
@@ -2632,7 +2766,7 @@ def llm_chat(
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
         aws_env: AwsEnv,
-        envvar_secretarn_list: list[tuple[str:str]],
+        docker_env: dict,
         ecr_arn: str
 ):
     cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
@@ -2664,7 +2798,7 @@ def deploy_cloudformation_stacks(
         cloudformation_params = get_stack_parameters(
             config,
             aws_env,
-            envvar_secretarn_list,
+            docker_env,
             cfn_file,
             ecr_arn
         )
@@ -2768,7 +2902,7 @@ def deploy_cloudformation_stacks(
 def get_stack_parameters(
         config: SelfDriverConfig,
         aws_env: AwsEnv,
-        envvar_secretarn_list: list[tuple[str, str]],
+        docker_env: dict,
         cfn_file: Path,
         ecr_arn: str
 ):
@@ -2780,9 +2914,6 @@ def get_stack_parameters(
     """
     self_driving_task = config.self_driving_task
     secrets_key = config.business.get_secrets_root_key(aws_env)
-    
-    # Map of ENV_VAR_NAME -> Secret ARN as provided by downstream credential management
-    envvar_to_arn = dict(envvar_secretarn_list or [])
     
     required_parameters, parameters_metadata = extract_cloudformation_params(
         cfn_file
@@ -2799,6 +2930,7 @@ def get_stack_parameters(
     
     known_params = {
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
+        "ClientIpForRemoteAccess": common.get_ip_address(),
         "TaskRoleArn": role_arn,
         "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
@@ -2814,13 +2946,10 @@ def get_stack_parameters(
     planning_required_creds = common.get(config.current_iteration, ["planning_json", "required_credentials"], default_val={})
     for svc_name, svc_spec in planning_required_creds.items():
         cfn_param = svc_spec.get("secret_arn_cfn_parameter")
-        if not cfn_param:
-            # this credential is not passed via CFN
-            continue
-        
         envvar_name = svc_spec.get("secret_arn_env_var")
-        if (arn := envvar_to_arn.get(envvar_name)) is not None:
-            arn_param_bindings.append((cfn_param, envvar_name, arn))
+        arn_value = docker_env.get(envvar_name)
+        if cfn_param and arn_value:
+            arn_param_bindings.append((cfn_param, envvar_name, arn_value))
     
     # Inject known ARNs for any required CFN params
     for param_name, envvar_name, arn in arn_param_bindings:
@@ -2859,7 +2988,7 @@ def get_stack_parameters(
             "desc": "Missing required secret ARN CloudFormation parameter(s).",
             "file": cfn_file.name,
             "missing_secret_params": missing_secret_params,
-            "available_env_vars": sorted(list(envvar_to_arn.keys())),
+            "available_env_vars": docker_env,
             "message": "Ensure credential_manager returned ARNs for these secrets and that they were passed into get_stack_parameters(envvar_secretarn_list=...)"
         }, indent=4), config.current_iteration.planning_json)
     
@@ -2911,63 +3040,6 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
         )
     
     return json_val
-
-
-def get_rds_credentials(project_name, environment, secrets_key, self_driving_task):
-    aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
-    rds_secrets_key = f"{secrets_key}/rds"
-    
-    try:
-        rds_secret = aws_secrets_client.get_secret_value(SecretId=rds_secrets_key)
-        db_creds = json.loads(rds_secret["SecretString"])
-    except aws_secrets_client.exceptions.ResourceNotFoundException:
-        if AwsEnv.DEV.eq(environment):
-            db_name = aws_utils.sanitize_aws_name([
-                project_name,
-                environment,
-                self_driving_task.task.id
-            ], max_length=50)
-        else:
-            db_name = aws_utils.sanitize_aws_name([
-                project_name,
-                environment
-            ], max_length=50)
-        
-        db_name = common.strip_non_alphanumeric(db_name)
-        db_creds = set_secret(aws_secrets_client, rds_secrets_key, {
-            "DBPassword": common.random_string(20),
-            "DBName": db_name
-        })
-    
-    return db_creds
-
-
-def manage_required_credentials(
-        config: SelfDriverConfig,
-        env: AwsEnv
-) -> list[tuple[str:str]]:
-    required_credentials = common.get(
-        config.current_iteration,
-        ["planning_json", "required_credentials"],
-        default_val={}
-    )
-    
-    envvar_secretarn_list = []
-    
-    for credential_service_name, cred_def in required_credentials.items():
-        secret_arn_env_var = cred_def.get("secret_arn_env_var")
-        secrent_arn = credential_manager.manage_credentials(
-            config,
-            env,
-            credential_service_name,
-            cred_def
-        )
-        
-        envvar_secretarn_list.append(
-            (secret_arn_env_var, secrent_arn)
-        )
-    
-    return envvar_secretarn_list
 
 
 def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):

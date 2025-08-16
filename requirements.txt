@@ -1,3 +1,4 @@
+erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git
 Django==5.1.6
 cfn-lint
 PyJWT

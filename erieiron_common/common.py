@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import importlib
+import ipaddress
 import json
 import logging
 import math
@@ -18,6 +19,7 @@ import time
 import traceback
 import types
 import unicodedata
+import urllib.request
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
@@ -1799,3 +1801,8 @@ def random_string(length=16):
 def assert_not_empty(s):
     if not s:
         raise ValueError("value is empty")
+
+
+def get_ip_address():
+    ip_txt = urllib.request.urlopen("https://checkip.amazonaws.com", timeout=5).read().decode().strip()
+    return f"{ipaddress.ip_address(ip_txt)}/32"

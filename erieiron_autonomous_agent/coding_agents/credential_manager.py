@@ -61,20 +61,20 @@ def get_existing_service_schema_desc() -> str:
 
 def manage_credentials(
         config:SelfDriverConfig,
-        env: AwsEnv,
+        aws_env: AwsEnv,
         credential_service_name: str,
         cred_def: dict
 ) -> str:
     business = config.business
     task = config.task
     
-    if not CredentialService.valid(credential_service_name):
+    if not CredentialService.valid(common.default_str(credential_service_name).upper()):
         raise AgentBlocked(f"""Blocked by unsupported credential service: {credential_service_name}
 
 Need a human to set this up
 
 Business:  {business.name} ({business.id})
-Env:  {env}
+Env:  {aws_env}
 
 Secret Def:
 {json.dumps(cred_def, indent=4)}
@@ -82,7 +82,7 @@ Secret Def:
     
     aws_secret_key, secret_dict = get_credential_secret(
         business,
-        env,
+        aws_env,
         task,
         credential_service_name
     )
@@ -138,11 +138,11 @@ def get_aws_role_name(
 
 def get_credential_secret(
         business: Business,
-        env: AwsEnv,
+        aws_env: AwsEnv,
         task: Task,
         credential_service_name: str
 ):
-    prefix = business.get_secrets_root_key(env)
+    prefix = business.get_secrets_root_key(aws_env)
     aws_secret_key = f"{prefix}/{credential_service_name}"
     
     aws_secret_key = aws_utils.sanitize_aws_name(aws_secret_key, 512)

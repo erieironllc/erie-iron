@@ -73,6 +73,12 @@ class SelfDriverConfig:
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
         
+        self.current_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
+        if self.current_iteration:
+            self.previous_iteration, self.iteration_to_modify = self.current_iteration.get_relevant_iterations()
+        else:
+            self.previous_iteration = self.iteration_to_modify = None
+
         artifacts_root = self.sandbox_root_dir / ARTIFACTS
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = artifacts_root

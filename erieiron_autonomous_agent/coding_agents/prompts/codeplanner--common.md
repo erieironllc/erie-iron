@@ -12,6 +12,7 @@
 - Include diagnostic logging in all plans.
 - Minimize iteration count. Minimize file sprawl.
 - Only emit blocked according to the criteria in Blocked Output Example.
+- When database-related errors occur (e.g., `django.db.utils.OperationalError`, connection refused/timeouts, authentication failures), you **must** plan edits to the settings module to fully configure `DATABASES` from AWS Secrets Manager rather than escalating to a human.
 - you **may not** edit the file self_driving_coder_agent.py.  
     - if you need edits to self_driving_coder_agent.py, you must return as "Blocked"
     - only return "Blocked" in this case if you have no workarounds in the code that you are able to edit
@@ -59,6 +60,25 @@ Always:
     - **Runtime contract:** Code must read the value of `secret_arn_env_var` from the environment, treat it as a Secrets Manager ARN, call `secretsmanager:GetSecretValue` to fetch the secret JSON, and parse keys according to `schema`. Do not construct secret names or paths in code; do not log secret contents; fail fast if the env var is missing or invalid.
 
 **Do not include any real or placeholder secret values — only the field definitions and metadata. The schema must be sufficient for secret creation and validation.**
+
+### Django database configuration contract
+- When planning fixes for database connectivity, always include `settings module` edits in `code_files` to configure `DATABASES` using an AWS Secrets Manager secret referenced by an environment variable.
+- Required behavior for the code writer:
+  - Read the secret ARN from the environment variable named `RDS_SECRET_ARN` (exact string) at runtime. If missing, raise a clear, fail-fast error that includes the missing env var name but **never** logs secret contents.
+  - Call `secretsmanager:GetSecretValue` for that ARN and parse a JSON object with keys: `username` (string, required), `password` (string, required), `host` (string, required), `port` (integer, required), `database` (string, required).
+  - Construct `DATABASES['default']` for Postgres as:
+    - ENGINE: `django.db.backends.postgresql`
+    - NAME: value of `database`
+    - USER: value of `username`
+    - PASSWORD: value of `password`
+    - HOST: value of `host`
+    - PORT: value of `port`
+    - OPTIONS: include `connect_timeout=5` and set `sslmode` to `prefer` unless explicitly disabled by an env var.
+  - Do **not** fall back to sqlite or any non-RDS database. If the secret ARN is not provided or the secret cannot be parsed, fail with a deterministic error message.
+- Planning obligations:
+  - Add an entry to `required_credentials` with the service key `RDS` using `secret_arn_env_var: RDS_SECRET_ARN` and the schema listed above.
+  - Ensure the `code_files` list includes the settings module path discovered via `DJANGO_SETTINGS_MODULE` or common defaults (`settings.py`, `project/settings.py`, `erieiron_config/settings.py`).
+  - Add guidance reminding the code writer not to perform network calls inside migrations or tests except where strictly necessary, and to guard settings-time calls with short timeouts.
 
 ---
 
@@ -144,6 +164,8 @@ Do **not** emit blocked:
 - For warnings that can be ignored.
 - When infrastructure edits target the wrong file — correct it instead.
 - When code is malformed but fixable (e.g. symbolic versions, prose entries).
+- Do **not** emit `blocked` solely because database secrets are not yet provisioned. Instead, plan the settings changes, require the `RDS` secret schema, and specify fail-fast behavior when the env var/secret is missing at runtime.
+- Do **not** escalate to a human for routine Django `DATABASES` wiring. Treat it as a standard, safe edit to the settings module.
 
 ---
 
@@ -388,8 +410,8 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
     },
 
     "required_credentials": {
-        "rds": {
-            "secret_arn_env_var": "SECRET_ARN_AWS_RDS",
+        "RDS": {
+            "secret_arn_env_var": "RDS_SECRET_ARN",
             "schema": [
                 { "key": "username", "type": "string", "required": true, "description": "Database username for the application" },
                 { "key": "password", "type": "string", "required": true, "description": "Database password for the application" },
@@ -467,6 +489,7 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 - Warnings should be ignored unless they directly interfere with achieving the GOAL (e.g., cause test failures, deployment errors, or runtime exceptions). 
     - Focus on actionable errors and failures instead of Warnings.
 - If the evaluator output includes deployment errors, CloudFormation errors, Dockerfile or Container errors, or other infrastructure errors, prioritize fixing those issues before proposing any other code changes. When infrastructure setup fails, the test and execute phases are skipped, meaning there is no feedback loop available for non-infrastructure code.
+- If evaluator logs include database connection or authentication errors during Django startup or tests, prioritize planning the settings module edit to read from `RDS_SECRET_ARN` and construct `DATABASES` as defined in the 'Django database configuration contract'. Include `required_credentials.RDS` in output.
 - If deployment failed, do not emit changes to application code, test code, handlers, models, or logic. Since nothing ran, there is no signal available about whether any of those systems are working or broken. All such changes would be speculative and violate the feedback-driven planning loop.
 - If the issue is with a file that causes build failure but the correction is straightforward, propose the fix rather than returning a `blocked` result. Favor self-unblocking whenever there is enough context.
 - If no matching code files are returned, begin planning using conventional file/module layout for the task type and document your assumptions.
@@ -482,12 +505,12 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 ---
 
 ## Forbidden Actions
-
 - Never attempt to use GitHub OIDC provider or any GitHub workflows
 - Never edit `self_driving_coder_agent.py`. If a change seems required there and no safe workaround exists in editable files, return a blocked result.
 - Never add or edit any file inside `erieiron_common`.
 - Never plan edits to read-only or generated artifacts, including anything in `venv`, `node_modules`, `.pyc`, `.log`, or other derived/runtime-generated files.
-- Never place `settings.py` anywhere except the Django app root next to `manage.py`.
+- Never relocate or rename the Django settings module, and never change `DJANGO_SETTINGS_MODULE` as part of a plan to satisfy database configuration.
+- Never hardcode database credentials, construct secret names/paths in code, or log secret contents. Always fetch via the ARN provided in `RDS_SECRET_ARN`.
 - Never add CloudFormation parameters named `DBName` or `DBPassword`.
   - If either exists, delete it.
   - Define the database name using `StackIdentifier` plus a sensible suffix.
@@ -504,3 +527,6 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
   - No multiple sections; do not return prose plus JSON.
 - Never use absolute paths in `code_file_path`. All paths must be relative and must not start with `/`.
 - Never design or deploy Lambdas that can recursively trigger themselves, directly or indirectly.
+- Never use decouple or similar for fetching environment variables.  Always fetch ALL environment variables directly from the os env
+
+If you detect code that violates any Forbidden Action, you **must** include a concrete plan to remediate it in this iteration.

@@ -335,11 +335,11 @@
                         <dl class="row">
                             <pre id="llmrequest-content-{{ forloop.counter }}">
                                 {% for inp_msg in llm_request.input_messages %}
-=============================================
-Role: {{ input_msg.role }} 
+==== Message Role: {{ inp_msg.role }} =========================================
+ 
                                     
 {{ inp_msg.content }}
-=============================================
+
                                 {% endfor %}
 =============================================
 Response from {{ llm_request.model }}
