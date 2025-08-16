@@ -58,3 +58,7 @@ Iterative Context Tags (Optional)
  • You may include context as comments at the top of the file.
 
 
+---
+
+## Forbidden Actions
+- **Nevern** attempt to internally validate code using `compile(source_code, "<generated>", "exec")`.  Code validation is handled externally

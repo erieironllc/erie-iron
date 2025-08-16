@@ -675,7 +675,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         raise BadPlan(f"current iteration has no planning data.  need to go back and replan", {})
     
     if not common.get(iteration.planning_json, "required_credentials"):
-        raise BadPlan(f"current iteration has no required_credentials.  need to go back and replan and add required_credentials", {})
+        raise BadPlan(f"current iteration has no required_credentials.  need to go back and replan and add required_credentials definition", {})
     
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
@@ -1650,6 +1650,7 @@ def write_initial_test(config: SelfDriverConfig):
         try:
             messages = [
                 get_sys_prompt([
+                    "codewriter--python_test.md",
                     "codewriter--initial_test.md",
                     "codewriter--common.md"
                 ]),
@@ -2288,6 +2289,8 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
     code_file_name_lower = code_file_name.lower()
     if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
         prompt = "codewriter--requirements.txt.md"
+    elif code_file_name_lower.startswith("test") and code_file_name_lower.endswith(".py"):
+        prompt = "codewriter--python_test.md"
     elif code_file_name_lower == "settings.py":
         prompt = ["codewriter--python_coder.md", "codewriter--django_settings.md"]
     elif code_file_name_lower.endswith(".json"):
