@@ -100,7 +100,6 @@ If `recovery_path` is 'DIRECT_FIX' or 'AWS_PROVISIONING_PLANNER', you must inclu
 - You must **never** make route decisions based on "WARNING" level log statements
   - For example, **never** make a routing decision based on a line like this:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 
-
 ---
 
 ## Read-Only Files
@@ -109,6 +108,18 @@ The following files are system-managed and must be treated as **read-only**. Do 
 
 - Files within the `venv` directory or any `node_modules` packages
 <read_only_files>
+
+---
+
+## Routing: Missing Cloud Resource Env Vars
+
+If an error message contains patterns like:
+ - KeyError / EnvironmentError for variables named *S3_BUCKET*, *DB_*, *QUEUE_*, *TOPIC_*, *STORAGE_*; or
+ - boto3 ClientError indicating a non-existent bucket/queue/topic; then classify as "MISSING_DEPENDENCY".
+ 
+Next step:
+ - Escalate to 'AWS_PROVISIONING_PLANNER'
+ - Proposed fix MUST modify CloudFormation and Lambda IAM/Environment, not the application code defaults.
 
 ---
 

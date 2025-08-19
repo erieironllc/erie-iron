@@ -108,7 +108,7 @@ def execute(task_id: str, quick_debug=False):
                     try:
                         most_recent_iteration = self_driving_task.get_most_recent_iteration()
                         if most_recent_iteration:
-                            if quick_debug or not most_recent_iteration.has_plan():
+                            if quick_debug or not most_recent_iteration.planning_json:
                                 config.set_iteration(most_recent_iteration)
                             else:
                                 config.set_iteration(self_driving_task.iterate())
@@ -354,6 +354,9 @@ def validate_plan(planning_data):
         if code_file_path.endswith("settings.py"):
             continue
         
+        if "docker-compose" in code_file_path:
+            raise BadPlan(f"All services must be defined in the existing Dockerfile. You may **never** use docker compose", planning_data)
+        
         if code_file_path.startswith("erieiron_common"):
             raise BadPlan(f"You may not add or edit any file in erieiron_common.  These are readonly library files.", planning_data)
         
@@ -394,11 +397,13 @@ def generate_first_iteration(self_driving_task):
                 [
                     "codeplanner--common.md",
                     "common--infrastructure_rules.md",
+                    "common--environment_variables.md",
                     "common--credentials_architecture.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                     ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
+                    ("<env_vars>", get_env_var_names(config)),
                     ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
                     get_readonly_files_replacement()
                 ]
@@ -530,6 +535,11 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
     return role_arn
 
 
+def get_env_var_names(config: SelfDriverConfig) -> str:
+    env = build_env(config, AwsEnv.DEV)
+    return ", ".join(env.keys())
+
+
 def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
     env = {}
     
@@ -555,6 +565,7 @@ def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
     env["AWS_DEFAULT_REGION"] = settings.AWS_DEFAULT_REGION_NAME
     env["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
     env["AWS_SESSION_TOKEN"] = frozen.token
+    env["TASK_NAMESPACE"] = env["CLOUDFORMATION_STACK_NAME"] = config.self_driving_task.get_cloudformation_stack_name(aws_env)
     env["DOCKER_BUILDKIT"] = "1"
     env["PATH"] = os.getenv("PATH")
     
@@ -1629,7 +1640,6 @@ def implement_code_changes(
                         roll_back_reason=roll_back_reason,
                         previous_exception=previous_exception
                     )
-                   
                     
                     previous_exception = None
                     break
@@ -1714,7 +1724,10 @@ def write_initial_test(config: SelfDriverConfig):
                 get_sys_prompt([
                     "codewriter--python_test.md",
                     "codewriter--initial_test.md",
+                    "common--environment_variables.md",
                     "codewriter--common.md"
+                ], replacements=[
+                    ("<env_vars>", get_env_var_names(config)),
                 ]),
                 *LlmMessage.user_from_data(
                     "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
@@ -1798,10 +1811,12 @@ def identify_required_credentials(
             *common.ensure_list(
                 get_sys_prompt([
                     "codeplanner--common.md",
+                    "common--environment_variables.md",
                     "common--credentials_architecture.md",
                     "codeplanner--initial_credentials.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<env_vars>", get_env_var_names(config)),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                     get_readonly_files_replacement()
                 ]),
@@ -1963,12 +1978,14 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 get_sys_prompt(
                     [
                         "codeplanner--common.md",
+                        "common--environment_variables.md",
                         "common--infrastructure_rules.md",
                         "common--credentials_architecture.md",
                         "codeplanner--aws_provisioning.md"
                     ], replacements=[
                         ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                         ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                        ("<env_vars>", get_env_var_names(config)),
                         ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
                         ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
                         get_readonly_files_replacement()
@@ -2036,11 +2053,13 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             *common.ensure_list(
                 get_sys_prompt([
                     "codeplanner--common.md",
+                    "common--environment_variables.md",
                     "common--credentials_architecture.md",
                     "common--infrastructure_rules.md",
                     "codeplanner--quick_fix.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<env_vars>", get_env_var_names(config)),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                     get_readonly_files_replacement()
                 ]),
@@ -2113,6 +2132,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
                 ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                 ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                 ("<test_file_path>", str(config.self_driving_task.test_file_path or "")),
+                ("<env_vars>", get_env_var_names(config)),
                 ("<aws_tag>", str(business.service_token)),
                 ("<db_name>", str(business.service_token)),
                 ("<iam_role_name>", str(business.get_iam_role_name())),
@@ -2216,7 +2236,10 @@ def write_code(
                 *get_codewriter_system_prompt(code_file_path),
                 "codewriter--common.md"
             ],
-            ("<sandbox_dir>", str(config.sandbox_root_dir))
+            replacements=[
+                ("<sandbox_dir>", str(config.sandbox_root_dir)),
+                ("<env_vars>", get_env_var_names(config))
+            ]
         ),
         *build_previous_iteration_context_messages(
             config,
@@ -2425,6 +2448,8 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         prompt = "codewriter--javascript_coder.md"
     elif code_file_name_lower.endswith(".html"):
         prompt = "codewriter--html_coder.md"
+    elif code_file_name_lower.endswith(".yaml"):
+        prompt = "codewriter--yaml_coder.md"
     elif code_file_name_lower.endswith(".css"):
         prompt = "codewriter--css_coder.md"
     elif code_file_name_lower.startswith(".env"):
@@ -2607,31 +2632,36 @@ def get_existing_required_credentials(
 
 def get_relevant_code_files(
         config: SelfDriverConfig,
-        paths: list[Path] = None
+        paths: list = None
 ) -> list[LlmMessage]:
     current_iteration = config.current_iteration
     iteration_to_modify = config.iteration_to_modify
     files = []
     
-    if paths:
-        for f in set(paths):
-            relative_file = config.sandbox_root_dir / f
+    if paths is not None:
+        paths = common.strings(common.filter_none(paths))
+        for path in set(paths):
+            if path.startswith("/"):
+                absolute_path = Path(path)
+            else:
+                absolute_path = config.sandbox_root_dir / path
             
-            if not relative_file.exists():
-                logging.info(f"{relative_file} does not exist, skipping")
+            if not absolute_path.exists():
+                logging.info(f"{absolute_path} does not exist, skipping")
                 continue
             
+            relative_path = absolute_path.relative_to(config.sandbox_root_dir)
             code_file = CodeFile.get(
                 config.business,
-                relative_file
+                relative_path
             )
             
             code_version = code_file.get_version(iteration_to_modify, default_to_latest=True)
             if not code_version:
                 try:
-                    code_version = CodeFile.init_from_codefile(current_iteration, relative_file)
+                    code_version = CodeFile.init_from_codefile(current_iteration, relative_path)
                 except Exception as e:
-                    config.log(f"failed to fetch {relative_file}")
+                    config.log(f"failed to fetch {relative_path}")
                     config.log(e)
                     continue
             

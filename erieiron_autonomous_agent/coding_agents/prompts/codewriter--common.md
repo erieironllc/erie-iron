@@ -19,7 +19,31 @@ Your responsibilities:
 - Do not generate unrelated code outside of DSL scope
 - Validate the final output using `compile()`
 
+
 DSL execution takes priority. Only fall back to natural-language instructions if no DSL is provided.
+
+---
+
+## Real AWS Integration Test Environment
+- Integration and smoke tests execute against real AWS in an isolated account and CloudFormation stack. Assume production-like conditions.
+- Never use LocalStack, moto, botocore Stubber, or any AWS emulator for acceptance or smoke tests.
+- Do not set `endpoint_url` on boto3 clients to non-AWS hosts. Clients must call real AWS endpoints in the region from `AWS_DEFAULT_REGION`.
+- Use only the single provided IAM role via `TaskRoleArn` or the CI-assumed role. If permissions are insufficient, update the role defined by TaskRoleArn to grant the permissions; do not introduce new roles.
+- Prefer long-lived infrastructure defined in the stack. Create only ephemeral data-plane resources during tests when explicitly allowed by evaluator guidance.
+- Add idempotency, bounded retries with jitter, and short timeouts to accommodate eventual consistency without flakiness.
+
+## Test integrity
+- Assume existing tests and their assertions are correct by default and represent valid assertions of the acceptance criteria.
+- Do not weaken, skip, xfail, or delete assertions to make tests pass. Plan code changes to satisfy the assertions.
+- Do not use any AWS emulator or mock for acceptance or smoke tests. This includes LocalStack, moto, botocore Stubber, and custom HTTP shims.
+- Tests must exercise actual AWS services and connectivity in the configured region. Do not set `endpoint_url` to non-AWS hosts for these tests.
+- Acceptance and smoke tests must never use mock entities. They must hit real AWS endpoints and real resources provisioned by the stack or explicitly created ephemerally for the test.
+
+## Forbidden Actions
+- Never reference or start LocalStack, moto_server, or any AWS-emulating process.
+- Never configure boto3 `endpoint_url` to `localhost`, `127.0.0.1`, or any non-AWS hostname for integration or smoke tests.
+- Never introduce botocore Stubber or request-level monkeypatching in integration or smoke tests to bypass AWS service calls.
+- Never add test-only IAM roles or assume roles other than the single provided `TaskRoleArn` or CI-assumed role.
 
 ### Related Code File Context
 

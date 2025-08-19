@@ -234,6 +234,7 @@ class SelfDriverConfig:
             return self.log_path.read_text()
         except Exception:
             return traceback.format_exc()
+    
 
 
 class GoalAchieved(Exception):

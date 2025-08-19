@@ -252,31 +252,30 @@ class Business(BaseErieIronModel):
         
         return goals_status
     
-    def snapshot_code(self, self_driving_task_iteration: 'SelfDrivingTaskIteration', include_erie_common=True):
+    def snapshot_code(
+            self,
+            self_driving_task_iteration: 'SelfDrivingTaskIteration',
+            include_erie_common=True
+    ):
         instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
         sandbox_path = Path(self_driving_task_iteration.self_driving_task.sandbox_path)
         
-        files_to_index = [sandbox_path / f for f in common.iterate_files_deep(
+        files_to_index = list(common.iterate_files_deep(
             sandbox_path,
             file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh", ".txt", "Dockerfile"],
             gitignore_patterns=["core/migrations/"]
-        )]
+        ))
         
         if include_erie_common:
-            erie_common_path = sandbox_path / "venv/lib/python3.11/site-packages/erieiron_common"
-            files_to_index += [erie_common_path / f for f in common.iterate_files_deep(
-                erie_common_path,
+            erie_common_path = "venv/lib/python3.11/site-packages/erieiron_public"
+            files_to_index += [f"{erie_common_path}/{f}" for f in common.iterate_files_deep(
+                sandbox_path / erie_common_path,
                 file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh"],
                 respect_git_ignore=False,
                 gitignore_patterns=["migrations/"]
             )]
         
-        for file_path in files_to_index:
-            try:
-                relative_file_path = Path(file_path).relative_to(sandbox_path)
-            except:
-                relative_file_path = file_path
-            
+        for relative_file_path in common.strings(files_to_index):
             code_file = CodeFile.get(self, relative_file_path)
             version = code_file.get_latest_version()
             
@@ -784,14 +783,14 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         
         for code_file in business.codefile_set.exclude(
                 file_path__in=[
-                    self_driving_task.test_file_path, 
+                    self_driving_task.test_file_path,
                     self_driving_task.design_doc_path
                 ]
         ).order_by("file_path"):
             if code_file.file_path.startswith("/"):
                 logging.error(f"code got indexed with a root path!: {code_file.file_path}")
                 continue
-
+            
             if code_file.file_path.startswith(str(os.getcwd())):
                 logging.error(f"erie iron code got indexed!: {code_file.file_path}")
                 continue
@@ -990,6 +989,9 @@ class CodeFile(BaseErieIronModel):
     
     @staticmethod
     def get(business: Business, code_file_path: Path) -> 'CodeFile':
+        if str(code_file_path).startswith("/"):
+            asdf = 1
+        
         return CodeFile.objects.get_or_create(
             business=business,
             file_path=code_file_path
@@ -1003,6 +1005,10 @@ class CodeFile(BaseErieIronModel):
         sandbox_path = Path(task_iteration.self_driving_task.sandbox_path)
         file_path = sandbox_path / relative_file_path
         file_path = common.assert_exists(file_path)
+        
+        if str(file_path).startswith("/"):
+            asdf = 1
+        
         return CodeFile.update_from_path(
             task_iteration,
             file_path,

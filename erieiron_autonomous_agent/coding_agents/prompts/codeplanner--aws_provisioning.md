@@ -97,84 +97,20 @@ The name of all of the AWS service instances will be unique based on environment
 
 ---
 
-### Infrastructure-Specific Planning Requirements
+## S3 Bucket Provisioning And Env Wiring
+When a task requires an S3 bucket (e.g., EMAIL_INGEST_S3_BUCKET, STORAGE_BUCKET, EMAIL_STORAGE_BUCKET):
 
-- Default the AWS region to us-west-2 unless specifically instructed otherwise
-- Provisioning plans must prioritize cost-efficiency and security:
-  - When choosing AWS services (e.g., App Runner vs ECS vs Lambda), select the **least expensive** option that satisfies load and runtime needs.
-  - When provisioning instance-based services (e.g., RDS, EC2), use the **smallest available instance type** that can fulfill the requirements.
-  - For test environments, prefer options like `db.t4g.micro`, `t4g.nano`, or similarly low-cost configurations.
-  - Avoid overprovisioning or selecting higher tiers by default.
-  - IAM roles must follow the **principle of least privilege**—grant only the permissions required to perform the specific task.
-- All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `infrastructure.yaml`.
-- All infrastructure must be defined in `infrastructure.yaml` to ensure coherent, atomic stack deployment and teardown.
-- If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
-- If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
-- All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
-- The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
-- You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
+### Naming
+Use deterministic names based on the value of env['TASK_NAMESPACE] to avoid collisions:
+${env['TASK_NAMESPACE']}-email-ingest and ${env['TASK_NAMESPACE']}-storage (omit -storage if only one bucket is needed).
 
-#### CloudFormation File Enforcement
-- All infrastructure definitions must go in `infrastructure.yaml` only.
-- Creating or modifying any other CloudFormation YAML file is a violation.
-- If a plan attempts to edit a different file, correct the plan to use `infrastructure.yaml` — do **not** return `blocked`.
+### CloudFormation:
+    - Resources: Create the buckets with sane defaults (versioning optional, block public access, server-side encryption AES-256).
+    - Policies: Add a BucketPolicy to restrict access; avoid public reads.
+    - IAM: Attach s3:GetObject, s3:PutObject, s3:ListBucket, and if needed s3:DeleteObject to the Lambda execution role, scoped to those buckets.
+    - Environment: Set the Lambda’s Environment to include EMAIL_INGEST_S3_BUCKET and/or STORAGE_BUCKET referencing the CFN logical resources (Ref).
+    - Outputs: Export the bucket names so other stacks can import if needed.
 
-- For stacks that provision RDS, include a `Parameters.RdsSecretArn` (Type `String`) and wire it as described in the **RDS + Secrets Manager Contract** above. Do not create the secret in this template when following this pattern.
-
-- **IAM roles or permissions related Tasks**
-    - Follow the principle of least privilege: include only permissions essential to accomplish the task.
-    - Identify all required permissions up front to avoid iteration churn due to missing access
-- **Database-Related Tasks**
-    - Use AWS RDS for PostgreSQL as the database backend in **all environments**, including development and test.
-    - Do not assume or configure any locally running PostgreSQL service.
-    - Source all connection details from environment variables or AWS Secrets Manager.
-- **RDS + Secrets Manager Contract (Secret ARN Parameter)**
-    - CloudFormation must accept a parameter named `RdsSecretArn` (Type: `String`). This parameter will contain the AWS Secrets Manager **Secret ARN** for the RDS master credentials. The stack must not create or name this secret; it is supplied externally by infra/self-driving agent.
-    - In `AWS::RDS::DBInstance`, source the master credentials using dynamic references to `RdsSecretArn`:
-        - `MasterUsername: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::username}}"`
-        - `MasterUserPassword: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::password}}"`
-    - Attach the secret to the DB instance using `AWS::SecretsManager::SecretTargetAttachment` with `TargetType: AWS::RDS::DBInstance` so rotation templates can manage updates.
-        - Example CloudFormation YAML:
-            ```yaml
-            Parameters:
-              RdsSecretArn:
-                Type: String
-                Description: ARN of the existing Secrets Manager secret for RDS master credentials
-
-            Resources:
-              MyDbInstance:
-                Type: AWS::RDS::DBInstance
-                Properties:
-                  # ... other properties ...
-                  MasterUsername: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::username}}"
-                  MasterUserPassword: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::password}}"
-                  # ... other properties ...
-
-              MyDbSecretAttachment:
-                Type: AWS::SecretsManager::SecretTargetAttachment
-                Properties:
-                  SecretId: !Ref RdsSecretArn
-                  TargetId: !Ref MyDbInstance
-                  TargetType: AWS::RDS::DBInstance
-            ```
-    - Do not set `ManageMasterUserPassword: true` in this pattern (that creates an RDS-managed secret with an unpredictable name). The external secret’s ARN is the source of truth.
-    - The plan must include deterministic edit steps for `infrastructure.yaml` to:
-        1. Add the `Parameters.RdsSecretArn` definition (Type `String`, description clarifying it must be a Secrets Manager ARN).
-        2. Update the `AWS::RDS::DBInstance` resource to use the dynamic references shown above.
-        3. Add an `AWS::SecretsManager::SecretTargetAttachment` resource that references both the DB instance and `!Ref RdsSecretArn`.
-        4. Add helpful outputs: `DbEndpoint`, `DbPort`, and `DbSecretArn` (the latter is `!Ref RdsSecretArn`).
-    - IAM: if this stack defines the runtime task/role, grant `secretsmanager:GetSecretValue` (and optionally `secretsmanager:DescribeSecret`) only on the ARN passed in `RdsSecretArn` (principle of least privilege).
-- **Forbidden Actions**
-    - Do not generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
-    - Do not create new files when an existing file already covers the same functional scope, as determined by the project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.
-    
----
-
-### Billing Safety
- - Avoid code patterns that may cause unbounded cloud resource usage, especially with AWS services.
- - Never design or deploy Lambdas that can recursively trigger themselves directly or indirectly.
- - Guard against unbounded loops, runaway retries, or unbounded concurrency when invoking external services.
- - Include runtime safeguards (e.g., counters, rate limits, timeout handling) to prevent uncontrolled execution.
- - Fix only what is required to eliminate the diagnosed error. Do not apply broader improvements.
-
-
+### Additional S3 Rules
+- Do not bake names into code. Always pass via Environment.
+- Prefer a single STORAGE_BUCKET if the app semantics allow; otherwise create distinct buckets and set both env vars.
