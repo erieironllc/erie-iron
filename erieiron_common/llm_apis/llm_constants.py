@@ -138,7 +138,7 @@ MODEL_TO_MAX_TOKENS = {
 
 MODEL_PRICE_USD_PER_MILLION_TOKENS = {
     LlmModel.OPENAI_GPT_5: {
-        "input": 1.00,
+        "input": 1.25,
         "output": 10.00,
     },
     LlmModel.OPENAI_GPT_5_MINI: {

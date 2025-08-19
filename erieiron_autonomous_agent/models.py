@@ -40,6 +40,7 @@ class Business(BaseErieIronModel):
     value_prop = models.TextField(null=True)
     revenue_model = models.TextField(null=True)
     audience = models.TextField(null=True)
+    required_credentials = models.JSONField(null=True)
     core_functions = models.JSONField(default=list)
     execution_dependencies = models.JSONField(default=list)
     growth_channels = models.JSONField(default=list)
@@ -776,10 +777,17 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         return totals['total_price'] or 0, totals['total_tokens'] or 0
     
     def write_to_disk(self):
-        sandbox_path = self.self_driving_task.get_sandbox()
+        self_driving_task = self.self_driving_task
         
-        business = self.self_driving_task.business
-        for code_file in list(business.codefile_set.all().order_by("file_path")):
+        sandbox_path = self_driving_task.get_sandbox()
+        business = self_driving_task.business
+        
+        for code_file in list(business.codefile_set.exclude(
+                file_path__in=[
+                    self_driving_task.test_file_path, 
+                    self_driving_task.design_doc_path
+                ]
+        ).order_by("file_path")):
             if code_file.file_path.startswith(str(os.getcwd())):
                 logging.error(f"erie iron code got indexed!: {code_file.file_path}")
                 continue
@@ -787,7 +795,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             code_version = code_file.get_version(self)
             if code_version:
                 code_version.write_to_disk(sandbox_path)
-            else:
+            elif code_file.allow_autonomous_delete():
                 common.quietly_delete(sandbox_path / code_file.get_path())
                 logging.info(f"{code_file.get_path()} did not exist at iteration {self.id}.  removing from disk")
     
@@ -925,6 +933,7 @@ class CodeFile(BaseErieIronModel):
     class Meta:
         unique_together = ['business', 'file_path']
     
+    ARCHITECTURE_FILE = "docs/architecture.md"
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     
     # file_path is not the primary key because code file paths change as we refactor
@@ -933,6 +942,11 @@ class CodeFile(BaseErieIronModel):
     
     def __str__(self):
         return f"{self.file_path} - {self.id}"
+    
+    def allow_autonomous_delete(self) -> bool:
+        return self.file_path not in [
+            CodeFile.ARCHITECTURE_FILE
+        ]
     
     def get_path(self) -> Path:
         return Path(self.file_path)

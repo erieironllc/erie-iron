@@ -234,23 +234,10 @@ def view_self_driver_iteration(request, iteration_id):
     
     previous_evaluations = []
     
-    try:
-        previous_iteration: SelfDrivingTaskIteration = iteration.get_previous_by_timestamp()
-        previous_evaluations = previous_iteration.evaluation_json
-        iteration_to_modify = previous_iteration
-        if isinstance(previous_evaluations, dict):
-            iteration_to_modify = SelfDrivingTaskIteration.objects.filter(id=previous_evaluations.get("iteration_id_to_modify")).first()
-            previous_evaluations = previous_evaluations.get("evaluation")
-    
-    except:
-        previous_iteration = None
-        iteration_to_modify = None
-    
-    try:
-        next_iteration: SelfDrivingTaskIteration = iteration.get_next_by_timestamp()
-    except:
-        next_iteration = None
-    
+    _, iteration_to_modify = iteration.get_relevant_iterations()
+    previous_iteration: SelfDrivingTaskIteration = iteration.get_previous_iteration()
+    next_iteration: SelfDrivingTaskIteration = iteration.get_next_iteration()
+
     try:
         last_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
     except:

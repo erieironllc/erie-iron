@@ -78,7 +78,7 @@ class SelfDriverConfig:
             self.previous_iteration, self.iteration_to_modify = self.current_iteration.get_relevant_iterations()
         else:
             self.previous_iteration = self.iteration_to_modify = None
-
+        
         artifacts_root = self.sandbox_root_dir / ARTIFACTS
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = artifacts_root
@@ -246,6 +246,11 @@ class AgentBlocked(Exception):
     def __init__(self, blocked_data):
         pprint.pprint(blocked_data)
         self.blocked_data = blocked_data
+
+
+class NeedPlan(Exception):
+    def __init__(self, msg: str):
+        super().__init__(msg)
 
 
 class BadPlan(Exception):

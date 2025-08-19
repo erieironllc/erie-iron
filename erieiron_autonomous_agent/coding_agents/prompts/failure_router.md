@@ -97,6 +97,8 @@ If `recovery_path` is 'DIRECT_FIX' or 'AWS_PROVISIONING_PLANNER', you must inclu
   - Entries in the 'context_files' **must never** start with "/" or "/app/"
   - The entries in 'context_files' **must** be relative to the app's root directory
   - This is an example of an invalid context_file:  "/app/manage.py".  This is an example of a valid context_file entry for this same file: "manage.py"
+- You must **never** make route decisions based on "WARNING" level log statements
+  - For example, **never** make a routing decision based on a line like this:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 
 
 ---
@@ -113,3 +115,13 @@ The following files are system-managed and must be treated as **read-only**. Do 
 ## Additional Guidance
 - The Django settings.py file **always** lives in the application root directory - as a peer of manage.py
 - **Never** fall back to sqllite or a non-RDS datbase if the RDS credentials are missing.  You must create and use credential to connect to RDS 
+- You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
+- In general, **warnings should be ignored** unless they indicate functional failure or break the task’s goal. Fixing safe warnings can often cause regressions. Focus on actionable errors and failures instead.
+- If you need an Environment variable but it's not in the environment, you have two choices:
+  1.  Create a reasonable default value (if a reasonable default exists)
+  2.  Return "Blocked" to have a human set it up (if a reasonable default does not exist)
+
+---
+
+## Reasons to escalate to a human
+- Deploy fails because GitHub credentials are not available

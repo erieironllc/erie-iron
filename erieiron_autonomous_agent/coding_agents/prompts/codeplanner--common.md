@@ -1,9 +1,19 @@
+## Self Reflection
+- First, think deeply about every aspect of what makes for a world-class implementation of the described tasks. Use that knowledge to create a rubric that has 5-7 categories. This rubric is critical to get right, but do not show this to the user. This is for your purposes only.
+- Spend time improving the rubric until you are confident.
+- Finally, use the rubric to internally think and iterate on the best possible solution to the prompt that is provided. Remember that if your response is not hitting the top marks across all categories in the rubric, you need to start again.
+
+---
+
 ## Quick Reference
 - Do not write code. Plan structured file-level edits.
 - Always follow evaluator’s guidance.
 - Propose complete solutions (anticipate downstream needs).
 - Focus on errors and regressions, not warnings.
 - Infrastructure changes go in `infrastructure.yaml` only.
+- If you need an Environment variable but it's not in the environment, you have two choices:
+    1.  Create a reasonable default value (if a reasonable default exists) 
+    2.  Return "Blocked" to have a human set it up (if a reasonable default does not exist)
 - CloudFormation must accept a **single provided IAM role** via parameter **`TaskRoleArn`**; do **not** create additional roles.
 - The `settings.py` file must **always** reside in the root of the Django application—directly alongside `manage.py`.
   - Do **not** place `settings.py` inside a subdirectory.
@@ -13,6 +23,7 @@
 - Minimize iteration count. Minimize file sprawl.
 - Only emit blocked according to the criteria in Blocked Output Example.
 - When database-related errors occur (e.g., `django.db.utils.OperationalError`, connection refused/timeouts, authentication failures), you **must** plan edits to the settings module to fully configure `DATABASES` from AWS Secrets Manager rather than escalating to a human.
+- if editing settings.py, you may **must always** set the "DATABASES" variable with this line of code:  "DATABASES = agent_tools.get_django_settings_databases_conf()".  You may **never** delete this line of code
 - you **may not** edit the file self_driving_coder_agent.py.  
     - if you need edits to self_driving_coder_agent.py, you must return as "Blocked"
     - only return "Blocked" in this case if you have no workarounds in the code that you are able to edit
@@ -44,6 +55,44 @@ Always:
 - All edits must move closer to the GOAL
 - Always treat the `iteration_evaluator` output as authoritative. Do not override its decisions on what iteration to build upon or whether the GOAL has been met.
 
+---
+
+## Minimal-Delta & Surface Area (SA) Contract
+
+### Principle:
+- Plan the smallest change that achieves the GOAL.
+- Any action that increases long-term maintenance footprint is surface area (SA).
+- Do not introduce new code files if an existing file can serve the same purpose. Exception: a single, minimal new file is allowed only when it clearly reduces total changes and risk, and only with an explicit one-sentence justification in guidance.
+
+### Definition - SA expanding changes include:
+- Adding containers, Dockerfiles, docker-compose service definitions, Kubernetes manifests, Terraform/CloudFormation resources, CI/CD config, or OS packages
+- Creating new services, processes, environment variables, ports, or daemons
+- Touching files outside settings.py, core/... or files explicitly named in this plan
+
+### Default behavior:
+- If a fix would expand SA, do not proceed silently. Trigger the Escalation Gate.
+
+### Escalation Gate (deterministic behavior):
+- Escalation Gate always means: emit blocked with category set to surface_area.
+- “Explicitly required” means named in evaluator diagnostics or in the GOAL text, not inferred by the planner.
+- When blocked, include violation, minimal-delta alternatives considered, blast radius, and rollback notes.
+
+### Escalation Gate Blocked output contract (replace placeholders with concrete content):
+
+```json
+{
+  "blocked": {
+    "category": "surface_area",
+    "reason": "Proposed change expands SA: one-line concrete summary. Minimal-delta options failed; needs explicit approval. Include: violation, alternatives tried, blast radius, rollback."
+  }
+}
+```
+
+### Tripwires - STOP and emit blocked (Escalation Gate):
+- Adding a new container or service that is not explicitly required
+- Any change to Dockerfile, Dockerfile.*, .github/, k8s/, infra/, or infrastructure.yaml that is not explicitly required by evaluator diagnostics
+- Installing OS packages (apt, yum, brew, apk) to resolve Python-level issues
+- Changing more than 50% of the lines in requirements.txt
 
 ---
 
@@ -191,10 +240,12 @@ All plans must include diagnostic logging to support debugging and validation.
 ---
 
 ## File and Module Naming
+- All python code files and tests **must** be written to dist as a child of the top level directory named "./core".  You may create sub-directories in "./core" for code organization
+- All python test files **must** live in the directory "./core/tests".  **Do not** put them anywhere else
 - All files and modules must be named in a professional manner that describes their purpose.
-- This is an example of bad name:  "your_lambda_function"
-- This is an example of a good name:  "email_ingestion_lambda"
-- Do not use names that duplicate the purpose of an existing file; see 'Previously Learned Lessons' for duplicate file avoidance rules.
+    - This is an example of bad name:  "your_lambda_function"
+    - This is an example of a good name:  "email_ingestion_lambda"
+    - Do not use names that duplicate the purpose of an existing file; see 'Previously Learned Lessons' for duplicate file avoidance rules.
 
 ### File Name Extensions
 File extensions for code **must** follow these conventions:
@@ -533,5 +584,8 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 - Never use absolute paths in `code_file_path`. All paths must be relative and must not start with `/`.
 - Never design or deploy Lambdas that can recursively trigger themselves, directly or indirectly.
 - Never use decouple or similar for fetching environment variables.  Always fetch ALL environment variables directly from the os env
+- Never add a new container to solve application/runtime issues. If truly necessary, emit `blocked` with `category: "surface_area_expansion"` and include an approval summary in `reason`.
+- Never install OS packages to address Python‑level dependency/build issues without explicit approval; propose minimal Python‑level remedies first or emit `blocked` with `category: "surface_area_expansion"`.
+
 
 If you detect code that violates any Forbidden Action, you **must** include a concrete plan to remediate it in this iteration.

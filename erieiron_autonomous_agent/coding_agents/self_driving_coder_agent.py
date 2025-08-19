@@ -21,9 +21,9 @@ from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Business
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils
@@ -70,8 +70,13 @@ def execute(task_id: str, quick_debug=False):
                 
                 if not (self_driving_task.design_doc_path and (config.sandbox_root_dir / self_driving_task.design_doc_path).exists()):
                     config.set_iteration(self_driving_task.iterate())
-                    config.set_phase(SdaPhase.CODING)
+                    config.set_phase(SdaPhase.INIT)
                     write_initial_design(config)
+                
+                if not config.business.required_credentials:
+                    config.set_iteration(self_driving_task.iterate())
+                    config.set_phase(SdaPhase.INIT)
+                    identify_required_credentials(config)
                 
                 if not (self_driving_task.test_file_path and (config.sandbox_root_dir / self_driving_task.test_file_path).exists()):
                     config.set_iteration(self_driving_task.iterate())
@@ -101,61 +106,25 @@ def execute(task_id: str, quick_debug=False):
                 else:
                     try:
                         most_recent_iteration = self_driving_task.get_most_recent_iteration()
-                        if quick_debug and most_recent_iteration:
-                            config.set_iteration(most_recent_iteration)
+                        if most_recent_iteration:
+                            if quick_debug or not most_recent_iteration.has_plan():
+                                config.set_iteration(most_recent_iteration)
+                            else:
+                                config.set_iteration(self_driving_task.iterate())
                         else:
                             config.set_iteration(self_driving_task.iterate())
-                        
-                        config.set_phase(SdaPhase.PLANNING)
                         
                         if not quick_debug and config.iteration_to_modify:
                             config.iteration_to_modify.write_to_disk()
                         
                         planning_data = plan_code_changes(config)
-                        cr_exception = None
-                        failed_code_reviews = []
-                        config.set_phase(SdaPhase.CODING)
-                        for review_iteration_idx in range(5):
-                            try:
-                                implement_code_changes(
-                                    config,
-                                    planning_data,
-                                    cr_exception
-                                )
-                                
-                                if not config.previous_iteration.has_error():
-                                    perform_code_review(
-                                        config,
-                                        planning_data
-                                    )
-                                
-                                break
-                            except CodeReviewException as code_review_exception:
-                                extract_lessons(
-                                    config,
-                                    TASK_DESC_CODE_WRITING,
-                                    code_review_exception.review_data
-                                )
-                                
-                                failed_code_reviews.append(code_review_exception.review_data)
-                                cr_exception = code_review_exception
-                                if code_review_exception.bad_plan:
-                                    raise BadPlan(
-                                        f"Code Review failed five times, time for a new plan.  this is all of code review blockers.",
-                                        {
-                                            "failed_code_reviews": failed_code_reviews
-                                        }
-                                    )
-                                elif review_iteration_idx == 4:
-                                    # out of retries
-                                    raise BadPlan(
-                                        f"Code Review failed 5 times.  Need a new plan.  ",
-                                        code_review_exception.review_data
-                                    )
+                        
+                        do_coding(config, planning_data)
                     finally:
                         config.reset_log()
                 
                 try:
+                    execution_exception = None
                     try:
                         execute_iteration(
                             config,
@@ -163,14 +132,20 @@ def execute(task_id: str, quick_debug=False):
                         )
                     except BadPlan as bpe:
                         config.log(bpe)
+                        execution_exception = bpe
                         raise bpe
                     except AgentBlocked as abe:
+                        execution_exception = abe
                         raise abe
+                    except NeedPlan as npe:
+                        execution_exception = npe
+                        raise npe
                     except Exception as e:
+                        execution_exception = e
                         config.log(e)
                     finally:
                         config.set_phase(SdaPhase.EVALUATE)
-                        evaluate_iteration_execution(config)
+                        evaluate_iteration_execution(config, execution_exception)
                 except GoalAchieved as goal_achieved:
                     if TaskType.CODING_ML.eq(config.task_type):
                         raise goal_achieved
@@ -185,6 +160,8 @@ def execute(task_id: str, quick_debug=False):
                             config,
                             AwsEnv.PRODUCTION
                         )
+            except NeedPlan as npe:
+                logging.info(f'NeedPlan - {npe}')
             except RetryableException as retryable_execution_exception:
                 config.log(retryable_execution_exception)
                 with transaction.atomic():
@@ -278,6 +255,50 @@ full logs:
             package_ml_artifacts(config)
 
 
+def do_coding(config, planning_data):
+    config.set_phase(SdaPhase.CODING)
+    
+    cr_exception = None
+    failed_code_reviews = []
+    for review_iteration_idx in range(5):
+        try:
+            implement_code_changes(
+                config,
+                planning_data,
+                cr_exception
+            )
+            
+            if not config.previous_iteration.has_error():
+                perform_code_review(
+                    config,
+                    planning_data
+                )
+            
+            break
+        except CodeReviewException as code_review_exception:
+            extract_lessons(
+                config,
+                TASK_DESC_CODE_WRITING,
+                code_review_exception.review_data
+            )
+            
+            failed_code_reviews.append(code_review_exception.review_data)
+            cr_exception = code_review_exception
+            if code_review_exception.bad_plan:
+                raise BadPlan(
+                    f"Code Review failed five times, time for a new plan.  this is all of code review blockers.",
+                    {
+                        "failed_code_reviews": failed_code_reviews
+                    }
+                )
+            elif review_iteration_idx == 4:
+                # out of retries
+                raise BadPlan(
+                    f"Code Review failed 5 times.  Need a new plan.  ",
+                    code_review_exception.review_data
+                )
+
+
 def on_reset_task_test(task_id):
     task = Task.objects.get(id=task_id)
     self_driving_task = task.selfdrivingtask
@@ -286,6 +307,8 @@ def on_reset_task_test(task_id):
 
 
 def plan_code_changes(config):
+    config.set_phase(SdaPhase.PLANNING)
+    
     planning_data = None
     route_to = route_code_changes(config)
     
@@ -319,9 +342,6 @@ def plan_code_changes(config):
 
 
 def validate_plan(planning_data):
-    if not planning_data.get("code_files", []):
-        raise BadPlan("no code files", planning_data)
-    
     readonly_paths = {
         f['path']: f
         for f in READONLY_FILES
@@ -505,7 +525,7 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
     
     if not role_arn:
         # Nothing to do; caller may rely on container-provided identity (e.g., ECS task role)
-        raise BadPlan("infrastructure.yaml does not define a ")
+        raise BadPlan("infrastructure.yaml does not define a TaskRoleArn")
     
     return role_arn
 
@@ -513,11 +533,7 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
 def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
     env = {}
     
-    required_credentials = common.get(
-        config.current_iteration,
-        ["planning_json", "required_credentials"],
-        default_val={}
-    )
+    required_credentials = config.business.required_credentials
     
     for credential_service_name, cred_def in required_credentials.items():
         secret_arn_env_var = cred_def.get("secret_arn_env_var")
@@ -672,10 +688,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
     
     iteration = config.current_iteration
     if not iteration.planning_json:
-        raise BadPlan(f"current iteration has no planning data.  need to go back and replan", {})
-    
-    if not common.get(iteration.planning_json, "required_credentials"):
-        raise BadPlan(f"current iteration has no required_credentials.  need to go back and replan and add required_credentials definition", {})
+        raise NeedPlan(f"current iteration has no planning data.  need to go back and replan")
     
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
@@ -805,7 +818,8 @@ def stack_exists(config: SelfDriverConfig, aws_env: AwsEnv, docker_env: dict) ->
             config.self_driving_task.get_cloudformation_stack_name(aws_env),
             boto3.client("cloudformation", region_name=docker_env['AWS_DEFAULT_REGION'])
         )
-        return matching_stack != None
+        
+        return matching_stack is not None
     except:
         return False
 
@@ -861,7 +875,10 @@ def init_task_execution(iteration):
     )
 
 
-def evaluate_iteration_execution(config: SelfDriverConfig):
+def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception):
+    if isinstance(exception, NeedPlan):
+        return
+    
     iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
     
     log_output = config.log_path.read_text()
@@ -870,18 +887,30 @@ def evaluate_iteration_execution(config: SelfDriverConfig):
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
     
+    messages = [
+        get_sys_prompt("iteration_summarizer.md"),
+        *LlmMessage.user_from_data(
+            f"**Logs from the iteration's test output and execution**",
+            {
+                "log_output": log_output
+            }
+        )
+    ]
+    
+    if exception:
+        messages += LlmMessage.user_from_data(
+            f"**Exception throw during this iteration's execution**",
+            {
+                "exception": common.get_stack_trace_as_string(exception)
+            }
+        )
+    
+    messages.append(LlmMessage.user("Please summarize this iteration"))
+    
     eval_data = llm_chat(
         "Iteration Summarizer",
         config,
-        [
-            get_sys_prompt("iteration_summarizer.md"),
-            *LlmMessage.user_from_data(
-                f"**Logs from the iteration's test output and execution**\nBase your evaluation on this log output",
-                {
-                    "log_output": log_output
-                }
-            )
-        ],
+        messages,
         LlmModel.OPENAI_GPT_5_NANO,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
@@ -1334,10 +1363,11 @@ def perform_code_review(
             get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.has_error() else []
         ),
         *common.ensure_list(
-            LlmMessage.user_from_data(
-                "Relevant past lessons",
-                get_lessons(config)
-            )
+            get_prev_attemp_summaries(config)
+            # LlmMessage.user_from_data(
+            #     "Relevant past lessons",
+            #     get_lessons(config)
+            # )
         ),
         *common.ensure_list(
             config.guidance
@@ -1384,7 +1414,39 @@ The code changes to review are in support of the following goal:
         config.log(non_blocking_warnings)
 
 
-def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True) -> list[dict]:
+def get_prev_attemp_summaries(config: SelfDriverConfig) -> list[dict]:
+    attempt_count = 0
+    
+    previous_iterations: list[SelfDrivingTaskIteration] = list(
+        config.self_driving_task
+        .selfdrivingtaskiteration_set
+        .filter(evaluation_json__isnull=False)
+        .filter(planning_json__isnull=False)
+        .exclude(id=config.current_iteration.pk)
+        .order_by("-timestamp")
+    )[0:10]
+    
+    previous_iteration_datas = [
+        {
+            "iteration_id": i.id,
+            "timestamp": i.timestamp,
+            "version": i.version_number,
+            "coding_plan": i.planning_json.get("code_files"),
+            "summary": i.evaluation_json.get("summary"),
+            "error": i.evaluation_json.get("error")
+        }
+        for i in sorted(previous_iterations, key=lambda _i: _i.timestamp)
+    ]
+    
+    return LlmMessage.user_from_data(
+        f"Summaries from last {len(previous_iteration_datas)} code iterations(s).  The 'coding_plan' defines the coding plan that caused the error and resultant summary.  Treat these as lessons.  Do not repeat these errors",
+        previous_iteration_datas
+    )
+
+
+def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True, skip=True) -> list[dict]:
+    if skip:
+        return None
     if all_lessons:
         lessons_q = AgentLesson.objects.all()
     else:
@@ -1453,8 +1515,12 @@ def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True) 
 def extract_lessons(
         config: SelfDriverConfig,
         agent_step: str,
-        log_content
+        log_content,
+        skip=True
 ):
+    if skip:
+        return
+    
     current_iteration = config.current_iteration
     task = config.task
     lessons_data = llm_chat(
@@ -1464,10 +1530,11 @@ def extract_lessons(
             get_sys_prompt("lesson_extractor.md"),
             LlmMessage.user(task.get_work_desc()),
             *LlmMessage.user_from_data(f"Log Content from the '{agent_step}' step", log_content),
-            *LlmMessage.user_from_data(
-                "Existing Lessons (Don't repeat these)",
-                get_lessons(config, exclude_invalid=False)
-            )
+            *get_prev_attemp_summaries(config),
+            # *LlmMessage.user_from_data(
+            #     "Existing Lessons (Don't repeat these)",
+            #     get_lessons(config, exclude_invalid=False)
+            # )
         ],
         output_schema="lesson_extractor.md.schema.json",
         model=LlmModel.OPENAI_GPT_5
@@ -1552,18 +1619,24 @@ def implement_code_changes(
             code_str = None
             for i in range(3):
                 try:
-                    previous_exception = None
                     code_str = write_code_file(
                         config=config,
                         code_version_to_modify=code_version_to_modify,
                         code_file_data=cfi,
                         requirements_txt=requirements_txt,
                         blocking_issues=blocking_issues,
-                        code_writing_model=LlmModel(cfi.get("code_writing_model")),
+                        code_writing_model=LlmModel.OPENAI_GPT_5,  # LlmModel(cfi.get("code_writing_model")),
                         roll_back_reason=roll_back_reason,
                         previous_exception=previous_exception
                     )
                     
+                    # Detect and handle git patch vs full-file outputs from the code writer
+                    code_str = post_process_code_ouput(
+                        code_str,
+                        code_version_to_modify
+                    )
+                    
+                    previous_exception = None
                     break
                 except CodeCompilationError as e:
                     extract_lessons(
@@ -1592,12 +1665,6 @@ resulted in this validation error
                 # validation failed three times.  keep going, if it fails in deployment or execution we'll have another 
                 # chances at the feedback loop
                 config.log(previous_exception)
-            
-            # Detect and handle git patch vs full-file outputs from the code writer
-            code_str = post_process_code_ouput(
-                code_str,
-                code_version_to_modify
-            )
             
             if code_str:
                 code_file.update(
@@ -1724,6 +1791,44 @@ def write_initial_test(config: SelfDriverConfig):
     raise previous_exception
 
 
+def identify_required_credentials(
+        config: SelfDriverConfig
+):
+    task = config.task
+    
+    planning_data = llm_chat(
+        "Identify required credentials",
+        config,
+        [
+            *common.ensure_list(
+                get_sys_prompt([
+                    "codeplanner--common.md",
+                    "common--credentials_architecture.md",
+                    "codeplanner--initial_credentials.md"
+                ], replacements=[
+                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                    get_readonly_files_replacement()
+                ]),
+            ),
+            *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
+            "Please identify the credentials required"
+        ],
+        config.model_code_planning,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    current_credentials = config.business.required_credentials or {}
+    Business.objects.filter(id=config.business.id).update(
+        required_credentials={
+            **current_credentials,
+            **(planning_data["required_credentials"] or {})
+        }
+    )
+    config.business.refresh_from_db(fields=["required_credentials"])
+
+
 def write_initial_design(
         config: SelfDriverConfig
 ):
@@ -1751,7 +1856,7 @@ def write_initial_design(
         
         design_file_path = update_file_contents(
             config,
-            config.sandbox_root_dir / "docs" / "architecture.md",
+            config.sandbox_root_dir / CodeFile.ARCHITECTURE_FILE,
             code
         )
         
@@ -1819,10 +1924,11 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                     )
                 ),
                 *common.ensure_list(
-                    LlmMessage.user_from_data(
-                        "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                        get_lessons(config)
-                    )
+                    get_prev_attemp_summaries(config)
+                    # LlmMessage.user_from_data(
+                    #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                    #     get_lessons(config)
+                    # )
                 ),
                 *common.ensure_list(
                     get_dependencies_msg(config, for_planning=True)
@@ -1874,10 +1980,11 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 ),
             ),
             *common.ensure_list(
-                LlmMessage.user_from_data(
-                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                    get_lessons(config)
-                )
+                get_prev_attemp_summaries(config)
+                # LlmMessage.user_from_data(
+                #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                #     get_lessons(config)
+                # )
             ),
             *common.ensure_list(
                 build_cloudformation_durations_context_messages(config)
@@ -1942,10 +2049,11 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 ]),
             ),
             *common.ensure_list(
-                LlmMessage.user_from_data(
-                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                    get_lessons(config)
-                )
+                get_prev_attemp_summaries(config)
+                # LlmMessage.user_from_data(
+                #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                #     get_lessons(config)
+                # )
             ),
             *common.ensure_list(
                 build_cloudformation_durations_context_messages(config)
@@ -2040,10 +2148,11 @@ def plan_full_code_changes(config: SelfDriverConfig):
             config.guidance
         ),
         *common.ensure_list(
-            LlmMessage.user_from_data(
-                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                get_lessons(config)
-            )
+            get_prev_attemp_summaries(config)
+            # LlmMessage.user_from_data(
+            #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+            #     get_lessons(config)
+            # )
         ),
         *common.ensure_list(
             LlmMessage.user(f"""
@@ -2496,10 +2605,11 @@ def get_relevant_code_files(
     
     if paths:
         for f in set(paths):
-            try:
-                relative_file = f.relative_to(config.sandbox_root_dir)
-            except:
-                relative_file = f
+            relative_file = config.sandbox_root_dir / f
+            
+            if not relative_file.exists():
+                logging.info(f"{relative_file} does not exist, skipping")
+                continue
             
             code_file = CodeFile.get(
                 config.business,
