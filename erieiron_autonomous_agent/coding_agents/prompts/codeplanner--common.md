@@ -542,6 +542,8 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 - If the evaluator output includes deployment errors, CloudFormation errors, Dockerfile or Container errors, or other infrastructure errors, prioritize fixing those issues before proposing any other code changes. When infrastructure setup fails, the test and execute phases are skipped, meaning there is no feedback loop available for non-infrastructure code.
 - Test integrity
   - Assume tests and their assertions are correct by default and represent the acceptance criteria.
+  - Do not use moto (or anything similar) to mock s3 services.  The tests **must** exercise aws services and not mocks.  These are not unit tests, they are smoke/acceptance tests
+    - These acceptance/smoke tests must **never** use mock entities – they must exercise actual system components and connectivity.
   - Do not propose edits that weaken or delete assertions to make tests pass.
   - Only propose test-file edits when there is clear evidence the test is wrong (e.g., evaluator cites a spec mismatch or the acceptance criteria changed). When doing so, include a short rationale that cites the evaluator output or updated specification and increases, not reduces, coverage.
 - If evaluator logs include database connection or authentication errors during Django startup or tests, prioritize planning the settings module edit to read from `RDS_SECRET_ARN` and construct `DATABASES` as defined in the 'Django database configuration contract'. Include `required_credentials.RDS` in output.

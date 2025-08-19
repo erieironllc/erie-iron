@@ -41,12 +41,6 @@ Extracting too many lessons can overwhelm downstream prompts. Limit output to on
             "trigger": "planner suggests creating a file named X",
             "lesson": "Do not create a file if a file with the same name or similar purpose already exists.",
             "context_tags": ["file_creation", "redundancy", "planner_agent"]
-        },
-        {
-            "pattern_description": "moto3 import errors",
-            "trigger": "code uses moto3, but package isn't in requirements.txt",
-            "lesson": "only use packages in requirements.txt",
-            "context_tags": ["python", "coding", "moto3"]
         }
     ]
 }

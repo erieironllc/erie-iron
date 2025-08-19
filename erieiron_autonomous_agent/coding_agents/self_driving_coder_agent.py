@@ -68,26 +68,27 @@ def execute(task_id: str, quick_debug=False):
                     stop_reason = f"Stopping - hit the max budget ${config.budget :.2f}"
                     break
                 
+                if not config.business.codefile_set.exists():
+                    config.set_phase(SdaPhase.INIT)
+                    config.set_iteration(self_driving_task.iterate())
+                    config.business.snapshot_code(
+                        config.current_iteration,
+                        include_erie_common=True
+                    )
+                
                 if not (self_driving_task.design_doc_path and (config.sandbox_root_dir / self_driving_task.design_doc_path).exists()):
                     config.set_iteration(self_driving_task.iterate())
                     config.set_phase(SdaPhase.INIT)
                     write_initial_design(config)
                 
                 if not config.business.required_credentials:
-                    config.set_iteration(self_driving_task.iterate())
                     config.set_phase(SdaPhase.INIT)
+                    config.set_iteration(self_driving_task.iterate())
                     identify_required_credentials(config)
                 
                 if not (self_driving_task.test_file_path and (config.sandbox_root_dir / self_driving_task.test_file_path).exists()):
-                    config.set_iteration(self_driving_task.iterate())
-                    
-                    if not config.business.codefile_set.exists():
-                        config.business.snapshot_code(
-                            config.current_iteration,
-                            include_erie_common=True
-                        )
-                    
                     config.set_phase(SdaPhase.CODING)
+                    config.set_iteration(self_driving_task.iterate())
                     write_initial_test(config)
                 
                 elif not quick_debug and i == 0:
@@ -403,6 +404,7 @@ def generate_first_iteration(self_driving_task):
                 ]
             ),
             *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
+            *get_existing_required_credentials(config),
             LlmMessage.sys("""
 This is the first iteration on this code.  
 
@@ -447,8 +449,6 @@ def build_docker_image(
     sandbox_path = self_driving_task.sandbox_path
     
     requirements_txt = Path(sandbox_path) / "requirements.txt"
-    if "moto==4.2.8" not in requirements_txt.read_text():
-        raise Exception("moto==4.2.8 is required")
     
     docker_build_cmd = common.strings([
         "docker",
@@ -1629,12 +1629,7 @@ def implement_code_changes(
                         roll_back_reason=roll_back_reason,
                         previous_exception=previous_exception
                     )
-                    
-                    # Detect and handle git patch vs full-file outputs from the code writer
-                    code_str = post_process_code_ouput(
-                        code_str,
-                        code_version_to_modify
-                    )
+                   
                     
                     previous_exception = None
                     break
@@ -1812,6 +1807,7 @@ def identify_required_credentials(
                 ]),
             ),
             *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
+            *get_existing_required_credentials(config),
             "Please identify the credentials required"
         ],
         config.model_code_planning,
@@ -1979,6 +1975,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     ]
                 ),
             ),
+            *get_existing_required_credentials(config),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
                 # LlmMessage.user_from_data(
@@ -2048,6 +2045,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                     get_readonly_files_replacement()
                 ]),
             ),
+            *get_existing_required_credentials(config),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
                 # LlmMessage.user_from_data(
@@ -2123,6 +2121,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
                 get_readonly_files_replacement()
             ]
         ),
+        *get_existing_required_credentials(config),
         *common.ensure_list(
             get_budget_message(config)
         ),
@@ -2339,6 +2338,12 @@ def write_code(
         code_writing_model,
     ).text
     
+    # Detect and handle git patch vs full-file outputs from the code writer
+    code = post_process_code_ouput(
+        code,
+        code_version_to_modify
+    )
+    
     for i in range(5):
         try:
             return validate_code(
@@ -2521,9 +2526,6 @@ def validate_code(
         # noinspection PyProtectedMember
         from pip._internal.exceptions import InstallationError
         
-        if "moto==4.2.8" not in code:
-            raise CodeCompilationError(code, f"moto==4.2.8 is required")
-        
         lines = code.splitlines()
         for i, line in enumerate(lines, start=1):
             line = line.strip()
@@ -2593,6 +2595,14 @@ Please plan code changes that work towards achieving this GOAL:
 
 def get_cloudformation_file(config: SelfDriverConfig) -> Path:
     return common.assert_exists(config.sandbox_root_dir / "infrastructure.yaml")
+
+
+def get_existing_required_credentials(
+        config: SelfDriverConfig
+) -> list[LlmMessage]:
+    return LlmMessage.user_from_data("Existing Required Credentials.  Use for reference.  Not need to re-specify.", {
+        "required_credentials": config.business.required_credentials or {}
+    })
 
 
 def get_relevant_code_files(

@@ -85,7 +85,7 @@ If `recovery_path` is 'DIRECT_FIX' or 'AWS_PROVISIONING_PLANNER', you must inclu
   "classification": "IMPORT_ERROR",
   "recovery_path": "DIRECT_FIX",
   "recovery_path_reason": "The code failed with an import error.  We can fix those directly",
-  "fix_prompt": "Given this stack trace and that we’re using moto version 4.1, what’s the correct way to import and use mock_s3?",
+  "fix_prompt": "Given this stack trace and that we’re using boto3 version 4.1, what’s the correct way to import and use boto3?",
   "context_files": ["core/lambda_function.py"]
 }
 ```

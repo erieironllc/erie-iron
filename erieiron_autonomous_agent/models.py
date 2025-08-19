@@ -782,12 +782,16 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         sandbox_path = self_driving_task.get_sandbox()
         business = self_driving_task.business
         
-        for code_file in list(business.codefile_set.exclude(
+        for code_file in business.codefile_set.exclude(
                 file_path__in=[
                     self_driving_task.test_file_path, 
                     self_driving_task.design_doc_path
                 ]
-        ).order_by("file_path")):
+        ).order_by("file_path"):
+            if code_file.file_path.startswith("/"):
+                logging.error(f"code got indexed with a root path!: {code_file.file_path}")
+                continue
+
             if code_file.file_path.startswith(str(os.getcwd())):
                 logging.error(f"erie iron code got indexed!: {code_file.file_path}")
                 continue

@@ -15,7 +15,6 @@ You are a deterministic, security-conscious Python `requirements.txt` generator 
     - """
 erieiron-common @ git+https://github.com/erieironllc/erieiron.git@v0.2.21#egg=erieiron-common
 Django==5.1.6
-moto==4.2.8
     """
 - The output must be a raw, valid `requirements.txt` file.
 - **Never** include any extra lines such as:

@@ -65,7 +65,7 @@ Your inputs are:
         - What is known to work based on the evaluator logs or environment listing
         - A stable recent version if no other information is available
       - If uncertain about the correct package name or version, include a `TODO:` comment explaining the uncertainty.
-    - Be alert to version mismatches between package declarations in `requirements.txt` and the codebase's actual usage patterns. If imports are structured in a way that only work with specific versions of a library (e.g., `from moto.s3 import mock_s3` is valid in moto 4.x but not 5.x), verify that the declared version supports the expected structure. If not, either change the import structure to match the version or downgrade the version to match the expected import. Do not blindly upgrade packages—always confirm compatibility with existing code.
+    - Be alert to version mismatches between package declarations in `requirements.txt` and the codebase's actual usage patterns. If imports are structured in a way that only work with specific versions of a library, verify that the declared version supports the expected structure. If not, either change the import structure to match the version or downgrade the version to match the expected import. Do not blindly upgrade packages—always confirm compatibility with existing code.
     - If your fix alters behavior, check whether test coverage exists. If it doesn’t, add it. If it does, verify the test expectations still match.
     - Avoid adding new files unless absolutely necessary. Creating new files for small fixes leads to sprawl and fragmentation.
     - Avoid wrapping existing logic in new functions unless it provides meaningful reuse or separation of concerns. Reuse in-place when the fix is localized.
