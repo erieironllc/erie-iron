@@ -21,7 +21,7 @@ from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Business
 from erieiron_autonomous_agent.utils import codegen_utils
@@ -396,6 +396,8 @@ def generate_first_iteration(self_driving_task):
             get_sys_prompt(
                 [
                     "codeplanner--common.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
                     "common--infrastructure_rules.md",
                     "common--environment_variables.md",
                     "common--credentials_architecture.md"
@@ -439,7 +441,7 @@ def build_docker_image(
         docker_env: dict,
         docker_file: Path
 ) -> str:
-    subprocess.run(["docker", "system", "prune", "-f"], check=True)
+    exec_docker_prune()
     
     current_iteration = config.current_iteration
     self_driving_task = current_iteration.self_driving_task
@@ -488,6 +490,14 @@ docker run --rm -it -v {self_driving_task.sandbox_path}:/app -w /app {docker_ima
         """)
     
     return docker_image_tag
+
+
+def exec_docker_prune():
+    try:
+        subprocess.run(["docker", "system", "prune", "-f"], check=True)
+    except Exception as e:
+        logging.exception(e)
+        raise AgentBlocked("unable to run docker prune - is docker running?")
 
 
 def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv, os_env: dict):
@@ -691,7 +701,23 @@ def run_docker_command(
     if return_code != 0:
         task_execution.error_msg = config.get_log_content()
         task_execution.save()
-        raise Exception(f"Docker execution failed - return code: {return_code}")
+        
+        extracted_exception = extract_exception(config, config.get_log_content())
+        raise ExecutionException(extracted_exception)
+
+
+def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
+    return llm_chat(
+        "Log Extraction",
+        config,
+        [
+            get_sys_prompt("log_parser.md"),
+            log_content
+        ],
+        model=LlmModel.OPENAI_GPT_5,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.LOW
+    ).text
 
 
 def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
@@ -820,7 +846,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
             running_process.save(update_fields=['is_running', 'terminated_at'])
         
         config.business.snapshot_code(iteration, include_erie_common=False)
-        subprocess.run(["docker", "system", "prune", "-f"], check=True)
+        exec_docker_prune()
 
 
 def stack_exists(config: SelfDriverConfig, aws_env: AwsEnv, docker_env: dict) -> bool:
@@ -887,10 +913,13 @@ def init_task_execution(iteration):
 
 
 def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception):
+    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
+    
+    if isinstance(exception, AgentBlocked):
+        raise exception
+    
     if isinstance(exception, NeedPlan):
         return
-    
-    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
     
     log_output = config.log_path.read_text()
     
@@ -898,23 +927,39 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
     
-    messages = [
-        get_sys_prompt("iteration_summarizer.md"),
-        *LlmMessage.user_from_data(
+    messages = ([
+        get_sys_prompt([
+            "iteration_summarizer.md",
+            "common--iam_role.md",
+            "common--forbidden_actions.md",
+            "common--environment_variables.md"
+        ], replacements=[
+            ("<env_vars>", get_env_var_names(config)),
+        ])
+    ])
+    
+    if isinstance(exception, ExecutionException):
+        messages += LlmMessage.user_from_data(
+            f"**Exception throw during this iteration's execution**",
+            {
+                "exception": str(exception)
+            }
+        )
+    else:
+        messages += LlmMessage.user_from_data(
             f"**Logs from the iteration's test output and execution**",
             {
                 "log_output": log_output
             }
         )
-    ]
-    
-    if exception:
-        messages += LlmMessage.user_from_data(
-            f"**Exception throw during this iteration's execution**",
-            {
-                "exception": common.get_stack_trace_as_string(exception)
-            }
-        )
+        
+        if exception:
+            messages += LlmMessage.user_from_data(
+                f"**Exception throw during this iteration's execution**",
+                {
+                    "exception": common.get_stack_trace_as_string(exception)
+                }
+            )
     
     messages.append(LlmMessage.user("Please summarize this iteration"))
     
@@ -926,6 +971,9 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
     
+    if isinstance(exception, ExecutionException):
+        common.struct_set(eval_data, ['error', 'logs'], str(exception))
+
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             evaluation_json=eval_data
@@ -954,7 +1002,14 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         "Iteration Selector",
         config,
         [
-            get_sys_prompt("iteration_selector.md"),
+            get_sys_prompt([
+                "iteration_selector.md",
+                "common--iam_role.md",
+                "common--forbidden_actions.md",
+                "common--environment_variables.md"
+            ], replacements=[
+                ("<env_vars>", get_env_var_names(config)),
+            ]),
             *LlmMessage.user_from_data(
                 f"**Iteration Evaluations**",
                 previous_iteration_evals
@@ -965,11 +1020,9 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     ).json()
     
     iteration_id_to_modify = selection_data.get("iteration_id_to_modify")
-    if iteration_id_to_modify == 'latest':
-        selection_data['iteration_id_to_modify'] = 'latest'
-    else:
+    if iteration_id_to_modify != 'latest':
         count_prevous_attempts = SelfDrivingTaskIteration.objects.filter(start_iteration_id=iteration_id_to_modify).count()
-        if count_prevous_attempts < 10:
+        if count_prevous_attempts < 5:
             selection_data['iteration_id_to_modify'] = iteration_id_to_modify
         else:
             # we've tried too many times.  go with the latest to see if this improves
@@ -1226,11 +1279,11 @@ def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_na
 def assert_cloudformation_stack_valid(stack_name, cf_client):
     matching_stack = get_stack(stack_name, cf_client)
     if not matching_stack:
-        raise RuntimeError(f"CloudFormation stack {stack_name} doesn't exist")
+        raise CloudFormationException(f"CloudFormation stack {stack_name} doesn't exist")
     
     status = matching_stack['StackStatus']
     if "FAILED" in status or "ROLLBACK" in status:
-        raise RuntimeError(f"CloudFormation stack {stack_name} failed with status: {status}")
+        raise CloudFormationException(f"CloudFormation stack {stack_name} failed with status: {status}")
 
 
 def build_cloudformation_durations_context_messages(config: SelfDriverConfig, title=None) -> List[LlmMessage]:
@@ -1306,17 +1359,22 @@ def get_iteration_eval_llm_messages(
     ])]
     
     messages = []
-    for iteration in SelfDrivingTaskIteration.objects.filter(id__in=all_iteration_ids).order_by("-timestamp"):
-        evaluation_json: dict = iteration.evaluation_json
-        if not evaluation_json:
-            continue
-        
+    for iteration in SelfDrivingTaskIteration.objects.filter(
+            id__in=all_iteration_ids
+    ).exclude(
+        evaluation_json__isnull=True
+    ).order_by("timestamp"):
         description = ""
+        include_strategic_guidance = False
         if iteration == previous_iteration and previous_iteration != iteration_to_modify:
             description = "This is the evalutation of the execution of a previous iteration of the code"
         elif iteration == iteration_to_modify:
             description = "We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code"
-        
+            include_strategic_guidance = True
+        else:
+            description = "This is an evaluation previous iteration of the code.  It is not the previous iteration neither is it the iteration we are rolling back to"
+
+        evaluation_json: dict = iteration.evaluation_json
         evaluation_parts = [
             evaluation_json.get("summary"),
         ]
@@ -1328,16 +1386,43 @@ def get_iteration_eval_llm_messages(
 # Log Output
 {error_logs}
             """)
+        else:
+            asdf = 1
         
-        messages.append({
+        iteration_data = {
             "iteration_id": iteration.id,
-            "iteration_timestamp": iteration.timestamp,
-            "description": description,
-            "evaluation": common.safe_join(evaluation_parts, "\n"),
-            "strategic_guidance": evaluation_json.get("strategic_guidance", "none"),
-        })
+            "iteration_version_number": iteration.version_number,
+            "iteration_description": description,
+        }
+        
+        if not (error_summary or error_logs):
+            iteration_data = {
+                **iteration_data,
+                "error_summary": "None.  No errors detected.  The code executed without error.",
+            }
+        
+        if error_summary:
+            iteration_data = {
+                **iteration_data,
+                "error_summary": error_summary,
+            }
+            
+        if error_logs:
+            iteration_data = {
+                **iteration_data,
+                "error_logs": error_logs,
+            }
+            
+        if include_strategic_guidance:
+            iteration_data['strategic_guidance'] = evaluation_json.get("strategic_guidance", "none")
+            
+        messages.append(iteration_data)
     
-    return LlmMessage.user_from_data(title, messages, item_name="previous_iteration_analyses")
+    return LlmMessage.user_from_data(
+        title, 
+        messages, 
+        item_name="previous_iteration_analyses"
+    )
 
 
 def get_sys_prompt(
@@ -1375,10 +1460,12 @@ def perform_code_review(
         ),
         *common.ensure_list(
             get_prev_attemp_summaries(config)
-            # LlmMessage.user_from_data(
-            #     "Relevant past lessons",
-            #     get_lessons(config)
-            # )
+        ),
+        *common.ensure_list(
+            LlmMessage.user_from_data(
+                "Relevant past lessons",
+                get_lessons(config)
+            )
         ),
         *common.ensure_list(
             config.guidance
@@ -1425,7 +1512,10 @@ The code changes to review are in support of the following goal:
         config.log(non_blocking_warnings)
 
 
-def get_prev_attemp_summaries(config: SelfDriverConfig) -> list[dict]:
+def get_prev_attemp_summaries(config: SelfDriverConfig, disabled=True) -> list[dict]:
+    if disabled:
+        return []
+    
     attempt_count = 0
     
     previous_iterations: list[SelfDrivingTaskIteration] = list(
@@ -1455,9 +1545,15 @@ def get_prev_attemp_summaries(config: SelfDriverConfig) -> list[dict]:
     )
 
 
-def get_lessons(config, task_desc=None, all_lessons=True, exclude_invalid=True, skip=True) -> list[dict]:
+def get_lessons(
+        config, 
+        task_desc=None, 
+        all_lessons=True, 
+        exclude_invalid=True, skip=False
+) -> list[dict]:
     if skip:
-        return None
+        return []
+    
     if all_lessons:
         lessons_q = AgentLesson.objects.all()
     else:
@@ -1529,9 +1625,6 @@ def extract_lessons(
         log_content,
         skip=True
 ):
-    if skip:
-        return
-    
     current_iteration = config.current_iteration
     task = config.task
     lessons_data = llm_chat(
@@ -1541,11 +1634,10 @@ def extract_lessons(
             get_sys_prompt("lesson_extractor.md"),
             LlmMessage.user(task.get_work_desc()),
             *LlmMessage.user_from_data(f"Log Content from the '{agent_step}' step", log_content),
-            *get_prev_attemp_summaries(config),
-            # *LlmMessage.user_from_data(
-            #     "Existing Lessons (Don't repeat these)",
-            #     get_lessons(config, exclude_invalid=False)
-            # )
+            *LlmMessage.user_from_data(
+                "Existing Lessons (Don't repeat these)",
+                get_lessons(config, exclude_invalid=False)
+            )
         ],
         output_schema="lesson_extractor.md.schema.json",
         model=LlmModel.OPENAI_GPT_5
@@ -1724,8 +1816,11 @@ def write_initial_test(config: SelfDriverConfig):
                 get_sys_prompt([
                     "codewriter--python_test.md",
                     "codewriter--initial_test.md",
-                    "common--environment_variables.md",
-                    "codewriter--common.md"
+                    "codewriter--common.md",
+                    "common--iam_role.md",
+                    "common--credentials_architecture.md"
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md"
                 ], replacements=[
                     ("<env_vars>", get_env_var_names(config)),
                 ]),
@@ -1810,10 +1905,12 @@ def identify_required_credentials(
         [
             *common.ensure_list(
                 get_sys_prompt([
+                    "codeplanner--initial_credentials.md",
                     "codeplanner--common.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
                     "common--environment_variables.md",
-                    "common--credentials_architecture.md",
-                    "codeplanner--initial_credentials.md"
+                    "common--credentials_architecture.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<env_vars>", get_env_var_names(config)),
@@ -1935,11 +2032,10 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                     )
                 ),
                 *common.ensure_list(
-                    get_prev_attemp_summaries(config)
-                    # LlmMessage.user_from_data(
-                    #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                    #     get_lessons(config)
-                    # )
+                    LlmMessage.user_from_data(
+                        "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                        get_lessons(config)
+                    )
                 ),
                 *common.ensure_list(
                     get_dependencies_msg(config, for_planning=True)
@@ -1977,11 +2073,13 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
             *common.ensure_list(
                 get_sys_prompt(
                     [
+                        "codeplanner--aws_provisioning.md",
                         "codeplanner--common.md",
+                        "common--iam_role.md",
+                        "common--forbidden_actions.md",
                         "common--environment_variables.md",
                         "common--infrastructure_rules.md",
-                        "common--credentials_architecture.md",
-                        "codeplanner--aws_provisioning.md"
+                        "common--credentials_architecture.md"
                     ], replacements=[
                         ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                         ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
@@ -1995,10 +2093,12 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
             *get_existing_required_credentials(config),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
-                # LlmMessage.user_from_data(
-                #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                #     get_lessons(config)
-                # )
+            ),
+            *common.ensure_list(
+                LlmMessage.user_from_data(
+                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                    get_lessons(config)
+                )
             ),
             *common.ensure_list(
                 build_cloudformation_durations_context_messages(config)
@@ -2052,11 +2152,13 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
         [
             *common.ensure_list(
                 get_sys_prompt([
+                    "codeplanner--quick_fix.md",
                     "codeplanner--common.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
                     "common--environment_variables.md",
                     "common--credentials_architecture.md",
-                    "common--infrastructure_rules.md",
-                    "codeplanner--quick_fix.md"
+                    "common--infrastructure_rules.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<env_vars>", get_env_var_names(config)),
@@ -2067,10 +2169,12 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             *get_existing_required_credentials(config),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
-                # LlmMessage.user_from_data(
-                #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                #     get_lessons(config)
-                # )
+            ),
+            *common.ensure_list(
+                LlmMessage.user_from_data(
+                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                    get_lessons(config)
+                )
             ),
             *common.ensure_list(
                 build_cloudformation_durations_context_messages(config)
@@ -2168,10 +2272,12 @@ def plan_full_code_changes(config: SelfDriverConfig):
         ),
         *common.ensure_list(
             get_prev_attemp_summaries(config)
-            # LlmMessage.user_from_data(
-            #     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-            #     get_lessons(config)
-            # )
+        ),
+        *common.ensure_list(
+            LlmMessage.user_from_data(
+                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                get_lessons(config)
+            )
         ),
         *common.ensure_list(
             LlmMessage.user(f"""
@@ -2234,7 +2340,10 @@ def write_code(
         get_sys_prompt(
             [
                 *get_codewriter_system_prompt(code_file_path),
-                "codewriter--common.md"
+                "codewriter--common.md",
+                "common--iam_role.md",
+                "common--credentials_architecture.md",
+                "common--forbidden_actions.md"
             ],
             replacements=[
                 ("<sandbox_dir>", str(config.sandbox_root_dir)),
@@ -2330,7 +2439,7 @@ def write_code(
     else:
         raise Exception(f"no instructions in {json.dumps(coding_task_data, indent=4)}")
     
-    lessons = None  # get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
+    lessons = get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
     if lessons:
         coding_task_data["lessons_learned"] = {
             "description": "Lessons learned in previous iterations.  Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
@@ -2969,9 +3078,9 @@ def deploy_cloudformation_stacks(
     
     except AgentBlocked as abe:
         raise abe
-    
-    except Exception as deploy_exception:
-        config.log(f"Error deploying CloudFormation stack {stack_name}: {deploy_exception}\n")
+
+    except CloudFormationException as cfe:
+        config.log(f"Error deploying CloudFormation stack {stack_name}: {cfe}\n")
         config.log(traceback.format_exc())
         try:
             events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
@@ -3046,10 +3155,7 @@ def deploy_cloudformation_stacks(
         except Exception as ct_ex:
             config.log(f"Failed to fetch CloudTrail events: {ct_ex}\n")
         
-        raise deploy_exception
-    finally:
-        asdf = 1
-        ...
+        raise cfe
 
 
 def get_stack_parameters(
@@ -3096,7 +3202,7 @@ def get_stack_parameters(
     }
     
     arn_param_bindings = []  # list of (param_name, envvar_name, arn)
-    planning_required_creds = common.get(config.current_iteration, ["planning_json", "required_credentials"], default_val={})
+    planning_required_creds = config.business.required_credentials or {}
     for svc_name, svc_spec in planning_required_creds.items():
         cfn_param = svc_spec.get("secret_arn_cfn_parameter")
         envvar_name = svc_spec.get("secret_arn_env_var")

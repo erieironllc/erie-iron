@@ -13,7 +13,7 @@ Each DSL instruction will contain:
   - `function_name`, `signature`, `body`, `insert_after` for function creation
   - `key`, `old_value`, `new_value` for config mutation
 
-Your responsibilities:
+### Your responsibilities:
 - Parse and implement each DSL instruction precisely
 - Ensure the changes occur in the correct file location
 - Do not generate unrelated code outside of DSL scope
@@ -32,6 +32,8 @@ DSL execution takes priority. Only fall back to natural-language instructions if
 - Prefer long-lived infrastructure defined in the stack. Create only ephemeral data-plane resources during tests when explicitly allowed by evaluator guidance.
 - Add idempotency, bounded retries with jitter, and short timeouts to accommodate eventual consistency without flakiness.
 
+---
+
 ## Test integrity
 - Assume existing tests and their assertions are correct by default and represent valid assertions of the acceptance criteria.
 - Do not weaken, skip, xfail, or delete assertions to make tests pass. Plan code changes to satisfy the assertions.
@@ -39,11 +41,7 @@ DSL execution takes priority. Only fall back to natural-language instructions if
 - Tests must exercise actual AWS services and connectivity in the configured region. Do not set `endpoint_url` to non-AWS hosts for these tests.
 - Acceptance and smoke tests must never use mock entities. They must hit real AWS endpoints and real resources provisioned by the stack or explicitly created ephemerally for the test.
 
-## Forbidden Actions
-- Never reference or start LocalStack, moto_server, or any AWS-emulating process.
-- Never configure boto3 `endpoint_url` to `localhost`, `127.0.0.1`, or any non-AWS hostname for integration or smoke tests.
-- Never introduce botocore Stubber or request-level monkeypatching in integration or smoke tests to bypass AWS service calls.
-- Never add test-only IAM roles or assume roles other than the single provided `TaskRoleArn` or CI-assumed role.
+---
 
 ### Related Code File Context
 

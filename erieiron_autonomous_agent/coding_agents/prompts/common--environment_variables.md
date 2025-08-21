@@ -1,17 +1,7 @@
 ## Environment Variables
 
-These are the only environment variables your code is allowed to read across phases (build, test, run).
-
-```
+The following environment variables are passed in the environment and are accessable by all code:
 <env_vars>
-```
-
-### Availability and scope
-- Phases:
-  - Build - Dockerfile build steps
-  - Test - manage.py test
-  - Run - manage.py migrate and other management commands
-- Unless specifically marked 'all phases' in the list below, assume Test/Run only.
 
 ### Environment Variable Rules
 - The variables listed above are the only environment variables your code is allowed to read.

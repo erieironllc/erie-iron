@@ -59,12 +59,24 @@ You will not have access to execution logs or raw test output — only high-leve
 
 6. **Provide Strategic Guidance**
    - **Field**: `strategic_guidance`
+   - Remember:  
+      - No skipping/mocking of integration tests
+      - Route infra gaps to CloudFormation + IAM + Env injection
+      - Prefer fail‑fast over resilience when external infra is missing
    - Optionally provide structured recommendations for future planning based on trend analysis.
    - Use when recurring issues or reliable improvements suggest clear next steps.
    - Each recommendation should include:
      - **suggested_action**: What to do next.
      - **justification**: Why it's a good idea, with reference to trends or results.
      - **confidence**: Your confidence score in this guidance (between 0 and 1).
+
+---
+
+## Missing‑Infra Routing
+If evaluations show failures like “Missing required configuration … EMAIL_INGEST_S3_BUCKET / STORAGE_BUCKET / EMAIL_STORAGE_BUCKET” or similar for queues, topics, DB hosts:
+- Classify as INFRASTRUCTURE_MISSING.
+- Recommend updating CloudFormation to create the resource, inject the env var into the Lambda/service Environment, and attach least‑privilege IAM. Do not propose code defaults, .env fallbacks, or skipping tests.
+
 
 ---
 
@@ -103,3 +115,8 @@ You will not have access to execution logs or raw test output — only high-leve
 - In general, **ignore warnings unless they indicate functional failure** or break the task’s GOAL.
 - Do not attempt to fix safe warnings. Focus on actionable errors and failures instead.
 - If the previous attempt failed with Docker running out of disk space, you can assume this issue is manually cleaned up and do not need to suggest the planner fix it
+
+## Test Policy (Non‑negotiable)
+1) Integration and acceptance tests must hit real AWS resources. Do not suggest skipping, mocking, or providing local stubs when external infra is unavailable.
+2) When required cloud resources or env vars are missing, tests must fail fast. Strategic guidance must route to AWS provisioning to create the resources and inject env via CloudFormation.
+3) CI pre‑checks are allowed only as a fail‑fast diagnostic gate (clear error and exit). They must not downgrade, skip, or mark integration tests as xfailed.

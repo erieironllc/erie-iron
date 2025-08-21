@@ -1,5 +1,6 @@
-### DATABASES 
-you **must always** configure databases with this code:
+## DATABASES 
+
+You **must always** configure databases with this code:
 ```python
 rds_secret = agent_tools.get_secret_from_env_arn('RDS_CREDS_ARN')
 DATABASES = {

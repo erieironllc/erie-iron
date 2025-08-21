@@ -234,7 +234,6 @@ class SelfDriverConfig:
             return self.log_path.read_text()
         except Exception:
             return traceback.format_exc()
-    
 
 
 class GoalAchieved(Exception):
@@ -245,13 +244,22 @@ class GoalAchieved(Exception):
 
 class AgentBlocked(Exception):
     def __init__(self, blocked_data):
-        pprint.pprint(blocked_data)
         self.blocked_data = blocked_data
 
 
 class NeedPlan(Exception):
     def __init__(self, msg: str):
         super().__init__(msg)
+
+
+class CloudFormationException(Exception):
+    def __init__(self, extracted_exception: str):
+        super().__init__(extracted_exception)
+
+
+class ExecutionException(Exception):
+    def __init__(self, extracted_exception: str):
+        super().__init__(extracted_exception)
 
 
 class BadPlan(Exception):
