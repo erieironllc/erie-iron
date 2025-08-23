@@ -68,7 +68,8 @@ def manage_credentials(
     business = config.business
     task = config.task
     
-    if not CredentialService.valid(common.default_str(credential_service_name).upper()):
+    credential_service = CredentialService.valid_or(common.default_str(credential_service_name).upper())
+    if not credential_service:
         raise AgentBlocked(f"""Blocked by unsupported credential service: {credential_service_name}
 
 Need a human to set this up
@@ -87,8 +88,11 @@ Secret Def:
         credential_service_name
     )
     
-    credential_service = CredentialService.valid_or(credential_service_name)
-    missing_secret_vals = validate_secret(secret_dict, CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, cred_def))
+    missing_secret_vals = validate_secret(
+        secret_dict, 
+        CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, cred_def)
+    )
+    
     if not missing_secret_vals:
         return aws_utils.get_secret_arn(aws_secret_key)
     
@@ -110,7 +114,11 @@ Secret Def:
             
             secret_dict[prop_name] = val
     
-    secret_arn = aws_utils.put_secret(aws_secret_key, secret_dict)
+    secret_arn = aws_utils.put_secret(
+        aws_secret_key, 
+        secret_dict
+    )
+    
     return secret_arn
 
 

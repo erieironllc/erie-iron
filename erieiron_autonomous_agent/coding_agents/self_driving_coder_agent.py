@@ -53,8 +53,8 @@ def initialize_workflow(pubsub_manager: PubSubManager):
     )
 
 
-def execute(task_id: str, quick_debug=False):
-    self_driving_task = bootstrap_selfdriving_agent(task_id)
+def execute(task_id: str, quick_debug=False, reset=False):
+    self_driving_task = bootstrap_selfdriving_agent(task_id, reset)
     
     config = None
     stop_reason = ""
@@ -323,7 +323,7 @@ def plan_code_changes(config):
     elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
         raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(config.current_iteration.routing_json, indent=4)}")
     
-    validate_plan(planning_data)
+    validate_plan(config, planning_data)
     
     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
         planning_json=planning_data
@@ -342,11 +342,8 @@ def plan_code_changes(config):
     return planning_data
 
 
-def validate_plan(planning_data):
-    readonly_paths = {
-        f['path']: f
-        for f in READONLY_FILES
-    }
+def validate_plan(config: SelfDriverConfig, planning_data):
+    readonly_paths = get_readonly_files_paths(config)
     
     for f in planning_data.get("code_files", []):
         code_file_path = str(f.get("code_file_path"))
@@ -373,66 +370,37 @@ def validate_plan(planning_data):
     return planning_data
 
 
-def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
+def bootstrap_selfdriving_agent(task_id, reset:False) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
-    self_driving_task = task.create_self_driving_env()
+    self_driving_task:SelfDrivingTask = task.create_self_driving_env()
     
     git = self_driving_task.get_git()
     git.pull()
     
+    if reset:
+        self_driving_task.selfdrivingtaskiteration_set.all().delete()
+
     if not self_driving_task.selfdrivingtaskiteration_set.exists():
-        generate_first_iteration(self_driving_task)
+        config = SelfDriverConfig(self_driving_task)
+        config.set_iteration(self_driving_task.iterate())
+
+        has_cloudformation = config.business.codefile_set.filter(
+            file_path="infrastructure.yaml"
+        ).exists()
+        
+        has_completed_tasks = config.business.selfdrivingtask_set.filter(
+            test_file_path__isnull=False,
+            task__status=TaskStatus.COMPLETE
+        ).exists()
+        
+        if has_cloudformation and has_completed_tasks:
+            # make sure the tests run
+            execute_iteration(
+                config,
+                AwsEnv.DEV
+            )
     
     return self_driving_task
-
-
-def generate_first_iteration(self_driving_task):
-    first_iteration = self_driving_task.iterate()
-    config = SelfDriverConfig(self_driving_task)
-    planning_json = llm_chat(
-        "Create First Iteration",
-        config,
-        [
-            get_sys_prompt(
-                [
-                    "codeplanner--common.md",
-                    "common--iam_role.md",
-                    "common--forbidden_actions.md",
-                    "common--infrastructure_rules.md",
-                    "common--environment_variables.md",
-                    "common--credentials_architecture.md"
-                ], replacements=[
-                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
-                    ("<env_vars>", get_env_var_names(config)),
-                    ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
-                    get_readonly_files_replacement()
-                ]
-            ),
-            *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
-            *get_existing_required_credentials(config),
-            LlmMessage.sys("""
-This is the first iteration on this code.  
-
-## Requirements:
-- Do not make any changes to the code_files.  
-    - The value of code_files must be []
-- Review the architecture document and specify values for 
-    1.  required_credentials (required)
-    2.  tombstones (optional) 
-                """)
-        ],
-        config.model_code_planning,
-        reasoning_effort=LlmReasoningEffort.HIGH,
-        output_schema="codeplanner.schema.json"
-    ).json()
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=first_iteration.id).update(
-            planning_json=planning_json
-        )
-        first_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
 
 
 def build_docker_image(
@@ -567,14 +535,14 @@ def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
     
     aws_credentials = botocore.session.Session(
         profile=os.environ.get("AWS_PROFILE")
-    ).get_credentials()
-    frozen = aws_credentials.get_frozen_credentials()
+    ).get_credentials().get_frozen_credentials()
     
-    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
-    env["AWS_ACCESS_KEY_ID"] = frozen.access_key
     env["AWS_DEFAULT_REGION"] = settings.AWS_DEFAULT_REGION_NAME
-    env["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
-    env["AWS_SESSION_TOKEN"] = frozen.token
+    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
+    env["AWS_ACCESS_KEY_ID"] = aws_credentials.access_key
+    env["AWS_SECRET_ACCESS_KEY"] = aws_credentials.secret_key
+    env["AWS_SESSION_TOKEN"] = aws_credentials.token
+    env["LLM_API_KEYS_SECRET_ARN"] = settings.LLM_API_KEYS_SECRET_ARN
     env["TASK_NAMESPACE"] = env["CLOUDFORMATION_STACK_NAME"] = config.self_driving_task.get_cloudformation_stack_name(aws_env)
     env["DOCKER_BUILDKIT"] = "1"
     env["PATH"] = os.getenv("PATH")
@@ -724,19 +692,19 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
     running_process = None
     
     iteration = config.current_iteration
-    if not iteration.planning_json:
-        raise NeedPlan(f"current iteration has no planning data.  need to go back and replan")
-    
     self_driving_task = iteration.self_driving_task
+    
     task = self_driving_task.task
     task_type = TaskType(task.task_type)
     task_execution = init_task_execution(iteration)
     
     try:
-        
         config.set_phase(SdaPhase.DEPLOY)
         
-        docker_env = build_env(config, aws_env)
+        docker_env = build_env(
+            config,
+            aws_env
+        )
         
         running_process, _ = RunningProcess.objects.update_or_create(
             task_execution=task_execution,
@@ -973,7 +941,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     
     if isinstance(exception, ExecutionException):
         common.struct_set(eval_data, ['error', 'logs'], str(exception))
-
+    
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             evaluation_json=eval_data
@@ -1373,7 +1341,7 @@ def get_iteration_eval_llm_messages(
             include_strategic_guidance = True
         else:
             description = "This is an evaluation previous iteration of the code.  It is not the previous iteration neither is it the iteration we are rolling back to"
-
+        
         evaluation_json: dict = iteration.evaluation_json
         evaluation_parts = [
             evaluation_json.get("summary"),
@@ -1406,21 +1374,21 @@ def get_iteration_eval_llm_messages(
                 **iteration_data,
                 "error_summary": error_summary,
             }
-            
+        
         if error_logs:
             iteration_data = {
                 **iteration_data,
                 "error_logs": error_logs,
             }
-            
+        
         if include_strategic_guidance:
             iteration_data['strategic_guidance'] = evaluation_json.get("strategic_guidance", "none")
-            
+        
         messages.append(iteration_data)
     
     return LlmMessage.user_from_data(
-        title, 
-        messages, 
+        title,
+        messages,
         item_name="previous_iteration_analyses"
     )
 
@@ -1546,9 +1514,9 @@ def get_prev_attemp_summaries(config: SelfDriverConfig, disabled=True) -> list[d
 
 
 def get_lessons(
-        config, 
-        task_desc=None, 
-        all_lessons=True, 
+        config,
+        task_desc=None,
+        all_lessons=True,
         exclude_invalid=True, skip=False
 ) -> list[dict]:
     if skip:
@@ -1818,11 +1786,13 @@ def write_initial_test(config: SelfDriverConfig):
                     "codewriter--initial_test.md",
                     "codewriter--common.md",
                     "common--iam_role.md",
+                    "common--llm_chat.md",
                     "common--credentials_architecture.md"
                     "common--forbidden_actions.md",
                     "common--environment_variables.md"
                 ], replacements=[
                     ("<env_vars>", get_env_var_names(config)),
+                    ("<business_tag>", config.business.service_token),
                 ]),
                 *LlmMessage.user_from_data(
                     "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
@@ -1907,15 +1877,17 @@ def identify_required_credentials(
                 get_sys_prompt([
                     "codeplanner--initial_credentials.md",
                     "codeplanner--common.md",
+                    "common--llm_chat.md",
                     "common--iam_role.md",
                     "common--forbidden_actions.md",
                     "common--environment_variables.md",
                     "common--credentials_architecture.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<business_tag>", config.business.service_token),
                     ("<env_vars>", get_env_var_names(config)),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    get_readonly_files_replacement()
+                    get_readonly_files_replacement(config)
                 ]),
             ),
             *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
@@ -2075,18 +2047,20 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     [
                         "codeplanner--aws_provisioning.md",
                         "codeplanner--common.md",
+                        "common--llm_chat.md",
                         "common--iam_role.md",
                         "common--forbidden_actions.md",
                         "common--environment_variables.md",
                         "common--infrastructure_rules.md",
                         "common--credentials_architecture.md"
                     ], replacements=[
+                        ("<business_tag>", config.business.service_token),
                         ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                         ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                         ("<env_vars>", get_env_var_names(config)),
                         ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
                         ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
-                        get_readonly_files_replacement()
+                        get_readonly_files_replacement(config)
                     ]
                 ),
             ),
@@ -2132,9 +2106,29 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     return planning_data
 
 
-def get_readonly_files_replacement() -> tuple[str, str]:
+def get_readonly_files_paths(config: SelfDriverConfig) -> list[str]:
+    readonly_file_paths = READONLY_FILES
+    
+    for test_file in config.business.codefile_set.filter(
+            Q(file_path__contains="test/") | Q(file_path__contains="/test")
+    ).exclude(
+        file_path=config.self_driving_task.test_file_path
+    ):
+        readonly_file_paths.append(
+            {
+                "path": test_file.file_path,
+                "alternatives": config.self_driving_task.test_file_path,
+                "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression"
+            }
+        )
+    
+    return readonly_file_paths
+
+
+def get_readonly_files_replacement(config: SelfDriverConfig) -> tuple[str, str]:
     parts = []
-    for f in READONLY_FILES:
+    
+    for f in get_readonly_files_paths(config):
         parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
     
     return "<read_only_files>", "\n".join(parts)
@@ -2154,16 +2148,18 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 get_sys_prompt([
                     "codeplanner--quick_fix.md",
                     "codeplanner--common.md",
+                    "common--llm_chat.md",
                     "common--iam_role.md",
                     "common--forbidden_actions.md",
                     "common--environment_variables.md",
                     "common--credentials_architecture.md",
                     "common--infrastructure_rules.md"
                 ], replacements=[
+                    ("<business_tag>", config.business.service_token),
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<env_vars>", get_env_var_names(config)),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    get_readonly_files_replacement()
+                    get_readonly_files_replacement(config)
                 ]),
             ),
             *get_existing_required_credentials(config),
@@ -2233,6 +2229,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
         get_sys_prompt(
             system_prompt_files,
             [
+                ("<business_tag>", config.business.service_token),
                 ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                 ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                 ("<test_file_path>", str(config.self_driving_task.test_file_path or "")),
@@ -2242,7 +2239,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
                 ("<iam_role_name>", str(business.get_iam_role_name())),
                 ("<artifacts_directory>", str(config.artifacts_dir)),
                 ("<sandbox_dir>", str(config.sandbox_root_dir)),
-                get_readonly_files_replacement()
+                get_readonly_files_replacement(config)
             ]
         ),
         *get_existing_required_credentials(config),
@@ -2346,6 +2343,7 @@ def write_code(
                 "common--forbidden_actions.md"
             ],
             replacements=[
+                ("<business_tag>", config.business.service_token),
                 ("<sandbox_dir>", str(config.sandbox_root_dir)),
                 ("<env_vars>", get_env_var_names(config))
             ]
@@ -2536,9 +2534,20 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
     if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
         prompt = "codewriter--requirements.txt.md"
     elif code_file_name_lower.startswith("test") and code_file_name_lower.endswith(".py"):
-        prompt = "codewriter--python_test.md"
+        prompt = [
+            "codewriter--python_test.md",
+            "common--llm_chat.md"
+        ]
     elif code_file_name_lower == "settings.py":
-        prompt = ["codewriter--python_coder.md", "codewriter--django_settings.md"]
+        prompt = [
+            "codewriter--django_settings.md",
+            "codewriter--python_coder.md"
+        ]
+    elif code_file_name_lower.endswith(".py"):
+        prompt = [
+            "codewriter--python_coder.md",
+            "common--llm_chat.md"
+        ]
     elif code_file_name_lower.endswith(".json"):
         prompt = "codewriter--json_coder.md"
     elif code_file_name_lower.endswith(".eml"):
@@ -2549,8 +2558,6 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         prompt = "codewriter--aws_cloudformation_coder.md"
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
-    elif code_file_name_lower.endswith(".py"):
-        prompt = "codewriter--python_coder.md"
     elif code_file_name_lower.endswith(".sql"):
         prompt = "codewriter--sql_coder.md"
     elif code_file_name_lower.endswith(".js"):
@@ -2565,6 +2572,7 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         raise BadPlan("All env vars must be fetched from the os environment.  Do not use .env files or decouple")
     else:
         raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
+    
     return common.ensure_list(prompt)
 
 
@@ -3078,7 +3086,7 @@ def deploy_cloudformation_stacks(
     
     except AgentBlocked as abe:
         raise abe
-
+    
     except CloudFormationException as cfe:
         config.log(f"Error deploying CloudFormation stack {stack_name}: {cfe}\n")
         config.log(traceback.format_exc())

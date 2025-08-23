@@ -548,6 +548,12 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 
 ## Validation Checklist
 - Fail the plan if the `code_files` ordering is not respected. Examples of violations include:
-  - Any instruction or dependency that requires a later-listed file to be edited first.
-  - Missing explicit interleaving when the same file must be edited multiple times.
-  - Proposed writer steps that would execute out of the declared order.
+    - Any instruction or dependency that requires a later-listed file to be edited first.
+    - Missing explicit interleaving when the same file must be edited multiple times.
+    - Proposed writer steps that would execute out of the declared order.
+
+----
+
+## Read Only Files
+The following files are read-only.  You **must never** modify any of these files under any circumstances.  
+<read_only_files>

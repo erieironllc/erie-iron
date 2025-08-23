@@ -16,9 +16,16 @@ class Command(BaseCommand):
             type=bool,
             required=False
         )
+        
+        parser.add_argument(
+            '--reset',
+            type=bool,
+            required=False
+        )
     
     def handle(self, *args, **options):
         self_driving_coder_agent.execute(
             options.get("task_id"),
-            options.get("quick_debug")
+            options.get("quick_debug"),
+            options.get("reset")
         )
