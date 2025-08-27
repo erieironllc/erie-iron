@@ -76,10 +76,9 @@ def execute(task_id: str, quick_debug=False, reset=False):
                         include_erie_common=True
                     )
                 
-                if not (self_driving_task.design_doc_path and (config.sandbox_root_dir / self_driving_task.design_doc_path).exists()):
-                    config.set_iteration(self_driving_task.iterate())
+                if config.business.architecture:
                     config.set_phase(SdaPhase.INIT)
-                    write_initial_design(config)
+                    write_business_architecture(config)
                 
                 if not config.business.required_credentials:
                     config.set_phase(SdaPhase.INIT)
@@ -370,20 +369,20 @@ def validate_plan(config: SelfDriverConfig, planning_data):
     return planning_data
 
 
-def bootstrap_selfdriving_agent(task_id, reset:False) -> SelfDrivingTask:
+def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
-    self_driving_task:SelfDrivingTask = task.create_self_driving_env()
+    self_driving_task: SelfDrivingTask = task.create_self_driving_env()
     
     git = self_driving_task.get_git()
     git.pull()
     
     if reset:
         self_driving_task.selfdrivingtaskiteration_set.all().delete()
-
+    
     if not self_driving_task.selfdrivingtaskiteration_set.exists():
         config = SelfDriverConfig(self_driving_task)
         config.set_iteration(self_driving_task.iterate())
-
+        
         has_cloudformation = config.business.codefile_set.filter(
             file_path="infrastructure.yaml"
         ).exists()
@@ -399,6 +398,8 @@ def bootstrap_selfdriving_agent(task_id, reset:False) -> SelfDrivingTask:
                 config,
                 AwsEnv.DEV
             )
+            
+            assert_tests_green(config)
     
     return self_driving_task
 
@@ -878,6 +879,27 @@ def init_task_execution(iteration):
         input_data=task_input,
         iteration=iteration
     )
+
+
+def assert_tests_green(config: SelfDriverConfig):
+    test_reviewer_output = llm_chat(
+        "Assert Initial Tests Green",
+        config,
+        [
+            get_sys_prompt("test_reviewer.md"),
+            config.get_log_content()
+        ],
+        output_schema="test_reviewer.md.schema.json",
+        model=LlmModel.OPENAI_GPT_5,
+        reasoning_effort=LlmReasoningEffort.LOW,
+        verbosity=LlmVerbosity.LOW
+    ).json()
+    
+    if not test_reviewer_output.get("all_passed"):
+        raise AgentBlocked({
+            "desc": "assert_tests_green failed",
+            **test_reviewer_output
+        })
 
 
 def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception):
@@ -1909,7 +1931,7 @@ def identify_required_credentials(
     config.business.refresh_from_db(fields=["required_credentials"])
 
 
-def write_initial_design(
+def write_business_architecture(
         config: SelfDriverConfig
 ):
     task = config.task

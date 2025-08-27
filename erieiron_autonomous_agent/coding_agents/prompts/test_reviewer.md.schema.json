@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/test-log-reviewer.schema.json",
+  "title": "Test Log Reviewer Output",
+  "description": "Validation schema for the Test Log Reviewer agent output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["all_passed", "summary", "failures"],
+  "properties": {
+    "all_passed": { "type": "boolean" },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "failed", "errored", "skipped", "xfailed", "xpassed"],
+      "properties": {
+        "total":   { "type": "integer", "minimum": 0 },
+        "passed":  { "type": "integer", "minimum": 0 },
+        "failed":  { "type": "integer", "minimum": 0 },
+        "errored": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "xfailed": { "type": "integer", "minimum": 0 },
+        "xpassed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test_id", "status", "error_type", "message", "stack_trace", "stdout", "stderr"],
+        "properties": {
+          "test_id":     { "type": "string", "minLength": 1 },
+          "status":      { "type": "string", "enum": ["failed", "error"] },
+          "error_type":  { "type": "string" },
+          "message":     { "type": "string" },
+          "stack_trace": { "type": "string" },
+          "stdout":      { "type": "string" },
+          "stderr":      { "type": "string" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "all_passed": { "const": true } }, "required": ["all_passed"] },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": { "failed": { "const": 0 }, "errored": { "const": 0 } }
+          },
+          "failures": { "maxItems": 0 }
+        }
+      }
+    }
+  ]
+}

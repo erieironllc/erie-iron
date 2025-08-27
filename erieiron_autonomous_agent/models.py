@@ -37,6 +37,7 @@ class Business(BaseErieIronModel):
     raw_idea = models.TextField(null=True)
     bank_account_id = models.TextField(null=True)
     business_plan = models.TextField(null=True)
+    architecture = models.TextField(null=True)
     value_prop = models.TextField(null=True)
     revenue_model = models.TextField(null=True)
     audience = models.TextField(null=True)
@@ -426,6 +427,7 @@ class BusinessCeoDirective(BaseErieIronModel):
 class Initiative(BaseErieIronModel):
     id = models.TextField(primary_key=True)  # initiative_token
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    architecture = models.TextField(null=True)
     initiative_type = models.TextField(choices=InitiativeType.choices(), default=InitiativeType.PRODUCT)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     title = models.TextField()
@@ -609,7 +611,6 @@ class SelfDrivingTask(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     main_name = models.TextField(null=False)
     test_file_path = models.TextField(null=True)
-    design_doc_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
     cloudformation_stack_name = models.TextField(null=True)
     goal = models.TextField(null=False)
