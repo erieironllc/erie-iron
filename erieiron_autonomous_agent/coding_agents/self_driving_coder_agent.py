@@ -23,7 +23,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Business
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Business, Initiative
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils
@@ -76,9 +76,13 @@ def execute(task_id: str, quick_debug=False, reset=False):
                         include_erie_common=True
                     )
                 
-                if config.business.architecture:
+                if not config.business.architecture:
                     config.set_phase(SdaPhase.INIT)
                     write_business_architecture(config)
+                
+                if not config.initiative.architecture:
+                    config.set_phase(SdaPhase.INIT)
+                    write_initiative_architecture(config)
                 
                 if not config.business.required_credentials:
                     config.set_phase(SdaPhase.INIT)
@@ -217,6 +221,7 @@ full logs:
                 break
             except GoalAchieved as goal_achieved:
                 config.git.add_commit_push(f"task {config.task.id}: {config.task.description}")
+                delete_cloudformation_stack(config, AwsEnv.DEV)
                 
                 stop_reason = "Goal Achieved"
                 if config.self_driving_task.task_id:
@@ -371,7 +376,9 @@ def validate_plan(config: SelfDriverConfig, planning_data):
 
 def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
-    self_driving_task: SelfDrivingTask = task.create_self_driving_env()
+    self_driving_task: SelfDrivingTask = task.create_self_driving_env(
+        reset_code_dir=reset
+    )
     
     git = self_driving_task.get_git()
     git.pull()
@@ -382,6 +389,11 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     if not self_driving_task.selfdrivingtaskiteration_set.exists():
         config = SelfDriverConfig(self_driving_task)
         config.set_iteration(self_driving_task.iterate())
+        
+        config.business.snapshot_code(
+            config.current_iteration,
+            include_erie_common=False
+        )
         
         has_cloudformation = config.business.codefile_set.filter(
             file_path="infrastructure.yaml"
@@ -394,6 +406,7 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
         
         if has_cloudformation and has_completed_tasks:
             # make sure the tests run
+            delete_cloudformation_stack(config, AwsEnv.DEV)
             execute_iteration(
                 config,
                 AwsEnv.DEV
@@ -474,7 +487,7 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
     if not stack_name:
         raise AgentBlocked("unable to determine stack name")
     
-    region = os_env.get("AWS_REGION") or os_env.get("AWS_DEFAULT_REGION") or settings.AWS_DEFAULT_REGION_NAME
+    region = get_aws_region()
     if not region:
         raise AgentBlocked("unable to determine regions")
     
@@ -512,6 +525,10 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
         raise BadPlan("infrastructure.yaml does not define a TaskRoleArn")
     
     return role_arn
+
+
+def get_aws_region():
+    return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or settings.AWS_DEFAULT_REGION_NAME
 
 
 def get_env_var_names(config: SelfDriverConfig) -> str:
@@ -748,6 +765,13 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
             except Exception as e:
                 raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
             
+            if AwsEnv.DEV.eq(aws_env):
+                try:
+                    empty_stack_buckets(config)
+                except Exception as e:
+                    logging.exception(e)
+                    raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
+            
             deploy_cloudformation_stacks(
                 config,
                 aws_env,
@@ -867,13 +891,14 @@ def init_task_execution(iteration):
         if not TaskStatus.COMPLETE.eq(upstream_task.status):
             raise AgentBlocked(f"task {task.id} depends on task {upstream_task.id}, but the upstream task's status is {upstream_task.status}")
         
-        previous_task_execution = upstream_task.get_last_execution()
-        if not previous_task_execution:
-            raise AgentBlocked({
-                "desc": f"task {task.id} depends on upstream task {upstream_task.id}, but the upstream task has not executed"
-            })
-        
-        task_input[upstream_task.id] = previous_task_execution.output
+        if TaskType.TASK_EXECUTION.eq(iteration.self_driving_task.task.task_type):
+            previous_task_execution = upstream_task.get_last_execution()
+            if not previous_task_execution:
+                raise AgentBlocked({
+                    "desc": f"task {task.id} depends on upstream task {upstream_task.id}, but the upstream task has not executed"
+                })
+            
+            task_input[upstream_task.id] = previous_task_execution.output
     
     return task.create_execution(
         input_data=task_input,
@@ -1075,7 +1100,7 @@ def cloudformation_wait(
         config: SelfDriverConfig,
         cf_client,
         stack_name,
-        timeout=1200,
+        timeout=45 * 60,
         poll_interval=10,
         throw_on_fail=False
 ):
@@ -1090,16 +1115,17 @@ def cloudformation_wait(
         
         status = stack['StackStatus']
         if throw_on_fail:
-            if not status.startswith("ROLLBACK_"):
+            if status.startswith("ROLLBACK_"):
                 break
         
         if not status.endswith("_IN_PROGRESS"):
             break
         
-        if time.time() - start_time > timeout:
+        wait_time = time.time() - start_time
+        if wait_time > timeout:
             raise TimeoutError(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
         
-        config.log(f"waiting on {stack_name}.  status: {status}")
+        config.log(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
     
     if throw_on_fail:
         assert_cloudformation_stack_valid(stack_name, cf_client)
@@ -1113,34 +1139,13 @@ def get_stack(stack_name, cf_client):
 
 
 def extract_cloudformation_params(cfn_file: Path):
-    # Extract Parameters block using indentation-aware parsing
-    lines = cfn_file.read_text().splitlines()
-    start_idx = None
-    for i, line in enumerate(lines):
-        if line.strip() == "Parameters:":
-            start_idx = i
-            break
-    if start_idx is None:
-        return set(), {}
+    data = yaml.load(cfn_file.read_text(), Loader=yaml.BaseLoader)
+    param_metadata = data.get("Parameters") or {}
     
-    param_lines = [lines[start_idx]]
-    base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
-    for line in lines[start_idx + 1:]:
-        if not line.strip():
-            param_lines.append(line)
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= base_indent:
-            break
-        param_lines.append(line)
-    
-    param_block_str = "\n".join(param_lines)
-    parsed = yaml.safe_load(param_block_str)
-    
-    param_metadata = parsed.get("Parameters", {})
     required_params = {
-        name for name, meta in param_metadata.items()
-        if "Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower()
+        name
+        for name, meta in param_metadata.items()
+        if not isinstance(meta, dict) or ("Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower())
     }
     
     return required_params, param_metadata
@@ -1208,6 +1213,25 @@ def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_na
         events = cf_client.describe_stack_events(StackName=stack_name).get('StackEvents', [])
     except Exception:
         return []
+    
+    from datetime import datetime, timezone as dt_timezone
+    if isinstance(deployment_start_datetime, str):
+        try:
+            # Attempt ISO 8601 parsing
+            deployment_start_datetime = datetime.fromisoformat(deployment_start_datetime)
+            # If parsed value is naive, make it UTC
+            if deployment_start_datetime.tzinfo is None:
+                deployment_start_datetime = deployment_start_datetime.replace(tzinfo=dt_timezone.utc)
+        except Exception:
+            # If parsing fails, fall back to including all events
+            deployment_start_datetime = datetime.min.replace(tzinfo=dt_timezone.utc)
+    elif isinstance(deployment_start_datetime, datetime):
+        # Ensure awareness; boto3 timestamps are tz-aware
+        if deployment_start_datetime.tzinfo is None:
+            deployment_start_datetime = deployment_start_datetime.replace(tzinfo=dt_timezone.utc)
+    else:
+        # Unknown type; include all events to avoid type errors
+        deployment_start_datetime = datetime.min.replace(tzinfo=dt_timezone.utc)
     
     recent_events = [e for e in events if e.get('Timestamp') and e['Timestamp'] >= deployment_start_datetime]
     recent_events.sort(key=lambda x: x['Timestamp'])
@@ -1431,6 +1455,18 @@ def get_sys_prompt(
     return LlmMessage.sys("\n\n-------\n\n".join(messages))
 
 
+def get_architecture_docs(config: SelfDriverConfig):
+    return LlmMessage.user_from_data(
+        "Architecture", {
+            "business_architecture": config.business.architecture,
+            "initiative_architecture": config.initiative.architecture,
+            "notes": "Business_architecture describes the whole picture for the business.  "
+                     "Initiative_architecture describes details specific to this initiative.  "
+                     "If there are conflicts between business_architecture and initiative_architecture, Business Architecture takes precedence."
+        }
+    )
+
+
 def perform_code_review(
         config: SelfDriverConfig,
         planning_data
@@ -1441,7 +1477,16 @@ def perform_code_review(
     task = config.task
     
     messages = [
-        get_sys_prompt("codereviewer.md"),
+        get_sys_prompt(
+            [
+                "codereviewer.md",
+                "common--credentials_architecture.md"
+            ]
+        ),
+        *get_architecture_docs(config),
+        *common.ensure_list(
+            get_tombstone_message(config)
+        ),
         # *common.ensure_list(
         #     get_relevant_code_files(config, current_iteration, iteration_to_modify)
         # ),
@@ -1783,8 +1828,7 @@ def post_process_code_ouput(code_str: str, code_version_to_modify: CodeVersion) 
             # Apply patch against the current version of the file
             code_str = codegen_utils.apply_unified_diff_to_text(
                 code_version_to_modify.code,
-                code_str,
-                expected_relpath=code_file_path_str
+                code_str
             )
         except Exception as patch_e:
             # Surface a structured error that preserves context for lesson extraction
@@ -1809,7 +1853,7 @@ def write_initial_test(config: SelfDriverConfig):
                     "codewriter--common.md",
                     "common--iam_role.md",
                     "common--llm_chat.md",
-                    "common--credentials_architecture.md"
+                    "common--credentials_architecture.md",
                     "common--forbidden_actions.md",
                     "common--environment_variables.md"
                 ], replacements=[
@@ -1826,6 +1870,12 @@ def write_initial_test(config: SelfDriverConfig):
                 )
             ]
             
+            if config.self_driving_task.test_file_path and (config.sandbox_root_dir / config.self_driving_task.test_file_path).exists():
+                messages += LlmMessage.user_from_data(
+                    "current version of the test code",
+                    config.sandbox_root_dir / config.self_driving_task.test_file_path
+                )
+            
             if previous_exception:
                 messages.append(LlmMessage.user(f"""
     Your previous attempt at writing this code failed with this exception:
@@ -1838,7 +1888,8 @@ def write_initial_test(config: SelfDriverConfig):
                 "Write initial test",
                 config,
                 messages,
-                LlmModel.OPENAI_GPT_5
+                LlmModel.OPENAI_GPT_5,
+                reasoning_effort=LlmReasoningEffort.HIGH
             ).text
             
             test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
@@ -1912,7 +1963,7 @@ def identify_required_credentials(
                     get_readonly_files_replacement(config)
                 ]),
             ),
-            *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
+            *get_architecture_docs(config),
             *get_existing_required_credentials(config),
             "Please identify the credentials required"
         ],
@@ -1931,46 +1982,82 @@ def identify_required_credentials(
     config.business.refresh_from_db(fields=["required_credentials"])
 
 
-def write_business_architecture(
-        config: SelfDriverConfig
-):
-    task = config.task
+def write_business_architecture(config: SelfDriverConfig):
+    business_architecture = llm_chat(
+        "Write initial design doc",
+        config,
+        [
+            get_sys_prompt(
+                [
+                    "system_architect.md",
+                    "common--llm_chat.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md",
+                    "common--infrastructure_rules.md",
+                    "common--credentials_architecture.md"
+                ],
+                replacements=[
+                    ("<env_vars>", get_env_var_names(config)),
+                    get_readonly_files_replacement(config)
+                ]
+            ),
+            *LlmMessage.user_from_data("Business Description", {
+                "business_description": config.business.llm_data()
+            }),
+            *LlmMessage.user_from_data(
+                "Business Initiatives", [i.llm_data() for i in config.business.initiative_set.all()], "planned_initiatives"
+            ),
+            "Please write a markdown-formatted high-level design document for Business's architecture"
+        ],
+        model=LlmModel.OPENAI_GPT_5,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.MEDIUM
+    ).text
     
-    try:
-        code = llm_chat(
-            "Write initial design doc",
-            config,
-            [
-                get_sys_prompt("codewriter--initial_design.md"),
-                *LlmMessage.user_from_data("Business Initiative Description", {
-                    "business_description": config.business.summary,
-                    "initiative_description": config.self_driving_task.task.initiative.description
-                }),
-                *LlmMessage.user_from_data("Task Description", {
-                    "goal": task.description,
-                    "acceptance_criteria": task.test_plan or "none",
-                    "risk_notes": task.risk_notes or "none"
-                }),
-                "Please write a markdown-formatted high-level design document for this task."
-            ],
-            LlmModel.OPENAI_GPT_5
-        ).text
-        
-        design_file_path = update_file_contents(
-            config,
-            config.sandbox_root_dir / CodeFile.ARCHITECTURE_FILE,
-            code
-        )
-        
-        SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
-            design_doc_path=design_file_path.relative_to(config.sandbox_root_dir)
-        )
-        config.self_driving_task.refresh_from_db(fields=["design_doc_path"])
-        
-        return design_file_path
-    except Exception as e:
-        config.log(e)
-        previous_exception = e
+    Business.objects.filter(id=config.business.id).update(
+        architecture=business_architecture
+    )
+    config.business.refresh_from_db(fields=["architecture"])
+
+
+def write_initiative_architecture(config: SelfDriverConfig):
+    architecture = llm_chat(
+        "Write Initiative design doc",
+        config,
+        [
+            get_sys_prompt(
+                [
+                    "system_architect.md",
+                    "common--llm_chat.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md",
+                    "common--infrastructure_rules.md",
+                    "common--credentials_architecture.md"
+                ],
+                replacements=[
+                    ("<env_vars>", get_env_var_names(config)),
+                    get_readonly_files_replacement(config)
+                ]
+            ),
+            *LlmMessage.user_from_data("Full Business Architecture", {
+                "architecture_docs": config.business.architecture
+            }),
+            *LlmMessage.user_from_data(
+                "Current Initiative", config.initiative.llm_data()
+            ),
+            "Please write a markdown-formatted high-level design document for this **Initiatives's** architecture. It should **never conflict** with the supplied business's architecture - it should only clarify details needed to implement the Current Initiative."
+        ],
+        model=LlmModel.OPENAI_GPT_5,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.MEDIUM
+    ).text
+    
+    Initiative.objects.filter(id=config.initiative.id).update(
+        architecture=architecture
+    )
+    config.initiative.refresh_from_db(fields=["architecture"])
 
 
 def update_file_contents(
@@ -2015,7 +2102,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                         get_readonly_files_replacement()
                     ]),
                 ),
-                *get_relevant_code_files(config, [config.self_driving_task.design_doc_path]),
+                *get_architecture_docs(config),
                 *common.ensure_list(
                     LlmMessage.user_from_data(
                         "Error with previous code iteration",
@@ -2056,7 +2143,6 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     
     context_files = routing_json.get("context_files", []) + [
         "Dockerfile",
-        config.self_driving_task.design_doc_path,
         "infrastructure.yaml"
     ]
     
@@ -2086,6 +2172,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     ]
                 ),
             ),
+            *get_architecture_docs(config),
             *get_existing_required_credentials(config),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
@@ -2184,6 +2271,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                     get_readonly_files_replacement(config)
                 ]),
             ),
+            *get_architecture_docs(config),
             *get_existing_required_credentials(config),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
@@ -2264,6 +2352,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
                 get_readonly_files_replacement(config)
             ]
         ),
+        *get_architecture_docs(config),
         *get_existing_required_credentials(config),
         *common.ensure_list(
             get_budget_message(config)
@@ -2370,6 +2459,7 @@ def write_code(
                 ("<env_vars>", get_env_var_names(config))
             ]
         ),
+        *get_architecture_docs(config),
         *build_previous_iteration_context_messages(
             config,
             title="previous iteration evaluations - learn from these past attempts. **you must not repeat these errors**"
@@ -2420,10 +2510,11 @@ def write_code(
         )
         
         previous_iteration_version = code_file.get_version(previous_iteration)
-        code_versions[previous_iteration_version.id] = (
-            "Previous Iteration's Code (your previous attempt at writing this code)",
-            previous_iteration_version
-        )
+        if previous_iteration_version:
+            code_versions[previous_iteration_version.id] = (
+                "Previous Iteration's Code (your previous attempt at writing this code)",
+                previous_iteration_version
+            )
     
     if code_version_to_modify and code_version_to_modify.code:
         current_version_title = f"Contents of {code_file.file_path}.  THIS IS CODE YOU WILL MODIFY.  "
@@ -2809,7 +2900,6 @@ def get_relevant_code_files(
     else:
         required_files = [
             config.self_driving_task.test_file_path,
-            config.self_driving_task.design_doc_path,
             "infrastructure.yaml",
             "requirements.txt"
         ]
@@ -3390,3 +3480,94 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
             "existing_file_structure": structure
         }
     )
+
+
+def delete_cloudformation_stack(config, aws_env: AwsEnv):
+    if not AwsEnv.DEV.eq(aws_env):
+        raise Exception(f"cannot delete a non DEV stack")
+    
+    stack_name = config.self_driving_task.cloudformation_stack_name
+    if not stack_name:
+        return
+    
+    cf_client = boto3.client("cloudformation", region_name=get_aws_region())
+    existing = get_stack(stack_name, cf_client)
+    if not existing:
+        config.log(f"CloudFormation stack {stack_name} does not exist. Nothing to delete.")
+        return
+    
+    empty_stack_buckets(config)
+    
+    config.log(f"Deleting CloudFormation stack {stack_name} in {get_aws_region()}")
+    cf_client.delete_stack(StackName=stack_name)
+    
+    # Wait until the stack is deleted or reaches a terminal state
+    cloudformation_wait(config, cf_client, stack_name)
+    config.log(f"Delete request finished for stack {stack_name}")
+
+
+def empty_stack_buckets(config: SelfDriverConfig):
+    stack_name = config.self_driving_task.cloudformation_stack_name
+    
+    cf_client = boto3.client("cloudformation", region_name=get_aws_region())
+    existing = get_stack(stack_name, cf_client)
+    if not existing:
+        return
+    
+    resources = boto3.client(
+        "cloudformation",
+        region_name=get_aws_region()
+    ).describe_stack_resources(
+        StackName=stack_name
+    )['StackResources']
+    
+    s3_buckets = [
+        resource for resource in resources
+        if resource['ResourceType'] == 'AWS::S3::Bucket' and resource['ResourceStatus'] != 'DELETE_COMPLETE'
+    ]
+    
+    if not s3_buckets:
+        return
+    
+    config.log(f"Found {len(s3_buckets)} S3 bucket(s) in stack {stack_name}, emptying before deletion...")
+    s3_client = boto3.client("s3", region_name=get_aws_region())
+    
+    for bucket_resource in s3_buckets:
+        bucket_name = bucket_resource['PhysicalResourceId']
+        try:
+            # Check if bucket exists before trying to empty it
+            s3_client.head_bucket(Bucket=bucket_name)
+            
+            # Empty the bucket by deleting all objects and versions
+            config.log(f"Emptying S3 bucket: {bucket_name}")
+            
+            # Delete all object versions and delete markers
+            paginator = s3_client.get_paginator('list_object_versions')
+            for page in paginator.paginate(Bucket=bucket_name):
+                objects_to_delete = []
+                
+                # Add all versions
+                for version in page.get('Versions', []):
+                    objects_to_delete.append({
+                        'Key': version['Key'],
+                        'VersionId': version['VersionId']
+                    })
+                
+                # Add all delete markers
+                for marker in page.get('DeleteMarkers', []):
+                    objects_to_delete.append({
+                        'Key': marker['Key'],
+                        'VersionId': marker['VersionId']
+                    })
+                
+                # Delete objects in batches
+                if objects_to_delete:
+                    s3_client.delete_objects(
+                        Bucket=bucket_name,
+                        Delete={'Objects': objects_to_delete}
+                    )
+            
+            config.log(f"Successfully emptied S3 bucket: {bucket_name}")
+        
+        except s3_client.exceptions.NoSuchBucket:
+            config.log(f"S3 bucket {bucket_name} no longer exists, skipping...")

@@ -52,6 +52,25 @@ class Business(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    def llm_data(self):
+        business_analysis, legal_analysis = self.get_latest_analysist()
+        return {
+            "summary": self.summary,
+            "business_plan": self.business_plan,
+            "value_prop": self.value_prop,
+            "revenue_model": self.revenue_model,
+            "audience": self.audience,
+            "required_credentials": self.required_credentials,
+            "core_functions": self.core_functions,
+            "execution_dependencies": self.execution_dependencies,
+            "growth_channels": self.growth_channels,
+            "personalization_options": self.personalization_options,
+            "autonomy_level": self.autonomy_level,
+            "kpis": [kpi.description for kpi in self.businesskpi_set.all()],
+            "goal": [goal.description for goal in self.businessgoal_set.all()],
+            "business_analysis": business_analysis.summary if business_analysis else None
+        }
+    
     def get_iam_role_name(self):
         return f"erieiron-{self.service_token}-role"
     
@@ -61,7 +80,7 @@ class Business(BaseErieIronModel):
     def get_latest_capacity(self):
         return BusinessCapacityAnalysis.objects.filter(business=self).order_by("created_timestamp").last()
     
-    def get_latest_analysist(self):
+    def get_latest_analysist(self) -> 'BusinessAnalysis':
         return (BusinessAnalysis.objects.filter(business=self).order_by("created_timestamp").last(),
                 BusinessLegalAnalysis.objects.filter(business=self).order_by("created_timestamp").last())
     
@@ -296,7 +315,7 @@ class Business(BaseErieIronModel):
     def get_secrets_root_key(self, aws_env: AwsEnv):
         from erieiron_common import aws_utils
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
-        return f"/erieiron/{project_name}/{aws_env.value}"
+        return f"z/{project_name}/{aws_env.value}"
 
 
 class BusinessAnalysis(BaseErieIronModel):
@@ -443,6 +462,18 @@ class Initiative(BaseErieIronModel):
             return False
         
         return not self.tasks.exclude(status=TaskStatus.COMPLETE).exists()
+    
+    def llm_data(self):
+        return {
+            "title": self.title,
+            "description": self.description,
+            "priority": self.priority,
+            "requirements": [{
+                "summary": req.summary,
+                "acceptance_criteria": req.acceptance_criteria,
+                "testable": req.testable
+            } for req in self.requirements.order_by()]
+        }
 
 
 class ProductRequirement(BaseErieIronModel):
@@ -538,20 +569,27 @@ class Task(BaseErieIronModel):
         
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
     
-    def create_self_driving_env(self) -> 'SelfDrivingTask':
+    def create_self_driving_env(self, reset_code_dir=False) -> 'SelfDrivingTask':
         business = self.initiative.business
         
-        temp_dir = tempfile.TemporaryDirectory()
-        
-        self_driving_task, _ = SelfDrivingTask.objects.get_or_create(
+        self_driving_task, created = SelfDrivingTask.objects.get_or_create(
             task_id=self.id,
             defaults={
-                "sandbox_path": os.path.abspath(temp_dir.name),
+                "sandbox_path": os.path.abspath(tempfile.TemporaryDirectory().name),
                 "main_name": common.safe_filename(self.id),
                 "goal": self.get_work_desc(),
                 "business": business
             }
         )
+        
+        if reset_code_dir and not created:
+            if Path(self_driving_task.sandbox_path).exists():
+                common.delete_dir(self_driving_task.sandbox_path)
+            
+            SelfDrivingTask.objects.filter(pk=self_driving_task.pk).update(
+                sandbox_path=os.path.abspath(tempfile.TemporaryDirectory().name)
+            )
+            self_driving_task.refresh_from_db(fields=["sandbox_path"])
         
         git = self_driving_task.get_git()
         
@@ -723,7 +761,7 @@ class SelfDrivingTask(BaseErieIronModel):
             cloudformation_stack_name = [
                 *cloudformation_stack_name,
                 self.task.initiative.id,
-                self.id
+                self.task_id
             ]
         
         cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=128)
@@ -784,8 +822,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         
         for code_file in business.codefile_set.exclude(
                 file_path__in=[
-                    self_driving_task.test_file_path,
-                    self_driving_task.design_doc_path
+                    self_driving_task.test_file_path
                 ]
         ).order_by("file_path"):
             if code_file.file_path.startswith("/"):
@@ -796,7 +833,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 logging.error(f"erie iron code got indexed!: {code_file.file_path}")
                 continue
             
-            code_version = code_file.get_version(self)
+            code_version = code_file.get_version(self, default_to_latest=True)
             if code_version:
                 code_version.write_to_disk(sandbox_path)
             elif code_file.allow_autonomous_delete():

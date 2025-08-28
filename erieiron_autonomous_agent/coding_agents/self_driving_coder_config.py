@@ -9,7 +9,7 @@ from pathlib import Path
 
 from django.db import transaction
 
-from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business
+from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative
 from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -23,6 +23,7 @@ COUNT_FULL_LOGS_IN_CONTEXT = 2
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",
     TaskType.CODING_APPLICATION: "codeplanner--feature_development.md",
+    TaskType.DESIGN_WEB_APPLICATION: "codeplanner--web_designer.md",
     TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
 }
 
@@ -60,6 +61,7 @@ class SelfDriverConfig:
         self.debug = True
         self.self_driving_task: SelfDrivingTask = self_driving_task
         self.task: Task = self_driving_task.task
+        self.initiative: Initiative = self.task.initiative
         self.task_type: TaskType = TaskType(self.task.task_type)
         self.budget: float = self.task.max_budget_usd or 0
         self.business = Business.objects.get(initiative__tasks__id=self.task.id)

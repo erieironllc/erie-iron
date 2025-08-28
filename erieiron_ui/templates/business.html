@@ -69,6 +69,15 @@
                 </button>
             </li>
         {% endif %}
+        {%  if business.architecture %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="architecture-tab" data-bs-toggle="tab" data-bs-target="#architecture"
+                        type="button"
+                        role="tab">
+                    Architecture
+                </button>
+            </li>
+        {% endif %}
         {% if business.initiative_set.exists %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="product-initiatives-tab" data-bs-toggle="tab"
@@ -474,6 +483,11 @@
                     {% endfor %}
                 </table>
             {% endif %}
+        </div>
+        <div class="tab-pane " id="architecture" role="tabpanel" aria-labelledby="architecture-tab">
+            <div class="markdown-container">
+                {{ business.architecture|markdown }}
+            </div>
         </div>
         <div class="tab-pane " id="product-initiatives" role="tabpanel" aria-labelledby="product-initiatives-tab">
             <table class="table table-striped">

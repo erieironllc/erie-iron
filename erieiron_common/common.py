@@ -458,6 +458,11 @@ def quietly_delete(file):
             log_info(f"unable to delete {file_path}:  {e}")
 
 
+def delete_dir(path: str):
+    if os.path.exists(path):
+        shutil.rmtree(path)
+
+
 def is_not_empty(v):
     return not is_empty(v)
 

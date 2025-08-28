@@ -39,6 +39,15 @@
                 </button>
             </li>
         {% endif %}
+        {% if initiative.architecture %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="architecture-tab" data-bs-toggle="tab" data-bs-target="#architecture"
+                        type="button"
+                        role="tab">
+                    Architecture
+                </button>
+            </li>
+        {% endif %}
         {% if tasks|length > 0 %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="tasks-tab" data-bs-toggle="tab" data-bs-target="#tasks"
@@ -95,6 +104,11 @@
                     {% endfor %}
                 </ul>
             {% endif %}
+        </div>
+        <div class="tab-pane " id="architecture" role="tabpanel" aria-labelledby="architecture-tab">
+            <div class="markdown-container">
+                {{ initiative.architecture|markdown }}
+            </div>
         </div>
         <div class="tab-pane " id="requirements" role="tabpanel" aria-labelledby="requirements-tab">
             {% if initiative.requirements.exists %}
