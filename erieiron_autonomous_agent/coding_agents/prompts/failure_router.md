@@ -77,6 +77,12 @@ An array listing the relative paths of code files likely needed to understand or
 
 ## Special Routing Rules
 
+### Role Permissions WARNINGS and ERRORS
+Consider any AWS role or permissions WARNING or ERROR messages as the most likely root cause errors.  (Even if it's just a reported as a warning)
+- these lines likely contain the string `is not authorized to perform`
+- **you must** prioritize fixing AWS role / permissions errors before attempting other changes
+- If the logs contain AWS role or permissions WARNING or ERROR lines, escalate to 'AWS_PROVISIONING_PLANNER'
+
 
 ### Localhost connections in cloud environments
 If the error indicates a failed connection to a local resource (e.g., `localhost`, `127.0.0.1`, `file:///`) for a service that the architecture expects to be AWS-hosted (e.g., RDS, S3, SQS), route to `AWS_PROVISIONING_PLANNER`.

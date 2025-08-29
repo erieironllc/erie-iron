@@ -18,3 +18,9 @@ The system enforces a single-role model per {business, env}. The role is **const
 
 **Assumptions**
 - Trust and permissions for the provided role are managed outside this template. Do not attempt to modify them here.
+
+---
+
+## Role Permissions WARNINGS and ERRORS
+Consider any AWS role or permissions WARNING or ERROR messages as likely root cause errors.  (Even if it's just a reported as a warning)
+- **you must** prioritize fixing these role permissions before attempting other changes

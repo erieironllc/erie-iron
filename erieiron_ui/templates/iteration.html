@@ -61,15 +61,6 @@
             </li>
         {% endif %}
 
-        {% if iteration.log_content_coding|length > 200 %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="codelog-tab" data-bs-toggle="tab" data-bs-target="#codelog"
-                        type="button" role="tab">
-                    Logs - Coding Phase
-                </button>
-            </li>
-        {% endif %}
-
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="planning-tab" data-bs-toggle="tab" data-bs-target="#planning"
                     type="button" role="tab">
@@ -85,19 +76,29 @@
                 </button>
             </li>
         {% endif %}
-        {% if iteration.log_content_execution %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="execlog-tab" data-bs-toggle="tab" data-bs-target="#execlog"
-                        type="button" role="tab">
-                    Logs - Deploy and Execution
-                </button>
-            </li>
-        {% endif %}
         {% if iteration.evaluation_json %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="evaluation-tab" data-bs-toggle="tab" data-bs-target="#evaluation"
                         type="button" role="tab">
                     Iteration Evaluation
+                </button>
+            </li>
+        {% endif %}
+
+        {% if iteration.log_content_coding|length > 200 %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="codelog-tab" data-bs-toggle="tab" data-bs-target="#codelog"
+                        type="button" role="tab">
+                    Logs - Coding
+                </button>
+            </li>
+        {% endif %}
+    
+        {% if iteration.log_content_execution %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="execlog-tab" data-bs-toggle="tab" data-bs-target="#execlog"
+                        type="button" role="tab">
+                    Logs - Execution
                 </button>
             </li>
         {% endif %}

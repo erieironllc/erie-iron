@@ -175,7 +175,6 @@ If lessons learned from past planner failures are provided, you must treat them 
 
 Failing to heed prior lessons is treated as a regression and must be avoided.
 
-
 ---
 
 ## Blocked Output Example
@@ -216,6 +215,9 @@ All plans must include diagnostic logging to support debugging and validation.
   - branching decisions
   - any caught exceptions or failures
 - **AWS-related tasks** must include comments justifying IAM or infrastructure permissions
+
+### Logging support squashing repeated errors 
+If the code or tests are continuing to fail on the same error in multiple sequential iterations, **increase** the verbosity of the logging on each iteration to help downstream agents debug the issue
 
 ---
 
@@ -552,6 +554,36 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
     - Missing explicit interleaving when the same file must be edited multiple times.
     - Proposed writer steps that would execute out of the declared order.
 
+----
+
+## File Type Constraints
+
+You may only plan code changes for file types that have an existing codewriter.  
+If the required file type does not match one of the codewriters listed below, you **must** return a `"blocked"` response with an explanation.
+
+### Supported File → Codewriter Mapping
+- `requirements.txt`, `constraints.txt` → `requirements.txt code writer`
+- `test*.py` → `python tests code writer`
+- `settings.py` → `django settings code writer`
+- `*.py` → `python code writer`
+- `*.json` → `json code writer`
+- `*.eml` → `eml code writer`
+- `*.md` → `documentation writer`
+- `infrastructure.yaml` → `aws cloudformation code writer`
+- `Dockerfile*` → `dockerfile code writer`
+- `*.sql` → `sql code writer`
+- `*.js` → `javascript code writer`
+- `*.html` → `html code writer`
+- `*.yaml` → `yaml code writer`
+- `*.css` → `css code writer`
+- `*.txt` → `txt code writer`
+- `*.ini` → `ini code writer`
+
+### Forbidden Files
+- Any `.env*` file is forbidden. All environment variables must come from the OS environment.  
+- Any file not listed above is unsupported; you must return `"blocked"`.
+
+Always use the correct file name for each file in your planning output - ensure the name will match to the appropriate code writer
 ----
 
 ## Read Only Files

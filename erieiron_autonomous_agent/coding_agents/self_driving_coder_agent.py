@@ -56,6 +56,10 @@ def initialize_workflow(pubsub_manager: PubSubManager):
 def execute(task_id: str, quick_debug=False, reset=False):
     self_driving_task = bootstrap_selfdriving_agent(task_id, reset)
     
+    Task.objects.filter(id=self_driving_task.task_id).update(
+        status=TaskStatus.IN_PROGRESS
+    )
+    
     config = None
     stop_reason = ""
     supress_eval = False
@@ -660,6 +664,8 @@ def run_docker_command(
     config.log(f"RUNNING {' '.join(cmd)} in {sandbox_path}\n")
     config.log("=" * 50 + "\n")
     
+    # Capture docker run start time
+    start_epoch = int(time.time())
     process = subprocess.Popen(
         cmd,
         stdout=config.log_f,
@@ -679,17 +685,66 @@ def run_docker_command(
         running_process.update_log_tail()
         time.sleep(2)
     
+    end_epoch = int(time.time())
     return_code = process.returncode
     config.log(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
     
     running_process.update_log_tail()
     
     if return_code != 0:
-        task_execution.error_msg = config.get_log_content()
+        enriched_logs = enrich_local_logs_with_cloudwatch_logs(
+            config.get_log_content(),
+            config,
+            aws_env,
+            start_epoch,
+            end_epoch
+        )
+        
+        task_execution.error_msg = enriched_logs
         task_execution.save()
         
-        extracted_exception = extract_exception(config, config.get_log_content())
+        extracted_exception = extract_exception(config, enriched_logs)
         raise ExecutionException(extracted_exception)
+
+
+def enrich_local_logs_with_cloudwatch_logs(
+        local_logs,
+        config,
+        aws_env,
+        start_epoch,
+        end_epoch
+):
+    # Attempt to enrich error with relevant CloudWatch Lambda logs (by RequestId found in local logs)
+    try:
+        cw_text = extract_cloudwatch_lambda_logs(
+            local_logs=local_logs,
+            config=config,
+            lookback_minutes=120
+        )
+        
+        if cw_text:
+            config.log("\n\n[CloudWatch enrichment]\n" + cw_text + "\n")
+            local_logs = local_logs + "\n\n==== CloudWatch Logs (enriched) ====\n" + cw_text
+        else:
+            config.log("No AWS Lambda RequestId found in local logs; skipping CloudWatch enrichment.")
+    except Exception as cw_e:
+        config.log(f"CloudWatch enrichment failed: {cw_e}")
+        local_logs = config.get_log_content() or ""
+    
+    # Also collect stack-scoped CloudWatch logs within the docker execution window
+    try:
+        stack_scoped = extract_cloudwatch_stack_logs_for_window(
+            config=config,
+            start_time=start_epoch - 5,  # small buffer
+            end_time=end_epoch + 5
+        )
+        if stack_scoped:
+            config.log("\n\n[CloudWatch stack-window enrichment]\n" + stack_scoped + "\n")
+            local_logs = local_logs + "\n\n==== CloudWatch Logs (stack scoped, docker window) ====\n" + stack_scoped
+    except Exception as sw_e:
+        config.log(f"CloudWatch stack-window enrichment failed: {sw_e}")
+    
+    return local_logs
 
 
 def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
@@ -704,6 +759,103 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
         reasoning_effort=LlmReasoningEffort.HIGH,
         verbosity=LlmVerbosity.LOW
     ).text
+
+
+# Helper to extract CloudWatch Lambda logs given RequestIds
+def extract_cloudwatch_lambda_logs(
+        local_logs:str,
+        config: SelfDriverConfig,
+        lookback_minutes: int = 60,
+        max_groups: int = 50
+) -> str:
+    """
+    Fetch CloudWatch Logs Insights for Lambda log groups that contain any of the given RequestIds.
+    We scan recent logs (lookback window) across up to `max_groups` Lambda log groups.
+    Returns a concatenated text block, sorted by timestamp, suitable for appending to error output.
+    """
+    request_ids = re.findall(r"RequestId:\s*([0-9a-fA-F\-]{36})", local_logs)
+    if not request_ids:
+        return ""
+    
+    logs = boto3.client("logs", region_name=get_aws_region())
+    
+    # Discover Lambda log groups (limit to keep queries bounded)
+    log_groups = []
+    next_token = None
+    try:
+        while True:
+            kwargs = {"logGroupNamePrefix": "/aws/lambda/"}
+            if next_token:
+                kwargs["nextToken"] = next_token
+            resp = logs.describe_log_groups(**kwargs)
+            for lg in resp.get("logGroups", []):
+                name = lg.get("logGroupName")
+                if name:
+                    log_groups.append(name)
+                    if len(log_groups) >= max_groups:
+                        break
+            if len(log_groups) >= max_groups or not resp.get("nextToken"):
+                break
+            next_token = resp.get("nextToken")
+    except Exception as e:
+        config.log(f"Failed to list CloudWatch log groups: {e}")
+        return ""
+    
+    if not log_groups:
+        return ""
+    
+    end = int(time.time())
+    start = end - lookback_minutes * 60
+    
+    # Build a Logs Insights query that matches any of the request IDs
+    # We OR the patterns to reduce the number of queries.
+    request_ids = [rid for rid in request_ids if isinstance(rid, str) and len(rid) >= 36]
+    if not request_ids:
+        return ""
+    
+    # Escape single quotes in IDs just in case
+    or_terms = ["@message like '" + rid.replace("'", "\\'") + "'" for rid in request_ids]
+    or_filters = " or ".join(or_terms)
+    query_str = "fields @timestamp, @log, @message | filter " + or_filters + " | sort @timestamp asc | limit 1000"
+    
+    combined = []
+    # Run the query against all discovered groups in small batches to stay within API limits
+    batch_size = 10
+    for i in range(0, len(log_groups), batch_size):
+        batch = log_groups[i:i + batch_size]
+        try:
+            q = logs.start_query(
+                logGroupNames=batch,
+                startTime=start,
+                endTime=end,
+                queryString=query_str
+            )
+            query_id = q["queryId"]
+        except Exception as e:
+            config.log(f"start_query failed for batch {batch}: {e}")
+            continue
+        
+        # Poll for completion
+        status = "Running"
+        for _ in range(60):
+            time.sleep(1)
+            resp = logs.get_query_results(queryId=query_id)
+            status = resp.get("status")
+            if status in ("Complete", "Failed", "Cancelled", "Timeout"):
+                results = resp.get("results", [])
+                # Flatten results into text lines
+                for item in results:
+                    fields = {f.get("field"): f.get("value") for f in item}
+                    ts = fields.get("@timestamp", "")
+                    lg = fields.get("@log", "")
+                    msg = fields.get("@message", "")
+                    combined.append(f"{ts}  {lg}\n{msg}")
+                break
+        
+        if status != "Complete":
+            config.log(f"Logs Insights query did not complete (status={status}) for batch {batch}")
+    
+    return "\n\n".join(combined)
 
 
 def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
@@ -1427,7 +1579,7 @@ def get_iteration_eval_llm_messages(
                 "error_logs": error_logs,
             }
         
-        if include_strategic_guidance:
+        if False and include_strategic_guidance:
             iteration_data['strategic_guidance'] = evaluation_json.get("strategic_guidance", "none")
         
         messages.append(iteration_data)
@@ -2072,6 +2224,17 @@ def update_file_contents(
     return file_path
 
 
+def get_tombstone_message(config, disabled=True) -> list[LlmMessage]:
+    asdf = LlmMessage.user_from_data(
+        "deprecation_plan", [
+            t.data_json for t in AgentTombstone.objects.filter(business=config.business)
+        ],
+        item_name="tombstone"
+    )
+    
+    return asdf
+
+
 def get_budget_message(config) -> LlmMessage:
     iteration_count = config.self_driving_task.selfdrivingtaskiteration_set.count()
     
@@ -2098,9 +2261,19 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
             config,
             [
                 *common.ensure_list(
-                    get_sys_prompt("failure_router.md", replacements=[
-                        get_readonly_files_replacement()
-                    ]),
+                    get_sys_prompt(
+                        [
+                            "failure_router.md",
+                            "common--iam_role.md",
+                            "common--forbidden_actions.md",
+                            "common--credentials_architecture.md",
+                            "common--environment_variables.md"
+                        ],
+                        replacements=[
+                            ("<env_vars>", get_env_var_names(config)),
+                            get_readonly_files_replacement(config)
+                        ]
+                    ),
                 ),
                 *get_architecture_docs(config),
                 *common.ensure_list(
@@ -2111,6 +2284,12 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                             "logs": error_logs
                         }
                     )
+                ),
+                *common.ensure_list(
+                    get_tombstone_message(config)
+                ),
+                *common.ensure_list(
+                    get_prev_attemp_summaries(config)
                 ),
                 *common.ensure_list(
                     LlmMessage.user_from_data(
@@ -2199,6 +2378,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
         
         ],
         config.model_code_planning,
+        reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -2218,11 +2398,17 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
 def get_readonly_files_paths(config: SelfDriverConfig) -> list[str]:
     readonly_file_paths = READONLY_FILES
     
+    already_there = []
+    
     for test_file in config.business.codefile_set.filter(
             Q(file_path__contains="test/") | Q(file_path__contains="/test")
     ).exclude(
         file_path=config.self_driving_task.test_file_path
     ):
+        if test_file.file_path in already_there:
+            continue
+        
+        already_there.append(test_file.file_path)
         readonly_file_paths.append(
             {
                 "path": test_file.file_path,
@@ -2296,6 +2482,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             "Please produce a development plan that addresses this issue"
         ],
         config.model_code_planning,
+        reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -2325,9 +2512,15 @@ def plan_full_code_changes(config: SelfDriverConfig):
     task_type = TaskType(task.task_type)
     
     system_prompt_files = [
-        "codeplanner--base.md",
         MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
+        "codeplanner--full_plan_base.md",
         "codeplanner--common.md",
+        "common--llm_chat.md",
+        "common--iam_role.md",
+        "common--forbidden_actions.md",
+        "common--credentials_architecture.md",
+        "common--environment_variables.md",
+        "common--infrastructure_rules.md"
     ]
     
     if config.self_driving_task.test_file_path:
@@ -2359,6 +2552,9 @@ def plan_full_code_changes(config: SelfDriverConfig):
         ),
         *common.ensure_list(
             build_cloudformation_durations_context_messages(config)
+        ),
+        *common.ensure_list(
+            get_tombstone_message(config)
         ),
         *common.ensure_list(
             build_previous_iteration_context_messages(config)
@@ -2406,6 +2602,7 @@ The previous iteration failed at the deployment stage.
         config,
         messages,
         config.model_code_planning,
+        reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -2424,7 +2621,7 @@ The previous iteration failed at the deployment stage.
     return planning_data
 
 
-def write_code(
+def write_code_file(
         config: SelfDriverConfig,
         code_version_to_modify: CodeVersion,
         code_file_data: dict,
@@ -2443,6 +2640,7 @@ def write_code(
     code_file = code_version_to_modify.code_file
     code_file_path = code_file.get_path()
     code_file_name = code_file_path.name
+    logging.info(f"writing code: {code_file_name}")
     
     messages: list[LlmMessage] = [
         get_sys_prompt(
@@ -2463,6 +2661,9 @@ def write_code(
         *build_previous_iteration_context_messages(
             config,
             title="previous iteration evaluations - learn from these past attempts. **you must not repeat these errors**"
+        ),
+        *common.ensure_list(
+            get_tombstone_message(config)
         ),
         *common.ensure_list(
             LlmMessage.sys(
@@ -2552,7 +2753,7 @@ def write_code(
     
     lessons = get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
     if lessons:
-        coding_task_data["lessons_learned"] = {
+        coding_task_data["previously_learned_lessons"] = {
             "description": "Lessons learned in previous iterations.  Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             **lessons
         }
@@ -2579,6 +2780,8 @@ def write_code(
         config,
         messages,
         code_writing_model,
+        verbosity=LlmVerbosity.LOW,
+        reasoning_effort=LlmReasoningEffort.HIGH
     ).text
     
     # Detect and handle git patch vs full-file outputs from the code writer
@@ -2668,7 +2871,10 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
     elif code_file_name == "infrastructure.yaml":
-        prompt = "codewriter--aws_cloudformation_coder.md"
+        prompt = [
+            "codewriter--aws_cloudformation_coder.md",
+            "common--infrastructure_rules.md"
+        ]
     elif code_file_name.startswith("Dockerfile"):
         prompt = "codewriter--dockerfile_coder.md"
     elif code_file_name_lower.endswith(".sql"):
@@ -2681,6 +2887,10 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         prompt = "codewriter--yaml_coder.md"
     elif code_file_name_lower.endswith(".css"):
         prompt = "codewriter--css_coder.md"
+    elif code_file_name_lower.endswith(".txt"):
+        prompt = "codewriter--txt.md"
+    elif code_file_name_lower.endswith(".ini"):
+        prompt = "codewriter--ini.md"
     elif code_file_name_lower.startswith(".env"):
         raise BadPlan("All env vars must be fetched from the os environment.  Do not use .env files or decouple")
     else:
@@ -2741,32 +2951,19 @@ def validate_code(
             code_file_name
         )
     
-    elif False and code_file_name == "infrastructure.yaml":
-        ## skipping this for now, as it seems like it's better for the feedback look to let cloudformation surface the errors
-        import subprocess
-        import tempfile
-        import json as _json
+    elif code_file_name == "infrastructure.yaml":
         try:
-            with tempfile.NamedTemporaryFile(mode='w+', suffix=".yaml", delete=False) as tmp:
-                tmp.write(code)
-                tmp.flush()
-                result = subprocess.run(
-                    ["cfn-lint", "--format", "json", tmp.name],
-                    capture_output=True,
-                    text=True
-                )
-            if result.returncode != 0:
-                try:
-                    findings = _json.loads(result.stdout)
-                    errors_only = [f for f in findings if f.get("Level") == "Error"]
-                    if errors_only:
-                        error_msgs = "\n".join(f"Line {f['Location']['Start']['LineNumber']}: {f['Message']}" for f in errors_only)
-                        raise CodeCompilationError(code, f"CloudFormation lint errors:\n{error_msgs}")
-                except Exception as cf_lint_e:
-                    config.log(cf_lint_e)
-                    raise CodeCompilationError(code, f"CloudFormation lint errors:\n{result.stdout.strip()}")
-        finally:
-            os.remove(tmp.name)
+            data = yaml.load(code, Loader=yaml.BaseLoader)
+            if not data.get("Parameters"):
+                raise Exception(f"infrastructure.yaml lacks parameters")
+        except Exception as e:
+            raise CodeCompilationError(code, f"infrastructure.yaml parse error:\n{e}")
+    
+    elif code_file_name.endswith(".yaml"):
+        try:
+            data = yaml.load(code, Loader=yaml.BaseLoader)
+        except Exception as e:
+            raise CodeCompilationError(code, f"yaml parse error:\n{e}")
     
     elif code_file_name.endswith(".py"):
         import ast
@@ -3067,29 +3264,37 @@ def llm_chat(
         messages: list[LlmMessage],
         model: LlmModel,
         output_schema: Path = None,
+        reasoning_effort: LlmReasoningEffort = None,
+        verbosity: LlmVerbosity = None,
         code_response=False
 ) -> LlmResponse:
+    if output_schema:
+        logging.info(f"llm chat: {desc} ({output_schema})")
+    else:
+        logging.info(f"llm chat: {desc}")
+    
     token_count = LlmMessage.get_total_token_count(model, messages)
-    
-    config.log(f"""
-    
-    
-    
-====== START LLM CHAT {desc} ===============================================================
-""")
     
     llm_resp = None
     for i in range(2):
         llm_messages = LlmMessage.parse_prompt(model, messages, code_response=code_response)
-        config.log(LlmMessage.dumps(llm_messages))
+        
+        llm_request = LlmRequest.objects.create(
+            title=desc,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+            task_iteration=config.current_iteration,
+            llm_model=model.value,
+            token_count=0,
+            price=0,
+            input_messages=[{
+                "role": m.message_type.value,
+                "content": llm_interface.sanitize_prompt(m.text)
+            } for m in llm_messages]
+        )
         
         try:
             max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-            if max_tokens:
-                config.log(f"about to call out to {model} for {desc}... ({token_count:,}/{max_tokens:,} tokens used)")
-            else:
-                config.log(f"about to call out to {model} for {desc}...  ({token_count:,} tokens used)")
-            
             llm_resp = llm_interface.chat(
                 messages=llm_messages,
                 model=model,
@@ -3098,49 +3303,31 @@ def llm_chat(
                 debug=False
             )
             
+            resp_json = llm_resp.__dict__.copy()
+            resp_json.pop("text", None)
+            resp_json.pop("parsed_json", None)
+            
+            LlmRequest.objects.filter(id=llm_request.id).update(
+                response=llm_resp.text,
+                resp_json=resp_json,
+                token_count=llm_resp.token_count,
+                price=llm_resp.price_total
+            )
+            
             break
         except Exception as e:
             config.log(e)
+            
+            LlmRequest.objects.filter(id=llm_request.id).update(
+                response=traceback.format_exc(),
+                token_count=0,
+                price=0
+            )
             
             if i == 1:
                 raise e
             else:
                 model = MODEL_BACKUPS[model]
-        finally:
-            if llm_resp:
-                LlmRequest.objects.create(
-                    title=desc,
-                    task_iteration=config.current_iteration,
-                    token_count=llm_resp.token_count,
-                    llm_model=model.value,
-                    input_messages=[{
-                        "role": m.message_type.value,
-                        "content": llm_interface.sanitize_prompt(m.text)
-                    } for m in llm_messages],
-                    response=llm_resp.text,
-                    price=llm_resp.price_total
-                )
-    
-    if llm_resp:
-        header_str = f"----------- RESPONSE from {model} for {desc} ------------"
-        footer_str = "-" * len(header_str)
-        config.log(f"""
-{header_str}
-{llm_resp.text}
-
-{footer_str}
-""")
-    else:
-        config.log(f"No Response from {model} for {desc}! prob should investigate what this is")
-    
-    config.log(f"total ${llm_resp.price_total:.4f}; input ${llm_resp.price_input:.4f}; output ${llm_resp.price_output:.4f} - total spend is ${config.self_driving_task.get_cost() :.2f} out a budget of ${config.budget :.2f}")
-    
-    config.log(f"""
-====== END LLM CHAT {desc} ===============================================================
-    
-    
-    
-    """)
     
     return llm_resp
 
@@ -3174,8 +3361,10 @@ def deploy_cloudformation_stacks(
                     stack_name,
                     cf_client
                 )
-        except:
-            raise AgentBlocked(f"cloudformation stack {stack_name} in {environment.get_aws_region()} is wedged and cannot be autonomously fixed.  JJ or a Human needs to clean up manually")
+        except Exception as e:
+            logging.exception(e)
+            config.log(traceback.format_exc())
+            raise AgentBlocked(f"cloudformation stack {stack_name} in {aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  JJ or a Human needs to clean up manually")
         
         cloudformation_params = get_stack_parameters(
             config,
@@ -3185,6 +3374,13 @@ def deploy_cloudformation_stacks(
             ecr_arn
         )
         
+        config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
+        
+        validate_parameters(
+            config,
+            cloudformation_params
+        )
+        
         push_cloudformation(
             config,
             stack_name,
@@ -3192,11 +3388,16 @@ def deploy_cloudformation_stacks(
             cfn_file,
             cloudformation_params
         )
+        
         config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
     except BadPlan as bpe:
+        logging.exception(bpe)
+        config.log(traceback.format_exc())
         raise bpe
     
     except AgentBlocked as abe:
+        logging.exception(abe)
+        config.log(traceback.format_exc())
         raise abe
     
     except CloudFormationException as cfe:
@@ -3276,6 +3477,13 @@ def deploy_cloudformation_stacks(
             config.log(f"Failed to fetch CloudTrail events: {ct_ex}\n")
         
         raise cfe
+
+
+def validate_parameters(
+        config: SelfDriverConfig,
+        cloudformation_params
+):
+    pass
 
 
 def get_stack_parameters(
@@ -3379,13 +3587,39 @@ def get_stack_parameters(
             "secret_hint": f"{secrets_key}/cloudformation"
         }, indent=4), config.current_iteration.planning_json)
     
-    return [
+    params = [
         {
             "ParameterKey": k,
             "ParameterValue": str(known_params.get(k, ""))
         }
         for k in required_parameters
     ]
+    
+    for p in params:
+        key = p.get("ParameterKey")
+        val = str(p.get("ParameterValue", "")).strip()
+        # persist any trimming to avoid false pattern mismatches
+        p["ParameterValue"] = val
+        meta = parameters_metadata.get(key) if isinstance(parameters_metadata, dict) else None
+        if isinstance(meta, dict) and "AllowedPattern" in meta and meta.get("AllowedPattern") is not None:
+            pattern = str(meta.get("AllowedPattern") or "")
+            try:
+                if not re.fullmatch(pattern, val):
+                    raise BadPlan(json.dumps({
+                        "desc": f"Parameter '{key}' failed AllowedPattern validation",
+                        "parameter": key,
+                        "provided_value": val,
+                        "allowed_pattern": pattern,
+                        "hint": "Pass a value that matches the regex or relax/remove AllowedPattern in infrastructure.yaml"
+                    }, indent=4), config.current_iteration.planning_json)
+            except re.error as rex:
+                raise BadPlan(json.dumps({
+                    "desc": f"Invalid AllowedPattern regex for parameter '{key}' in infrastructure.yaml",
+                    "allowed_pattern": pattern,
+                    "regex_error": str(rex)
+                }, indent=4), config.current_iteration.planning_json)
+    
+    return params
 
 
 def get_admin_credentials(
@@ -3571,3 +3805,124 @@ def empty_stack_buckets(config: SelfDriverConfig):
         
         except s3_client.exceptions.NoSuchBucket:
             config.log(f"S3 bucket {bucket_name} no longer exists, skipping...")
+
+
+# Helper to extract CloudWatch stack logs for a time window
+def extract_cloudwatch_stack_logs_for_window(
+        config: SelfDriverConfig,
+        start_time: int,
+        end_time: int,
+        max_groups: int = 50
+) -> str:
+    """
+    Given a CloudFormation stack (resolved from the current task/env), collect CloudWatch Logs
+    from relevant log groups (Lambda functions and explicit LogGroup resources) within the
+    provided [start_time, end_time] window (epoch seconds). Returns a concatenated text block.
+    """
+    try:
+        cf = boto3.client("cloudformation", region_name=get_aws_region())
+        logs = boto3.client("logs", region_name=get_aws_region())
+    except Exception as e:
+        config.log(f"Unable to create AWS clients: {e}")
+        return ""
+    
+    # Determine stack name
+    try:
+        stack_name = config.self_driving_task.cloudformation_stack_name
+        if not stack_name:
+            return ""
+    except Exception as e:
+        config.log(f"Could not resolve stack name: {e}")
+        return ""
+    
+    # Collect candidate log group names from stack resources
+    log_group_names = []
+    try:
+        paginator = cf.get_paginator("list_stack_resources")
+        for page in paginator.paginate(StackName=stack_name):
+            for r in page.get("StackResourceSummaries", []):
+                rtype = r.get("ResourceType", "")
+                phys = r.get("PhysicalResourceId", "")
+                # Explicit log groups
+                if rtype == "AWS::Logs::LogGroup" and phys:
+                    # PhysicalResourceId for LogGroup can be the full name or ARN; normalize to name
+                    name = phys
+                    if ":log-group:" in name:
+                        # ARN format: arn:aws:logs:region:acct:log-group:NAME:*
+                        name = name.split(":log-group:", 1)[-1].split(":")[0]
+                    if name:
+                        log_group_names.append(name)
+                # Lambda functions -> /aws/lambda/<function name>
+                elif rtype == "AWS::Lambda::Function" and phys:
+                    log_group_names.append(f"/aws/lambda/{phys}")
+    except Exception as e:
+        config.log(f"Failed to enumerate stack resources for {stack_name}: {e}")
+    
+    # Fallback: include lambda groups whose names contain the stack name
+    if len(log_group_names) == 0:
+        try:
+            next_token = None
+            while True:
+                kwargs = {"logGroupNamePrefix": "/aws/lambda/"}
+                if next_token:
+                    kwargs["nextToken"] = next_token
+                resp = logs.describe_log_groups(**kwargs)
+                for lg in resp.get("logGroups", []):
+                    name = lg.get("logGroupName")
+                    if name and stack_name in name:
+                        log_group_names.append(name)
+                        if len(log_group_names) >= max_groups:
+                            break
+                if len(log_group_names) >= max_groups or not resp.get("nextToken"):
+                    break
+                next_token = resp.get("nextToken")
+        except Exception as e:
+            config.log(f"Fallback discovery failed: {e}")
+    
+    # Deduplicate and clip to max_groups
+    log_group_names = list(dict.fromkeys([n for n in log_group_names if isinstance(n, str) and n.strip()]))[:max_groups]
+    if not log_group_names:
+        return ""
+    
+    # Logs Insights query over the time window - no RequestId filter, just the window
+    query_str = (
+        "fields @timestamp, @log, @message "
+        "| sort @timestamp asc "
+        "| limit 2000"
+    )
+    
+    combined = []
+    batch_size = 10
+    for i in range(0, len(log_group_names), batch_size):
+        batch = log_group_names[i:i + batch_size]
+        try:
+            q = logs.start_query(
+                logGroupNames=batch,
+                startTime=int(start_time),
+                endTime=int(end_time),
+                queryString=query_str
+            )
+            query_id = q["queryId"]
+        except Exception as e:
+            config.log(f"start_query failed for batch {batch}: {e}")
+            continue
+        
+        status = "Running"
+        for _ in range(60):
+            time.sleep(1)
+            resp = logs.get_query_results(queryId=query_id)
+            status = resp.get("status")
+            if status in ("Complete", "Failed", "Cancelled", "Timeout"):
+                results = resp.get("results", [])
+                for item in results:
+                    fields = {f.get("field"): f.get("value") for f in item}
+                    ts = fields.get("@timestamp", "")
+                    lg = fields.get("@log", "")
+                    msg = fields.get("@message", "")
+                    combined.append(f"{ts}  {lg}\n{msg}")
+                break
+        
+        if status != "Complete":
+            config.log(f"Logs Insights window query did not complete (status={status}) for batch {batch}")
+    
+    return "\n\n".join(combined)
