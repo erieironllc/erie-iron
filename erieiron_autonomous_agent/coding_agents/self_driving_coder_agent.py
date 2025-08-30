@@ -131,43 +131,28 @@ def execute(task_id: str, quick_debug=False, reset=False):
                     finally:
                         config.reset_log()
                 
+                execution_exception = None
                 try:
-                    execution_exception = None
-                    try:
-                        execute_iteration(
-                            config,
-                            AwsEnv.DEV
-                        )
-                    except BadPlan as bpe:
-                        config.log(bpe)
-                        execution_exception = bpe
-                        raise bpe
-                    except AgentBlocked as abe:
-                        execution_exception = abe
-                        raise abe
-                    except NeedPlan as npe:
-                        execution_exception = npe
-                        raise npe
-                    except Exception as e:
-                        execution_exception = e
-                        config.log(e)
-                    finally:
-                        config.set_phase(SdaPhase.EVALUATE)
-                        evaluate_iteration_execution(config, execution_exception)
-                except GoalAchieved as goal_achieved:
-                    if TaskType.CODING_ML.eq(config.task_type):
-                        raise goal_achieved
-                    elif not self_driving_task.task.initiative.all_tasks_complete():
-                        raise goal_achieved
-                    else:
-                        # for non-ml tasks, if all tasks are complete deploy to prod.  
-                        # execute_and_evaluate will re-throw GoalAchieved if the prod deploy is successful
-                        # perhaps think about moving this somewhere else - like listen to an event and then do this work in a separa message
-                        config.set_iteration(self_driving_task.iterate())
-                        execute_iteration(
-                            config,
-                            AwsEnv.PRODUCTION
-                        )
+                    execute_iteration(
+                        config,
+                        AwsEnv.DEV
+                    )
+                except BadPlan as bpe:
+                    config.log(bpe)
+                    execution_exception = bpe
+                    raise bpe
+                except AgentBlocked as abe:
+                    execution_exception = abe
+                    raise abe
+                except NeedPlan as npe:
+                    execution_exception = npe
+                    raise npe
+                except Exception as e:
+                    execution_exception = e
+                    config.log(e)
+                finally:
+                    config.set_phase(SdaPhase.EVALUATE)
+                    evaluate_iteration_execution(config, execution_exception)
             except NeedPlan as npe:
                 logging.info(f'NeedPlan - {npe}')
             except RetryableException as retryable_execution_exception:
@@ -205,49 +190,26 @@ full logs:
                     )
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
-                config.log(agent_blocked)
-                
                 stop_reason = "Agent Blocked"
-                if config.self_driving_task.task_id:
-                    with transaction.atomic():
-                        Task.objects.filter(id=config.self_driving_task.task_id).update(
-                            status=TaskStatus.BLOCKED
-                        )
-                    
-                    PubSubManager.publish(
-                        PubSubMessageType.TASK_BLOCKED,
-                        payload={
-                            "blocked_data": json.dumps(agent_blocked.blocked_data),
-                            "task_id": config.self_driving_task.task_id
-                        }
-                    )
-                
+                config.log(agent_blocked)
+                handle_agent_blocked(config, agent_blocked)
                 break
             except GoalAchieved as goal_achieved:
-                config.git.add_commit_push(f"task {config.task.id}: {config.task.description}")
-                delete_cloudformation_stack(config, AwsEnv.DEV)
-                
                 stop_reason = "Goal Achieved"
-                if config.self_driving_task.task_id:
-                    PubSubManager.publish_id(
-                        PubSubMessageType.TASK_COMPLETED,
-                        config.self_driving_task.task_id
-                    )
-                
+                handle_goal_achieved(config)
                 break
             except Exception as e:
                 logging.exception(e)
                 config.log(e)
                 config.supress_eval = True
                 if config.self_driving_task.task_id:
-                    # PubSubManager.publish(
-                    #     PubSubMessageType.TASK_FAILED,
-                    #     payload={
-                    #         "task_id": config.self_driving_task.task_id,
-                    #         "error": traceback.format_exc()
-                    #     }
-                    # )
-                    ...
+                    PubSubManager.publish(
+                        PubSubMessageType.TASK_FAILED,
+                        payload={
+                            "task_id": config.self_driving_task.task_id,
+                            "error": traceback.format_exc()
+                        }
+                    )
                 
                 break
             finally:
@@ -256,12 +218,62 @@ full logs:
     
     finally:
         config.log("DIR", config.git.source_root)
-        # config.git.cleanup()
         
         config.log("STOP REASON", stop_reason)
         if TaskType.CODING_ML.eq(config.task_type):
             from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
             package_ml_artifacts(config)
+
+
+def handle_agent_blocked(config, agent_blocked):
+    if not config.self_driving_task.task_id:
+        return
+        
+    with transaction.atomic():
+        Task.objects.filter(id=config.self_driving_task.task_id).update(
+            status=TaskStatus.BLOCKED
+        )
+    
+    PubSubManager.publish(
+        PubSubMessageType.TASK_BLOCKED,
+        payload={
+            "blocked_data": json.dumps(agent_blocked.blocked_data),
+            "task_id": config.self_driving_task.task_id
+        }
+    )
+
+
+def handle_goal_achieved(config):
+    try:
+        config.git.add_commit_push(
+            f"task {config.task.id}: {config.task.description}"
+        )
+        
+        config.git.cleanup()
+        
+        delete_cloudformation_stack(
+            config,
+            AwsEnv.DEV,
+            block_while_waiting=False
+        )
+        
+        if config.self_driving_task.task_id:
+            PubSubManager.publish_id(
+                PubSubMessageType.TASK_COMPLETED,
+                config.self_driving_task.task_id
+            )
+        
+        Task.objects.filter(id=config.task.id).update(
+            status=TaskStatus.COMPLETE
+        )
+    except Exception as e:
+        logging.exception(e)
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            log_content_evaluation=traceback.format_exc()
+        )
+        Task.objects.filter(id=config.task.id).update(
+            status=TaskStatus.FAILED
+        )
 
 
 def do_coding(config, planning_data):
@@ -763,7 +775,7 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
 
 # Helper to extract CloudWatch Lambda logs given RequestIds
 def extract_cloudwatch_lambda_logs(
-        local_logs:str,
+        local_logs: str,
         config: SelfDriverConfig,
         lookback_minutes: int = 60,
         max_groups: int = 50
@@ -3716,7 +3728,7 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
     )
 
 
-def delete_cloudformation_stack(config, aws_env: AwsEnv):
+def delete_cloudformation_stack(config, aws_env: AwsEnv, block_while_waiting=True):
     if not AwsEnv.DEV.eq(aws_env):
         raise Exception(f"cannot delete a non DEV stack")
     
@@ -3736,8 +3748,9 @@ def delete_cloudformation_stack(config, aws_env: AwsEnv):
     cf_client.delete_stack(StackName=stack_name)
     
     # Wait until the stack is deleted or reaches a terminal state
-    cloudformation_wait(config, cf_client, stack_name)
-    config.log(f"Delete request finished for stack {stack_name}")
+    if block_while_waiting:
+        cloudformation_wait(config, cf_client, stack_name)
+        config.log(f"Delete request finished for stack {stack_name}")
 
 
 def empty_stack_buckets(config: SelfDriverConfig):
