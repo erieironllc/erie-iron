@@ -1486,6 +1486,17 @@ def cosine_sim(mel1, mel2):
     return cosine_similarity(mel1_flat, mel2_flat)[0, 0]
 
 
+def invalid_file(path: Path) -> bool:
+    return not valid_file(path)
+
+def valid_file(path: Path) -> bool:
+    try:
+        assert_exists(path)
+        return True
+    except:
+        return False
+
+
 def assert_exists(path: Path) -> Path:
     if path is None:
         raise Exception(f"path {path} is None")

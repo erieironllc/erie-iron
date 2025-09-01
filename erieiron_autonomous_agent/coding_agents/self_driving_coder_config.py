@@ -23,6 +23,7 @@ COUNT_FULL_LOGS_IN_CONTEXT = 2
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",
     TaskType.CODING_APPLICATION: "codeplanner--feature_development.md",
+    TaskType.INITIATIVE_VERIFICATION: "codeplanner--initiative_verification.md",
     TaskType.DESIGN_WEB_APPLICATION: "codeplanner--web_designer.md",
     TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
 }
@@ -123,6 +124,10 @@ class SelfDriverConfig:
             self.iteration_to_modify = self.current_iteration
         
         self.reset_log()
+    
+    def iterate_if_necessary(self):
+        if not self.current_iteration:
+            self.set_iteration(self.self_driving_task.iterate())
     
     def init_log(self):
         self.log_path = self.artifacts_dir / f"{self.self_driving_task.id}.log"

@@ -53,7 +53,7 @@ def initialize_workflow(pubsub_manager: PubSubManager):
     )
 
 
-def execute(task_id: str, quick_debug=False, reset=False):
+def execute(task_id: str, reset=False):
     self_driving_task = bootstrap_selfdriving_agent(task_id, reset)
     
     Task.objects.filter(id=self_driving_task.task_id).update(
@@ -80,30 +80,21 @@ def execute(task_id: str, quick_debug=False, reset=False):
                         include_erie_common=True
                     )
                 
-                if not config.business.architecture:
-                    config.set_phase(SdaPhase.INIT)
-                    write_business_architecture(config)
-                
-                if not config.initiative.architecture:
-                    config.set_phase(SdaPhase.INIT)
-                    write_initiative_architecture(config)
-                
-                if not config.business.required_credentials:
-                    config.set_phase(SdaPhase.INIT)
-                    config.set_iteration(self_driving_task.iterate())
-                    identify_required_credentials(config)
-                
                 if not (self_driving_task.test_file_path and (config.sandbox_root_dir / self_driving_task.test_file_path).exists()):
                     config.set_phase(SdaPhase.CODING)
                     config.set_iteration(self_driving_task.iterate())
                     write_initial_test(config)
                 
-                elif not quick_debug and i == 0:
-                    # we've re-started an self driving task - just execute on the first time around
+                elif config.task_type == TaskType.INITIATIVE_VERIFICATION:
+                    ...
+                
+                elif i == 0:
                     most_recent_iteration = self_driving_task.get_most_recent_iteration()
                     if most_recent_iteration:
+                        # we've re-started an self driving task - just execute on the first time around
                         config.set_iteration(most_recent_iteration)
                     else:
+                        # we've started an self driving task - this is the first iteration
                         config.set_iteration(self_driving_task.iterate())
                     
                     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
@@ -113,16 +104,9 @@ def execute(task_id: str, quick_debug=False, reset=False):
                     config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
                 else:
                     try:
-                        most_recent_iteration = self_driving_task.get_most_recent_iteration()
-                        if most_recent_iteration:
-                            if quick_debug or not most_recent_iteration.planning_json:
-                                config.set_iteration(most_recent_iteration)
-                            else:
-                                config.set_iteration(self_driving_task.iterate())
-                        else:
-                            config.set_iteration(self_driving_task.iterate())
+                        config.set_iteration(self_driving_task.iterate())
                         
-                        if not quick_debug and config.iteration_to_modify:
+                        if config.iteration_to_modify:
                             config.iteration_to_modify.write_to_disk()
                         
                         planning_data = plan_code_changes(config)
@@ -213,7 +197,6 @@ full logs:
                 
                 break
             finally:
-                quick_debug = False
                 config.cleanup_iteration()
     
     finally:
@@ -228,7 +211,7 @@ full logs:
 def handle_agent_blocked(config, agent_blocked):
     if not config.self_driving_task.task_id:
         return
-        
+    
     with transaction.atomic():
         Task.objects.filter(id=config.self_driving_task.task_id).update(
             status=TaskStatus.BLOCKED
@@ -395,6 +378,8 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     self_driving_task: SelfDrivingTask = task.create_self_driving_env(
         reset_code_dir=reset
     )
+    config = SelfDriverConfig(self_driving_task)
+    config.set_phase(SdaPhase.INIT)
     
     git = self_driving_task.get_git()
     git.pull()
@@ -403,32 +388,24 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
         self_driving_task.selfdrivingtaskiteration_set.all().delete()
     
     if not self_driving_task.selfdrivingtaskiteration_set.exists():
-        config = SelfDriverConfig(self_driving_task)
-        config.set_iteration(self_driving_task.iterate())
-        
+        run_existing_tests(config, self_driving_task)
         config.business.snapshot_code(
             config.current_iteration,
             include_erie_common=False
         )
-        
-        has_cloudformation = config.business.codefile_set.filter(
-            file_path="infrastructure.yaml"
-        ).exists()
-        
-        has_completed_tasks = config.business.selfdrivingtask_set.filter(
-            test_file_path__isnull=False,
-            task__status=TaskStatus.COMPLETE
-        ).exists()
-        
-        if has_cloudformation and has_completed_tasks:
-            # make sure the tests run
-            delete_cloudformation_stack(config, AwsEnv.DEV)
-            execute_iteration(
-                config,
-                AwsEnv.DEV
-            )
-            
-            assert_tests_green(config)
+    
+    if not config.business.architecture:
+        write_business_architecture(config)
+    
+    if not config.initiative.architecture:
+        write_initiative_architecture(config)
+    
+    if not config.business.required_credentials:
+        identify_required_credentials(config)
+    
+    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.initiative.test_file_path):
+        config.iterate_if_necessary()
+        write_end_to_end_test(config)
     
     return self_driving_task
 
@@ -2003,7 +1980,51 @@ def post_process_code_ouput(code_str: str, code_version_to_modify: CodeVersion) 
     return code_str
 
 
+def write_end_to_end_test(config: SelfDriverConfig):
+    task = config.task
+    
+    return write_test(
+        config,
+        desc="Write initiative end-to-end test",
+        test_file_name=f"test_initiative_{config.initiative.id}.py",
+        system_prompt_name="codewriter--python_tdd_initiative.md",
+        user_messages=LlmMessage.user_from_data(
+            "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
+            {
+                "GOAL": task.description,
+                "test_plan": task.test_plan,
+                "risk_notes": task.risk_notes
+            }
+        )
+    )
+
+
 def write_initial_test(config: SelfDriverConfig):
+    task = config.task
+    
+    return write_test(
+        config,
+        desc="Write initial test",
+        test_file_name=f"test_{task.id}.py",
+        system_prompt_name="codewriter--python_tdd_task.md",
+        user_messages=LlmMessage.user_from_data(
+            "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
+            {
+                "GOAL": task.description,
+                "test_plan": task.test_plan,
+                "risk_notes": task.risk_notes
+            }
+        )
+    )
+
+
+def write_test(
+        config: SelfDriverConfig,
+        desc: str,
+        test_file_name: str,
+        system_prompt_name:str,
+        user_messages: list[LlmMessage]
+):
     task = config.task
     
     previous_exception = None
@@ -2013,7 +2034,8 @@ def write_initial_test(config: SelfDriverConfig):
             messages = [
                 get_sys_prompt([
                     "codewriter--python_test.md",
-                    "codewriter--initial_test.md",
+                    system_prompt_name,
+                    "codewriter--python_tdd_common.md",
                     "codewriter--common.md",
                     "common--iam_role.md",
                     "common--llm_chat.md",
@@ -2024,14 +2046,7 @@ def write_initial_test(config: SelfDriverConfig):
                     ("<env_vars>", get_env_var_names(config)),
                     ("<business_tag>", config.business.service_token),
                 ]),
-                *LlmMessage.user_from_data(
-                    "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
-                    {
-                        "GOAL": task.description,
-                        "test_plan": task.test_plan,
-                        "risk_notes": task.risk_notes
-                    }
-                )
+                *user_messages
             ]
             
             if config.self_driving_task.test_file_path and (config.sandbox_root_dir / config.self_driving_task.test_file_path).exists():
@@ -2049,7 +2064,7 @@ def write_initial_test(config: SelfDriverConfig):
                 """))
             
             code = llm_chat(
-                "Write initial test",
+                desc,
                 config,
                 messages,
                 LlmModel.OPENAI_GPT_5,
@@ -2059,7 +2074,7 @@ def write_initial_test(config: SelfDriverConfig):
             test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
             test_file_path_dir.mkdir(parents=True, exist_ok=True)
             (test_file_path_dir / "__init__.py").touch(exist_ok=True)
-            test_file_path = test_file_path_dir / common.sanitize_filename(f'test_{task.id}.py')
+            test_file_path = test_file_path_dir / common.sanitize_filename(test_file_name)
             
             for code_validation_idx in range(5):
                 try:
@@ -2105,6 +2120,7 @@ def identify_required_credentials(
         config: SelfDriverConfig
 ):
     task = config.task
+    config.iterate_if_necessary()
     
     planning_data = llm_chat(
         "Identify required credentials",
@@ -2147,6 +2163,7 @@ def identify_required_credentials(
 
 
 def write_business_architecture(config: SelfDriverConfig):
+    config.iterate_if_necessary()
     business_architecture = llm_chat(
         "Write initial design doc",
         config,
@@ -2186,6 +2203,7 @@ def write_business_architecture(config: SelfDriverConfig):
 
 
 def write_initiative_architecture(config: SelfDriverConfig):
+    config.iterate_if_necessary()
     architecture = llm_chat(
         "Write Initiative design doc",
         config,
@@ -3939,3 +3957,29 @@ def extract_cloudwatch_stack_logs_for_window(
             config.log(f"Logs Insights window query did not complete (status={status}) for batch {batch}")
     
     return "\n\n".join(combined)
+
+
+def run_existing_tests(config, self_driving_task):
+    config.iterate_if_necessary()
+    
+    has_cloudformation = config.business.codefile_set.filter(
+        file_path="infrastructure.yaml"
+    ).exists()
+    
+    has_completed_tasks = config.business.selfdrivingtask_set.filter(
+        test_file_path__isnull=False,
+        task__status=TaskStatus.COMPLETE
+    ).exists()
+    
+    if not (has_cloudformation and has_completed_tasks):
+        # no need to run the tests
+        return
+    
+    # make sure the tests run
+    delete_cloudformation_stack(config, AwsEnv.DEV)
+    execute_iteration(
+        config,
+        AwsEnv.DEV
+    )
+    
+    assert_tests_green(config)

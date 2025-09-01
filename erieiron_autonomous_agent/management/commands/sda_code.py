@@ -12,12 +12,6 @@ class Command(BaseCommand):
         )
         
         parser.add_argument(
-            '--quick_debug',
-            type=bool,
-            required=False
-        )
-        
-        parser.add_argument(
             '--reset',
             type=bool,
             required=False
@@ -26,6 +20,5 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self_driving_coder_agent.execute(
             options.get("task_id"),
-            options.get("quick_debug"),
             options.get("reset")
         )

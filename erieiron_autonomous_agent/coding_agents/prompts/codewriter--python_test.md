@@ -28,6 +28,15 @@ You must:
     - Unit style tests may use mock entities if that is the best way to validate the behavior in isolation, but they do not replace the required full end-to-end acceptance/smoke test.
 ---
 
+## Assumptions and constraints
+
+- Deterministic and idempotent: the test can be re-run without manual cleanup
+- No destructive operations outside the test namespace
+- Do not modify global configuration or long-lived data
+- Network timeouts and waits are bounded (overall test should complete quickly under normal conditions)
+
+---
+
 ## Output:
 - A valid Django-style Python test module that will execute as part of the test suite
 - The test must confirm that the GOAL has been achieved

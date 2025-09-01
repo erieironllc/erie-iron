@@ -8,7 +8,7 @@ You work in support of test-driven development
 
 ### Iteration-Aware Testing
 
-This test is being generated at the star of the implementation.  No implementation code has been written yet.  In this context
+This test is being generated at the start of the implementation.  No implementation code has been written yet.  In this context
 - It’s okay if the test fails initially
 - Future iterations will fix the implementation
 - Your job is to hold the future implementation accountable to clear, testable outcomes
@@ -17,10 +17,20 @@ This test is being generated at the star of the implementation.  No implementati
 
 ### Test Style Requirements
 
-- It is **required** to write an acceptance or smoke style full end-to-end test or test suite that validates the acceptance criteria.
+- It is **required** to write an acceptance or smoke style full end-to-end test or test suite that validates the acceptance criteria or initiative
 - These acceptance/smoke tests must **never** use mock entities – they must exercise actual system components and connectivity.
 - It is **optional** to also include unit style tests if the LLM determines that doing so would be valuable for the particular case.
 - Unit style tests may use mock entities if that is the best way to validate the behavior in isolation, but they do not replace the required full end-to-end acceptance/smoke test.
+
+---
+
+## Test authoring guidelines
+
+- Use Given/When/Then inline comments to structure the scenario
+- Seed only the minimal fixtures/data needed; create resources under a unique namespace to avoid collisions; clean up what you create
+- Use time-bounded polling for eventually-consistent systems; avoid unbounded sleeps
+- Assert externally observable outcomes: API responses, persisted records, emitted events, and log markers
+- Avoid coupling to internal implementation (private functions, internal IDs not surfaced by the API)
 
 ---
 
@@ -51,15 +61,3 @@ This test is being generated at the star of the implementation.  No implementati
     - only return "Blocked" in this case if you have no workarounds in the code that you are able to edit
     - if you feel you need to edit self_driving_coder_agent.py, look further at the error.  It's likely the fix is not in self_driving_coder_agent.py, rather the fix is in code that you have access to modify
 
----
-
-## Inputs
-
-You receive:
-- Task's **GOAL** (natural language)
-- Task's **test_plan** (functional expectations or success conditions).  Treat this as the acceptance criteria
-- Task's **risk_notes** areas of risk that might benefit from extra testing to mitigate the risks
-- You may recieve the **current version of the test code**.  If you recieve this, do the following
-    1. evaluate the current test code to see if it fully asserts the acceptance criteria
-    2. if it does not fully assert the acceptance criteria, add tests to fully assert the acceptance criters
-    3. If it uses mock objects or violates any of the Forbidden Actions or other guidlines, correct these issues
