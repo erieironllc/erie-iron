@@ -3,6 +3,8 @@ from django.db import transaction
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.models import BusinessCapacityAnalysis, BusinessKPI, BusinessGoal, BusinessCeoDirective, Initiative, ProductRequirement
+from erieiron_common.enums import PubSubMessageType
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
 def define_initiatives(business_id):
@@ -11,6 +13,8 @@ def define_initiatives(business_id):
     chat_data = build_chat_data(business)
 
     product_lead_response = business_level_chat(
+        business,
+        "Define Produce Initiatives",
         "product_lead.md",
         chat_data
     )
@@ -25,6 +29,8 @@ def define_single_initiative(initiative_id):
     initiative = Initiative.objects.get(id=initiative_id)
 
     product_lead_response = business_level_chat(
+        initiative,
+        "Define Single Initiative",
         "product_lead--single_intiative.md",
         f"""
 {initiative.title} ({initiative.initiative_type} initiative)
@@ -91,7 +97,12 @@ def process_response(business, product_lead_response):
             initiative_data
         )
         updated_or_created_initiative_ids.append(initiative.id)
-
+    
+    PubSubManager.publish_id(
+        PubSubMessageType.PRODUCT_INITIATIVES_DEFINED, 
+        business.id
+    )
+    
     return updated_or_created_initiative_ids
 
 

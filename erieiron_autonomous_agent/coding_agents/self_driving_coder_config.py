@@ -15,10 +15,10 @@ from erieiron_common.enums import LlmModel, TaskType, ErieEnum
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 TASK_DESC_CODE_WRITING = "code writing"
-
-PROMPTS_DIR = Path(__file__).parent / "prompts"
+LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
+
 
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",

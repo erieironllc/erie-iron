@@ -152,7 +152,7 @@ def ensure_iam_role_exists_and_get_arn(role_name: str) -> str:
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:
     if common.is_list_like(name):
         name = common.safe_join(name, "-")
-    name = name.replace("_", "-").replace(" ", "-")
+    name = name.replace("_", "-").replace(" ", "-").lower()
     
     if len(name) <= max_length:
         return name
@@ -348,7 +348,6 @@ def get_secret(secret_name: str):
             SecretId=secret_name
         )
     except ClientError as e:
-        logging.exception(e)
         raise e
     else:
         # Decrypts secret using the associated KMS CMK

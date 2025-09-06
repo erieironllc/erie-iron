@@ -19,7 +19,7 @@
     </td>
     <td>{{ task.role_assignee|label }}</td>
     <td><a href="{% url "view_task" task.id %}">{{ task.id }}</a></td>
-    <td>{{ task.description }}</td>
+    <td>{{ task.description|linebreaksbr }}</td>
     <td>
         <form method="post" action="{% url 'action_delete_task' task.id %}" class="d-inline">
             {% csrf_token %}

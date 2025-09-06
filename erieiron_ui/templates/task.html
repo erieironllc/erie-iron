@@ -74,6 +74,16 @@
                 </button>
             </li>
         {% endif %}
+     
+        {% if llm_requests %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="llmrequests-tab" data-bs-toggle="tab" data-bs-target="#llmrequests"
+                        type="button" role="tab">
+                    LLM Requests
+                </button>
+            </li>
+        {% endif %}
+    
         {% if task.taskexecution_set.exists %}
             <li class="nav-item" role="presentation">
                 <button class="nav-link" id="executions-tab" data-bs-toggle="tab" data-bs-target="#executions"
@@ -224,6 +234,11 @@
 
             {% endfor %}
         </div>
+     
+        <div class="tab-pane " id="llmrequests" role="tabpanel" aria-labelledby="llmrequests-tab">
+            {% include '_llm_requests_list.html' %}
+        </div>
+
 
         <div class="tab-pane  " id="executions" role="tabpanel" aria-labelledby="executions-tab">
             {% for te in task.taskexecution_set.all|dictsortreversed:"created_time" %}
@@ -295,7 +310,33 @@
         </div>
 
         <div class="tab-pane  " id="edit" role="tabpanel" aria-labelledby="edit-tab">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="description" class="form-label">Sandbox dir</label>
+                        <div class="d-flex justify-content-between">
+                        <input type="text" class="form-control w-75" value="{{ task.selfdrivingtask.sandbox_path }}" disabledk>
+                            <button class="btn btn-secondary bi-copy copy-btn" data-target="#div_iteration_debug_link">&nbsp;ln</button>
+                        <div id="div_iteration_debug_link" class="d-none">rm ~/src/iteration_debug && ln -s {{ task.selfdrivingtask.sandbox_path }} ~/src/iteration_debug</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="description" class="form-label">Cloudformation Stack</label>
+                        <div>
+                        <a target=_blank href="https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/stackinfo?stackId={{ task.selfdrivingtask.cloudformation_stack_id }}">
+                            {{ task.selfdrivingtask.cloudformation_stack_name }}
+                        </a>
+                            </div>
+                    </div>
+                </div>
+            </div>
+        
+        <hr>
+        
             <h5>Edit Task Fields</h5>
+        
             <form action="{% url 'action_update_task' task.id %}" method="post">
                 {% csrf_token %}
                 <div class="row">

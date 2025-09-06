@@ -5,19 +5,28 @@ import uuid
 
 from django.db import transaction
 
+from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import (
-    Initiative,
-    Task,
-    ProductRequirement, Business, SelfDrivingTask
-)
-from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
+from erieiron_autonomous_agent.models import Initiative, Task, ProductRequirement, Business, SelfDrivingTask
+from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat, llm_chat, get_sys_prompt
 from erieiron_common import common
-from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType
+from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType, LlmModel, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.git_utils import GitWrapper
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 INITIATIVE_TITLE_BOOTSTRAP_ENVS = "BOOTSTRAP_ENVS"
+DEFAULT_ENV_VARS = [
+    "AWS_DEFAULT_REGION",
+    "AWS_ACCOUNT_ID",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "LLM_API_KEYS_SECRET_ARN",
+    "TASK_NAMESPACE",
+    "CLOUDFORMATION_STACK_NAME",
+    "PATH"
+]
 
 
 def on_task_blocked(payload, msg):
@@ -50,7 +59,19 @@ def on_task_blocked(payload, msg):
     ]
     
     eng_lead_response = business_level_chat(
-        ["eng_lead--unblocker.md", "eng_lead.md"],
+        initiative,
+        "Handle Blocked Task",
+        [
+            "eng_lead--unblocker.md",
+            "eng_lead.md",
+            "common--general_coding_rules.md",
+            "common--llm_chat.md",
+            "common--iam_role.md",
+            "common--forbidden_actions.md",
+            "common--environment_variables.md",
+            "common--infrastructure_rules.md",
+            "common--credentials_architecture.md"
+        ],
         payload,
         output_schema="eng_lead.md.schema.json",
         replacements=[
@@ -73,14 +94,33 @@ def on_task_blocked(payload, msg):
     return new_task_ids
 
 
+def on_product_initiatives_defined(business_id):
+    business = Business.objects.get(id=business_id)
+    write_business_architecture(business)
+    identify_required_credentials(business)
+
+
 def define_tasks_for_initiative(initiative_id, msg):
     initiative = Initiative.objects.get(id=initiative_id)
     business = initiative.business
     
+    write_initiative_architecture(initiative)
+    
     chat_data = build_chat_data(business, initiative)
     
     eng_lead_response = business_level_chat(
-        "eng_lead.md",
+        initiative,
+        "Define Initiative Tasks",
+        [
+            "eng_lead.md",
+            "common--general_coding_rules.md",
+            "common--llm_chat.md",
+            "common--iam_role.md",
+            "common--forbidden_actions.md",
+            "common--environment_variables.md",
+            "common--infrastructure_rules.md",
+            "common--credentials_architecture.md"
+        ],
         chat_data,
         output_schema="eng_lead.md.schema.json",
         replacements=[
@@ -88,7 +128,27 @@ def define_tasks_for_initiative(initiative_id, msg):
         ]
     )
     
-    return process_response(msg, initiative, eng_lead_response)
+    new_task_ids = process_response(msg, initiative, eng_lead_response)
+    
+    verification_task, created = Task.objects.update_or_create(
+        id=f"{initiative_id}--end_to_end_verification_tester",
+        defaults={
+            "initiative": initiative,
+            "status": TaskStatus.NOT_STARTED,
+            "description": f"Verify {initiative.title} end to end",
+            "completion_criteria": "end to end test runs green",
+            "execution_schedule": TaskExecutionSchedule.NOT_APPLICABLE,
+            "task_type": TaskType.INITIATIVE_VERIFICATION
+        }
+    )
+    
+    if new_task_ids:
+        verification_task.depends_on.set(Task.objects.filter(id__in=new_task_ids))
+        Task.objects.filter(id=verification_task.id).update(
+            status=TaskStatus.BLOCKED
+        )
+    
+    return new_task_ids
 
 
 def build_chat_data(business, initiative):
@@ -134,6 +194,13 @@ def build_chat_data(business, initiative):
         "linked_kpis": linked_kpis,
         "linked_goals": linked_goals,
         "existing_tasks": existing_tasks,
+        "architecture": {
+            "business_architecture": business.architecture,
+            "initiative_architecture": initiative.architecture,
+            "notes": "Business_architecture describes the whole picture for the business.  "
+                     "Initiative_architecture describes details specific to this initiative.  "
+                     "If there are conflicts between business_architecture and initiative_architecture, Business Architecture takes precedence."
+        }
     }
 
 
@@ -274,7 +341,7 @@ def bootstrap_buiness(business_id):
                 "business": business
             }
         )
-        self_driving_task_iteration, _, _ = self_driving_task.iterate()
+        self_driving_task_iteration = self_driving_task.iterate()
         
         self_driving_task.sandbox_path = os.path.abspath(git.source_root)
         self_driving_task.save()
@@ -315,14 +382,18 @@ def bootstrap_repo(business: Business, git: GitWrapper):
             target_repo
         )
         
-        common.replace_in_file(clone_path / "README.md", [
-            ("erieiron_bootstrap", business.service_token),
-            ("Bootstrap Project", f"{business.name} Project")
-        ])
+        if (clone_path / "README.md").exists():
+            common.replace_in_file(clone_path / "README.md", [
+                ("erieiron_bootstrap", business.service_token),
+                ("Bootstrap Project", f"{business.name} Project")
+            ])
+        else:
+            (clone_path / "README.md").write_text("TODO")
         
-        common.replace_in_file(clone_path / "package.json", [
-            ("erieiron_bootstrap", business.service_token)
-        ])
+        if (clone_path / "package.json").exists():
+            common.replace_in_file(clone_path / "package.json", [
+                ("erieiron_bootstrap", business.service_token)
+            ])
         
         git.create_repo(business.github_repo_url)
         git.add_commit_push(f"Initialize repository for {business.name}")
@@ -331,3 +402,144 @@ def bootstrap_repo(business: Business, git: GitWrapper):
 def get_source_repo_url(business: Business) -> str:
     # at some point we might support different source repos depending the the business requirements
     return "https://github.com/erieironllc/erieiron_bootstrap"
+
+
+def write_business_architecture(business):
+    business_architecture = llm_chat(
+        "Write business architecture",
+        [
+            get_sys_prompt(
+                [
+                    "system_architect.md",
+                    "common--general_coding_rules.md",
+                    "common--llm_chat.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md",
+                    "common--infrastructure_rules.md",
+                    "common--credentials_architecture.md"
+                ],
+                replacements=[
+                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS)),
+                    get_readonly_files_replacement(business)
+                ]
+            ),
+            *LlmMessage.user_from_data("Business Description", {
+                "business_description": business.llm_data()
+            }),
+            *LlmMessage.user_from_data(
+                "Business Initiatives", [i.llm_data() for i in business.initiative_set.all()], "planned_initiatives"
+            ),
+            "Please write a markdown-formatted high-level design document for Business's architecture"
+        ],
+        model=LlmModel.OPENAI_GPT_5,
+        tag_entity=business,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.MEDIUM
+    ).text
+    
+    Business.objects.filter(id=business.id).update(
+        architecture=business_architecture
+    )
+    business.refresh_from_db(fields=["architecture"])
+
+
+def write_initiative_architecture(initiative: Initiative):
+    business = initiative.business
+    architecture = llm_chat(
+        "Write Initiative design doc",
+        [
+            get_sys_prompt(
+                [
+                    "system_architect.md",
+                    "common--general_coding_rules.md",
+                    "common--llm_chat.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md",
+                    "common--infrastructure_rules.md",
+                    "common--credentials_architecture.md"
+                ],
+                replacements=[
+                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS)),
+                    get_readonly_files_replacement(business)
+                ]
+            ),
+            *LlmMessage.user_from_data("Full Business Architecture", {
+                "architecture_docs": business.architecture
+            }),
+            *LlmMessage.user_from_data(
+                "Current Initiative", initiative.llm_data()
+            ),
+            "Please write a markdown-formatted high-level design document for this **Initiatives's** architecture. It should **never conflict** with the supplied business's architecture - it should only clarify details needed to implement the Current Initiative."
+        ],
+        model=LlmModel.OPENAI_GPT_5,
+        tag_entity=initiative,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.MEDIUM
+    ).text
+    
+    Initiative.objects.filter(id=initiative.id).update(
+        architecture=architecture
+    )
+    initiative.refresh_from_db(fields=["architecture"])
+
+
+def identify_required_credentials(business: Business):
+    planning_data = llm_chat(
+        "Identify required credentials",
+        [
+            *common.ensure_list(
+                get_sys_prompt([
+                    "codeplanner--initial_credentials.md",
+                    "codeplanner--common.md",
+                    "common--general_coding_rules.md",
+                    "common--llm_chat.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md",
+                    "common--credentials_architecture.md"
+                ], replacements=[
+                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                    ("<business_tag>", business.service_token),
+                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS)),
+                    get_readonly_files_replacement(business)
+                ]),
+            ),
+            *LlmMessage.user_from_data(
+                "Architecture", {
+                    "business_architecture": business.architecture,
+                    "notes": "Business_architecture describes the whole picture for the business"
+                }
+            ),
+            *business.get_existing_required_credentials_llmm(),
+            "Please identify the credentials required"
+        ],
+        model=LlmModel.OPENAI_GPT_5,
+        tag_entity=business,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.MEDIUM,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    current_credentials = business.required_credentials or {}
+    Business.objects.filter(id=business.id).update(
+        required_credentials={
+            **current_credentials,
+            **(planning_data["required_credentials"] or {})
+        }
+    )
+    business.refresh_from_db(fields=["required_credentials"])
+
+
+def get_readonly_files_replacement(business: Business) -> tuple[str, str]:
+    parts = []
+    
+    for f in business.get_readonly_files():
+        if f['alternatives']:
+            parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
+        else:
+            parts.append(f"- `{f['path']}` — {f['description']}")
+    
+    return "<read_only_files>", "\n".join(parts)

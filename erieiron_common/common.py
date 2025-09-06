@@ -1486,8 +1486,12 @@ def cosine_sim(mel1, mel2):
     return cosine_similarity(mel1_flat, mel2_flat)[0, 0]
 
 
-def invalid_file(path: Path) -> bool:
-    return not valid_file(path)
+def invalid_file(parent_path: Path, file_name: str) -> bool:
+    if not file_name:
+        return True
+    
+    return not valid_file(parent_path / file_name)
+
 
 def valid_file(path: Path) -> bool:
     try:
@@ -1767,10 +1771,10 @@ def run_cmd(cwd: Path, cmd: list[str]) -> subprocess.CompletedProcess:
     try:
         env = os.environ.copy()
         result = subprocess.run(
-            ensure_list(cmd),
+            strings(cmd),
             env=env,
             stdin=subprocess.DEVNULL,
-            cwd=cwd,
+            cwd=str(cwd.absolute()),
             check=True,
             capture_output=True,
             text=True

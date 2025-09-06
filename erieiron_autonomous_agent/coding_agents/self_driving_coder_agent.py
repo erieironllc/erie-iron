@@ -1,13 +1,16 @@
 import json
 import logging
 import os
+import pprint
 import re
+import shutil
 import subprocess
+import tempfile
 import time
 import traceback
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import boto3
 import botocore.session
@@ -21,28 +24,19 @@ from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, PROMPTS_DIR, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, LlmRequest, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Business, Initiative
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative
+from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, LlmVerbosity
-from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_constants import MODEL_BACKUPS
-from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, LlmResponse
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-READONLY_FILES = [
-    {
-        "path": "manage.py",
-        "alternatives": "settings.py",
-        "description": "Django's core management script"
-    }
-]
 
 
 @pubsub_workflow
@@ -54,113 +48,93 @@ def initialize_workflow(pubsub_manager: PubSubManager):
 
 
 def execute(task_id: str, reset=False):
-    self_driving_task = bootstrap_selfdriving_agent(task_id, reset)
-    
-    Task.objects.filter(id=self_driving_task.task_id).update(
-        status=TaskStatus.IN_PROGRESS
+    self_driving_task = bootstrap_selfdriving_agent(
+        task_id,
+        reset
     )
     
-    config = None
-    stop_reason = ""
-    supress_eval = False
-    try:
-        for i in range(100):
-            config = SelfDriverConfig(self_driving_task)
+    for i in range(100):
+        config = SelfDriverConfig(self_driving_task)
+        
+        try:
+            if config.budget and config.self_driving_task.get_cost() > config.budget:
+                logging.info(f"Stopping - hit the max budget ${config.budget :.2f}")
+                break
             
-            try:
-                if config.budget and config.self_driving_task.get_cost() > config.budget:
-                    stop_reason = f"Stopping - hit the max budget ${config.budget :.2f}"
-                    break
-                
-                if not config.business.codefile_set.exists():
-                    config.set_phase(SdaPhase.INIT)
-                    config.set_iteration(self_driving_task.iterate())
-                    config.business.snapshot_code(
-                        config.current_iteration,
-                        include_erie_common=True
-                    )
-                
-                if not (self_driving_task.test_file_path and (config.sandbox_root_dir / self_driving_task.test_file_path).exists()):
-                    config.set_phase(SdaPhase.CODING)
-                    config.set_iteration(self_driving_task.iterate())
-                    write_initial_test(config)
-                
-                elif config.task_type == TaskType.INITIATIVE_VERIFICATION:
-                    ...
-                
-                elif i == 0:
-                    most_recent_iteration = self_driving_task.get_most_recent_iteration()
-                    if most_recent_iteration:
-                        # we've re-started an self driving task - just execute on the first time around
-                        config.set_iteration(most_recent_iteration)
-                    else:
-                        # we've started an self driving task - this is the first iteration
-                        config.set_iteration(self_driving_task.iterate())
-                    
-                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                        log_content_execution="",
-                        evaluation_json=None
-                    )
-                    config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
+            if i == 0:
+                config.iterate_if_necessary()
+                most_recent_iteration = self_driving_task.get_most_recent_iteration()
+                if most_recent_iteration:
+                    # we've re-started an self driving task - just execute on the first time around
+                    config.set_iteration(most_recent_iteration)
                 else:
-                    try:
-                        config.set_iteration(self_driving_task.iterate())
-                        
-                        if config.iteration_to_modify:
-                            config.iteration_to_modify.write_to_disk()
-                        
-                        planning_data = plan_code_changes(config)
-                        
-                        do_coding(config, planning_data)
-                    finally:
-                        config.reset_log()
+                    # we've started an self driving task - this is the first iteration
+                    config.set_iteration(self_driving_task.iterate())
                 
-                execution_exception = None
+                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                    log_content_execution="",
+                    evaluation_json=None
+                )
+                config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
+            else:
                 try:
-                    execute_iteration(
-                        config,
-                        AwsEnv.DEV
-                    )
-                except BadPlan as bpe:
-                    config.log(bpe)
-                    execution_exception = bpe
-                    raise bpe
-                except AgentBlocked as abe:
-                    execution_exception = abe
-                    raise abe
-                except NeedPlan as npe:
-                    execution_exception = npe
-                    raise npe
-                except Exception as e:
-                    execution_exception = e
-                    config.log(e)
+                    config.set_iteration(self_driving_task.iterate())
+                    
+                    if config.iteration_to_modify:
+                        config.iteration_to_modify.write_to_disk()
+                    
+                    planning_data = plan_code_changes(config)
+                    
+                    do_coding(config, planning_data)
                 finally:
-                    config.set_phase(SdaPhase.EVALUATE)
-                    evaluate_iteration_execution(config, execution_exception)
+                    config.reset_log()
+            
+            execution_exception = None
+            try:
+                execute_iteration(
+                    config,
+                    AwsEnv.DEV
+                )
+            except BadPlan as bpe:
+                config.log(bpe)
+                execution_exception = bpe
+                raise bpe
+            except AgentBlocked as abe:
+                execution_exception = abe
+                raise abe
             except NeedPlan as npe:
-                logging.info(f'NeedPlan - {npe}')
-            except RetryableException as retryable_execution_exception:
-                config.log(retryable_execution_exception)
-                with transaction.atomic():
-                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                        log_content_execution=f"""
+                execution_exception = npe
+                raise npe
+            except Exception as e:
+                execution_exception = e
+                config.log(e)
+            finally:
+                config.set_phase(SdaPhase.EVALUATE)
+                evaluate_iteration_execution(config, execution_exception)
+        except NeedPlan as npe:
+            logging.info(f'NeedPlan - {npe}')
+        except RetryableException as retryable_execution_exception:
+            config.log(retryable_execution_exception)
+            with transaction.atomic():
+                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                    log_content_execution=f"""
 Execution Failed with 
 {retryable_execution_exception}
 {traceback.format_exc()}
-            
+        
 planning data:
 We should just try again - should be fixed next time around
 
 full logs:
 {config.get_log_content()}
-                        """
-                    )
-                config.current_iteration.refresh_from_db(fields=["log_content_execution"])
-            except BadPlan as bad_plan_exception:
-                config.log(bad_plan_exception)
-                with transaction.atomic():
-                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                        log_content_execution=f"""
+                    """
+                )
+            config.current_iteration.refresh_from_db(fields=["log_content_execution"])
+        except BadPlan as bad_plan_exception:
+            config.log(bad_plan_exception)
+            with transaction.atomic():
+                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                    log_content_execution=f"""
 Planning agent produced a bad plan:
 {bad_plan_exception}
 {traceback.format_exc()}
@@ -170,42 +144,34 @@ planning data:
 
 full logs:
 {config.get_log_content()}
-                        """
-                    )
-                config.current_iteration.refresh_from_db(fields=["log_content_execution"])
-            except AgentBlocked as agent_blocked:
-                stop_reason = "Agent Blocked"
-                config.log(agent_blocked)
-                handle_agent_blocked(config, agent_blocked)
-                break
-            except GoalAchieved as goal_achieved:
-                stop_reason = "Goal Achieved"
-                handle_goal_achieved(config)
-                break
-            except Exception as e:
-                logging.exception(e)
-                config.log(e)
-                config.supress_eval = True
-                if config.self_driving_task.task_id:
-                    PubSubManager.publish(
-                        PubSubMessageType.TASK_FAILED,
-                        payload={
-                            "task_id": config.self_driving_task.task_id,
-                            "error": traceback.format_exc()
-                        }
-                    )
-                
-                break
-            finally:
-                config.cleanup_iteration()
-    
-    finally:
-        config.log("DIR", config.git.source_root)
-        
-        config.log("STOP REASON", stop_reason)
-        if TaskType.CODING_ML.eq(config.task_type):
-            from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
-            package_ml_artifacts(config)
+                    """
+                )
+            config.current_iteration.refresh_from_db(fields=["log_content_execution"])
+        except AgentBlocked as agent_blocked:
+            config.log(agent_blocked)
+            handle_agent_blocked(config, agent_blocked)
+            logging.info(f"Stopping - Agent Blocked")
+            break
+        except GoalAchieved as goal_achieved:
+            handle_goal_achieved(config)
+            logging.info(f"Stopping - Goal Achieved")
+            break
+        except Exception as e:
+            logging.exception(e)
+            config.log(e)
+            if config.self_driving_task.task_id:
+                PubSubManager.publish(
+                    PubSubMessageType.TASK_FAILED,
+                    payload={
+                        "task_id": config.self_driving_task.task_id,
+                        "error": traceback.format_exc()
+                    }
+                )
+            
+            logging.info(f"Stopping - Unhandled Exception")
+            break
+        finally:
+            config.cleanup_iteration()
 
 
 def handle_agent_blocked(config, agent_blocked):
@@ -227,6 +193,10 @@ def handle_agent_blocked(config, agent_blocked):
 
 
 def handle_goal_achieved(config):
+    if TaskType.CODING_ML.eq(config.task_type):
+        from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
+        package_ml_artifacts(config)
+    
     try:
         config.git.add_commit_push(
             f"task {config.task.id}: {config.task.description}"
@@ -307,7 +277,7 @@ def on_reset_task_test(task_id):
     task = Task.objects.get(id=task_id)
     self_driving_task = task.selfdrivingtask
     config = SelfDriverConfig(self_driving_task)
-    write_initial_test(config)
+    write_task_tdd_test(config)
 
 
 def plan_code_changes(config):
@@ -375,17 +345,28 @@ def validate_plan(config: SelfDriverConfig, planning_data):
 
 def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
+    
+    Task.objects.filter(id=task.id).update(
+        status=TaskStatus.IN_PROGRESS
+    )
+    
     self_driving_task: SelfDrivingTask = task.create_self_driving_env(
         reset_code_dir=reset
     )
-    config = SelfDriverConfig(self_driving_task)
-    config.set_phase(SdaPhase.INIT)
-    
-    git = self_driving_task.get_git()
-    git.pull()
     
     if reset:
         self_driving_task.selfdrivingtaskiteration_set.all().delete()
+    
+    config = SelfDriverConfig(self_driving_task)
+    config.set_phase(SdaPhase.INIT)
+    self_driving_task.get_git().pull()
+    
+    if not config.business.codefile_set.exists():
+        config.iterate_if_necessary()
+        config.business.snapshot_code(
+            config.current_iteration,
+            include_erie_common=True
+        )
     
     if not self_driving_task.selfdrivingtaskiteration_set.exists():
         run_existing_tests(config, self_driving_task)
@@ -394,18 +375,13 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
             include_erie_common=False
         )
     
-    if not config.business.architecture:
-        write_business_architecture(config)
+    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.sandbox_root_dir, config.initiative.test_file_path):
+        config.set_phase(SdaPhase.CODING)
+        write_initiative_tdd_test(config)
     
-    if not config.initiative.architecture:
-        write_initiative_architecture(config)
-    
-    if not config.business.required_credentials:
-        identify_required_credentials(config)
-    
-    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.initiative.test_file_path):
-        config.iterate_if_necessary()
-        write_end_to_end_test(config)
+    elif config.task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION] and common.invalid_file(config.sandbox_root_dir, self_driving_task.test_file_path):
+        config.set_phase(SdaPhase.CODING)
+        write_task_tdd_test(config)
     
     return self_driving_task
 
@@ -455,11 +431,17 @@ def build_docker_image(
     if build_process.returncode != 0:
         raise Exception(f"Docker build failed with return code: {build_process.returncode}")
     
+    env_flags = " ".join(build_env_flags(docker_env))
     config.log(f"""
 =========================================================
 if you want to debug the docker container, run this 
 
-docker run --rm -it -v {self_driving_task.sandbox_path}:/app -w /app {docker_image_tag} /bin/bash
+docker run --rm -it \
+  -v {self_driving_task.sandbox_path}:/app \
+  -w /app \
+  {env_flags} \
+  {docker_image_tag} \
+  /bin/bash
 
 =========================================================
         """)
@@ -576,6 +558,115 @@ def build_env_flags(env):
             env_flags += ["-e", f"{k}={val}"]
     
     return env_flags
+
+
+def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
+    s3 = boto3.client("s3", region_name=get_aws_region())
+    
+    lambda_datas = get_stack_lambdas(config)
+    
+    for lambda_data in lambda_datas:
+        dependencies = lambda_data["lambda_datas"]
+        code_file_path = lambda_data["code_file_path"]
+        full_lambda_path = config.sandbox_root_dir / code_file_path
+        
+        if not full_lambda_path.exists():
+            raise FileNotFoundError(f"Lambda source file not found: {full_lambda_path}")
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            shutil.copy(full_lambda_path, temp_dir_path / full_lambda_path.name)
+            
+            if dependencies:
+                req_file = temp_dir_path / "requirements.txt"
+                req_file.write_text("\n".join(dependencies))
+                
+                subprocess.run([
+                    "pip", "install", "-r", str(req_file), "-t", str(temp_dir_path)
+                ], check=True)
+            
+            s3_key_name = aws_utils.sanitize_aws_name("-".join([
+                config.task.id,
+                config.current_iteration.version_number
+            ]), 1000) + ".zip"
+            
+            logging.info(f"Packaging Lambda: {code_file_path} → {s3_key_name} with dependencies: {dependencies}")
+            
+            zip_path = temp_dir_path / s3_key_name
+            shutil.make_archive(zip_path.with_suffix(""), 'zip', root_dir=temp_dir_path)
+            
+            s3.upload_fileobj(
+                zip_path,
+                LAMBDA_PACKAGES_BUCKET,
+                s3_key_name
+            )
+            lambda_data['s3_key_name'] = s3_key_name
+    
+    return lambda_datas
+
+
+def get_stack_lambdas(config) -> list[dict]:
+    lambdas = []
+    
+    resources = get_infrastructure_yaml_data(config).get("Resources", {})
+    for resource_name, resource_config in resources.items():
+        if resource_config.get("Type") != "AWS::Lambda::Function":
+            continue
+        
+        props = resource_config.get("Properties", {})
+        code_block = props.get("Code", {})
+        s3_key_ref = code_block.get("S3Key")
+        
+        metadata = resource_config.get("Metadata", {})
+        source_file = metadata.get("SourceFile")
+        if not isinstance(source_file, str):
+            raise Exception(f"Bad Lambda {resource_name}: SourceFile is not a string — got {source_file}")
+        candidate_path = Path(source_file)
+        
+        if not isinstance(s3_key_ref, dict) or "Ref" not in s3_key_ref:
+            raise Exception(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
+        
+        if not (config.sandbox_root_dir / candidate_path).exists():
+            raise Exception(f"Bad Lambda {resource_name}: file not found — expected at {candidate_path}")
+        
+        code_file_code = (config.sandbox_root_dir / candidate_path).read_text()
+        match = re.search(r'^# LAMBDA_DEPENDENCIES: (\[.*?])', code_file_code, flags=re.MULTILINE)
+        if match:
+            try:
+                dependencies = json.loads(match.group(1))
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid LAMBDA_DEPENDENCIES in {candidate_path}: {e}")
+        else:
+            dependencies = []
+        
+        lambdas.append({
+            "lambda_name": resource_name,
+            "dependencies": dependencies,
+            "code_file_path": str(candidate_path),
+            "s3_key_param": s3_key_ref["Ref"]
+        })
+    
+    return lambdas
+
+
+def get_infrastructure_yaml_data(config: SelfDriverConfig) -> dict:
+    return agent_tools.parse_cloudformation_yaml(
+        get_infrastructure_yaml_code(config)
+    )
+
+
+def get_infrastructure_yaml_codeversion(config):
+    return CodeFile.get(
+        config.business, "infrastructure.yaml"
+    ).get_latest_version(
+        config.self_driving_task
+    )
+
+
+def get_infrastructure_yaml_code(config):
+    infrastructure_code_version = get_infrastructure_yaml_codeversion(config)
+    
+    return infrastructure_code_version.code if infrastructure_code_version else None
 
 
 def push_image_to_ecr(
@@ -739,12 +830,12 @@ def enrich_local_logs_with_cloudwatch_logs(
 def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
     return llm_chat(
         "Log Extraction",
-        config,
         [
             get_sys_prompt("log_parser.md"),
             log_content
         ],
         model=LlmModel.OPENAI_GPT_5,
+        tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.HIGH,
         verbosity=LlmVerbosity.LOW
     ).text
@@ -889,14 +980,19 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         )
         iteration.refresh_from_db(fields=["docker_tag"])
         
-        infrastructure_code_version = iteration.codeversion_set.filter(
-            code_file=CodeFile.get(config.business, "infrastructure.yaml")
-        ).first()
+        stack_exists = is_stack_exists(config, aws_env, docker_env)
+        if stack_exists:
+            need_stack_update = is_stack_modified(config)
+        else:
+            need_stack_update = True
         
-        if not stack_exists(config, aws_env, docker_env) or (
-                infrastructure_code_version
-                and infrastructure_code_version.get_diff()
-        ):
+        if need_stack_update:
+            lambda_datas = None
+            try:
+                lambda_datas = deploy_lambda_packages(config)
+            except Exception as e:
+                raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
+            
             try:
                 full_image_uri, ecr_arn = push_image_to_ecr(
                     config,
@@ -917,7 +1013,8 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
                 config,
                 aws_env,
                 docker_env,
-                ecr_arn
+                ecr_arn,
+                lambda_datas
             )
         
         manage_db(
@@ -944,7 +1041,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
                 config=config,
                 aws_env=aws_env,
                 docker_env=docker_env,
-                command_args="test",
+                command_args=["test", "--keepdb", "--noinput"],
                 running_process=running_process,
                 docker_image=docker_image_tag
             )
@@ -983,7 +1080,63 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         exec_docker_prune()
 
 
-def stack_exists(config: SelfDriverConfig, aws_env: AwsEnv, docker_env: dict) -> bool:
+def is_stack_modified(config):
+    infrastructure_code_file = config.business.codefile_set.filter(file_path="infrastructure.yaml").first()
+    if not infrastructure_code_file:
+        # no infrastructure
+        return False
+    
+    iteration = config.current_iteration
+    infrastructure_code_version = iteration.codeversion_set.filter(
+        code_file=CodeFile.get(config.business, "infrastructure.yaml")
+    ).order_by("created_at").last()
+    
+    if infrastructure_code_version and infrastructure_code_version.get_diff():
+        # infrastructure.yaml modified in this iteration, need to push
+        return True
+    
+    infrastructure_code_version = iteration.get_code_version(infrastructure_code_file)
+    
+    lambda_modified = False
+    try:
+        infra_data = get_infrastructure_yaml_data(config)
+        resources = infra_data.get("Resources", {})
+        
+        lambda_source_files = set()
+        for resource_name, resource_config in resources.items():
+            if resource_config.get("Type") == "AWS::Lambda::Function":
+                properties = resource_config.get("Properties", {})
+                code_config = properties.get("Code", {})
+                
+                if "ZipFile" in code_config:
+                    continue
+                
+                s3_bucket = code_config.get("S3Bucket")
+                s3_key = code_config.get("S3Key")
+                
+                if s3_key and isinstance(s3_key, str):
+                    if s3_key.endswith(".py"):
+                        lambda_source_files.add(s3_key)
+                    elif s3_key.endswith(".zip"):
+                        lambda_source_files.add(s3_key.replace(".zip", ".py"))
+        
+        if lambda_source_files:
+            lambda_modified = any(
+                cv.get_diff() for cv in iteration.codeversion_set.filter(
+                    code_file__file_path__in=lambda_source_files
+                )
+            )
+    except Exception as e:
+        config.log(f"Failed to parse infrastructure.yaml for lambda detection: {e}")
+        lambda_modified = any(
+            cv.get_diff() for cv in iteration.codeversion_set.filter(
+                code_file__file_path__icontains="lambda"
+            )
+        )
+    return lambda_modified
+
+
+def is_stack_exists(config: SelfDriverConfig, aws_env: AwsEnv, docker_env: dict) -> bool:
     try:
         matching_stack = get_stack(
             config.self_driving_task.get_cloudformation_stack_name(aws_env),
@@ -1002,26 +1155,41 @@ def manage_db(
         docker_image_tag: str,
         running_process: RunningProcess
 ):
-    aws_region_name = docker_env["AWS_DEFAULT_REGION"]
-    
-    rds_secret = agent_tools.get_secret_json(
-        docker_env["RDS_SECRET_ARN"],
-        aws_region_name
-    )
-    
-    # aws_utils.ensure_network_access(
-    #     rds_secret["host"],
-    #     aws_region_name
-    # )
-    
-    run_docker_command(
-        config=config,
-        aws_env=aws_env,
-        docker_env=docker_env,
-        command_args="migrate",
-        running_process=running_process,
-        docker_image=docker_image_tag
-    )
+    try:
+        aws_region_name = docker_env["AWS_DEFAULT_REGION"]
+        
+        rds_secret = agent_tools.get_secret_json(
+            docker_env["RDS_SECRET_ARN"],
+            aws_region_name
+        )
+        
+        # aws_utils.ensure_network_access(
+        #     rds_secret["host"],
+        #     aws_region_name
+        # )
+        
+        run_docker_command(
+            config=config,
+            aws_env=aws_env,
+            docker_env=docker_env,
+            command_args="makemigrations",
+            running_process=running_process,
+            docker_image=docker_image_tag
+        )
+        
+        run_docker_command(
+            config=config,
+            aws_env=aws_env,
+            docker_env=docker_env,
+            command_args="migrate",
+            running_process=running_process,
+            docker_image=docker_image_tag
+        )
+    except Exception as e:
+        if "DuplicateDatabase" in str(e):
+            raise AgentBlocked(e.__dict__)
+        else:
+            raise e
 
 
 def init_task_execution(iteration):
@@ -1036,7 +1204,7 @@ def init_task_execution(iteration):
             previous_task_execution = upstream_task.get_last_execution()
             if not previous_task_execution:
                 raise AgentBlocked({
-                    "desc": f"task {task.id} depends on upstream task {upstream_task.id}, but the upstream task has not executed"
+                    "description": f"task {task.id} depends on upstream task {upstream_task.id}, but the upstream task has not executed"
                 })
             
             task_input[upstream_task.id] = previous_task_execution.output
@@ -1050,20 +1218,20 @@ def init_task_execution(iteration):
 def assert_tests_green(config: SelfDriverConfig):
     test_reviewer_output = llm_chat(
         "Assert Initial Tests Green",
-        config,
         [
             get_sys_prompt("test_reviewer.md"),
             config.get_log_content()
         ],
         output_schema="test_reviewer.md.schema.json",
         model=LlmModel.OPENAI_GPT_5,
+        tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.LOW,
         verbosity=LlmVerbosity.LOW
     ).json()
     
     if not test_reviewer_output.get("all_passed"):
         raise AgentBlocked({
-            "desc": "assert_tests_green failed",
+            "description": "assert_tests_green failed",
             **test_reviewer_output
         })
 
@@ -1082,7 +1250,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
-    
+        
     messages = ([
         get_sys_prompt([
             "iteration_summarizer.md",
@@ -1094,6 +1262,16 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         ])
     ])
     
+    aws_env = AwsEnv.DEV
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    stack_name = config.self_driving_task.get_cloudformation_stack_name(aws_env)
+    stack_status = get_stack_status(stack_name, cf_client)
+    
+    messages += LlmMessage.user_from_data("Cloudformation Status", {
+        "stack_status": stack_status,
+        "allow_goal_achieved": "True" if stack_status == "DEPLOY_COMPLETE" else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
+    })
+
     if isinstance(exception, ExecutionException):
         messages += LlmMessage.user_from_data(
             f"**Exception throw during this iteration's execution**",
@@ -1121,9 +1299,9 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     
     eval_data = llm_chat(
         "Iteration Summarizer",
-        config,
         messages,
         LlmModel.OPENAI_GPT_5_NANO,
+        tag_entity=config.current_iteration,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
     
@@ -1156,7 +1334,6 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     
     selection_data = llm_chat(
         "Iteration Selector",
-        config,
         [
             get_sys_prompt([
                 "iteration_selector.md",
@@ -1172,6 +1349,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
             )
         ],
         LlmModel.OPENAI_GPT_5_MINI,
+        tag_entity=config.current_iteration,
         output_schema="iteration_selector.md.schema.json"
     ).json()
     
@@ -1272,6 +1450,13 @@ def cloudformation_wait(
         assert_cloudformation_stack_valid(stack_name, cf_client)
 
 
+def get_stack_status(stack_name, cf_client):
+    try:
+        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])['StackStatus']
+    except:
+        return "NO_STACK"
+
+
 def get_stack(stack_name, cf_client):
     try:
         return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])
@@ -1327,6 +1512,8 @@ def push_cloudformation(
                 Parameters=param_list,
                 Capabilities=["CAPABILITY_NAMED_IAM"]
             )
+        
+        pprint.pprint(get_stack(stack_name, cf_client))
         
         cloudformation_wait(
             config,
@@ -1441,7 +1628,7 @@ def assert_cloudformation_stack_valid(stack_name, cf_client):
         raise CloudFormationException(f"CloudFormation stack {stack_name} failed with status: {status}")
 
 
-def build_cloudformation_durations_context_messages(config: SelfDriverConfig, title=None) -> List[LlmMessage]:
+def build_cloudformation_durations_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
     iteration_to_modify = config.iteration_to_modify
     if not (iteration_to_modify and iteration_to_modify.slowest_cloudformation_resources):
         return []
@@ -1454,7 +1641,7 @@ def build_cloudformation_durations_context_messages(config: SelfDriverConfig, ti
     )
 
 
-def build_previous_iteration_context_messages(config: SelfDriverConfig, title=None) -> List[LlmMessage]:
+def build_previous_iteration_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -1580,22 +1767,6 @@ def get_iteration_eval_llm_messages(
     )
 
 
-def get_sys_prompt(
-        file_name: str,
-        replacements: tuple[str, str] = None
-) -> LlmMessage:
-    return_list = common.is_list_like(file_name)
-    
-    messages = []
-    for f in common.ensure_list(file_name):
-        msg = (PROMPTS_DIR / f).read_text()
-        for look_for_str, replace_with_str in common.ensure_list(replacements):
-            msg = msg.replace(look_for_str, replace_with_str)
-        messages.append(msg)
-    
-    return LlmMessage.sys("\n\n-------\n\n".join(messages))
-
-
 def get_architecture_docs(config: SelfDriverConfig):
     return LlmMessage.user_from_data(
         "Architecture", {
@@ -1672,9 +1843,9 @@ The code changes to review are in support of the following goal:
     
     code_review_data = llm_chat(
         "Perform Code Review",
-        config,
         messages,
         LlmModel.OPENAI_GPT_5,
+        tag_entity=config.current_iteration,
         output_schema="codereviewer.md.schema.json"
     ).json()
     
@@ -1805,7 +1976,6 @@ def extract_lessons(
     task = config.task
     lessons_data = llm_chat(
         "Extract Lessons",
-        config,
         [
             get_sys_prompt("lesson_extractor.md"),
             LlmMessage.user(task.get_work_desc()),
@@ -1816,6 +1986,7 @@ def extract_lessons(
             )
         ],
         output_schema="lesson_extractor.md.schema.json",
+        tag_entity=config.current_iteration,
         model=LlmModel.OPENAI_GPT_5
     ).json()
     
@@ -1980,31 +2151,50 @@ def post_process_code_ouput(code_str: str, code_version_to_modify: CodeVersion) 
     return code_str
 
 
-def write_end_to_end_test(config: SelfDriverConfig):
-    task = config.task
+def write_initiative_tdd_test(config: SelfDriverConfig):
+    config.iterate_if_necessary()
     
-    return write_test(
+    task = config.task
+    initiative = config.initiative
+    
+    test_file_path = write_test(
         config,
-        desc="Write initiative end-to-end test",
+        description="Write initiative end-to-end test",
         test_file_name=f"test_initiative_{config.initiative.id}.py",
         system_prompt_name="codewriter--python_tdd_initiative.md",
-        user_messages=LlmMessage.user_from_data(
-            "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
-            {
-                "GOAL": task.description,
-                "test_plan": task.test_plan,
-                "risk_notes": task.risk_notes
-            }
-        )
+        user_messages=[
+            *get_architecture_docs(config),
+            *LlmMessage.user_from_data(
+                "Please write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
+                {
+                    "name": initiative.title,
+                    "description": initiative.description
+                }
+            ),
+            *LlmMessage.user_from_data(
+                "**Additional Context** = existing code and automated tests",
+                [
+                    f.get_latest_version().get_llm_message_data()
+                    for f in config.business.codefile_set.all() if f.get_latest_version()
+                ], item_name="file"
+            )
+        ]
     )
+    
+    with transaction.atomic():
+        Initiative.objects.filter(id=config.initiative.id).update(
+            test_file_path=test_file_path
+        )
+        config.initiative.refresh_from_db(fields=["test_file_path"])
 
 
-def write_initial_test(config: SelfDriverConfig):
+def write_task_tdd_test(config: SelfDriverConfig):
+    config.iterate_if_necessary()
     task = config.task
     
-    return write_test(
+    test_file_path = write_test(
         config,
-        desc="Write initial test",
+        description="Write initial test",
         test_file_name=f"test_{task.id}.py",
         system_prompt_name="codewriter--python_tdd_task.md",
         user_messages=LlmMessage.user_from_data(
@@ -2016,13 +2206,19 @@ def write_initial_test(config: SelfDriverConfig):
             }
         )
     )
+    
+    with transaction.atomic():
+        SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+            test_file_path=test_file_path
+        )
+        config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
 def write_test(
         config: SelfDriverConfig,
-        desc: str,
+        description: str,
         test_file_name: str,
-        system_prompt_name:str,
+        system_prompt_name: str,
         user_messages: list[LlmMessage]
 ):
     task = config.task
@@ -2036,6 +2232,7 @@ def write_test(
                     "codewriter--python_test.md",
                     system_prompt_name,
                     "codewriter--python_tdd_common.md",
+                    "common--infrastructure_rules.md",
                     "codewriter--common.md",
                     "common--iam_role.md",
                     "common--llm_chat.md",
@@ -2064,10 +2261,10 @@ def write_test(
                 """))
             
             code = llm_chat(
-                desc,
-                config,
+                description,
                 messages,
                 LlmModel.OPENAI_GPT_5,
+                tag_entity=config.current_iteration,
                 reasoning_effort=LlmReasoningEffort.HIGH
             ).text
             
@@ -2100,146 +2297,16 @@ def write_test(
                         )
             
             test_file_path.write_text(code)
+            code_verson = config.current_iteration.get_code_version(test_file_path)
+            code_verson.code = code
+            code_verson.save()
             
-            with transaction.atomic():
-                code_verson = config.current_iteration.get_code_version(test_file_path)
-                SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
-                    test_file_path=test_file_path.relative_to(config.sandbox_root_dir)
-                )
-                config.self_driving_task.refresh_from_db(fields=["test_file_path"])
-            
-            return test_file_path
+            return test_file_path.relative_to(config.sandbox_root_dir)
         except Exception as e:
             config.log(e)
             previous_exception = e
     
     raise previous_exception
-
-
-def identify_required_credentials(
-        config: SelfDriverConfig
-):
-    task = config.task
-    config.iterate_if_necessary()
-    
-    planning_data = llm_chat(
-        "Identify required credentials",
-        config,
-        [
-            *common.ensure_list(
-                get_sys_prompt([
-                    "codeplanner--initial_credentials.md",
-                    "codeplanner--common.md",
-                    "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--credentials_architecture.md"
-                ], replacements=[
-                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                    ("<business_tag>", config.business.service_token),
-                    ("<env_vars>", get_env_var_names(config)),
-                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    get_readonly_files_replacement(config)
-                ]),
-            ),
-            *get_architecture_docs(config),
-            *get_existing_required_credentials(config),
-            "Please identify the credentials required"
-        ],
-        config.model_code_planning,
-        reasoning_effort=LlmReasoningEffort.HIGH,
-        output_schema="codeplanner.schema.json"
-    ).json()
-    
-    current_credentials = config.business.required_credentials or {}
-    Business.objects.filter(id=config.business.id).update(
-        required_credentials={
-            **current_credentials,
-            **(planning_data["required_credentials"] or {})
-        }
-    )
-    config.business.refresh_from_db(fields=["required_credentials"])
-
-
-def write_business_architecture(config: SelfDriverConfig):
-    config.iterate_if_necessary()
-    business_architecture = llm_chat(
-        "Write initial design doc",
-        config,
-        [
-            get_sys_prompt(
-                [
-                    "system_architect.md",
-                    "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--infrastructure_rules.md",
-                    "common--credentials_architecture.md"
-                ],
-                replacements=[
-                    ("<env_vars>", get_env_var_names(config)),
-                    get_readonly_files_replacement(config)
-                ]
-            ),
-            *LlmMessage.user_from_data("Business Description", {
-                "business_description": config.business.llm_data()
-            }),
-            *LlmMessage.user_from_data(
-                "Business Initiatives", [i.llm_data() for i in config.business.initiative_set.all()], "planned_initiatives"
-            ),
-            "Please write a markdown-formatted high-level design document for Business's architecture"
-        ],
-        model=LlmModel.OPENAI_GPT_5,
-        reasoning_effort=LlmReasoningEffort.HIGH,
-        verbosity=LlmVerbosity.MEDIUM
-    ).text
-    
-    Business.objects.filter(id=config.business.id).update(
-        architecture=business_architecture
-    )
-    config.business.refresh_from_db(fields=["architecture"])
-
-
-def write_initiative_architecture(config: SelfDriverConfig):
-    config.iterate_if_necessary()
-    architecture = llm_chat(
-        "Write Initiative design doc",
-        config,
-        [
-            get_sys_prompt(
-                [
-                    "system_architect.md",
-                    "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--infrastructure_rules.md",
-                    "common--credentials_architecture.md"
-                ],
-                replacements=[
-                    ("<env_vars>", get_env_var_names(config)),
-                    get_readonly_files_replacement(config)
-                ]
-            ),
-            *LlmMessage.user_from_data("Full Business Architecture", {
-                "architecture_docs": config.business.architecture
-            }),
-            *LlmMessage.user_from_data(
-                "Current Initiative", config.initiative.llm_data()
-            ),
-            "Please write a markdown-formatted high-level design document for this **Initiatives's** architecture. It should **never conflict** with the supplied business's architecture - it should only clarify details needed to implement the Current Initiative."
-        ],
-        model=LlmModel.OPENAI_GPT_5,
-        reasoning_effort=LlmReasoningEffort.HIGH,
-        verbosity=LlmVerbosity.MEDIUM
-    ).text
-    
-    Initiative.objects.filter(id=config.initiative.id).update(
-        architecture=architecture
-    )
-    config.initiative.refresh_from_db(fields=["architecture"])
 
 
 def update_file_contents(
@@ -2288,7 +2355,6 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
         error_summary, error_logs = iteration_to_modify.get_error()
         routing_data = llm_chat(
             "Identify Development Route",
-            config,
             [
                 *common.ensure_list(
                     get_sys_prompt(
@@ -2333,6 +2399,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                 "Please perform the routing analysis"
             ],
             LlmModel.OPENAI_GPT_5,
+            tag_entity=config.current_iteration,
             output_schema="failure_router.md.schema.json"
         ).json()
         
@@ -2357,12 +2424,12 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     
     planning_data = llm_chat(
         "Plan aws provisioning code changes",
-        config,
         [
             *common.ensure_list(
                 get_sys_prompt(
                     [
                         "codeplanner--aws_provisioning.md",
+                        "common--general_coding_rules.md",
                         "codeplanner--common.md",
                         "common--llm_chat.md",
                         "common--iam_role.md",
@@ -2382,7 +2449,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 ),
             ),
             *get_architecture_docs(config),
-            *get_existing_required_credentials(config),
+            *config.business.get_existing_required_credentials_llmm(),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
             ),
@@ -2408,6 +2475,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
         
         ],
         config.model_code_planning,
+        tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -2426,35 +2494,24 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
 
 
 def get_readonly_files_paths(config: SelfDriverConfig) -> list[str]:
-    readonly_file_paths = READONLY_FILES
+    alternative_path = None
     
-    already_there = []
+    if config.task_type == TaskType.INITIATIVE_VERIFICATION:
+        alternative_path = config.initiative.test_file_path
+    elif config.task_type == TaskType.CODING_APPLICATION:
+        alternative_path = config.self_driving_task.test_file_path
     
-    for test_file in config.business.codefile_set.filter(
-            Q(file_path__contains="test/") | Q(file_path__contains="/test")
-    ).exclude(
-        file_path=config.self_driving_task.test_file_path
-    ):
-        if test_file.file_path in already_there:
-            continue
-        
-        already_there.append(test_file.file_path)
-        readonly_file_paths.append(
-            {
-                "path": test_file.file_path,
-                "alternatives": config.self_driving_task.test_file_path,
-                "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression"
-            }
-        )
-    
-    return readonly_file_paths
+    return config.business.get_readonly_files(alternative_path)
 
 
 def get_readonly_files_replacement(config: SelfDriverConfig) -> tuple[str, str]:
     parts = []
     
     for f in get_readonly_files_paths(config):
-        parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
+        if f['alternatives']:
+            parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
+        else:
+            parts.append(f"- `{f['path']}` — {f['description']}")
     
     return "<read_only_files>", "\n".join(parts)
 
@@ -2467,11 +2524,11 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
     
     planning_data = llm_chat(
         "Plan quick fix code changes",
-        config,
         [
             *common.ensure_list(
                 get_sys_prompt([
                     "codeplanner--quick_fix.md",
+                    "common--general_coding_rules.md",
                     "codeplanner--common.md",
                     "common--llm_chat.md",
                     "common--iam_role.md",
@@ -2488,7 +2545,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 ]),
             ),
             *get_architecture_docs(config),
-            *get_existing_required_credentials(config),
+            *config.business.get_existing_required_credentials_llmm(),
             *common.ensure_list(
                 get_prev_attemp_summaries(config)
             ),
@@ -2512,6 +2569,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             "Please produce a development plan that addresses this issue"
         ],
         config.model_code_planning,
+        tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -2544,6 +2602,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
     system_prompt_files = [
         MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
         "codeplanner--full_plan_base.md",
+        "common--general_coding_rules.md",
         "codeplanner--common.md",
         "common--llm_chat.md",
         "common--iam_role.md",
@@ -2576,7 +2635,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
             ]
         ),
         *get_architecture_docs(config),
-        *get_existing_required_credentials(config),
+        *config.business.get_existing_required_credentials_llmm(),
         *common.ensure_list(
             get_budget_message(config)
         ),
@@ -2629,9 +2688,9 @@ The previous iteration failed at the deployment stage.
     
     planning_data = llm_chat(
         "Plan code changes",
-        config,
         messages,
         config.model_code_planning,
+        tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -2683,6 +2742,7 @@ def write_code_file(
             ],
             replacements=[
                 ("<business_tag>", config.business.service_token),
+                ("<included_dependencies>", "\n\t\t".join(code_file_data.get("dependencies", []))),
                 ("<sandbox_dir>", str(config.sandbox_root_dir)),
                 ("<env_vars>", get_env_var_names(config))
             ]
@@ -2730,7 +2790,7 @@ def write_code_file(
             item_name="related_code_files"
         )
     
-    if code_file_name.endswith(".py"):
+    if 'lambda' not in str(code_file_path) and code_file_name.endswith(".py"):
         messages += get_requirementstxt_msg(requirements_txt)
     
     code_versions = {}
@@ -2807,9 +2867,9 @@ def write_code_file(
     
     code = llm_chat(
         f"Write code for {code_file_name}",
-        config,
         messages,
         code_writing_model,
+        tag_entity=config.current_iteration,
         verbosity=LlmVerbosity.LOW,
         reasoning_effort=LlmReasoningEffort.HIGH
     ).text
@@ -2853,7 +2913,6 @@ def get_requirementstxt_msg(requirements_txt, header="The python environment has
 def fix_code_compilation(config, code_file_path, code, e):
     code = llm_chat(
         "Fix compilation error cheaply",
-        config,
         [
             LlmMessage.sys("You are a code fixer. Your job is to fix syntax or compilation errors in a code file."),
             LlmMessage.user(f"""
@@ -2869,14 +2928,17 @@ Please return only the corrected version of the code. No explanation, no formatt
 """)
         ],
         model=LlmModel.OPENAI_GPT_5_MINI,
+        tag_entity=config.current_iteration,
         code_response=True
     ).text
     return code
 
 
 def get_codewriter_system_prompt(code_file_path) -> list[str]:
+    code_file_path_str = str(code_file_path).lower()
     code_file_name = code_file_path.name
     code_file_name_lower = code_file_name.lower()
+    
     if code_file_name_lower in ["requirements.txt", "constraints.txt"]:
         prompt = "codewriter--requirements.txt.md"
     elif code_file_name_lower.startswith("test") and code_file_name_lower.endswith(".py"):
@@ -2890,10 +2952,17 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
             "codewriter--python_coder.md"
         ]
     elif code_file_name_lower.endswith(".py"):
-        prompt = [
-            "codewriter--python_coder.md",
-            "common--llm_chat.md"
-        ]
+        if 'lambda' in code_file_path_str:
+            prompt = [
+                "codewriter--python_coder.md",
+                "codewriter--lambda_coder.md",
+                "common--llm_chat.md"
+            ]
+        else:
+            prompt = [
+                "codewriter--python_coder.md",
+                "common--llm_chat.md"
+            ]
     elif code_file_name_lower.endswith(".json"):
         prompt = "codewriter--json_coder.md"
     elif code_file_name_lower.endswith(".eml"):
@@ -3079,14 +3148,6 @@ def get_cloudformation_file(config: SelfDriverConfig) -> Path:
     return common.assert_exists(config.sandbox_root_dir / "infrastructure.yaml")
 
 
-def get_existing_required_credentials(
-        config: SelfDriverConfig
-) -> list[LlmMessage]:
-    return LlmMessage.user_from_data("Existing Required Credentials.  Use for reference.  Not need to re-specify.", {
-        "required_credentials": config.business.required_credentials or {}
-    })
-
-
 def get_relevant_code_files(
         config: SelfDriverConfig,
         paths: list = None
@@ -3162,12 +3223,12 @@ def get_relevant_code_files(
         # Step 1: Get the structured retrieval cues from the LLM
         cues = llm_chat(
             "Find relavant code",
-            config,
             [
                 get_sys_prompt("codefinder.md"),
                 LlmMessage.user(config.self_driving_task.task.get_work_desc())
             ],
             LlmModel.OPENAI_GPT_5_MINI,
+            tag_entity=config.current_iteration,
             output_schema="codefinder.md.schema.json",
             code_response=True
         ).json()
@@ -3288,85 +3349,12 @@ def get_relevant_code_files(
     return LlmMessage.user_from_data("Relevant Code Files", files_unique.values())
 
 
-def llm_chat(
-        desc: str,
-        config: SelfDriverConfig,
-        messages: list[LlmMessage],
-        model: LlmModel,
-        output_schema: Path = None,
-        reasoning_effort: LlmReasoningEffort = None,
-        verbosity: LlmVerbosity = None,
-        code_response=False
-) -> LlmResponse:
-    if output_schema:
-        logging.info(f"llm chat: {desc} ({output_schema})")
-    else:
-        logging.info(f"llm chat: {desc}")
-    
-    token_count = LlmMessage.get_total_token_count(model, messages)
-    
-    llm_resp = None
-    for i in range(2):
-        llm_messages = LlmMessage.parse_prompt(model, messages, code_response=code_response)
-        
-        llm_request = LlmRequest.objects.create(
-            title=desc,
-            reasoning_effort=reasoning_effort,
-            verbosity=verbosity,
-            task_iteration=config.current_iteration,
-            llm_model=model.value,
-            token_count=0,
-            price=0,
-            input_messages=[{
-                "role": m.message_type.value,
-                "content": llm_interface.sanitize_prompt(m.text)
-            } for m in llm_messages]
-        )
-        
-        try:
-            max_tokens = MODEL_TO_MAX_TOKENS.get(model)
-            llm_resp = llm_interface.chat(
-                messages=llm_messages,
-                model=model,
-                output_schema=PROMPTS_DIR / output_schema if output_schema else None,
-                code_response=code_response,
-                debug=False
-            )
-            
-            resp_json = llm_resp.__dict__.copy()
-            resp_json.pop("text", None)
-            resp_json.pop("parsed_json", None)
-            
-            LlmRequest.objects.filter(id=llm_request.id).update(
-                response=llm_resp.text,
-                resp_json=resp_json,
-                token_count=llm_resp.token_count,
-                price=llm_resp.price_total
-            )
-            
-            break
-        except Exception as e:
-            config.log(e)
-            
-            LlmRequest.objects.filter(id=llm_request.id).update(
-                response=traceback.format_exc(),
-                token_count=0,
-                price=0
-            )
-            
-            if i == 1:
-                raise e
-            else:
-                model = MODEL_BACKUPS[model]
-    
-    return llm_resp
-
-
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
         aws_env: AwsEnv,
         docker_env: dict,
-        ecr_arn: str
+        ecr_arn: str,
+        lambda_datas: dict
 ):
     cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
     
@@ -3401,7 +3389,8 @@ def deploy_cloudformation_stacks(
             aws_env,
             docker_env,
             cfn_file,
-            ecr_arn
+            ecr_arn,
+            lambda_datas
         )
         
         config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
@@ -3521,7 +3510,8 @@ def get_stack_parameters(
         aws_env: AwsEnv,
         docker_env: dict,
         cfn_file: Path,
-        ecr_arn: str
+        ecr_arn: str,
+        lambda_datas: list
 ):
     """
     Build the CloudFormation Parameters array for this stack.
@@ -3559,6 +3549,9 @@ def get_stack_parameters(
         )
     }
     
+    for lambda_data in lambda_datas:
+        known_params[lambda_data['s3_key_param']] = lambda_data['s3_key_name']
+    
     arn_param_bindings = []  # list of (param_name, envvar_name, arn)
     planning_required_creds = config.business.required_credentials or {}
     for svc_name, svc_spec in planning_required_creds.items():
@@ -3587,9 +3580,9 @@ def get_stack_parameters(
     missing = set()
     for param in required_parameters:
         param_meta = parameters_metadata.get(param, {})
-        desc = str(param_meta.get("Description", "")).lower()
+        description = str(param_meta.get("Description", "")).lower()
         has_default = "Default" in param_meta
-        is_optional = "(optional)" in desc or has_default
+        is_optional = "(optional)" in description or has_default
         if param not in known_params and not is_optional:
             missing.add(param)
     
@@ -3602,7 +3595,7 @@ def get_stack_parameters(
     
     if missing_secret_params:
         raise BadPlan(json.dumps({
-            "desc": "Missing required secret ARN CloudFormation parameter(s).",
+            "description": "Missing required secret ARN CloudFormation parameter(s).",
             "file": cfn_file.name,
             "missing_secret_params": missing_secret_params,
             "available_env_vars": docker_env,
@@ -3611,7 +3604,7 @@ def get_stack_parameters(
     
     if missing:
         raise BadPlan(json.dumps({
-            "desc": "infrastructure.yaml specifies the following parameters, but agent unable to supply them.  Either the parameters are invalid (likely) or the agent needs to be modified (not likely)",
+            "description": "infrastructure.yaml specifies the following parameters, but agent unable to supply them.  Either the parameters are invalid (likely) or need a default (most likely- try this) or the agent needs to be modified (not likely)",
             "missing_parameters": sorted(missing),
             "file": cfn_file.name,
             "secret_hint": f"{secrets_key}/cloudformation"
@@ -3636,7 +3629,7 @@ def get_stack_parameters(
             try:
                 if not re.fullmatch(pattern, val):
                     raise BadPlan(json.dumps({
-                        "desc": f"Parameter '{key}' failed AllowedPattern validation",
+                        "description": f"Parameter '{key}' failed AllowedPattern validation",
                         "parameter": key,
                         "provided_value": val,
                         "allowed_pattern": pattern,
@@ -3644,7 +3637,7 @@ def get_stack_parameters(
                     }, indent=4), config.current_iteration.planning_json)
             except re.error as rex:
                 raise BadPlan(json.dumps({
-                    "desc": f"Invalid AllowedPattern regex for parameter '{key}' in infrastructure.yaml",
+                    "description": f"Invalid AllowedPattern regex for parameter '{key}' in infrastructure.yaml",
                     "allowed_pattern": pattern,
                     "regex_error": str(rex)
                 }, indent=4), config.current_iteration.planning_json)

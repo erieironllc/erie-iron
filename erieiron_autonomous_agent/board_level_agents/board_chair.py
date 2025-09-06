@@ -1,17 +1,17 @@
 from django.db import transaction
 
+from erieiron_autonomous_agent.enums import BusinessGuidanceRating, BusinessStatus, TrafficLight
+from erieiron_autonomous_agent.models import Business
+from erieiron_autonomous_agent.models import BusinessGuidance
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType
-from erieiron_autonomous_agent.enums import BusinessGuidanceRating, BusinessStatus, TrafficLight
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_autonomous_agent.models import Business
-from erieiron_autonomous_agent.models import BusinessGuidance
 
 
 def exec_board_chair_tasks():
     erieiron_business = Business.get_erie_iron_business()
-
+    
     erieiron_capacity = erieiron_business.businesscapacityanalysis_set.order_by("created_timestamp").last()
     if erieiron_capacity:
         if TrafficLight.GREEN.eq(erieiron_capacity.recommendation):
@@ -30,7 +30,7 @@ def exec_business_analysis():
                 PubSubMessageType.RESOURCE_PLANNING_REQUESTED,
                 business.id
             )
-
+        
         if business.needs_analysis():
             PubSubManager.publish_id(
                 PubSubMessageType.ANALYSIS_REQUESTED,
@@ -42,11 +42,12 @@ def on_board_guidance_requested(business_id):
     erieiron_business = Business.get_erie_iron_business()
     if erieiron_business.id == business_id:
         return None
-
+    
     business = Business.objects.get(id=business_id)
     business_analysis, legal_analysis = business.get_latest_analysist()
-
+    
     business_guidance = board_level_chat(
+        "Board Chair Guidance",
         "board_chair.md",
         f"""
             Please review and provide guidance for {business.name}
@@ -61,7 +62,7 @@ def on_board_guidance_requested(business_id):
             {common.model_to_dict_s(legal_analysis)}
         """
     )
-
+    
     process_response(business, business_guidance)
 
 

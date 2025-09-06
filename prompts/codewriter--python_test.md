@@ -19,13 +19,13 @@ You must:
 - Use the acceptance criteria as assertions
 - If the acceptance criteria are vague or missing, fail the test with a helpful message so future iterations will fix it
 
----
 ### Test Style Requirements
 
 - The test file is **required** to contain an acceptance or smoke style full end-to-end test or test suite that validates the acceptance criteria.
-    - These acceptance/smoke tests must **never** use mock entities – they must exercise actual system components and connectivity.
-- The test file may also include unit style tests if you determines that doing so would be valuable for the particular case.  These unit style tests are encouraged but ultimately optional
-    - Unit style tests may use mock entities if that is the best way to validate the behavior in isolation, but they do not replace the required full end-to-end acceptance/smoke test.
+    - Acceptance/smoke tests must not use mocks. They must exercise actual system components end to end.
+- The test file may also include unit style tests if you determines that doing so would be valuable for the particular case.  
+    - Unit tests may use mocks to isolate behavior, but this is optional and does not replace the required acceptance/smoke test.
+    
 ---
 
 ## Assumptions and constraints
@@ -49,7 +49,19 @@ You must:
 - Output **only** valid Python source code. 
 - **Do not** include Markdown formatting, triple backticks, or explanatory comments. 
 
-Example Output (for illustration only – do not output with triple backticks or Markdown formatting):
+### Preflight Checklist Header
+
+Each generated Python test file must begin with a 5‑line comment header that explicitly states:
+- Test type: Acceptance or Unit
+- Any use of unittest.mock: Yes/No
+- Any use of non‑allowlisted stubs: Yes/No
+- Real integrations exercised: (e.g., DB, HTTP client, message bus, email pipeline)
+- Deterministic data used: Yes/No
+
+If any of the checklist items cannot be satisfied, the file must instead output BLOCKED with the reason.
+
+### Example Output 
+for illustration only – do not output with triple backticks or Markdown formatting:
 
 ```python
 from django.test import TestCase
@@ -80,7 +92,8 @@ class TaskBehaviorTests(TestCase):
 ```
 
 ---
-#### Environment, Namespacing, and Isolation
+
+## Environment, Namespacing, and Isolation
 
 All acceptance/smoke tests run against resources that are fully isolated and namespaced to the task under test via cloudformation and namespacing.  Each task uses its own CloudFormation stack. Safety and isolation come from:
 - A unique namespace for the task (e.g., TASK_NAMESPACE)
@@ -110,8 +123,7 @@ The test code must:
 - Prefer configuration discovery via environment variables (e.g., ERIE_STACK_NAME, TASK_NAMESPACE, DATABASE_URL) over hard-coded constants.
 - If live credentials for external providers (e.g., LLMs) are required but not present, fail the test with a clear remediation message rather than stubbing or mocking.
 - Use realistic input examples, not placeholders, when possible.
-- Tests **must** exercise the full system path (e.g., database, message bus, LLM calls) and not stubs or mocks.
-- If the task involves file I/O, database queries, or external APIs, write integration-style tests if context permits.
+- Tests must exercise the full system path (e.g., database, message bus, LLM calls). In acceptance tests, mocks and stubs are not allowed except for narrowly scoped, pre-approved cases (e.g., FakeClock, InMemoryEmailSink).
 - Use deterministic data and outputs.
 - Prefer clarity over cleverness.
 - The tests **MUST** extend "from django.test import TestCase"
@@ -119,6 +131,5 @@ The test code must:
 ---
 
 ## Forbidden Actions
-- **Never** use mocks in acceptance/smoke tests; those must exercise real system components end to end.
-- Unit tests may use mocks when appropriate, but must not replace the required acceptance/smoke test.
-- **Never** append summaries, usage explanations, or extended comments at the end of the file. The output must terminate after the final line of Python code
+- Do not use mocks in acceptance/smoke tests. These must connect to real system components end to end. Only the explicitly pre-approved stubs may be used if necessary.
+- Mocks are permitted in unit tests but cannot substitute for the acceptance/smoke test.

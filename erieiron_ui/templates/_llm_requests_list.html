@@ -1,0 +1,70 @@
+{% load humanize %}
+{% load erieiron_common_tags %}
+
+<label class="mb-3">Total Bill (so far): ${{ llm_requests|llm_cost|floatformat:2 }}</label>
+{% for llm_request in llm_requests %}
+    <div class="card mb-4 iteration_card">
+        <div class="card-header d-flex justify-content-between"
+             role="button"
+             aria-expanded="false"
+             style="cursor: pointer;">
+            <div class="d-flex align-items-center"
+                 data-bs-toggle="collapse"
+                 data-bs-target="#llmrequest-{{ forloop.counter }}"
+            >
+                <i class="fas fa-chevron-right me-2 collapse-icon"></i>
+                <small class="text-muted">
+                    {{ llm_request.title }} ({{ llm_request.timestamp }})
+                </small>
+            </div>
+            <div class="d-flex justify-content-end align-items-center">
+                <small class="text-muted ms-3">
+                    {{ llm_request.llm_model }}
+                </small>
+                {% if llm_request.response %}
+                    <small class="text-muted ms-3">
+                        {{ llm_request.token_count }} tokens
+                    </small>
+                    <small class="text-muted ms-3">
+                        ${{ llm_request.price|floatformat:3 }}
+                    </small>
+                {% else %}
+                    <small class="text-muted ms-3">
+                        In Progress
+                    </small>
+                {% endif %}
+                <button class="btn btn-sm ms-3 copy-btn bi bi-copy"
+                        data-target="#llmrequest-content-{{ forloop.counter }}"
+                        onclick="event.stopPropagation(); return false;"
+                        title="Copy to clipboard">
+                </button>
+                <button class="btn btn-sm ms-3 bi bi-box-arrow-up-right" 
+                        data-target="#llmrequest-content-{{ forloop.counter }}" 
+                        onclick="event.stopPropagation(); return false;" 
+                        title="open">
+                    <i class="fas fa-copy"></i>
+                </button>
+            </div>
+        </div>
+        <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
+            <dl class="row">
+                <pre id="llmrequest-content-{{ forloop.counter }}">
+                    {% for inp_msg in llm_request.input_messages %}
+==== Message Role: {{ inp_msg.role }} =========================================
+
+                        
+{{ inp_msg.content }}
+
+                    {% endfor %}
+==== Response from {{ llm_request.llm_model }} ================================
+                    {% if llm_request.response %}
+{{ llm_request.response }}
+                    {% else %}
+(¯`·._.·  w a i t i n g  ·._.·´¯)
+                    {% endif %}
+
+                </pre>
+            </dl>
+        </div>
+    </div>
+{% endfor %}

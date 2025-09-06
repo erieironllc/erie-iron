@@ -8,6 +8,7 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
@@ -51,6 +52,7 @@ def view_business(request, business_id):
         "business.html", {
             "tasks": tasks,
             "business": business,
+            "llm_requests": business.llmrequest_set.order_by("-timestamp"),
             "business_status_choices": BusinessStatus.choices(),
             "business_source_choices": BusinessIdeaSource.choices(),
             "autonomy_level_choices": Level.choices()
@@ -65,7 +67,7 @@ def view_initiative(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
     business = initiative.business
     
-    tasks = list(initiative.tasks.all())
+    tasks = list(initiative.tasks.order_by("created_timestamp"))
     
     sdt_dict = {
         sdt.id: sdt
@@ -102,10 +104,10 @@ def view_initiative(request, initiative_id):
         
         task_type_tasks[TaskStatus(task.status)].append(task)
     
-    task_datas = []
-    for status in TaskStatus.get_sorted_status():
-        for task in task_type_tasks[status]:
-            task_datas.append(task)
+    task_datas = tasks
+    # for status in TaskStatus.get_sorted_status():
+    #     for task in task_type_tasks[status]:
+    #         task_datas.append(task)
     
     # Get all running processes for tasks in this initiative
     running_processes = list(RunningProcess.objects.filter(
@@ -118,6 +120,7 @@ def view_initiative(request, initiative_id):
         {
             "tasks": task_datas,
             "initiative": initiative,
+            "llm_requests": initiative.llmrequest_set.order_by("-timestamp"),
             "running_processes_count": running_processes_count,
             "running_processes": running_processes
         },
@@ -187,7 +190,9 @@ def view_task(request, task_id):
             "task_executions": task_executions,
             "iterations": iterations,
             "self_driving_task": self_driving_task,
+            "test_code_version": test_code_version,
             "task": task,
+            "llm_requests": LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).order_by("-timestamp"),
             "running_processes": running_processes,
             "running_processes_count": running_processes_count,
             "task_status_choices": TaskStatus.choices(),
@@ -243,8 +248,6 @@ def view_self_driver_iteration(request, iteration_id):
     except:
         last_iteration = None
     
-    llm_requests = list(iteration.llmrequest_set.all().order_by("timestamp"))
-    
     return send_response(
         request,
         "iteration.html",
@@ -260,7 +263,7 @@ def view_self_driver_iteration(request, iteration_id):
             "task": task,
             "initiative": initiative,
             "business": business,
-            "llm_requests": llm_requests,
+            "llm_requests": iteration.llmrequest_set.order_by("-timestamp"),
             
             "total_price": total_price,
             "total_tokens": total_tokens,
@@ -462,6 +465,40 @@ def action_dowork_initiative(request, initiative_id):
     return redirect(f"{reverse('view_businesses')}#initiatives")
 
 
+def action_update_initiative(request, initiative_id):
+    if request.method != 'POST':
+        raise Exception()
+    
+    try:
+        initiative = get_object_or_404(Initiative, pk=initiative_id)
+        
+        # Get form data
+        title = rget(request, 'title', '').strip()
+        description = rget(request, 'description', '').strip()
+        architecture = rget(request, 'architecture', '').strip()
+        requires_unit_tests = request.POST.get('requires_unit_tests') == 'on'
+        
+        # Prepare update data
+        update_data = {
+            'title': title,
+            'description': description,
+            'architecture': architecture or None,
+            'requires_unit_tests': requires_unit_tests
+        }
+        
+        # Update the initiative
+        Initiative.objects.filter(id=initiative_id).update(**update_data)
+        
+        messages.success(request, 'Initiative updated successfully!')
+        return redirect(reverse('view_initiative', args=[initiative_id]) + '#edit')
+    except Initiative.DoesNotExist:
+        messages.error(request, 'Initiative not found.')
+        return redirect(reverse('view_businesses'))
+    except Exception as e:
+        messages.error(request, f'Error updating initiative: {str(e)}')
+        return redirect(reverse('view_initiative', args=[initiative_id]))
+
+
 def action_delete_initiative(request, initiative_id):
     if request.method != 'POST':
         raise Exception()
@@ -618,6 +655,7 @@ def action_update_business(request, business_id):
         bank_account_id = rget(request, 'bank_account_id', '').strip()
         github_repo_url = rget(request, 'github_repo_url', '').strip()
         business_plan = rget(request, 'business_plan', '').strip()
+        architecture = rget(request, 'architecture', '').strip()
         allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
         
         # Prepare update data
@@ -634,6 +672,7 @@ def action_update_business(request, business_id):
             'bank_account_id': bank_account_id or None,
             'github_repo_url': github_repo_url or None,
             'business_plan': business_plan or None,
+            'architecture': architecture or None,
             'allow_autonomous_shutdown': allow_autonomous_shutdown
         }
         

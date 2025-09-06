@@ -2,15 +2,15 @@ import json
 
 from django.db import transaction
 
+from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.models import BusinessBankBalanceSnapshot, BusinessBankBalanceSnapshotAccount, BusinessCapacityAnalysis
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_autonomous_agent.utils import bank_utils
-from erieiron_autonomous_agent.models import Business
 
 
 def on_resource_planning_requested(business_id):
     business = Business.objects.get(id=business_id)
-
+    
     if business.needs_bank_balance_update():
         balance_data = bank_utils.get_account_balance_data()
         with transaction.atomic():
@@ -24,8 +24,9 @@ def on_resource_planning_requested(business_id):
                     current_balance=account_data.get("currentBalance", 0),
                     status=account_data.get("status", "")
                 )
-
+    
     capacity_analysis = board_level_chat(
+        "Portfolio Resource Planner",
         "portfolio_resource_planner.md",
         f"""
             Please analyze these metrics give resource planning guidance
@@ -38,9 +39,8 @@ def on_resource_planning_requested(business_id):
             
             ## Human Capacity
             {json.dumps(business.get_human_capacity(), indent=4)}
-        """
-    )
-
+        """)
+    
     BusinessCapacityAnalysis.objects.create(
         business=business,
         cash_capacity_status=capacity_analysis["cash_capacity_status"],

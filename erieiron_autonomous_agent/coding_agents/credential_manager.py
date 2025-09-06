@@ -2,6 +2,8 @@ import json
 import secrets
 import string
 
+import settings
+
 DISALLOWED_RDS_PASSWORD_CHARS = set('/@" ')
 ALLOWED_RDS_SPECIALS = ''.join(ch for ch in string.punctuation if ch not in DISALLOWED_RDS_PASSWORD_CHARS)
 
@@ -86,6 +88,13 @@ def manage_credentials(
         credential_service_name: str,
         cred_def: dict
 ) -> str:
+    secret_arn_env_var = cred_def.get("secret_arn_env_var")
+    if secret_arn_env_var == "LLM_API_KEYS_SECRET_ARN":
+        return settings.LLM_API_KEYS_SECRET_ARN
+    
+    if secret_arn_env_var == "STRIPE_WEBHOOK_SECRET_ARN":
+        return settings.STRIPE_WEBHOOK_SECRET_ARN
+    
     business = config.business
     task = config.task
     

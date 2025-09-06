@@ -88,6 +88,16 @@
                 </button>
             </li>
         {% endif %}
+     
+        {% if llm_requests %}
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="llmrequests-tab" data-bs-toggle="tab" data-bs-target="#llmrequests"
+                        type="button" role="tab">
+                    LLM Requests
+                </button>
+            </li>
+        {% endif %}
+    
 {#        <li class="nav-item" role="presentation">#}
 {#            <button class="nav-link" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button"#}
 {#                    role="tab">#}
@@ -188,6 +198,11 @@
                 </tr>
             </table>
         </div>
+     
+        <div class="tab-pane " id="llmrequests" role="tabpanel" aria-labelledby="llmrequests-tab">
+            {% include '_llm_requests_list.html' %}
+        </div>
+
         <div class="tab-pane " id="business-analysis" role="tabpanel" aria-labelledby="business-analysis-tab">
             {% for business_analysis in business.businessanalysis_set.all|dictsortreversed:"created_timestamp" %}
                 <div class="card my-4">
@@ -622,6 +637,11 @@
                 <div class="mb-3">
                     <label for="business_plan" class="form-label">Business Plan</label>
                     <textarea name="business_plan" id="business_plan" class="form-control" rows="5">{{ business.business_plan|default:"" }}</textarea>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="architecture" class="form-label">Architecture</label>
+                    <textarea name="architecture" id="architecture" class="form-control" rows="10" placeholder="Describe the system architecture, components, and technology stack...">{{ business.architecture|default:"" }}</textarea>
                 </div>
                 
                 <button type="submit" class="btn btn-primary">Save Changes</button>

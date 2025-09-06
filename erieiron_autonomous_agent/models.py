@@ -9,12 +9,13 @@ from pathlib import Path
 from typing import Tuple, Optional
 
 from django.db import models, transaction
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
 
+import settings
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
@@ -22,6 +23,7 @@ from erieiron_common import common
 from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType, AwsEnv
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.models import BaseErieIronModel
 
 mini_lm_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -51,6 +53,29 @@ class Business(BaseErieIronModel):
     github_repo_url = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    def get_readonly_files(self, path_force_writable=None):
+        q = self.codefile_set.filter(
+            Q(file_path__contains="test/") | Q(file_path__contains="/test")
+        )
+        if path_force_writable:
+            q = q.exclude(file_path=path_force_writable)
+        
+        readonly_file_paths = [f for f in settings.READONLY_FILES]
+        for test_file in q.order_by("file_path").distinct("file_path"):
+            readonly_file_paths.append(
+                {
+                    "path": test_file.file_path,
+                    "alternatives": path_force_writable,
+                    "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression"
+                }
+            )
+        return readonly_file_paths
+    
+    def get_existing_required_credentials_llmm(self) -> list[LlmMessage]:
+        return LlmMessage.user_from_data("Existing Required Credentials.  Use for reference.  Not need to re-specify.", {
+            "required_credentials": self.required_credentials or {}
+        })
     
     def llm_data(self):
         business_analysis, legal_analysis = self.get_latest_analysist()
@@ -652,6 +677,7 @@ class SelfDrivingTask(BaseErieIronModel):
     test_file_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
     cloudformation_stack_name = models.TextField(null=True)
+    cloudformation_stack_id = models.TextField(null=True)
     goal = models.TextField(null=False)
     task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     config_path = models.TextField(null=True, db_index=True)
@@ -961,7 +987,9 @@ class RunningProcess(BaseErieIronModel):
 
 
 class LlmRequest(BaseErieIronModel):
-    task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
+    business = models.ForeignKey(Business, on_delete=models.SET_NULL, null=True)
+    initiative = models.ForeignKey(Initiative, on_delete=models.SET_NULL, null=True)
+    task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True)
     token_count = models.IntegerField()
     title = models.TextField(null=True, default="Unknown")
     price = models.FloatField()
@@ -999,8 +1027,15 @@ class CodeFile(BaseErieIronModel):
     def get_dir(self) -> Path:
         return self.get_path().parent
     
-    def get_latest_version(self) -> 'CodeVersion':
-        return self.codeversion_set.order_by("created_at").last()
+    def get_latest_version(self, self_driving_task: SelfDrivingTask = None) -> 'CodeVersion':
+        if self_driving_task:
+            code_version = self.codeversion_set.filter(
+                task_iteration__self_driving_task=self_driving_task
+            ).order_by("created_at").last()
+            
+            return code_version if code_version else self.get_latest_version()
+        else:
+            return self.codeversion_set.order_by("created_at").last()
     
     def get_version(
             self,

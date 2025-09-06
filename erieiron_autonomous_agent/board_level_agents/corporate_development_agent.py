@@ -1,17 +1,17 @@
 import json
 from pathlib import Path
 
+from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
 from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType
-from erieiron_autonomous_agent.models import Business
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
 def find_new_business_opportunity(payload):
     placehold_business_id = payload.get("placehold_business_id")
     erieiron_business = Business.get_erie_iron_business()
-
+    
     """
     use this:
     Failed Startup Dataset by Shivam Bansal
@@ -24,16 +24,16 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
 
 
     """
-
+    
     messages = []
-
+    
     for b in Business.objects.exclude(id=erieiron_business.id).exclude(summary__isnull=True):
         messages.append(f"""
             ## Existing Erie Iron Business
             {b.name}
             {b.summary}
         """)
-
+    
     messages.append(
         f"""
             Please find a new business idea that roughly fits this capacity.  
@@ -48,12 +48,13 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
             {common.model_to_dict_s(erieiron_business.get_latest_capacity())}
             """
     )
-
+    
     business_idea = board_level_chat(
+        "Business Finder",
         "corporate_development--business_finder.md",
         messages
     )
-
+    
     return {
         "existing_business_id": placehold_business_id,
         "summary": business_idea.get("summary"),
@@ -67,7 +68,7 @@ def submit_business_opportunity(payload):
     summary = payload.get("summary")
     idea_content = payload.get("idea_content")
     source = payload.get("source")
-
+    
     if existing_business_id:
         name = Business.objects.get(id=existing_business_id).name
     else:
@@ -76,7 +77,7 @@ def submit_business_opportunity(payload):
             idea_content = idea_content.read_text()
         else:
             name = f"{Constants.NEW_BUSINESS_NAME_PREFIX} {common.get_now()}"
-
+    
     token = common.strip_non_alpha(name).lower()
     business, created = Business.objects.update_or_create(
         id=existing_business_id,
@@ -93,8 +94,9 @@ def submit_business_opportunity(payload):
         PubSubMessageType.BUSINESS_BOOTSTRAP_REQUESTED,
         business.id
     )
-
+    
     business_structure = board_level_chat(
+        "Business Structurer",
         "corporate_development--business_structurer.md",
         f"""
             Existing business names: {[b.name for b in Business.objects.all()]}
@@ -106,12 +108,12 @@ def submit_business_opportunity(payload):
             {idea_content}
         """
     )
-
+    
     if business.name.startswith(Constants.NEW_BUSINESS_NAME_PREFIX.value) and business_structure.get("business_name"):
         Business.objects.filter(id=business.id).update(
             name=business_structure.get("business_name")
         )
-
+    
     Business.objects.filter(id=business.id).update(
         summary=business_structure.get("summary"),
         business_plan=business_structure.get("business_plan"),
@@ -123,5 +125,5 @@ def submit_business_opportunity(payload):
         growth_channels=business_structure.get("growth_channels", []),
         personalization_options=business_structure.get("personalization_options", [])
     )
-
+    
     return business.id

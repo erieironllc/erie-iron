@@ -15,6 +15,8 @@ def on_business_guidance_updated(business_id):
     chat_data = build_chat_data(business)
 
     ceo_analysis = business_level_chat(
+        business,
+        "CEO Guidance",
         "ceo.md",
         chat_data
     )

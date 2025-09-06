@@ -35,10 +35,13 @@ class GitWrapper:
             env = os.environ.copy()
             env["GITHUB_TOKEN"] = github_token
             
+            cmd = common.strings(cmd)
+            
+            print(" ".join(cmd))
             result = subprocess.run(
                 cmd,
                 env=env,
-                cwd=self.source_root,
+                cwd=str(self.source_root.absolute()) if self.source_root.exists() else None,
                 check=True,
                 capture_output=True,
                 text=True
@@ -65,7 +68,7 @@ class GitWrapper:
     
     def clone(self, source_repo) -> 'GitWrapper':
         self.cleanup()
-        self.source_root.mkdir(parents=True)
+        # self.source_root.mkdir(parents=True)
         return self.exec("clone", self.wrap_url_with_token(source_repo), self.source_root)
     
     def pull(self) -> 'GitWrapper':
@@ -144,8 +147,35 @@ class GitWrapper:
         if not pip_executable.exists():
             run_cmd(
                 self.source_root,
-                ["python3.11", "-m", "venv", str(venv_path)]
+                ["python3.11", "-m", "venv", "--without-pip", str(venv_path)]
             )
+            
+            # Bootstrap pip into the venv without triggering ensurepip --upgrade
+            venv_python = venv_path / ("Scripts" / Path("python.exe") if os.name == "nt" else "bin/python")
+            if os.name != "nt":
+                # POSIX: use curl pipeline as requested
+                run_cmd(
+                    self.source_root,
+                    [
+                        "bash",
+                        "-lc",
+                        f"curl -sS https://bootstrap.pypa.io/get-pip.py | {venv_python}"
+                    ]
+                )
+            else:
+                # Windows: use PowerShell to download then execute with the venv's python
+                run_cmd(
+                    self.source_root,
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        (
+                            "iwr -UseBasicParsing https://bootstrap.pypa.io/get-pip.py -OutFile get-pip.py; "
+                            f"& '{venv_python}' get-pip.py"
+                        ),
+                    ],
+                )
         
         run_cmd(
             self.source_root,

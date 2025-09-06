@@ -101,9 +101,9 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     
     eval_data = llm_chat(
         "Package Artifacts",
-        config,
         messages,
         config.model_code_planning,
+        tag_entity=config.current_iteration,
         code_response=True
     ).json()
     
@@ -140,9 +140,9 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     
     arch_llm_response = llm_chat(
         "Writeup Summary",
-        config,
         messages,
-        config.model_code_planning
+        config.model_code_planning,
+        tag_entity=config.current_iteration,
     )
     
     planning_model = best_iteration.planning_model

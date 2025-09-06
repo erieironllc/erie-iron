@@ -14,6 +14,7 @@ urlpatterns = [
 
     path("initiative/<str:initiative_id>", views.view_initiative, name="view_initiative"),
     path("_initiative/add", views.action_add_initiative, name="action_add_initiative"),
+    path("_initiative/update/<str:initiative_id>", views.action_update_initiative, name="action_update_initiative"),
     path("_initiative/delete/<str:initiative_id>", views.action_delete_initiative, name="action_delete_initiative"),
     path("_initiative/dowork/<str:initiative_id>", views.action_dowork_initiative, name="action_dowork_initiative"),
 

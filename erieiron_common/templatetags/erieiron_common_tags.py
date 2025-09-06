@@ -14,6 +14,7 @@ from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 
+from erieiron_autonomous_agent.models import LlmRequest
 from erieiron_common import common, date_utils, settings_common
 from erieiron_common.aws_utils import get_cloudwatch_url
 
@@ -33,6 +34,14 @@ def highlight_code(code, lang='python'):
 @register.filter(name='markdown')
 def markdown_format(text):
     return mark_safe(markdown.markdown(text))
+
+
+@register.filter(name='llm_cost')
+def llm_cost(llm_requests:list[LlmRequest]):
+    if not len(llm_requests):
+        return 0
+    
+    return sum([l.price for l in llm_requests])
 
 
 @register.filter

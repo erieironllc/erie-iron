@@ -80,6 +80,9 @@ def business_workflow(pubsub_manager: PubSubManager):
         eng_lead.define_tasks_for_initiative,
         T.TASK_UPDATED
     ).on(
+        T.PRODUCT_INITIATIVES_DEFINED,
+        eng_lead.on_product_initiatives_defined
+    ).on(
         T.BUSINESS_BOOTSTRAP_REQUESTED,
         eng_lead.bootstrap_buiness
     ).on(

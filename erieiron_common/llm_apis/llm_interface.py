@@ -2,17 +2,16 @@ import json
 import logging
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import List
 
-import tiktoken
 from jsonschema import validate as jsonschema_validate
 
 from erieiron_common import common
-from erieiron_common.enums import LlmModel, LlmMessageType
+from erieiron_common.enums import LlmModel, LlmMessageType, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.json_encoder import ErieIronJSONEncoder
-from erieiron_common.llm_apis.llm_constants import CODE_PLANNING_MODELS_IN_ORDER, CHAT_MODELS_IN_ORDER, MODEL_TO_IMPL, MODEL_PRICE_USD_PER_MILLION_TOKENS, MODEL_TO_MAX_TOKENS
+from erieiron_common.llm_apis.llm_constants import CODE_PLANNING_MODELS_IN_ORDER, CHAT_MODELS_IN_ORDER, MODEL_TO_IMPL, MODEL_TO_MAX_TOKENS, get_token_count
+from erieiron_common.llm_apis.llm_response import LlmResponse
 
 
 def chat(
@@ -40,10 +39,11 @@ def chat(
         models = common.ensure_list(model)
     
     for idx, model in enumerate(models):
-        model = LlmModel(model)
+        if not isinstance(model, LlmModel):
+            model = LlmModel(model)
         
         try:
-            impl = MODEL_TO_IMPL[LlmModel(model)]
+            impl = MODEL_TO_IMPL[model]
             
             messages = LlmMessage.parse_prompt(model, messages, code_response)
             json_messages = [m.get_message_json(model) for m in messages]

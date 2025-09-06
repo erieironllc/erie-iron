@@ -12,6 +12,8 @@ def do_work(task_id):
     chat_data = build_chat_data(task)
 
     designer = business_level_chat(
+        task.initiative,
+        "Do Designer Work",
         "worker_design.md",
         chat_data,
         debug=True
