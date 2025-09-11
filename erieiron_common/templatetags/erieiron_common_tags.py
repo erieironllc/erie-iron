@@ -17,6 +17,7 @@ from pygments.lexers import get_lexer_by_name
 from erieiron_autonomous_agent.models import LlmRequest
 from erieiron_common import common, date_utils, settings_common
 from erieiron_common.aws_utils import get_cloudwatch_url
+from erieiron_common.enums import LlmModel
 
 register = template.Library()
 
@@ -33,7 +34,18 @@ def highlight_code(code, lang='python'):
 
 @register.filter(name='markdown')
 def markdown_format(text):
+    if not text:
+        return text
+    
     return mark_safe(markdown.markdown(text))
+
+
+@register.filter(name='llm_msg_cost')
+def llm_msg_cost(content: str, llm_model:str):
+    llm_model = LlmModel(llm_model)
+    
+    return llm_model.get_input_price(content)
+
 
 
 @register.filter(name='llm_cost')

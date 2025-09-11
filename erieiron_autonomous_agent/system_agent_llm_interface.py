@@ -1,3 +1,4 @@
+import itertools
 import logging
 import os
 import traceback
@@ -143,6 +144,8 @@ def llm_chat(
         verbosity: LlmVerbosity = None,
         code_response=False
 ) -> LlmResponse:
+    messages = common.flatten(messages)
+    
     if isinstance(tag_entity, SelfDrivingTaskIteration):
         business = tag_entity.self_driving_task.business
         initiative = tag_entity.self_driving_task.task.initiative

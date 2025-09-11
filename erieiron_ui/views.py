@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -8,12 +9,15 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
+from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
-from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson
+from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
+from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget
 
@@ -242,7 +246,7 @@ def view_self_driver_iteration(request, iteration_id):
     _, iteration_to_modify = iteration.get_relevant_iterations()
     previous_iteration: SelfDrivingTaskIteration = iteration.get_previous_iteration()
     next_iteration: SelfDrivingTaskIteration = iteration.get_next_iteration()
-
+    
     try:
         last_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
     except:
@@ -788,3 +792,84 @@ def action_toggle_lesson_validity(request, lesson_id):
     except Exception as e:
         messages.error(request, f'Error updating lesson: {str(e)}')
         return redirect(reverse('view_businesses'))
+
+
+def action_llm_debug_ask(request, llm_request_id):
+    prompt = rget(request, "prompt")
+    llm_model, verbosity, reasoning_effort = rget(request, "llm_model").split(";")
+    
+    orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
+    
+    resp = system_agent_llm_interface.llm_chat(
+        description=f"Debug {orig_llm_request.title}",
+        messages=[
+            get_sys_prompt("chat_response_interpreter.md"),
+            LlmMessage.user_from_data(
+                "Chat Interatction",
+                orig_llm_request.get_llm_data()
+            ),
+            prompt
+        ],
+        model=LlmModel(llm_model),
+        tag_entity=(
+                orig_llm_request.task_iteration
+                or orig_llm_request.initiative
+                or orig_llm_request.business
+                or Business.get_erie_iron_business()
+        ),
+        reasoning_effort=LlmReasoningEffort(reasoning_effort),
+        verbosity=LlmVerbosity(verbosity)
+    )
+    
+    return send_response(
+        request,
+        "_llm_request_response.html",
+        {
+            "llm_response_text": resp.text
+        }
+    )
+
+
+def view_llm_request(request, llm_request_id):
+    llm_request = LlmRequest.objects.get(id=llm_request_id)
+    
+    breadcrumbs = []
+    if llm_request.business_id:
+        breadcrumbs.append(
+            (f"{reverse(view_business, args=[llm_request.business_id])}#product-initiatives", llm_request.business.name),
+        )
+        if llm_request.initiative:
+            breadcrumbs.append(
+                (f"{reverse(view_initiative, args=[llm_request.initiative_id])}#tasks", llm_request.initiative.title),
+            )
+            if llm_request.task_iteration:
+                task = llm_request.task_iteration.self_driving_task.task
+                breadcrumbs.append(
+                    (f"{reverse(view_task, args=[task.id])}#iterations", task.id)
+                )
+    
+    model_choices = []
+    for m in LlmModel:
+        if m == LlmModel.OPENAI_GPT_5:
+            for verbosity in LlmVerbosity:
+                for reasoning_effort in LlmReasoningEffort:
+                    model_choices.append({
+                        "label": f"{m.label()} - {verbosity.label()} Verbosity, {reasoning_effort.label()} Reasoning",
+                        "value": f"{m.value};{verbosity.value};{reasoning_effort.value}"
+                    })
+        else:
+            model_choices.append({
+                "label": m.label(),
+                "value": f"{m.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
+            })
+    
+    return send_response(
+        request,
+        "llm_request.html",
+        {
+            "llm_request": llm_request,
+            "model_choices": model_choices,
+            "model_choice_value": f"{LlmModel.OPENAI_GPT_5.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
+        },
+        breadcrumbs=breadcrumbs
+    )

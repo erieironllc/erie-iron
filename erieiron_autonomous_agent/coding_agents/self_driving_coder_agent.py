@@ -613,16 +613,21 @@ def get_stack_lambdas(config) -> list[dict]:
         if resource_config.get("Type") != "AWS::Lambda::Function":
             continue
         
-        props = resource_config.get("Properties", {})
-        code_block = props.get("Code", {})
-        s3_key_ref = code_block.get("S3Key")
-        
         metadata = resource_config.get("Metadata", {})
         source_file = metadata.get("SourceFile")
+        if not source_file:
+            continue
+            
         if not isinstance(source_file, str):
             raise Exception(f"Bad Lambda {resource_name}: SourceFile is not a string — got {source_file}")
         candidate_path = Path(source_file)
         
+        props = resource_config.get("Properties", {})
+        code_block = props.get("Code", {})
+        s3_key_ref = code_block.get("S3Key")
+        if not s3_key_ref:
+            continue
+            
         if not isinstance(s3_key_ref, dict) or "Ref" not in s3_key_ref:
             raise Exception(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
         
@@ -991,6 +996,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
             try:
                 lambda_datas = deploy_lambda_packages(config)
             except Exception as e:
+                logging.exception(e)
                 raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
             
             try:

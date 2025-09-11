@@ -1,0 +1,150 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load humanize %}
+{% load erieiron_common_tags %}
+{% block content %}
+    <h2 class="">
+        {{ llm_request.title }}
+    </h2>
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <small>
+                {{ llm_request.timestamp }}
+            </small>
+            <small class="ms-3">
+                {{ llm_request.llm_model }}
+            </small>
+            {% if llm_request.response %}
+                <small class="ms-3">
+                    {{ llm_request.token_count }} tokens
+                </small>
+                <small class="ms-3">
+                    ${{ llm_request.price|floatformat:3 }}
+                </small>
+            {% else %}
+                <small class="ms-3">
+                    In Progress
+                </small>
+            {% endif %}
+        </div>
+        <div>
+            <button class="btn btn-sm ms-3 copy-btn bi bi-copy "
+                    style="color: #2a2a1e;"
+                    data-target="#div_full_prompt"
+                    onclick="event.stopPropagation(); return false;"
+                    title="Copy to clipboard">
+            </button>
+            <button id="btn_debug" class="btn btn-sm ms-3 bi bi-chat-left-text"
+                    style="color: #2a2a1e;"
+                    title="Debug">
+            </button>
+        </div>
+    </div>
+<hr>
+    <div class="d-flex justify-content-between align-items-start">
+        <div class="w-50 me-3">
+            <h5>Context Messages</h5>
+            {% for inp_msg in llm_request.input_messages %}
+                <div class="card mb-4 iteration_card">
+                    <div class="card-header d-flex justify-content-between"
+                         role="button"
+                         aria-expanded="false"
+                         style="cursor: pointer;">
+                        <div class="d-flex align-items-center nowrap overflow-x-hidden"
+                             data-bs-toggle="collapse"
+                             data-bs-target="#llmrequest-{{ forloop.counter }}"
+                        >
+                            <i class="bi bi-chevron-right me-2 collapse-icon"></i>
+                            <small class="text-muted nowrap " style="white-space: nowrap;">
+                                {{ inp_msg.role }}
+                                (${{ inp_msg.content|llm_msg_cost:llm_request.llm_model|floatformat:3 }})
+                                - {{ inp_msg.content|truncatechars:250 }}
+                            </small>
+                        </div>
+                    </div>
+                    <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
+                        <dl class="row">
+                            <pre id="llmrequest-content-{{ forloop.counter }}">{{ inp_msg.content }}</pre>
+                        </dl>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+
+        <div class="w-50">
+            <h5>{{ llm_request.llm_model }} Response</h5>
+            {% if llm_request.response %}
+                <pre>{{ llm_request.response }}</pre>
+            {% else %}
+                No response
+            {% endif %}
+        </div>
+    </div>
+
+
+    <pre class="d-none" id="div_full_prompt">
+        {% for inp_msg in llm_request.input_messages %}
+            ==== Message Role: {{ inp_msg.role }} =========================================
+
+            {{ inp_msg.content }}
+        {% endfor %}
+
+        ==== Response from {{ llm_request.llm_model }} ================================
+        {% if llm_request.response %}
+            {{ llm_request.response }}
+        {% else %}
+            (¯`·._.·  w a i t i n g  ·._.·´¯)
+        {% endif %}
+    </pre>
+
+
+    <div class="modal fade modal-lg"
+         id="modal_llmrequest_debug"
+         tabindex="-1"
+         aria-hidden="true"
+    >
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-body">
+                    <form id="frm_llm_question" action="{% url 'action_llm_debug_ask' llm_request.id %}">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <textarea class="form-control"
+                                      id="initiativeDescription"
+                                      name="prompt"
+                                      rows="3"
+                                      placeholder="Ask a question about this interation">Can this be optimized?</textarea>
+                            <div class="mt-1 d-flex justify-content-end">
+                                <select name="llm_model" class="form-select">
+                                    {% for model_choice in model_choices %}
+                                        <option value="{{ model_choice.value }}"
+                                                {% if model_choice.value == model_choice_value %}selected{% endif %}>
+                                            {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <a id="btn_ask" class="ms-3 btn btn-secondary pull-right" href="#">Ask</a>
+                            </div>
+                        </div>
+                        <div id="txt_question_response" style="height: 55vh; overflow-y: scroll">
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+
+
+
+
+    <script>
+        $(document).ready(function () {
+            if (!window.llmrequestview) {
+                window.llmrequestview = new LlmRequestView();
+            } else {
+                window.llmrequestview.initialize();
+            }
+        });
+    </script>
+{% endblock %}

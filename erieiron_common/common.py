@@ -1826,3 +1826,4 @@ def assert_not_empty(s):
 def get_ip_address():
     ip_txt = urllib.request.urlopen("https://checkip.amazonaws.com", timeout=5).read().decode().strip()
     return f"{ipaddress.ip_address(ip_txt)}/32"
+

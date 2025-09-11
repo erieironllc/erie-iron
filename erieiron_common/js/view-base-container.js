@@ -5,6 +5,7 @@ BaseContainerView = ErieView.extend({
         'mousedown .resizer_bar-horiz': 'horiz_resizer_mousedown',
         'mousedown .resizer_bar-vert': 'vert_resizer_mousedown',
 
+        'change #txt_llm_search': 'txt_llm_search_change',
         'click .modal .btn-cancel': 'modal_cancel_click',
         'click #modal_cookie_consent .btn-primary': 'btn_accept_cookie_consent_click',
 
@@ -30,6 +31,10 @@ BaseContainerView = ErieView.extend({
 
     init_view: function (options) {
         this.tooltip_instances = [];
+
+        setTimeout(() => {
+            $("input[type=text]").first().focus();
+        }, 100);
 
         this.init_page();
 
@@ -451,6 +456,24 @@ BaseContainerView = ErieView.extend({
                 set_cookie(btn.attr("id"), is_on ? 1 : 0)
             }
 
+        }
+    },
+
+    txt_llm_search_change: function (ev) {
+        const search_val = $("#txt_llm_search").val().toLowerCase();
+        if (!search_val) {
+            $(".llm_request_card").show();
+        } else {
+            $(".llm_request_card").each((idx, el) => {
+                const card_text = $("pre", el)[0].innerText.toLowerCase();
+                if (card_text.indexOf(search_val) >= 0) {
+                    $(el).show();
+                    $(".card-body", el).removeClass("collapse");
+                } else {
+                    $(el).hide();
+                    $(".card-body", el).addClass("collapse");
+                }
+            })
         }
     },
 

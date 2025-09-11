@@ -476,7 +476,7 @@
             {% endfor %}
         </div>
         <div class="tab-pane " id="business-plan" role="tabpanel" aria-labelledby="business-plan-tab">
-            {{ business.business_plan|linebreaksbr }}
+            {{ business.business_plan|markdown }}
 
             {% if business.businesskpi_set.exists %}
                 <hr>

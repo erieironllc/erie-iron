@@ -364,6 +364,16 @@ class LlmModel(ErieEnum):
     
     DEEPSEEK_CODER = "deepseek-coder"
     DEEPSEEK_CHAT = "deepseek-chat"
+    
+    def get_input_price(self, content):
+        from erieiron_common.llm_apis.llm_constants import get_token_count, MODEL_PRICE_USD_PER_MILLION_TOKENS
+        price_per_million_tokens = MODEL_PRICE_USD_PER_MILLION_TOKENS[self]["input"]
+        token_count = get_token_count(self, content)
+        
+        token_count = token_count or 0
+        msg_cost = (token_count / 1_000_000.0) * float(price_per_million_tokens)
+        
+        return round(msg_cost, 6)
 
 
 class S3Bucket(ErieEnum):
