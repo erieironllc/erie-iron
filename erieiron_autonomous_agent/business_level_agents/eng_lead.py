@@ -15,7 +15,7 @@ from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
-INITIATIVE_TITLE_BOOTSTRAP_ENVS = "BOOTSTRAP_ENVS"
+INITIATIVE_TITLE_BOOTSTRAP_ENVS = "Bootstrap Business"
 DEFAULT_ENV_VARS = [
     "AWS_DEFAULT_REGION",
     "AWS_ACCOUNT_ID",
@@ -79,7 +79,7 @@ def on_task_blocked(payload, msg):
         ]
     )
     
-    new_task_ids = process_response(msg, initiative, eng_lead_response)
+    new_task_ids = process_response(initiative, eng_lead_response)
     with transaction.atomic():
         Task.objects.filter(id=task.id).update(
             status=TaskStatus.BLOCKED
@@ -100,11 +100,12 @@ def on_product_initiatives_defined(business_id):
     identify_required_credentials(business)
 
 
-def define_tasks_for_initiative(initiative_id, msg):
+def define_tasks_for_initiative(initiative_id):
     initiative = Initiative.objects.get(id=initiative_id)
     business = initiative.business
     
-    write_initiative_architecture(initiative)
+    if not initiative.architecture:
+        write_initiative_architecture(initiative)
     
     chat_data = build_chat_data(business, initiative)
     
@@ -128,7 +129,7 @@ def define_tasks_for_initiative(initiative_id, msg):
         ]
     )
     
-    new_task_ids = process_response(msg, initiative, eng_lead_response)
+    new_task_ids = process_response(initiative, eng_lead_response)
     
     verification_task, created = Task.objects.update_or_create(
         id=f"{initiative_id}--end_to_end_verification_tester",
@@ -205,7 +206,7 @@ def build_chat_data(business, initiative):
 
 
 @transaction.atomic
-def process_response(msg, initiative, eng_lead_response):
+def process_response(initiative, eng_lead_response):
     updated_or_created_task_ids = []
     
     for task_data in eng_lead_response.get("tasks", []):

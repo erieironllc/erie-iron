@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
 from erieiron_autonomous_agent import system_agent_llm_interface
+from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile
@@ -397,6 +398,39 @@ def action_add_business(request):
     
     messages.success(request, 'Business idea submitted successfully! It will be reviewed and processed.')
     return redirect(reverse('view_business', args=[business.id]))
+
+
+def action_business_regenerate_architecture(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
+    
+    # PubSubManager.publish_id(
+    #     PubSubMessageType.RESET_TASK_TEST,
+    #     business_id
+    # )
+    eng_lead.write_business_architecture(business)
+    
+    return redirect(reverse('view_business', args=[business_id]) + "#testcode")
+
+
+def action_initiative_regenerate_architecture(request, initiative_id):
+    initiative = get_object_or_404(Initiative, pk=initiative_id)
+    
+    # PubSubManager.publish_id(
+    #     PubSubMessageType.RESET_TASK_TEST,
+    #     initiative_id
+    # )
+    eng_lead.write_initiative_architecture(initiative)
+    
+    return redirect(reverse('view_initiative', args=[initiative_id]) + "#testcode")
+
+
+def action_initiative_regenerate_tasks(request, initiative_id):
+    initiative = get_object_or_404(Initiative, pk=initiative_id)
+    
+    initiative.tasks.all().delete()
+    eng_lead.define_tasks_for_initiative(initiative_id)
+    
+    return redirect(reverse('view_initiative', args=[initiative_id]) + "#testcode")
 
 
 def action_delete_business(request, business_id):

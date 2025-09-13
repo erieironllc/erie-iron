@@ -1,13 +1,13 @@
 $cast-iron: #2a2a1e;
 
-$primary: $cast-iron;
+$primary: #3B82F6;
 $secondary: #6c757d; // Bootstrap default secondary
 $success: #2a9d4a; // green green
-$info: #56cfe1; // sky blue
+$info: #06B6D4; // modern teal
 $warning: #f26b00; // tangerine
 $danger: #e63946; // ripe grapefruit red
-$light: #fdfdfd; // off-white
-$dark: #212529; // dark charcoal
+$light: #EAEAEA; // off-white
+$dark: #1E1E2E; // near-black slate
 
 $white: #fdfaf6;
 $black: $cast-iron;
@@ -22,10 +22,10 @@ $gray-700: #374151;
 $gray-800: #1F2937;
 $gray-900: #111827;
 
-$body-bg: #F9FAFB;
-$body-color: #111827;
+$body-bg: #2A2A38;
+$body-color: #EAEAEA;
 $link-color: $primary;
-$link-hover-color: #c1440e;
+$link-hover-color: #60A5FA;
 
 $theme-colors: (
   "primary": $primary,
@@ -50,19 +50,19 @@ $table-hover-color: $body-color;
 
 
 // Navigation colors
-$nav-bg: #111827;
-$sidebar-bg: #1F2937;
-$sidebar-text: #D1D5DB;
-$sidebar-hover-bg: #374151;
-$sidebar-hover-text: #FFFFFF;
-$sidebar-active-bg: #2563EB;
-$sidebar-active-text: #FFFFFF;
+$nav-bg: #121212;
+$sidebar-bg: #1E1E2E;
+$sidebar-text: #9CA3AF;
+$sidebar-hover-bg: #2A2A38;
+$sidebar-hover-text: #EAEAEA;
+$sidebar-active-bg: #3B82F6;
+$sidebar-active-text: #EAEAEA;
 
 // Main content colors
-$main-content-bg: #F9FAFB;
-$main-content-text: #111827;
-$text-muted-color: #6B7280;
-$divider-color: #E5E7EB;
+$main-content-bg: #2A2A38;
+$main-content-text: #EAEAEA;
+$text-muted-color: #9CA3AF;
+$divider-color: #374151;
 
 
 // Syntax highlighting colors

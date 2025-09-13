@@ -3,14 +3,25 @@ body {
   color: $body-color;
   overflow: hidden;
 
+  font-family: 'Inter', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+
   a:hover {
     color: $link-hover-color !important;
   }
-  
-  .code-container{
+
+  .code-container {
     background-color: $gray-100 !important;
-    *{
+
+    * {
       background-color: $gray-100 !important;
+    }
+  }
+  
+  table{
+    thead{
+      th{
+        white-space: nowrap;
+      }
     }
   }
 
@@ -56,10 +67,18 @@ body {
       height: 2rem;
       width: 2rem;
     }
-    
-    .breadcrumb-item{
-      *{
+
+    .breadcrumb {
+      --bs-breadcrumb-divider: "|";
+    }
+
+    .breadcrumb-item {
+      * {
         color: $sidebar-text;
+      }
+
+      a {
+        text-decoration: none;
       }
     }
   }
@@ -71,7 +90,7 @@ body {
     min-height: 0; // allows shrinking so scrolling works
     overflow-y: auto; // internal scroll
     border-radius: 0;
-    
+
     h1, h2, h3, h4, h5 {
       color: $sidebar-text !important;
       margin-left: 1rem;
@@ -122,12 +141,12 @@ body {
     .divider {
       border-color: $divider-color;
     }
-    
-    .tab-pane{
+
+    .tab-pane {
       padding-top: 1rem;
     }
-    
-    .tab-content{
+
+    .tab-content {
       height: calc(100vh - 5.5rem);
       overflow-y: scroll;
     }

@@ -6,6 +6,7 @@ BaseContainerView = ErieView.extend({
         'mousedown .resizer_bar-vert': 'vert_resizer_mousedown',
 
         'change #txt_llm_search': 'txt_llm_search_change',
+        'change #statusFilter': 'statusFilter_change',
         'click .modal .btn-cancel': 'modal_cancel_click',
         'click #modal_cookie_consent .btn-primary': 'btn_accept_cookie_consent_click',
 
@@ -474,6 +475,18 @@ BaseContainerView = ErieView.extend({
                     $(".card-body", el).addClass("collapse");
                 }
             })
+        }
+    },
+
+    statusFilter_change: function (ev) {
+        const selected_status = $(ev.target).val();
+        if (!selected_status) {
+            $(".task_card").show();
+        } else {
+            $(".task_card").each((idx, el) => {
+                el = $(el);
+                el.show(el.data("status") === selected_status);
+            });
         }
     },
 

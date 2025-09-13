@@ -1,32 +1,37 @@
 {% load erieiron_common_tags %}
-<tr>
-    <td>
-        <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
-    </td>
-    <td>
-        {% if task.first_iteration_time %}
-            {{ task.first_iteration_time|date:"m/d/Y h:i:s a" }}
-        {% else %}
-            -
-        {% endif %}
-    </td>
-    <td>
-        {% if task.last_execution_time %}
-            {{ task.last_execution_time|date:"m/d/Y h:i:s a" }}
-        {% else %}
-            -
-        {% endif %}
-    </td>
-    <td>{{ task.role_assignee|label }}</td>
-    <td><a href="{% url "view_task" task.id %}">{{ task.id }}</a></td>
-    <td>{{ task.description|linebreaksbr }}</td>
-    <td>
-        <form method="post" action="{% url 'action_delete_task' task.id %}" class="d-inline">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-danger btn-sm" 
-                    onclick="return confirm('Are you sure you want to delete this task? This action cannot be undone.')">
-                Delete
-            </button>
-        </form>
-    </td>
-</tr>
+<div class="card mb-4 iteration_card task_card" data-status="{{task.status}}">
+    <div class="card-header d-flex justify-content-between"
+         role="button"
+         aria-expanded="false"
+         style="cursor: pointer;">
+
+        <div class="d-flex align-items-center justify-content-between task_card_toggle">
+            <i class="bi bi-chevron-right me-2 collapse-icon"
+               data-bs-toggle="collapse"
+               data-bs-target="#task-{{ forloop.counter }}"
+            ></i>
+
+            <small class="text-muted d-flex justify-content-start">
+                <div class="me-2">
+                    <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
+                </div>
+                <div class="me-2">
+                    <a href="{% url "view_task" task.id %}">{{ task.id }}</a>
+                </div>
+                <div class="me-2">
+                    {% if task.first_iteration_time %}
+                        {{ task.first_iteration_time|date:"m/d/Y h:i:s a" }}
+                    {% endif %}
+                </div>
+            </small>
+        </div>
+        <div class="d-flex justify-content-end align-items-center">
+            <div>{{ task.role_assignee|label }}</div>
+        </div>
+    </div>
+    <div class="card-body collapse" id="task-{{ forloop.counter }}">
+        <dl class="row">
+            <div id="task-content-{{ forloop.counter }}" class="markdown-container">{{ task.description|markdown }}</div>
+        </dl>
+    </div>
+</div>

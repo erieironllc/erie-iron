@@ -2,7 +2,7 @@
 {% load erieiron_common_tags %}
 
 <div class="d-flex justify-content-between align-items-end mb-3">
-    <label class="mb-3">Total Bill (so far): ${{ llm_requests|llm_cost|floatformat:2 }}</label>
+    <label >Total Bill (so far): ${{ llm_requests|llm_cost|floatformat:2 }}</label>
     <input id="txt_llm_search" type="text" placeholder="search llm requests" class="form-control w-25" /> 
 </div>
 {% for llm_request in llm_requests %}
