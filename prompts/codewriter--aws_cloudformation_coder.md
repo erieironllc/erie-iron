@@ -42,95 +42,12 @@ All Lambda function configuration in `infrastructure.yaml` must follow these rul
 - Each Lambda resource must include a `Metadata` block with a `SourceFile` field set to the full relative path of the Lambda `.py` source file (e.g., `lambda/my_handler.py`). This is required for deployment mapping.
   - Exception: the `RdsSecretUpdaterLambda` must embed its code inline via `Code.ZipFile` as specified in the "Required Lambda for RDS Secret Population" section. Do not reference S3 for this Lambda.
 
-### Required Lambda for RDS Secret Population
-- You must always include a Lambda function named `RdsSecretUpdaterLambda` that merges RDS connection metadata into the provided secret.
-- For this Lambda only, embed the source code inline using `Code: ZipFile:`. Do not reference an S3 artifact and do not add a parameter for its code key.
-- Configuration:
-  - `Role: !Ref TaskRoleArn`
-  - `Runtime: python3.12`
-  - `Handler: index.handler`
-  - `Architectures: [arm64]`
-  - Include a `Metadata.SourceFile: lambda/rds_secret_updater.py` entry to document the canonical source path, even though the code is inline.
-- Use the following Python implementation verbatim as the `ZipFile` content. It must send success/failure to the CloudFormation response URL and update the existing secret JSON with `host`, `port`, `engine`, `dbname`, and `sslmode` without altering `username` or `password`:
-```yaml
-Code:
-  ZipFile: |
-    import boto3, json, urllib.request, traceback
-
-    def send_response(event, context, status, data, reason=None, physical_resource_id=None):
-        response_url = event['ResponseURL']
-        response_body = {
-            'Status': status,
-            'Reason': reason or f"See CloudWatch Logs for details: {context.log_stream_name}",
-            'PhysicalResourceId': physical_resource_id or context.log_stream_name,
-            'StackId': event['StackId'],
-            'RequestId': event['RequestId'],
-            'LogicalResourceId': event['LogicalResourceId'],
-            'NoEcho': False,
-            'Data': data or {}
-        }
-        body = json.dumps(response_body).encode('utf-8')
-        req = urllib.request.Request(
-            response_url,
-            data=body,
-            headers={'content-type': '', 'content-length': str(len(body))},
-            method='PUT'
-        )
-        with urllib.request.urlopen(req) as resp:
-            resp.read()
-
-    def handler(event, context):
-        try:
-            request_type = event.get('RequestType', 'Create')
-            props = event['ResourceProperties']
-            secret_arn = props['SecretArn']
-            db_id = props['DbInstanceIdentifier']
-            db_name = props['DbName']
-
-            if request_type not in ('Create', 'Update'):
-                send_response(event, context, 'SUCCESS', {'Message': 'No-op on Delete'})
-                return
-
-            rds = boto3.client('rds')
-            sm = boto3.client('secretsmanager')
-
-            resp = rds.describe_db_instances(DBInstanceIdentifier=db_id)
-            db = resp['DBInstances'][0]
-            endpoint = db.get('Endpoint')
-            if not endpoint:
-                raise RuntimeError('DB endpoint not available yet')
-
-            host = endpoint['Address']
-            port = endpoint['Port']
-
-            sec = sm.get_secret_value(SecretId=secret_arn)
-            if 'SecretString' in sec:
-                current = json.loads(sec['SecretString'] or '{}')
-            else:
-                raise RuntimeError('Secret value is binary; expected SecretString JSON')
-
-            current.update({
-                'host': host,
-                'port': port,
-                'engine': 'postgres',
-                'dbname': db_name,
-                'sslmode': 'require'
-            })
-
-            sm.update_secret(SecretId=secret_arn, SecretString=json.dumps(current))
-            send_response(event, context, 'SUCCESS', {'host': host, 'port': port, 'dbname': db_name})
-        except Exception as e:
-            traceback.print_exc()
-            send_response(event, context, 'FAILED', {}, reason=str(e))
-
-```
 ---
 
 ## RDS Configuration
 
 When provisioning RDS the following rules **must** be followed
-- if the planner specifies an `RdsSecretArn` parameter, do not create the secret in the template. 
-    - Use the ARN parameter with dynamic references for master username and password, and attach the secret to the DB instance with `AWS::SecretsManager::SecretTargetAttachment`. Avoid `ManageMasterUserPassword: true` in this pattern.
+- if the planner specifies an `RdsSecretArn` parameter, do not create the secret in the template. infrastructure.yaml should never specify RdsSecretArn as a parameter
 - Add the ip-address from the `ClientIpForRemoteAccess` parameter to the RDSSecurityGroup.  Use this markeup
 ```
       SecurityGroupIngress:
@@ -146,17 +63,14 @@ When provisioning RDS the following rules **must** be followed
           Description: Allow RDS access from client IP
 ```
 
-### Mandatory Custom Resource to Populate RDS Secret
-- Always include a `Custom::RdsSecretUpdater` resource that invokes `RdsSecretUpdaterLambda` to update the secret with `host`, `port`, `engine`, `dbname`, and `sslmode`.
-- Wiring requirements:
-  - Logical ID: `RdsSecretUpdater`
-  - `DependsOn`: must include both `RDSInstance` and `RdsDbSecretAttachment`
-  - Properties:
-    - `ServiceToken: !GetAtt RdsSecretUpdaterLambda.Arn`
-    - `SecretArn: !Ref RdsSecretArn`
-    - `DbInstanceIdentifier: !Ref RDSInstance`
-    - `DbName: !Sub "${StackIdentifier}MailDigestorDb"` unless a task-specific dbname is provided, in which case use that value.
-- The template must remain idempotent: repeated updates should overwrite only these connection fields and must not alter username or password values in the secret.
+### RDS Secret Management
+- RDS secrets must be managed using `ManageMasterUserPassword: true` on the `AWS::RDS::DBInstance` resource.
+- The resulting secret is automatically created and managed by RDS in AWS Secrets Manager.
+- The `DBInstanceIdentifier` must be parameterized using `!Sub "${StackIdentifier}-db"` to namespace the secret name.
+- Templates must output both:
+  - `!GetAtt RDSInstance.MasterUserSecret.SecretArn`
+  - `!GetAtt RDSInstance.MasterUserSecret.SecretName`
+- No Lambda functions or custom resources are needed for secret updates.
 
 ---
 
@@ -252,7 +166,6 @@ The name of all of the AWS service instances will be unique based on environment
 - The unique name prefix is defined at deploy time and passed to cloudformation as a parameter named 'StackIdentifier'.  as such:
 - The full name of a service **must never** be hardcoded in the infrastructure.yaml file.  
 - The service name **must** always be prefixed using the StackIdentifier in infrastructure.yaml
-- `RdsSecretArn` is an externally supplied Secrets Manager ARN and must not be modified or prefixed with `StackIdentifier`.
 
 ---
 
@@ -286,9 +199,6 @@ Any output that is not valid YAML is a hard failure and will be rejected.
 - Follow best practices from AWS Well-Architected Framework.
 - Use `DependsOn`, `Condition`, and `Fn::Sub` wisely to control execution flow and simplify customization.
 - Use logical and predictable naming for each resource.
-- When using `RdsSecretArn`, source `MasterUsername` and `MasterUserPassword` in the DB instance with:
-   - `MasterUsername: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::username}}"`
-   - `MasterUserPassword: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::password}}"`
 
 ---
 

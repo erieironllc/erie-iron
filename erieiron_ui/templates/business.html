@@ -2,100 +2,69 @@
 {% load humanize %}
 {% load erieiron_common_tags %}
 {% block content %}
-    <h3>Business: {{ business.name }}</h3>
-    <!-- Nav tabs -->
-    <ul class="nav nav-tabs" id="businessTab" role="tablist">
-        <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview"
-                    type="button" role="tab">
-                Overview
-            </button>
-        </li>
+    <!-- Sidebar navigation -->
+    <div class="row">
+        <div class="col-md-3">
+            <div class="list-group" id="businessSidebar" role="tablist">
+                <h3>Business</h3>
+                <a class="list-group-item list-group-item-action active" id="overview-tab" data-bs-toggle="list" href="#overview"
+                   role="tab" aria-controls="overview">
+                    {{ business.name }}
+                </a>
         {%  if business.business_plan %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="business-plan-tab" data-bs-toggle="tab" data-bs-target="#business-plan"
-                        type="button"
-                        role="tab">
-                    Business Plan
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="business-plan-tab" data-bs-toggle="list" href="#business-plan"
+                       role="tab" aria-controls="business-plan">
+                        Business Plan
+                    </a>
         {% endif %}
         {% if business.businessanalysis_set.exists %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="business-analysis-tab" data-bs-toggle="tab"
-                        data-bs-target="#business-analysis"
-                        type="button"
-                        role="tab">
-                    Business Analysis
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="business-analysis-tab" data-bs-toggle="list" href="#business-analysis"
+                       role="tab" aria-controls="business-analysis">
+                        Business Analysis
+                    </a>
         {% endif %}
         {% if business.businesslegalanalysis_set.exists %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="legal-analysis-tab" data-bs-toggle="tab" data-bs-target="#legal-analysis"
-                        type="button"
-                        role="tab">
-                    Legal Analysis
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="legal-analysis-tab" data-bs-toggle="list" href="#legal-analysis"
+                       role="tab" aria-controls="legal-analysis">
+                        Legal Analysis
+                    </a>
         {% endif %}
         {% if business.businesscapacityanalysis_set.exists %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="capacity-analysis-tab" data-bs-toggle="tab"
-                        data-bs-target="#capacity-analysis"
-                        type="button"
-                        role="tab">
-                    Capacity Analysis
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="capacity-analysis-tab" data-bs-toggle="list" href="#capacity-analysis"
+                       role="tab" aria-controls="capacity-analysis">
+                        Capacity Analysis
+                    </a>
         {% endif %}
         {% if business.businessguidance_set.exists %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="board-guidance-tab" data-bs-toggle="tab"
-                        data-bs-target="#board-guidance"
-                        type="button"
-                        role="tab">
-                    Board Guidance
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="board-guidance-tab" data-bs-toggle="list" href="#board-guidance"
+                       role="tab" aria-controls="board-guidance">
+                        Board Guidance
+                    </a>
         {% endif %}
         {% if business.businessceodirective_set.exists %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="ceo-guidance-tab" data-bs-toggle="tab"
-                        data-bs-target="#ceo-guidance"
-                        type="button"
-                        role="tab">
-                    CEO Guidance
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="ceo-guidance-tab" data-bs-toggle="list" href="#ceo-guidance"
+                       role="tab" aria-controls="ceo-guidance">
+                        CEO Guidance
+                    </a>
         {% endif %}
         {%  if business.architecture %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="architecture-tab" data-bs-toggle="tab" data-bs-target="#architecture"
-                        type="button"
-                        role="tab">
-                    Architecture
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="architecture-tab" data-bs-toggle="list" href="#architecture"
+                       role="tab" aria-controls="architecture">
+                        Architecture
+                    </a>
         {% endif %}
         {% if business.initiative_set.exists %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="product-initiatives-tab" data-bs-toggle="tab"
-                        data-bs-target="#product-initiatives"
-                        type="button"
-                        role="tab">
-                    Product Initiatives
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="product-initiatives-tab" data-bs-toggle="list" href="#product-initiatives"
+                       role="tab" aria-controls="product-initiatives">
+                        Product Initiatives
+                    </a>
         {% endif %}
      
         {% if llm_requests %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="llmrequests-tab" data-bs-toggle="tab" data-bs-target="#llmrequests"
-                        type="button" role="tab">
-                    LLM Requests
-                </button>
-            </li>
+                    <a class="list-group-item list-group-item-action" id="llmrequests-tab" data-bs-toggle="list" href="#llmrequests"
+                       role="tab" aria-controls="llmrequests">
+                        LLM Requests
+                    </a>
         {% endif %}
     
 {#        <li class="nav-item" role="presentation">#}
@@ -104,16 +73,14 @@
 {#                Details#}
 {#            </button>#}
 {#        </li>#}
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="edit-tab" data-bs-toggle="tab" data-bs-target="#edit" type="button"
-                    role="tab">
-                Edit
-            </button>
-        </li>
-    </ul>
-
-    <!-- Tab panes -->
-    <div class="tab-content pt-3" id="businessTabContent">
+                <a class="list-group-item list-group-item-action" id="edit-tab" data-bs-toggle="list" href="#edit"
+                   role="tab" aria-controls="edit">
+                    Edit
+                </a>
+            </div>
+        </div>
+        <div class="col-md-9">
+            <div class="tab-content" id="businessTabContent">
         <div class="tab-pane  " id="overview" role="tabpanel" aria-labelledby="overview-tab">
             <div>{{ business.summary|default_if_none:"" }}</div>
             <hr>
@@ -656,7 +623,8 @@
                         Bootstrap
                     </button>
                 </form>
-            </div>
+                </div>
         </div>
+    </div>
     </div>
 {% endblock %}

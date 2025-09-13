@@ -1,42 +1,23 @@
 {% load erieiron_common_tags %}
 {% load static %}
 
-<nav id="top_nav" class="navbar navbar-expand-sm d-flex justify-content-between" {% if breadcrumbs %}style="margin-top: -0.70rem"{% endif %}>
+<nav id="top_nav" class="navbar navbar-expand-sm d-flex justify-content-between"
+     {% if breadcrumbs %}style="margin-top: -0.70rem"{% endif %}>
     <div id="top_nav_leftpart" class="d-flex justify-content-start align-items-center">
         <div class="logo top_nav--item pe-0">
             <a class="navbar-brand" href="{% url "view_home" %}">
-                <img src="{% static "img/logo_no_text.png" %}" alt="Home" class="erieiron-logo">
+                <img src="{% static "img/logo_no_text_reversed.png" %}" alt="Home" class="erieiron-logo">
             </a>
         </div>
 
-        {% if breadcrumbs %}
-            <nav aria-label="breadcrumb" class="">
-                <ol class="breadcrumb pt-3">
-                    {% for bc in breadcrumbs %}
-                        <li class="breadcrumb-item">
-                            <a href="{{ bc.url }}">{{ bc.label }}</a>
-                        </li>
-                    {% endfor %}
-                </ol>
-            </nav>
-        {% else %}
-            Erie Iron, LLC
-        {% endif %}
-    </div>
-
-
-    <div id="erie_context_menu" class="d-none">
-        <ul>
-            <li>Action 1</li>
-            <li>Action 2</li>
-            <li class="has_submenu">
-                Action with Submenu
-                <ul class="submenu d-none">
-                    <li>Sub Action 1</li>
-                    <li>Sub Action 2</li>
-                </ul>
-            </li>
-            <li>Action 3</li>
-        </ul>
+        <nav aria-label="breadcrumb" class="">
+            <ol class="breadcrumb pt-3">
+                {% for bc in breadcrumbs %}
+                    <li class="breadcrumb-item">
+                        <a href="{{ bc.url }}">{{ bc.label }}</a>
+                    </li>
+                {% endfor %}
+            </ol>
+        </nav>
     </div>
 </nav>

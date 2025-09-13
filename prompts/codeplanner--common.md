@@ -287,18 +287,18 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
         "tombstones": [
             {
                 "name": "DBName",
-                "replace_with": "value inferred from the RdsSecretArn secret",
+                "replace_with": "get from env",
                 "migration_steps": [
                     "remove:DBName",
-                    "Migrate code to use the value from RdsSecretArn"
+                    "Migrate code to use the value from rds secret"
                 ]
             },
             {
                 "name": "DBPassword",
-                "replace_with": "value inferred from the RdsSecretArn secret",
+                "replace_with": "value inferred from the rds secret",
                 "migration_steps": [
                     "remove:DBPassword",
-                    "Migrate code to use the value from RdsSecretArn"
+                    "Migrate code to use the value from rds secret"
                 ]
             }
         ]
@@ -524,3 +524,8 @@ Failing to heed prior lessons is treated as a regression and must be avoided.
 - Focus on errors and regressions, not warnings.
 - All integration and smoke tests run against real AWS in an isolated CloudFormation stack. Do not plan for emulators, endpoint overrides, or local AWS surrogates.
 - Infrastructure changes go in `infrastructure.yaml` only.
+
+---
+
+## Additional Forbidden Actions
+- **Never** create new files when an existing file already covers the same functional scope, as determined by the project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.

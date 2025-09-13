@@ -19,7 +19,7 @@ from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.view_utils import send_response, redirect, rget
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool
 
 
 def hello(request):
@@ -62,7 +62,8 @@ def view_business(request, business_id):
             "autonomy_level_choices": Level.choices()
         },
         breadcrumbs=[
-            (reverse(view_businesses), Business.get_erie_iron_business().name)
+            (reverse(view_businesses), Business.get_erie_iron_business().name),
+            (reverse(view_business, args=[business.id]), business.name)
         ]
     )
 
@@ -129,7 +130,9 @@ def view_initiative(request, initiative_id):
             "running_processes": running_processes
         },
         breadcrumbs=[
-            (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name)
+            (reverse(view_businesses), Business.get_erie_iron_business().name),
+            (reverse(view_business, args=[business.id]), business.name),
+            (reverse(view_initiative, args=[initiative.id]), initiative.title)
         ]
     )
 
@@ -191,6 +194,7 @@ def view_task(request, task_id):
     return send_response(
         request, "task.html",
         {
+            "task_name": task.get_name(),
             "task_executions": task_executions,
             "iterations": iterations,
             "self_driving_task": self_driving_task,
@@ -204,8 +208,10 @@ def view_task(request, task_id):
             "task_type_choices": TaskType.choices()
         },
         breadcrumbs=[
-            (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
-            (f"{reverse(view_initiative, args=[initiative.id])}#tasks", initiative.title)
+            (reverse(view_businesses), Business.get_erie_iron_business().name),
+            (reverse(view_business, args=[business.id]), business.name),
+            (reverse(view_initiative, args=[initiative.id]), initiative.title),
+            (reverse(view_task, args=[task.id]), task.get_name())
         ]
     )
 
@@ -274,9 +280,11 @@ def view_self_driver_iteration(request, iteration_id):
             "running_processes": running_processes
         },
         breadcrumbs=[
-            (f"{reverse(view_business, args=[business.id])}#product-initiatives", business.name),
-            (f"{reverse(view_initiative, args=[initiative.id])}#tasks", initiative.title),
-            (f"{reverse(view_task, args=[task.id])}#iterations", task.id)
+            (reverse(view_businesses), Business.get_erie_iron_business().name),
+            (reverse(view_business, args=[business.id]), business.name),
+            (reverse(view_initiative, args=[initiative.id]), initiative.title),
+            (reverse(view_task, args=[task.id]), task.get_name()),
+            (reverse(view_self_driver_iteration, args=[iteration.id]), f"Iteration {iteration.version_number}")
         ]
     )
 
@@ -795,30 +803,31 @@ def action_toggle_lesson_validity(request, lesson_id):
 
 
 def action_llm_debug_ask(request, llm_request_id):
+    optimize = rget_bool(request, "optimize")
     prompt = rget(request, "prompt")
     llm_model, verbosity, reasoning_effort = rget(request, "llm_model").split(";")
     
     orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
     
     resp = system_agent_llm_interface.llm_chat(
-        description=f"Debug {orig_llm_request.title}",
+        description=f"{'Optimize' if optimize else 'Debug'} {orig_llm_request.title}",
         messages=[
-            get_sys_prompt("chat_response_interpreter.md"),
+            get_sys_prompt("chat_evaluator.md" if optimize else "chat_response_interpreter.md"),
             LlmMessage.user_from_data(
                 "Chat Interatction",
                 orig_llm_request.get_llm_data()
             ),
             prompt
         ],
-        model=LlmModel(llm_model),
+        model=LlmModel.OPENAI_GPT_5_NANO if optimize else LlmModel(llm_model),
         tag_entity=(
                 orig_llm_request.task_iteration
                 or orig_llm_request.initiative
                 or orig_llm_request.business
                 or Business.get_erie_iron_business()
         ),
-        reasoning_effort=LlmReasoningEffort(reasoning_effort),
-        verbosity=LlmVerbosity(verbosity)
+        reasoning_effort=LlmReasoningEffort.LOW if optimize else LlmReasoningEffort(reasoning_effort),
+        verbosity=LlmVerbosity.MEDIUM if optimize else LlmVerbosity(verbosity)
     )
     
     return send_response(
@@ -833,7 +842,9 @@ def action_llm_debug_ask(request, llm_request_id):
 def view_llm_request(request, llm_request_id):
     llm_request = LlmRequest.objects.get(id=llm_request_id)
     
-    breadcrumbs = []
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name)
+    ]
     if llm_request.business_id:
         breadcrumbs.append(
             (f"{reverse(view_business, args=[llm_request.business_id])}#product-initiatives", llm_request.business.name),
@@ -845,9 +856,12 @@ def view_llm_request(request, llm_request_id):
             if llm_request.task_iteration:
                 task = llm_request.task_iteration.self_driving_task.task
                 breadcrumbs.append(
-                    (f"{reverse(view_task, args=[task.id])}#iterations", task.id)
+                    (f"{reverse(view_task, args=[task.id])}#iterations", task.get_name())
                 )
-    
+                breadcrumbs.append(
+                    (f"{reverse(view_self_driver_iteration, args=[llm_request.task_iteration_id])}#", f"Iteration {llm_request.task_iteration.version_number}")
+                )
+
     model_choices = []
     for m in LlmModel:
         if m == LlmModel.OPENAI_GPT_5:

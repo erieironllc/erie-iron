@@ -15,7 +15,6 @@
 - Never add CloudFormation parameters named `DBName` or `DBPassword`.
   - If either exists, delete it.
   - Define the database name using `StackIdentifier` plus a sensible suffix.
-  - Fetch the DB password only via the secret referenced by `RdsSecretArn`.
 - Never fall back to sqlite or any non-RDS database when RDS credentials are missing.
 - Never construct secret names or paths in code, never include real or placeholder secret values in plans, and never log secret contents. Secrets must be fetched only via the ARN provided in the designated environment variable.
 

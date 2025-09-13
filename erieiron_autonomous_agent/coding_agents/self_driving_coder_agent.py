@@ -24,7 +24,7 @@ from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
@@ -32,7 +32,7 @@ from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, LlmVerbosity, CredentialService
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
 
@@ -278,6 +278,7 @@ def on_reset_task_test(task_id):
     self_driving_task = task.selfdrivingtask
     config = SelfDriverConfig(self_driving_task)
     write_task_tdd_test(config)
+    return config
 
 
 def plan_code_changes(config):
@@ -406,11 +407,10 @@ def build_docker_image(
     config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
     sandbox_path = self_driving_task.sandbox_path
     
-    requirements_txt = Path(sandbox_path) / "requirements.txt"
-    
     docker_build_cmd = common.strings([
         "docker",
         "build",
+        "--build-arg", f"ERIEIRON_PUBLIC_COMMON_SHA={ERIEIRON_PUBLIC_COMMON_VERSION}",
         "-t", docker_image_tag,
         "-f", docker_file,
         docker_file.parent
@@ -502,6 +502,58 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
     return role_arn
 
 
+def update_rds_secret_from_cloudformation_stack(
+        config: SelfDriverConfig,
+        aws_env: AwsEnv,
+        docker_env: dict
+):
+    stack_name = config.self_driving_task.get_cloudformation_stack_name(aws_env)
+    if not stack_name:
+        raise AgentBlocked("unable to determine stack name")
+    
+    region = get_aws_region()
+    if not region:
+        raise AgentBlocked("unable to determine regions")
+    
+    cf_client = boto3.client("cloudformation", region_name=region)
+    try:
+        stack_descriptions = cf_client.describe_stacks(StackName=stack_name).get("Stacks")
+    except Exception as e:
+        raise AgentBlocked(f"unable to describe stack {stack_name}: {e}")
+    
+    if not stack_descriptions:
+        raise AgentBlocked(f"no stack descriptions found for {stack_name}")
+    
+    cloudformation_output_vars = {
+        o.get("OutputKey"): o.get("OutputValue")
+        for o in common.ensure_list(common.first(stack_descriptions).get("Outputs"))
+    }
+    
+    rds_secret_arn = cloudformation_output_vars.get("RdsMasterSecretArn")
+    if not rds_secret_arn:
+        raise BadPlan(f"Cloudformation stack lacks an output variable named RdsMasterSecretArn")
+    
+    rds_credential_def = config.business.required_credentials.get(CredentialService.RDS.value)
+    secret_arn_env_var = rds_credential_def.get("secret_arn_env_var")
+    docker_env[secret_arn_env_var] = rds_secret_arn
+    
+    secrets = boto3.client("secretsmanager", region_name=get_aws_region())
+    resp = secrets.get_secret_value(SecretId=rds_secret_arn)
+    secret_dict = json.loads(resp["SecretString"])
+    
+    output_varname_to_envname = {
+        "RdsInstanceDBName": "ERIEIRON_DB_NAME", 
+        "RdsInstancePort": "ERIEIRON_DB_PORT", 
+        "RdsInstanceEndpoint": "ERIEIRON_DB_HOST"
+    }
+    
+    for output_var_name, env_name in output_varname_to_envname.items():
+        output_var_value = cloudformation_output_vars.get(output_var_name)
+        if not output_var_value:
+            raise BadPlan(f"Cloudformation stack lacks an output variable value for the required output variable named '{output_var_name}'")
+        docker_env[env_name] = output_var_value
+
+
 def get_aws_region():
     return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or settings.AWS_DEFAULT_REGION_NAME
 
@@ -517,6 +569,10 @@ def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
     required_credentials = config.business.required_credentials
     
     for credential_service_name, cred_def in required_credentials.items():
+        if credential_service_name == CredentialService.RDS.value:
+            # cloudformation and rds handle the rds secret - we update this as a special case later
+            continue
+        
         secret_arn_env_var = cred_def.get("secret_arn_env_var")
         secrent_arn = credential_manager.manage_credentials(
             config,
@@ -617,7 +673,7 @@ def get_stack_lambdas(config) -> list[dict]:
         source_file = metadata.get("SourceFile")
         if not source_file:
             continue
-            
+        
         if not isinstance(source_file, str):
             raise Exception(f"Bad Lambda {resource_name}: SourceFile is not a string — got {source_file}")
         candidate_path = Path(source_file)
@@ -627,7 +683,7 @@ def get_stack_lambdas(config) -> list[dict]:
         s3_key_ref = code_block.get("S3Key")
         if not s3_key_ref:
             continue
-            
+        
         if not isinstance(s3_key_ref, dict) or "Ref" not in s3_key_ref:
             raise Exception(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
         
@@ -1023,6 +1079,14 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
                 lambda_datas
             )
         
+        if CredentialService.RDS.value in config.business.required_credentials:
+            # special handling for RDS
+            update_rds_secret_from_cloudformation_stack(
+                config,
+                aws_env,
+                docker_env
+            )
+        
         manage_db(
             config,
             aws_env,
@@ -1256,7 +1320,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
-        
+    
     messages = ([
         get_sys_prompt([
             "iteration_summarizer.md",
@@ -1277,7 +1341,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         "stack_status": stack_status,
         "allow_goal_achieved": "True" if stack_status == "DEPLOY_COMPLETE" else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
     })
-
+    
     if isinstance(exception, ExecutionException):
         messages += LlmMessage.user_from_data(
             f"**Exception throw during this iteration's execution**",
@@ -1448,7 +1512,7 @@ def cloudformation_wait(
         
         wait_time = time.time() - start_time
         if wait_time > timeout:
-            raise TimeoutError(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
+            raise CloudFormationException(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
         
         config.log(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
     
@@ -3533,10 +3597,10 @@ def get_stack_parameters(
     )
     
     if "DBName" in required_parameters:
-        raise BadPlan("infrastructure.yaml has a parameter named 'DBName'. **NEVER** add a parameter to infrastructure.yaml named 'DBName'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the RdsSecretArn parameter", config.current_iteration.planning_json)
+        raise BadPlan("infrastructure.yaml has a parameter named 'DBName'. **NEVER** add a parameter to infrastructure.yaml named 'DBName'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the rds secret", config.current_iteration.planning_json)
     
     if "DBPassword" in required_parameters:
-        raise BadPlan("infrastructure.yaml has a parameter named 'DBPassword'. **NEVER** add a parameter to infrastructure.yaml named 'DBPassword'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the RdsSecretArn parameter", config.current_iteration.planning_json)
+        raise BadPlan("infrastructure.yaml has a parameter named 'DBPassword'. **NEVER** add a parameter to infrastructure.yaml named 'DBPassword'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the rds secret", config.current_iteration.planning_json)
     
     role_name = credential_manager.get_aws_role_name(config, aws_env)
     role_arn = aws_utils.ensure_iam_role_exists_and_get_arn(role_name)

@@ -18,12 +18,12 @@ $gray-300: #dee2e6;
 $gray-400: #ced4da;
 $gray-500: #adb5bd;
 $gray-600: #6c757d;
-$gray-700: #495057;
-$gray-800: #343a40;
-$gray-900: #212529;
+$gray-700: #374151;
+$gray-800: #1F2937;
+$gray-900: #111827;
 
-$body-bg: $white;
-$body-color: $primary;
+$body-bg: #F9FAFB;
+$body-color: #111827;
 $link-color: $primary;
 $link-hover-color: #c1440e;
 
@@ -47,3 +47,25 @@ $table-active-bg: rgba($primary, 0.1);
 $table-active-color: $body-color;
 $table-hover-bg: rgba($primary, 0.075);
 $table-hover-color: $body-color;
+
+
+// Navigation colors
+$nav-bg: #111827;
+$sidebar-bg: #1F2937;
+$sidebar-text: #D1D5DB;
+$sidebar-hover-bg: #374151;
+$sidebar-hover-text: #FFFFFF;
+$sidebar-active-bg: #2563EB;
+$sidebar-active-text: #FFFFFF;
+
+// Main content colors
+$main-content-bg: #F9FAFB;
+$main-content-text: #111827;
+$text-muted-color: #6B7280;
+$divider-color: #E5E7EB;
+
+
+// Syntax highlighting colors
+$highlight-string-color: darkcyan;
+$highlight-namespace-color: burlywood;
+$highlight-function-color: cornflowerblue;

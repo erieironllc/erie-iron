@@ -3,32 +3,13 @@ import secrets
 import string
 
 import settings
-
-DISALLOWED_RDS_PASSWORD_CHARS = set('/@" ')
-ALLOWED_RDS_SPECIALS = ''.join(ch for ch in string.punctuation if ch not in DISALLOWED_RDS_PASSWORD_CHARS)
-
-def is_valid_rds_password(pw: str) -> bool:
-    if not isinstance(pw, str):
-        return False
-    # RDS allows 8-128 length
-    if not (8 <= len(pw) <= 128):
-        return False
-    # Only printable ASCII 33..126 and none of the disallowed
-    for ch in pw:
-        o = ord(ch)
-        if o < 33 or o > 126 or ch in DISALLOWED_RDS_PASSWORD_CHARS:
-            return False
-    # Basic complexity
-    has_lower = any(c.islower() for c in pw)
-    has_upper = any(c.isupper() for c in pw)
-    has_digit = any(c.isdigit() for c in pw)
-    has_special = any(c in ALLOWED_RDS_SPECIALS for c in pw)
-    return has_lower and has_upper and has_digit and has_special
-
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import AgentBlocked, SelfDriverConfig
 from erieiron_autonomous_agent.models import Business, Task
 from erieiron_common import aws_utils, common
 from erieiron_common.enums import CredentialService, AwsEnv
+
+DISALLOWED_RDS_PASSWORD_CHARS = set('/@" ')
+ALLOWED_RDS_SPECIALS = ''.join(ch for ch in string.punctuation if ch not in DISALLOWED_RDS_PASSWORD_CHARS)
 
 CREDENTIALSERVICE_TO_CREDENTIALDEF = {
     CredentialService.RDS: {
@@ -46,24 +27,6 @@ CREDENTIALSERVICE_TO_CREDENTIALDEF = {
                 "type": "string",
                 "required": True,
                 "description": "Database password for the application"
-            },
-            {
-                "key": "host",
-                "type": "string",
-                "required": False,
-                "description": "RDS instance endpoint"
-            },
-            {
-                "key": "port",
-                "type": "int",
-                "required": False,
-                "description": "RDS instance port"
-            },
-            {
-                "key": "database",
-                "type": "string",
-                "required": False,
-                "description": "Database name"
             }
         ]
     }
@@ -83,7 +46,7 @@ def get_existing_service_schema_desc() -> str:
 
 
 def manage_credentials(
-        config:SelfDriverConfig,
+        config: SelfDriverConfig,
         aws_env: AwsEnv,
         credential_service_name: str,
         cred_def: dict
@@ -119,7 +82,7 @@ Secret Def:
     )
     
     missing_secret_vals = validate_secret(
-        secret_dict, 
+        secret_dict,
         CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, cred_def)
     )
     
@@ -149,7 +112,7 @@ Secret Def:
             secret_dict[prop_name] = val
     
     secret_arn = aws_utils.put_secret(
-        aws_secret_key, 
+        aws_secret_key,
         secret_dict
     )
     
@@ -157,7 +120,7 @@ Secret Def:
 
 
 def get_aws_role_name(
-        config:SelfDriverConfig,
+        config: SelfDriverConfig,
         env: AwsEnv
 ):
     business = config.business
@@ -172,7 +135,7 @@ def get_aws_role_name(
             # let the sanitizer figure it out
             task_suffix = f"-{task.id}"
         role_name += task_suffix
-
+    
     role_name = aws_utils.sanitize_aws_name(role_name, 64)
     
     return role_name
@@ -229,20 +192,20 @@ def create_password(length: int) -> str:
         length = 12
     if length > 128:
         length = 128
-
+    
     lowers = string.ascii_lowercase
     uppers = string.ascii_uppercase
     digits = string.digits
     specials = ALLOWED_RDS_SPECIALS
-
+    
     # Fallback in the unlikely case specials is empty
     if not specials:
         specials = '!#$%^&*()-_=+[]{}:,;.?\\|~'  # still excludes '/', '@', '"', and space
-
+    
     all_chars = lowers + uppers + digits + specials
-
+    
     rng = secrets.SystemRandom()
-
+    
     while True:
         pwd_chars = [
             rng.choice(lowers),
@@ -255,3 +218,22 @@ def create_password(length: int) -> str:
         candidate = ''.join(pwd_chars)
         if is_valid_rds_password(candidate):
             return candidate
+
+
+def is_valid_rds_password(pw: str) -> bool:
+    if not isinstance(pw, str):
+        return False
+    # RDS allows 8-128 length
+    if not (8 <= len(pw) <= 128):
+        return False
+    # Only printable ASCII 33..126 and none of the disallowed
+    for ch in pw:
+        o = ord(ch)
+        if o < 33 or o > 126 or ch in DISALLOWED_RDS_PASSWORD_CHARS:
+            return False
+    # Basic complexity
+    has_lower = any(c.islower() for c in pw)
+    has_upper = any(c.isupper() for c in pw)
+    has_digit = any(c.isdigit() for c in pw)
+    has_special = any(c in ALLOWED_RDS_SPECIALS for c in pw)
+    return has_lower and has_upper and has_digit and has_special

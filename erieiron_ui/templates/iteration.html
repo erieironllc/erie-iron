@@ -2,376 +2,329 @@
 {% load humanize %}
 {% load erieiron_common_tags %}
 {% block content %}
-    <style>
-        pre {
-            max-width: calc(100vw - 20rem);
-        }
-    </style>
+    <div class="row">
+    <div class="col-md-3">
+        <div class="list-group" id="iterationSidebar" role="tablist">
+            <h3>
+                Iteration
+                {% if iteration.achieved_goal %}
+                    <div class="badge bg-success">Goal Achieved</div>
+                {% elif iterationo.evaluation_json %}
+                    <div class="badge bg-danger">Failed</div>
+                {% endif %}
+            </h3>
+            <a class="list-group-item list-group-item-action active" id="routing-tab" data-bs-toggle="list"
+               href="#routing"
+               role="tab" aria-controls="routing">
+                Iteration {{ iteration.version_number }}
+            </a>
 
-
-
-    <div class="d-flex justify-content-between align-items-center">
-        <h3>
-            {% if iteration.achieved_goal %}
-                <span class="badge bg-success">Goal Achieved</span>
-            {% elif iterationo.evaluation_json %}
-                <span class="badge bg-danger">Failed</span>
+            {% if previous_iteration %}
+                <a class="list-group-item me-3" href="{% url 'view_self_driver_iteration' previous_iteration.id %}">
+                    Previous Iteration
+                </a>
             {% endif %}
-            Iteration: Version {{ iteration.version_number }} ({{ iteration.timestamp }})
-        </h3>
-        <form method="post" action="{% url 'action_delete_iteration' iteration.id %}" class="d-inline">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-danger"
-                    onclick="return confirm('Are you sure you want to delete this iteration? This action cannot be undone.')">
-                Delete Iteration
-            </button>
-        </form>
-    </div>
-    <div class="d-flex justify-content-start">
-        {% if previous_iteration %}
-            <a class="me-3" href="{% url 'view_self_driver_iteration' previous_iteration.id %}">Previous Iteration</a>
-        {% else %}
-            <span class="me-3">First Iteration</span>
-        {% endif %}
-        {% if next_iteration %}
-            <a class="me-3" href="{% url 'view_self_driver_iteration' next_iteration.id %}">Next Iteration</a>
-            <a class="me-3" href="{% url 'view_self_driver_iteration' last_iteration.id %}">Last Iteration</a>
-        {% else %}
-            <span class="me-3">Next Iteration</span>
-            <span class="me-3">Last Iteration</span>
-        {% endif %}
-    </div>
+
+            {% if next_iteration %}
+                <a class="list-group-item me-3" href="{% url 'view_self_driver_iteration' next_iteration.id %}">Next
+                    Iteration</a>
+            {% endif %}
+
+            <a class="list-group-item me-3" href="{% url 'view_self_driver_latest_iteration' task.id %}">Latest
+                Iteration</a>
+        
+            <div class="list-group-item disabled text-center">
+                <hr class="my-2">
+            </div>
 
 
-    <!-- Nav tabs -->
-    <ul class="nav nav-tabs" id="iterationTab" role="tablist">
-        <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="routing-tab" data-bs-toggle="tab" data-bs-target="#routing"
-                    type="button" role="tab">
-                Routing
-            </button>
-        </li>
 
-        {% if llm_requests %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="llmrequests-tab" data-bs-toggle="tab" data-bs-target="#llmrequests"
-                        type="button" role="tab">
-                    LLM Requests
-                </button>
-            </li>
-        {% endif %}
-
-        <li class="nav-item" role="presentation">
-            <button class="nav-link" id="planning-tab" data-bs-toggle="tab" data-bs-target="#planning"
-                    type="button" role="tab">
+            <a class="list-group-item list-group-item-action" id="planning-tab" data-bs-toggle="list" href="#planning"
+               role="tab" aria-controls="planning">
                 Code Planning
-            </button>
-        </li>
+            </a>
 
-        {% if iteration.codeversion_set.exists %}
-            <li class="nav-item " role="presentation">
-                <button class="nav-link " id="code-tab" data-bs-toggle="tab" data-bs-target="#code" type="button"
-                        role="tab">
+            {% if iteration.codeversion_set.exists %}
+                <a class="list-group-item list-group-item-action" id="code-tab" data-bs-toggle="list" href="#code"
+                   role="tab" aria-controls="code">
                     Code Writing
-                </button>
-            </li>
-        {% endif %}
-        {% if iteration.evaluation_json %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="evaluation-tab" data-bs-toggle="tab" data-bs-target="#evaluation"
-                        type="button" role="tab">
+                </a>
+            {% endif %}
+            {% if iteration.evaluation_json %}
+                <a class="list-group-item list-group-item-action" id="evaluation-tab" data-bs-toggle="list"
+                   href="#evaluation"
+                   role="tab" aria-controls="evaluation">
                     Iteration Evaluation
-                </button>
-            </li>
-        {% endif %}
+                </a>
+            {% endif %}
+        
+        
+            <div class="list-group-item disabled text-center">
+                <hr class="my-2">
+            </div>
 
-        {% if iteration.log_content_coding|length > 200 %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="codelog-tab" data-bs-toggle="tab" data-bs-target="#codelog"
-                        type="button" role="tab">
+
+            {% if iteration.log_content_coding|length > 200 %}
+                <a class="list-group-item list-group-item-action" id="codelog-tab" data-bs-toggle="list" href="#codelog"
+                   role="tab" aria-controls="codelog">
                     Logs - Coding
-                </button>
-            </li>
-        {% endif %}
-    
-        {% if iteration.log_content_execution %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="execlog-tab" data-bs-toggle="tab" data-bs-target="#execlog"
-                        type="button" role="tab">
-                    Logs - Execution
-                </button>
-            </li>
-        {% endif %}
+                </a>
+            {% endif %}
 
-        {% if False and running_processes %}
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="processes-tab" data-bs-toggle="tab" data-bs-target="#processes"
-                        type="button"
-                        role="tab">
+            {% if iteration.log_content_execution %}
+                <a class="list-group-item list-group-item-action" id="execlog-tab" data-bs-toggle="list" href="#execlog"
+                   role="tab" aria-controls="execlog">
+                    Logs - Execution
+                </a>
+            {% endif %}
+
+            {% if False and running_processes %}
+                <a class="list-group-item list-group-item-action" id="processes-tab" data-bs-toggle="list"
+                   href="#processes"
+                   role="tab" aria-controls="processes">
                     Processes
                     {% if running_processes_count %}
                         <span class="badge bg-danger ms-1">{{ running_processes_count }}</span>
                     {% endif %}
+                </a>
+            {% endif %}
+
+            {% if llm_requests %}
+                <a class="list-group-item list-group-item-action" id="llmrequests-tab" data-bs-toggle="list"
+                   href="#llmrequests"
+                   role="tab" aria-controls="llmrequests">
+                    LLM Requests
+                </a>
+            {% endif %}
+
+            <div class="list-group-item disabled text-center">
+                <hr class="my-2">
+            </div>
+
+            <form method="post" action="{% url 'action_delete_iteration' iteration.id %}" class="list-group-item">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger"
+                        onclick="return confirm('Are you sure you want to delete this iteration? This action cannot be undone.')">
+                    Delete Iteration
                 </button>
-            </li>
-        {% endif %}
-    </ul>
+            </form>
+        </div>
+    </div>
+    <div class="col-md-9">
 
-    <div class="tab-content pt-3" id="iterationTabContent">
-        <div class="tab-pane active show" id="routing" role="tabpanel" aria-labelledby="routing-tab">
-            {% if iteration_to_modify %}
-                {% if iteration_to_modify.id|not_eq:iteration.id %}
-                    <p>To start, we are <b>rolling back to <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation">
-                        version {{ iteration_to_modify.version_number }}
-                    </a></b>. {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
-                {% else %}
-                    <p>Starting with the latest code from the previous iteration.  {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
+        <div class="tab-content" id="iterationTabContent">
+            <div class="tab-pane active show" id="routing" role="tabpanel" aria-labelledby="routing-tab">
+                {% if iteration_to_modify %}
+                    {% if iteration_to_modify.id|not_eq:previous_iteration.id %}
+                        <p>To start, we are <b>rolling back to <a
+                                href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation">
+                            version {{ iteration_to_modify.version_number }}
+                        </a></b>. {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
+                    {% else %}
+                        <p>Starting with the <b>latest code</b> from the previous
+                            iteration. {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
+                    {% endif %}
+                    <hr>
+                    <p><b>Output from
+                        version {{ iteration_to_modify.version_number }}</b>: {{ iteration_to_modify.evaluation_json.error.summary }}
+                    </p>
+                    <pre style="max-height: 8rem"> {{ iteration_to_modify.evaluation_json.error.logs }} </pre>
                 {% endif %}
-                <hr>
-                <p><b>Output from
-                    version {{ iteration_to_modify.version_number }}</b>: {{ iteration_to_modify.evaluation_json.error.summary }}
-                </p>
-                <pre style="max-height: 8rem"> {{ iteration_to_modify.evaluation_json.error.logs }} </pre>
-            {% endif %}
 
-            {% if iteration.routing_json %}
-                <hr>
-                <b>Routing based on version {{ iteration_to_modify.version_number }}'s output:</b>
-                <table class="table table-striped mt-3">
-                    <tr>
-                        <td>Classification</td>
-                        <td>{{ iteration.routing_json.classification }}</td>
-                    </tr>
-                    <tr>
-                        <td>Route</td>
-                        <td>{{ iteration.routing_json.recovery_path }}</td>
-                    </tr>
-                    <tr>
-                        <td>Explanation</td>
-                        <td>
-                            <p>
-                                {{ iteration.routing_json.recovery_path_explanation }}
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>Fix Prompt</td>
-                        <td>{{ iteration.routing_json.fix_prompt }}</td>
-                    </tr>
-                    <tr>
-                        <td>Related Files</td>
-                        <td>{{ iteration.routing_json.context_files|pprint_json }}</td>
-                    </tr>
-                </table>
-            {% else %}
-                No routing info - likely skipped to execution
-            {% endif %}
-        </div>
+                {% if iteration.routing_json %}
+                    <hr>
+                    <b>Routing based on version {{ iteration_to_modify.version_number }}'s output:</b>
+                    <table class="table table-striped mt-3">
+                        <tr>
+                            <td>Classification</td>
+                            <td>{{ iteration.routing_json.classification }}</td>
+                        </tr>
+                        <tr>
+                            <td>Route</td>
+                            <td>{{ iteration.routing_json.recovery_path }}</td>
+                        </tr>
+                        <tr>
+                            <td>Explanation</td>
+                            <td>
+                                <p>
+                                    {{ iteration.routing_json.recovery_path_explanation }}
+                                </p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Fix Prompt</td>
+                            <td>{{ iteration.routing_json.fix_prompt }}</td>
+                        </tr>
+                        <tr>
+                            <td>Related Files</td>
+                            <td>{{ iteration.routing_json.context_files|pprint_json }}</td>
+                        </tr>
+                    </table>
+                {% else %}
+                    No routing info - likely skipped to execution
+                {% endif %}
+            </div>
 
-        <div class="tab-pane " id="planning" role="tabpanel" aria-labelledby="planning-tab">
-            {% for code_file in iteration.planning_json.code_files %}
-                <div class="card mb-4 iteration_card">
-                    <div class="card-header d-flex justify-content-between">
-                        <small class="text-muted">
-                            {{ code_file.code_file_path }}
-                        </small>
-                        <small class="text-muted">
-                            use {{ code_file.code_writing_model }}
-                        </small>
-                    </div>
-                    <div class="card-body">
-                        <dl class="row">
-                            <label>{{ code_file.guidance }}</label>
-                            <dd>
-                                {% if code_file.instructions|dictsort:"step_number" %}
-                                    <ol>
-                                        {% for instruction in code_file.instructions|dictsort:"step_number" %}
-                                            <li class="mt-3">
-                                                <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
-                                            </li>
-                                        {% endfor %}
-                                    </ol>
-                                {% else %}
-                                    <pre>{{ code_version.code_instructions }}</pre>
-                                {% endif %}
-                            </dd>
-                        </dl>
-                    </div>
-                </div>
-            {% endfor %}
-        </div>
-
-        <div class="tab-pane " id="code" role="tabpanel" aria-labelledby="code-tab">
-            {% for code_version in iteration.codeversion_set.all %}
-                {% if code_version.code_instructions|dictsort:"step_number" %}
+            <div class="tab-pane " id="planning" role="tabpanel" aria-labelledby="planning-tab">
+                {% for code_file in iteration.planning_json.code_files %}
                     <div class="card mb-4 iteration_card">
-                        <div class="card-header">
+                        <div class="card-header d-flex justify-content-between">
                             <small class="text-muted">
-                                {{ code_version.code_file.file_path }}
+                                {{ code_file.code_file_path }}
+                            </small>
+                            <small class="text-muted">
+                                use {{ code_file.code_writing_model }}
                             </small>
                         </div>
                         <div class="card-body">
                             <dl class="row">
+                                <label>{{ code_file.guidance }}</label>
                                 <dd>
-                                    {% if code_version.code_instructions %}
-                                        {% if code_version.code_instructions|dictsort:"step_number" %}
-
-                                            <ol>
-                                                {% for instruction in code_version.code_instructions|dictsort:"step_number" %}
-                                                    <li class="mb-3">
-                                                        <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
-                                                    </li>
-                                                {% endfor %}
-                                            </ol>
-                                        {% else %}
-                                            <pre>{{ code_version.code_instructions }}</pre>
-                                        {% endif %}
+                                    {% if code_file.instructions|dictsort:"step_number" %}
+                                        <ol>
+                                            {% for instruction in code_file.instructions|dictsort:"step_number" %}
+                                                <li class="mt-3">
+                                                    <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
+                                                </li>
+                                            {% endfor %}
+                                        </ol>
                                     {% else %}
-                                        no changes this iteration
+                                        <pre>{{ code_version.code_instructions }}</pre>
                                     {% endif %}
                                 </dd>
-                                {% if code_version.code %}
-                                    <dt class="mt-3 d-flex justify-content-between">
-                                        <div class="full_code d-none">Resulting Code:</div>
-                                        <div class="code_diff">Resulting Code Changes:</div>
-                                        <a class="code_type_toggle full_code  d-none" href="#">Show Diff</a>
-                                        <a class="code_type_toggle code_diff" href="#">Show Full Code</a>
-                                    </dt>
-                                    <dd>
-                                        <pre class="full_code d-none">{{ code_version.code|highlight }}</pre>
-                                        <pre class="code_diff ">{{ code_version.get_diff|highlight }}</pre>
-                                    </dd>
-                                {% endif %}
                             </dl>
                         </div>
                     </div>
-                {% endif %}
-            {% endfor %}
-        </div>
-
-        <div class="tab-pane" id="evaluation" role="tabpanel" aria-labelledby="evaluation-tab">
-            <table class="table table-striped ">
-                <tr>
-                    <td>Achieved Goal</td>
-                    <td>{{ iteration.evaluation_json.goal_achieved }}</td>
-                </tr>
-                <tr>
-                    <td>Summary</td>
-                    <td>{{ iteration.evaluation_json.summary }}</td>
-                </tr>
-                <tr>
-                    <td>Running Status Report</td>
-                    <td>{{ iteration.evaluation_json.status_report }}</td>
-                </tr>
-                {% if iteration.evaluation_json.best_iteration_id %}
-                    <tr>
-                        <td>Best Iteration So Far</td>
-                        <td>
-                            <a href="{% url 'view_self_driver_iteration' iteration.evaluation_json.best_iteration_id %}">{{ iteration.evaluation_json.best_iteration_id }}</a>
-                            {% if iteration.evaluation_json.best_iteration_id|eq:iteration.id %} (this one) {% endif %}
-                        </td>
-                    </tr>
-                {% endif %}
-                {% if iteration.evaluation_json.iteration_id_to_modify and iteration.evaluation_json.iteration_id_to_modify|not_eq:iteration.id %}
-                    <tr>
-                        <td>Iteration to Modify</td>
-                        <td>
-                            {% if iteration.evaluation_json.iteration_id_to_modify == 'latest' %}
-                                This Iteration - {{ iteration.evaluation_json.rollback_reason }}
-                            {% else %}
-                                <a href="{% url 'view_self_driver_iteration' iteration.evaluation_json.iteration_id_to_modify %}">{{ iteration.evaluation_json.iteration_id_to_modify }}</a>
-                                - {{ iteration.evaluation_json.rollback_reason }}
-                            {% endif %}
-                        </td>
-                    </tr>
-                {% endif %}
-                {% if iteration.evaluation_json.error %}
-                    <tr>
-                        <td>Error Summary</td>
-                        <td>
-                            <label class="mb-3">{{ iteration.evaluation_json.error.summary }}:</label>
-                            <pre>{{ iteration.evaluation_json.error.logs }}</pre>
-                        </td>
-                    </tr>
-                {% endif %}
-                <tr>
-                    <td>strategic_guidance</td>
-                    <td>
-                        <pre>{{ iteration.evaluation_json.strategic_guidance|pprint_json }}</pre>
-                    </td>
-                </tr>
-            </table>
-
-        </div>
-
-        <div class="tab-pane " id="llmrequests" role="tabpanel" aria-labelledby="llmrequests-tab">
-            {% for llm_request in llm_requests %}
-                <div class="card mb-4 iteration_card">
-                    <div class="card-header d-flex justify-content-between" role="button" data-bs-toggle="collapse" data-bs-target="#llmrequest-{{ forloop.counter }}" aria-expanded="false" style="cursor: pointer;">
-                        <div class="d-flex align-items-center">
-                            <i class="fas fa-chevron-right me-2 collapse-icon"></i>
-                            <small class="text-muted">
-                                {{ llm_request.title }} ({{ llm_request.timestamp }})
-                            </small>
-                        </div>
-                        <div class="d-flex justify-content-end align-items-center">
-                            <small class="text-muted ms-3">
-                                {{ llm_request.model }}
-                            </small>
-                            <small class="text-muted ms-3">
-                                {{ llm_request.token_count }} tokens
-                            </small>
-                            <small class="text-muted ms-3">
-                                ${{ llm_request.price|floatformat:2 }}
-                            </small>
-                            <button class="btn btn-sm btn-outline-secondary ms-3 copy-btn" 
-                                    data-target="#llmrequest-content-{{ forloop.counter }}" 
-                                    onclick="event.stopPropagation();" 
-                                    title="Copy to clipboard">
-                                <i class="fas fa-copy"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
-                        <dl class="row">
-                            <pre id="llmrequest-content-{{ forloop.counter }}">
-                                {% for inp_msg in llm_request.input_messages %}
-==== Message Role: {{ inp_msg.role }} =========================================
- 
-                                    
-{{ inp_msg.content }}
-
-                                {% endfor %}
-=============================================
-Response from {{ llm_request.model }}
-                                    
-{{ llm_request.response }}
-=============================================
-                            </pre>
-                        </dl>
-                    </div>
-                </div>
-            {% endfor %}
-        </div>
-
-        <div class="tab-pane " id="codelog" role="tabpanel" aria-labelledby="codelog-tab">
-            <pre style="font-size: 8pt">{{ iteration.log_content_coding|default_if_none:"" }}</pre>
-        </div>
-
-        <div class="tab-pane" id="execlog" role="tabpanel" aria-labelledby="execlog-tab">
-            <pre style="font-size: 8pt">{{ iteration.log_content_execution|default_if_none:"" }}</pre>
-        </div>
-
-        <div class="tab-pane  " id="processes" role="tabpanel" aria-labelledby="processes-tab">
-            {% if running_processes %}
-                {% for process in running_processes|dictsortreversed:"started_at" %}
-                    {% include "_process_card.html" %}
                 {% endfor %}
-            {% else %}
-                <div class="alert alert-secondary">
-                    No processes are currently running for this iteration.
-                </div>
-            {% endif %}
+            </div>
+
+            <div class="tab-pane " id="code" role="tabpanel" aria-labelledby="code-tab">
+                {% for code_version in iteration.codeversion_set.all %}
+                    {% if code_version.code_instructions|dictsort:"step_number" %}
+                        <div class="card mb-4 iteration_card">
+                            <div class="card-header">
+                                <small class="text-muted">
+                                    {{ code_version.code_file.file_path }}
+                                </small>
+                            </div>
+                            <div class="card-body">
+                                <dl class="row">
+                                    <dd>
+                                        {% if code_version.code_instructions %}
+                                            {% if code_version.code_instructions|dictsort:"step_number" %}
+
+                                                <ol>
+                                                    {% for instruction in code_version.code_instructions|dictsort:"step_number" %}
+                                                        <li class="mb-3">
+                                                            <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
+                                                        </li>
+                                                    {% endfor %}
+                                                </ol>
+                                            {% else %}
+                                                <pre>{{ code_version.code_instructions }}</pre>
+                                            {% endif %}
+                                        {% else %}
+                                            no changes this iteration
+                                        {% endif %}
+                                    </dd>
+                                    {% if code_version.code %}
+                                        <dt class="mt-3 d-flex justify-content-between">
+                                            <div class="full_code d-none">Resulting Code:</div>
+                                            <div class="code_diff">Resulting Code Changes:</div>
+                                            <a class="code_type_toggle full_code  d-none" href="#">Show Diff</a>
+                                            <a class="code_type_toggle code_diff" href="#">Show Full Code</a>
+                                        </dt>
+                                        <dd>
+                                            <pre class="full_code d-none">{{ code_version.code|highlight }}</pre>
+                                            <pre class="code_diff ">{{ code_version.get_diff|highlight }}</pre>
+                                        </dd>
+                                    {% endif %}
+                                </dl>
+                            </div>
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+
+            <div class="tab-pane" id="evaluation" role="tabpanel" aria-labelledby="evaluation-tab">
+                <table class="table table-striped ">
+                    <tr>
+                        <td>Achieved Goal</td>
+                        <td>{{ iteration.evaluation_json.goal_achieved }}</td>
+                    </tr>
+                    <tr>
+                        <td>Summary</td>
+                        <td>{{ iteration.evaluation_json.summary }}</td>
+                    </tr>
+                    <tr>
+                        <td>Running Status Report</td>
+                        <td>{{ iteration.evaluation_json.status_report }}</td>
+                    </tr>
+                    {% if iteration.evaluation_json.best_iteration_id %}
+                        <tr>
+                            <td>Best Iteration So Far</td>
+                            <td>
+                                <a href="{% url 'view_self_driver_iteration' iteration.evaluation_json.best_iteration_id %}">{{ iteration.evaluation_json.best_iteration_id }}</a>
+                                {% if iteration.evaluation_json.best_iteration_id|eq:iteration.id %} (this
+                                    one) {% endif %}
+                            </td>
+                        </tr>
+                    {% endif %}
+                    {% if iteration.evaluation_json.iteration_id_to_modify and iteration.evaluation_json.iteration_id_to_modify|not_eq:iteration.id %}
+                        <tr>
+                            <td>Iteration to Modify</td>
+                            <td>
+                                {% if iteration.evaluation_json.iteration_id_to_modify == 'latest' %}
+                                    This Iteration - {{ iteration.evaluation_json.rollback_reason }}
+                                {% else %}
+                                    <a href="{% url 'view_self_driver_iteration' iteration.evaluation_json.iteration_id_to_modify %}">{{ iteration.evaluation_json.iteration_id_to_modify }}</a>
+                                    - {{ iteration.evaluation_json.rollback_reason }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endif %}
+                    {% if iteration.evaluation_json.error %}
+                        <tr>
+                            <td>Error Summary</td>
+                            <td>
+                                <label class="mb-3">{{ iteration.evaluation_json.error.summary }}:</label>
+                                <pre>{{ iteration.evaluation_json.error.logs }}</pre>
+                            </td>
+                        </tr>
+                    {% endif %}
+                    <tr>
+                        <td>strategic_guidance</td>
+                        <td>
+                            <pre>{{ iteration.evaluation_json.strategic_guidance|pprint_json }}</pre>
+                        </td>
+                    </tr>
+                </table>
+
+            </div>
+
+            <div class="tab-pane " id="llmrequests" role="tabpanel" aria-labelledby="llmrequests-tab">
+                {% include '_llm_requests_list.html' %}
+            </div>
+
+            <div class="tab-pane " id="codelog" role="tabpanel" aria-labelledby="codelog-tab">
+                <pre style="font-size: 8pt">{{ iteration.log_content_coding|default_if_none:"" }}</pre>
+            </div>
+
+            <div class="tab-pane" id="execlog" role="tabpanel" aria-labelledby="execlog-tab">
+                <pre style="font-size: 8pt">{{ iteration.log_content_execution|default_if_none:"" }}</pre>
+            </div>
+
+            <div class="tab-pane  " id="processes" role="tabpanel" aria-labelledby="processes-tab">
+                {% if running_processes %}
+                    {% for process in running_processes|dictsortreversed:"started_at" %}
+                        {% include "_process_card.html" %}
+                    {% endfor %}
+                {% else %}
+                    <div class="alert alert-secondary">
+                        No processes are currently running for this iteration.
+                    </div>
+                {% endif %}
+            </div>
         </div>
     </div>
 

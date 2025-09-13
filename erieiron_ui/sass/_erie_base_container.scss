@@ -1,66 +1,174 @@
-body{
+body {
   background-color: $body-bg;
   color: $body-color;
+  overflow: hidden;
 
-  a:hover{
+  a:hover {
     color: $link-hover-color !important;
   }
+  
+  .code-container{
+    background-color: $gray-100 !important;
+    *{
+      background-color: $gray-100 !important;
+    }
+  }
 
-  .pre_log_output{
+  .pre_log_output {
     max-height: 400px;
     overflow-y: auto;
   }
 
-  pre{
-    .highlight{
+  pre {
+    .highlight {
       background: transparent;
       margin-top: 1rem;
-      .s1, .s2{
-        color: darkcyan;
+
+      .s1, .s2 {
+        color: $highlight-string-color !important;
       }
-      .nn{
-        color:burlywood;
+
+      .c1 {
+        color: $gray-600 !important;
       }
-      .nf{
+
+      .nn, .n {
+        color: $gray-800 !important;
+      }
+
+      .p {
+        color: $gray-800 !important;
+      }
+
+      .nf {
         font-weight: bold;
-        color: cornflowerblue;
+        color: $highlight-function-color !important;
       }
     }
   }
 
-  #top_nav{
+  #top_nav {
+    background-color: $sidebar-bg;
     padding-left: 2rem;
     padding-right: 2rem;
-    .erieiron-logo{
+
+    .erieiron-logo {
       height: 2rem;
       width: 2rem;
     }
+    
+    .breadcrumb-item{
+      *{
+        color: $sidebar-text;
+      }
+    }
   }
 
-  .nav-tabs{
-    margin-top: 1rem;
+  .list-group {
+    padding-top: 1rem;
+    background-color: $sidebar-bg;
+    flex: 1 1 auto !important; // expands to fill remaining space
+    min-height: 0; // allows shrinking so scrolling works
+    overflow-y: auto; // internal scroll
+    border-radius: 0;
+    
+    h1, h2, h3, h4, h5 {
+      color: $sidebar-text !important;
+      margin-left: 1rem;
+    }
+
+    .list-group-item {
+      border-radius: 0 !important;
+      border: none;
+
+      color: $sidebar-text;
+      background-color: $sidebar-bg;
+
+      &:hover {
+        background-color: $sidebar-hover-bg;
+        color: $sidebar-hover-text;
+      }
+
+      &.active {
+        background-color: $sidebar-active-bg;
+        color: $sidebar-active-text;
+        border-color: $sidebar-active-bg;
+      }
+    }
   }
 
-  #main-content-container{
-    margin: 0 2rem !important;
-    margin-top: -.5rem !important;
+  #main-content-container {
+    background-color: $main-content-bg;
+    color: $main-content-text;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh; // ensure container fills viewport
+    margin: 0 !important;
+    margin-right: 2.5rem !important;
+
+
+    h1, h2, h3, h4, h5, h6 {
+      color: $main-content-text;
+    }
+
+    //p, span, li {
+    //  color: $main-content-text;
+    //}
+
+    .text-muted {
+      color: $text-muted-color;
+    }
+
+    .divider {
+      border-color: $divider-color;
+    }
+    
+    .tab-pane{
+      padding-top: 1rem;
+    }
+    
+    .tab-content{
+      height: calc(100vh - 5.5rem);
+      overflow-y: scroll;
+    }
+
+    .row {
+      flex: 1;
+      min-height: 0;
+
+      .col-md-3 {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      .col-md-9 {
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+    }
   }
 }
 
-.markdown-container{
-  h1{
+.markdown-container {
+  h1 {
     font-size: 1.5rem;
   }
-  h2{
+
+  h2 {
     font-size: 1.25rem;
   }
-  h3{
+
+  h3 {
     font-size: 1rem;
   }
-  h4{
+
+  h4 {
     font-size: 1rem;
   }
-  h5{
+
+  h5 {
     font-size: 1rem;
   }
 }

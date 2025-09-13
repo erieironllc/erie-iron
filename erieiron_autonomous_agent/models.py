@@ -631,6 +631,9 @@ class Task(BaseErieIronModel):
             task.id: task.get_last_execution().output
             for task in self.depends_on.all()
         }
+    
+    def get_name(self):
+        return str(self.id)[len("task_"):].replace("_", " ").capitalize()
 
 
 # Design system and handoff models

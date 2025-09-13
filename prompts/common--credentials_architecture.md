@@ -5,7 +5,7 @@ This contract defines how credentials are passed and handled across the system, 
 ### Planner Requirements:
   - Credentials **must not** be hardcoded or passed as plain parameters such as "DBPassword".
   - Any credential-related parameters must be clearly documented and justified in comments.
-  - The codeplanner **must** define all credentials by specifying a Secrets Manager ARN parameter in `infrastructure.yaml` (e.g., `RdsSecretArn`).
+  - The codeplanner **must** define all credentials by specifying a Secrets Manager ARN parameter in `infrastructure.yaml`
   - The codeplanner **must** ensure that the database name is constructed using the `StackIdentifier` prefix plus a meaningful suffix; it must **not** be passed as a parameter named "DBName".
   - if editing settings.py, you may **must always** set the "DATABASES" variable with this line of code:  "DATABASES = agent_tools.get_django_settings_databases_conf()".  You may **never** delete this line of code
 
@@ -39,14 +39,6 @@ This section is authoritative. All other sections must not restate these rules.
   - Fail if any file path or module import violates File and Module Naming rules.
 
 ### Examples:
-  **RDS Credentials:**
-  - Parameter in `infrastructure.yaml`: `RdsSecretArn` (ARN of the Secrets Manager secret containing username and password)
-  - Database name constructed as `${StackIdentifier}MyAppDb`
-  - CloudFormation references `RdsSecretArn` for secret access and grants necessary IAM permissions
-  - Runtime code fetches credentials at startup from AWS Secrets manager using the ARN defined by RdsSecretArn
-  - **never** attempt to specify or fetch RDS Credentials with any other environment variables other than RdsSecretArn
-    - examples of **forbidden** env vars are RDS_DB_USER, RDS_DB_PASSWORD, DBName, DBPassword, etc.  If you see one of these values, "tombstone" it
-
   **Stripe API Key:**
   - Parameter in `infrastructure.yaml`: `StripeSecretsArn`
   - CloudFormation grants access to the secret ARN for the relevant Lambda functions

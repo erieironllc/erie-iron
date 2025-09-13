@@ -16,7 +16,6 @@ class Command(BaseCommand):
         SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=task_id).delete()
         CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
         eng_lead.bootstrap_buiness(task.initiative.business_id)
-        on_reset_task_test(task_id)
     
     def handle_as(self, *args, **options):
         Task.objects.filter(initiative_id="articleparser_forwarddigest_launch_token").delete()

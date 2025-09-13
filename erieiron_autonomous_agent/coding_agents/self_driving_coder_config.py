@@ -14,6 +14,7 @@ from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
+ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.18"
 TASK_DESC_CODE_WRITING = "code writing"
 LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 

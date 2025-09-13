@@ -20,10 +20,6 @@
 - Creating or modifying any other CloudFormation YAML file is a violation.
 - If a plan attempts to edit a different file, correct the plan to use `infrastructure.yaml` — do **not** return `blocked`.
 
-- For stacks that provision RDS, include a `Parameters.RdsSecretArn` (Type `String`) and wire it as described in the **RDS + Secrets Manager Contract** above. Do not create the secret in this template when following this pattern.
-
-- For stacks that provision RDS, planners must also schedule creation of the RDS Secret Updater Lambda (`RdsSecretUpdaterLambda`) and the associated Custom Resource (`RdsSecretUpdater`). This Lambda is special-cased: it is embedded inline in `infrastructure.yaml` and is responsible for merging the RDS endpoint, port, dbname, engine, and sslmode into the existing secret provided by `RdsSecretArn`. Planners do not need to restate its code, only ensure that tasks direct the CloudFormation code writer to include it and wire it with `DependsOn: [RDSInstance, RdsDbSecretAttachment]`. 
-
 - **IAM roles or permissions related Tasks**
     - Follow the principle of least privilege: include only permissions essential to accomplish the task.
     - Identify all required permissions up front to avoid iteration churn due to missing access
@@ -32,45 +28,12 @@
     - use PostgreSQL engine version >= 16.8
     - Do not assume or configure any locally running PostgreSQL service.
     - Source all connection details from environment variables or AWS Secrets Manager.
-- **RDS + Secrets Manager Contract (Secret ARN Parameter)**
-    - CloudFormation must accept a parameter named `RdsSecretArn` (Type: `String`). This parameter will contain the AWS Secrets Manager **Secret ARN** for the RDS master credentials. The stack must not create or name this secret; it is supplied externally by infra/self-driving agent.
-    - In `AWS::RDS::DBInstance`, source the master credentials using dynamic references to `RdsSecretArn`:
-        - `MasterUsername: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::username}}"`
-        - `MasterUserPassword: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::password}}"`
-    - Attach the secret to the DB instance using `AWS::SecretsManager::SecretTargetAttachment` with `TargetType: AWS::RDS::DBInstance` so rotation templates can manage updates.
-        - Example CloudFormation YAML:
-            ```yaml
-            Parameters:
-              RdsSecretArn:
-                Type: String
-                Description: ARN of the existing Secrets Manager secret for RDS master credentials
 
-            Resources:
-              MyDbInstance:
-                Type: AWS::RDS::DBInstance
-                Properties:
-                  # ... other properties ...
-                  MasterUsername: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::username}}"
-                  MasterUserPassword: !Sub "{{resolve:secretsmanager:${RdsSecretArn}::password}}"
-                  # ... other properties ...
-
-              MyDbSecretAttachment:
-                Type: AWS::SecretsManager::SecretTargetAttachment
-                Properties:
-                  SecretId: !Ref RdsSecretArn
-                  TargetId: !Ref MyDbInstance
-                  TargetType: AWS::RDS::DBInstance
-            ```
-    - Do not set `ManageMasterUserPassword: true` in this pattern (that creates an RDS-managed secret with an unpredictable name). The external secret’s ARN is the source of truth.
-    - The plan must include deterministic edit steps for `infrastructure.yaml` to:
-        1. Add the `Parameters.RdsSecretArn` definition (Type `String`, description clarifying it must be a Secrets Manager ARN).
-        2. Update the `AWS::RDS::DBInstance` resource to use the dynamic references shown above.
-        3. Add an `AWS::SecretsManager::SecretTargetAttachment` resource that references both the DB instance and `!Ref RdsSecretArn`.
-        4. Add helpful outputs: `DbEndpoint`, `DbPort`, and `DbSecretArn` (the latter is `!Ref RdsSecretArn`).
-    - IAM: if this stack defines the runtime task/role, grant `secretsmanager:GetSecretValue` (and optionally `secretsmanager:DescribeSecret`) only on the ARN passed in `RdsSecretArn` (principle of least privilege).
-- **Forbidden Actions**
-    - Do not generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
-    - Do not create new files when an existing file already covers the same functional scope, as determined by the project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.
+### RDS Secret Management Contract
+- Use `ManageMasterUserPassword: true` in `AWS::RDS::DBInstance`.
+- The DBInstanceIdentifier must be parameterized (e.g. `!Sub "${StackIdentifier}-db"`) to namespace the auto-generated secret.
+- CloudFormation must output both `!GetAtt RDSInstance.MasterUserSecret.SecretArn` and `!GetAtt RDSInstance.MasterUserSecret.SecretName`.
+- No `Parameters.RdsSecretArn`, no `SecretTargetAttachment`, and no Lambda custom resource are required for this pattern.
     
 
 ### CloudFormation Update Efficiency Guidelines
@@ -159,3 +122,8 @@ agent_tools.parse_cloudformation_yaml(Path(<path to yaml>))  # ✅ Correct
 ```python
 yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 ```
+
+--- 
+## Additional Forbidden Actions
+- **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
+- **Never** add a new Parameter to infrastructure.yaml without a default value.  If you add a new parameter to infrastructure.yaml without a default value, deployment will fail
