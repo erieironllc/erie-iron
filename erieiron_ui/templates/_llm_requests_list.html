@@ -29,7 +29,10 @@
                 </small>
                 {% if llm_request.response %}
                     <small class="text-muted ms-3">
-                        {{ llm_request.token_count }} tokens
+                        {{ llm_request.token_count|intcomma }} tokens
+                    </small>
+                    <small class="text-muted ms-3">
+                        {{ llm_request.chat_millis|intcomma }}ms
                     </small>
                     <small class="text-muted ms-3">
                         ${{ llm_request.price|floatformat:3 }}

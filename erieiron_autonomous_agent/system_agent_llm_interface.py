@@ -140,8 +140,8 @@ def llm_chat(
         model: LlmModel,
         tag_entity,
         output_schema: Path = None,
-        reasoning_effort: LlmReasoningEffort = None,
-        verbosity: LlmVerbosity = None,
+        reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.HIGH,
+        verbosity: LlmVerbosity = LlmVerbosity.LOW,
         code_response=False
 ) -> LlmResponse:
     input_model = model

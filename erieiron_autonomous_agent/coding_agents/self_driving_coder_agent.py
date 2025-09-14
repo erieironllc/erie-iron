@@ -896,9 +896,7 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
             log_content
         ],
         model=LlmModel.OPENAI_GPT_5,
-        tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.HIGH,
-        verbosity=LlmVerbosity.LOW
+        tag_entity=config.current_iteration
     ).text
 
 
@@ -1295,8 +1293,7 @@ def assert_tests_green(config: SelfDriverConfig):
         output_schema="test_reviewer.md.schema.json",
         model=LlmModel.OPENAI_GPT_5,
         tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.LOW,
-        verbosity=LlmVerbosity.LOW
+        reasoning_effort=LlmReasoningEffort.LOW
     ).json()
     
     if not test_reviewer_output.get("all_passed"):
@@ -2163,7 +2160,7 @@ def implement_code_changes(
                         code_file_data=cfi,
                         requirements_txt=requirements_txt,
                         blocking_issues=blocking_issues,
-                        code_writing_model=LlmModel.OPENAI_GPT_5,  # LlmModel(cfi.get("code_writing_model")),
+                        code_writing_model=LlmModel.valid_or(cfi.get("code_writing_model"), LlmModel.OPENAI_GPT_5),
                         roll_back_reason=roll_back_reason,
                         previous_exception=previous_exception
                     )
@@ -2352,8 +2349,7 @@ def write_test(
                 description,
                 messages,
                 LlmModel.OPENAI_GPT_5,
-                tag_entity=config.current_iteration,
-                reasoning_effort=LlmReasoningEffort.HIGH
+                tag_entity=config.current_iteration
             ).text
             
             test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
@@ -2560,7 +2556,6 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
         ],
         config.model_code_planning,
         tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -2656,7 +2651,6 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
         ],
         config.model_code_planning,
         tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -2770,7 +2764,6 @@ def plan_full_code_changes(config: SelfDriverConfig):
         messages,
         config.model_code_planning,
         tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.HIGH,
         output_schema="codeplanner.schema.json"
     ).json()
     
@@ -2949,9 +2942,7 @@ def write_code_file(
         f"Write code for {code_file_name} {code_file_data.get('validator')}",
         messages,
         code_writing_model,
-        tag_entity=config.current_iteration,
-        verbosity=LlmVerbosity.LOW,
-        reasoning_effort=LlmReasoningEffort.HIGH
+        tag_entity=config.current_iteration
     ).text
     
     # Detect and handle git patch vs full-file outputs from the code writer
