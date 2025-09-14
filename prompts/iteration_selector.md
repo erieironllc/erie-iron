@@ -39,10 +39,9 @@ You will not have access to execution logs or raw test output — only high-leve
    - **Field**: `iteration_id_to_modify` 
    - The value is either an iteration_id or the string 'latest'
    - This tells the planner which iteration to use as the base for its next round of edits.
-   - Be heavily biased towards pdating the latest version.  Keep the progress moving forward - reverting back to old revisions often causes the agents to repeat old mistakes
-   - Use a prior iteration ID if recent changes introduced regressions.
+   - Be **heavily biased** towards choosing the latest version.  Keep the progress **moving forward** - reverting back to old revisions often causes the agents to repeat old mistakes
    - If in the rare case you decide to roll back to a previous iteration, justify your decision in `rollback_reason`.
-   - If there have been a lot of attempts based on the same previous iteration and it seems like we are **stuck**, try going forward with the latest version to see if that helps get us unstuck
+   - If there have been a more than a couple of attempts based on the same previous iteration and it seems like we are **stuck**, try going forward with the latest version to see if that helps get us unstuck
 
 3. **Set Scope of Planner Context**
    - **Field**: `previous_iteration_count`
@@ -78,7 +77,6 @@ If evaluations show failures like “Missing required configuration … EMAIL_IN
 - Classify as INFRASTRUCTURE_MISSING.
 - Recommend updating CloudFormation to create the resource, inject the env var into the Lambda/service Environment, and attach least‑privilege IAM. Do not propose code defaults, .env fallbacks, or skipping tests.
 
-
 ---
 
 ## Output Format
@@ -108,7 +106,6 @@ If evaluations show failures like “Missing required configuration … EMAIL_IN
 ---
 
 ## Guidelines
-
 - Justify any rollbacks or departures from the latest iteration.
 - Use specific references to evaluation output content (errors resolved, regressions introduced, stability gains, etc).
 - You can safely ignore this warning:  
@@ -116,8 +113,3 @@ If evaluations show failures like “Missing required configuration … EMAIL_IN
 - In general, **ignore warnings unless they indicate functional failure** or break the task’s GOAL.
 - Do not attempt to fix safe warnings. Focus on actionable errors and failures instead.
 - If the previous attempt failed with Docker running out of disk space, you can assume this issue is manually cleaned up and do not need to suggest the planner fix it
-
-## Test Policy (Non‑negotiable)
-1) Integration and acceptance tests must hit real AWS resources. Do not suggest skipping, mocking, or providing local stubs when external infra is unavailable.
-2) When required cloud resources or env vars are missing, tests must fail fast. Strategic guidance must route to AWS provisioning to create the resources and inject env via CloudFormation.
-3) CI pre‑checks are allowed only as a fail‑fast diagnostic gate (clear error and exit). They must not downgrade, skip, or mark integration tests as xfailed.

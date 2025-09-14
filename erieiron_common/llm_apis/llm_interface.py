@@ -284,9 +284,9 @@ class LlmMessage:
         #             )
         
         token_count = LlmMessage.get_total_token_count(model, messages_out)
-        while token_count > MODEL_TO_MAX_TOKENS.get(model, sys.maxsize):
-            messages_out = messages_out[1:]
-            token_count = LlmMessage.get_total_token_count(model, messages_out)
+        max_token_count = MODEL_TO_MAX_TOKENS.get(model, sys.maxsize)
+        if token_count > max_token_count:
+            raise Exception(f"token count greater than max: {token_count} > {max_token_count}")
         
         return messages_out
     

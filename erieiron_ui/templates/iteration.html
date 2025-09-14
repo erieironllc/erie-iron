@@ -3,7 +3,7 @@
 {% load erieiron_common_tags %}
 {% block content %}
     <div class="row">
-    <div class="col-md-3">
+    <div class="col-sidebar">
         <div class="list-group" id="iterationSidebar" role="tablist">
             <h3>
                 Iteration
@@ -108,7 +108,7 @@
 
         </div>
     </div>
-    <div class="col-md-9">
+    <div class="col-main-content">
 
         <div class="tab-content" id="iterationTabContent">
             <div class="tab-pane active show" id="routing" role="tabpanel" aria-labelledby="routing-tab">
@@ -122,16 +122,14 @@
                         <p>Starting with the <b>latest code</b> from the previous
                             iteration. {{ previous_iteration.evaluation_json.rollback_reason|swizzle_current }}</p>
                     {% endif %}
-                    <hr>
-                    <p><b>Output from
-                        version {{ iteration_to_modify.version_number }}</b>: {{ iteration_to_modify.evaluation_json.error.summary }}
-                    </p>
-                    <pre style="max-height: 8rem"> {{ iteration_to_modify.evaluation_json.error.logs }} </pre>
+                    <hr class="mt-4">
+                    <b>Output from version {{ iteration_to_modify.version_number }}</b>
+                    <p>{{ iteration_to_modify.evaluation_json.error.summary }} </p>
                 {% endif %}
 
                 {% if iteration.routing_json %}
-                    <hr>
-                    <b>Routing based on version {{ iteration_to_modify.version_number }}'s output:</b>
+                    <hr class="mt-4">
+                    <b>Routing based on version {{ iteration_to_modify.version_number }}'s output</b>
                     <table class="table table-striped mt-3">
                         <tr>
                             <td>Classification</td>
@@ -158,20 +156,36 @@
                             <td>{{ iteration.routing_json.context_files|pprint_json }}</td>
                         </tr>
                     </table>
-                {% else %}
-                    No routing info - likely skipped to execution
                 {% endif %}
+
+                {% if previous_iteration and iteration_to_modify != previous_iteration %}
+                    <div class="mt-5">
+                        <hr>
+                        <b>Iteration {{ previous_iteration.version_number }} Error Logs (this is the previous
+                            iteration)</b>
+                        <pre class="mt-3"> {{ previous_iteration.evaluation_json.error.logs }} </pre>
+                    </div>
+                {% endif %}
+
+
+                {% if iteration_to_modify %}
+                    <div class="mt-5">
+                        <hr>
+                        <b>Iteration {{ iteration_to_modify.version_number }} Error Logs (this is the iteration we will
+                            modify)</b>
+                        <pre class="mt-3"> {{ iteration_to_modify.evaluation_json.error.logs }} </pre>
+                    </div>
+                {% endif %}
+
+
             </div>
 
             <div class="tab-pane " id="planning" role="tabpanel" aria-labelledby="planning-tab">
                 {% for code_file in iteration.planning_json.code_files %}
                     <div class="card mb-4 iteration_card">
-                        <div class="card-header d-flex justify-content-between">
+                        <div class="card-header d-flex justify-content-start">
                             <small class="text-muted">
                                 {{ code_file.code_file_path }}
-                            </small>
-                            <small class="text-muted">
-                                use {{ code_file.code_writing_model }}
                             </small>
                         </div>
                         <div class="card-body">
@@ -200,7 +214,7 @@
                 {% for code_version in iteration.codeversion_set.all %}
                     {% if code_version.code_instructions|dictsort:"step_number" %}
                         <div class="card mb-4 iteration_card">
-                            <div class="card-header">
+                            <div class="card-header d-flex justify-content-start">
                                 <small class="text-muted">
                                     {{ code_version.code_file.file_path }}
                                 </small>

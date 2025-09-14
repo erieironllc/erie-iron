@@ -15,6 +15,15 @@ This test is being generated at the start of the implementation.  No implementat
 
 ---
 
+## S3 Integration Rule
+- Never stub out or mock S3 services.
+- Always create real CloudFormation resources for buckets, IAM policies, and related infrastructure.
+- In application code, always use boto3 or the AWS SDK for real interaction with S3.
+- Do not include placeholder code such as 'TODO: add S3 integration later.'
+- All S3 code must be deployable and production-ready.
+
+---
+
 ## Inputs
 
 You receive:

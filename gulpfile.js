@@ -22,8 +22,6 @@ const paths = {
             './node_modules/underscore/underscore.js',
             './node_modules/backbone/backbone.js',
             './node_modules/bootstrap/dist/js/bootstrap.bundle.js',
-            './node_modules/tone/build/Tone.js',
-            // './node_modules/chart.js/dist/chart.js',
             './erieiron_common/js/**/*.js',
             './erieiron_ui/js/**/*.js'
         ],

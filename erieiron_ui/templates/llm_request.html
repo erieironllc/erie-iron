@@ -3,55 +3,91 @@
 {% load erieiron_common_tags %}
 {% block content %}
     <div class="row">
-        <div class="col-md-3">
+        <div class="col-sidebar">
             <div class="list-group" id="iterationSidebar" role="tablist">
                 <h3>LLM Request</h3>
-                <a class="list-group-item list-group-item-action active" id="routing-tab" data-bs-toggle="list"
-                   href="#routing"
-                   role="tab" aria-controls="routing">
-                    {{ llm_request.title }}
+
+                <a id="messages-tab"
+                   href="#messages"
+                   class="list-group-item list-group-item-action active"
+                   role="tab"
+                   data-bs-toggle="list"
+                   aria-controls="messages"
+                >
+                    Messages and Response
                 </a>
+
+                <a id="chat-tab"
+                   href="#chat"
+                   class="list-group-item list-group-item-action"
+                   role="tab"
+                   data-bs-toggle="list"
+                   aria-controls="chat"
+                >
+                    Chat
+                </a>
+
+                <a id="optimize-tab"
+                   href="#optimize"
+                   class="list-group-item list-group-item-action"
+                   role="tab"
+                   data-bs-toggle="list"
+                   aria-controls="optimize"
+                >
+                    Optimize
+                </a>
+
+                <a id="compare-tab"
+                   href="#compare"
+                   class="list-group-item list-group-item-action"
+                   role="tab"
+                   data-bs-toggle="list"
+                   aria-controls="compare"
+                >
+                    Compare
+                </a>
+
             </div>
         </div>
-        <div class="col-md-9">
+        <div class="col-main-content">
             <div class="tab-content" id="iterationTabContent">
-                <div class="tab-pane active show" id="routing" role="tabpanel" aria-labelledby="routing-tab">
-
+                <div class="tab-pane show" id="messages" role="tabpanel" aria-labelledby="messages-tab">
+                    <h5>
+                        {{ llm_request.title }}
+                    </h5>
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
-                            <small>
-                                {{ llm_request.timestamp }}
-                            </small>
-                            <small class="ms-3">
-                                {{ llm_request.llm_model }}
+                            <small class="me-3">
+                                Model: {{ llm_request.llm_model }};
+                                Reasoning: {{ llm_request.reasoning_effort|default_if_none:"medium" }};
+                                Verbosity: {{ llm_request.verbosity|default_if_none:"medium" }}
                             </small>
                             {% if llm_request.response %}
-                                <small class="ms-3">
+                                <small class="me-3">
                                     {{ llm_request.token_count }} tokens
                                 </small>
-                                <small class="ms-3">
+                                <small class="me-3">
+                                    {{ llm_request.chat_millis|intcomma }}ms
+                                </small>
+                                <small class="me-3">
                                     ${{ llm_request.price|floatformat:3 }}
                                 </small>
                             {% else %}
-                                <small class="ms-3">
+                                <small class="me-3">
                                     In Progress
                                 </small>
                             {% endif %}
+                            <small class="me-3">
+                                {{ llm_request.timestamp }}
+                            </small>
                         </div>
                         <div>
                             <button class="btn btn-sm ms-3 copy-btn bi bi-copy "
-                                    style="color: #2a2a1e;"
+                                    style="color: white;"
                                     data-target="#div_full_prompt"
                                     onclick="event.stopPropagation(); return false;"
                                     title="Copy to clipboard">
                             </button>
-                            <button id="btn_debug" class="btn btn-sm ms-3 bi bi-chat-left-text"
-                                    style="color: #2a2a1e;"
-                                    title="Ask questions about interaction">
-                            </button>
-                            <button id="btn_optimize" class="btn btn-sm ms-3 bi bi-lightning-fill"
-                                    style="color: #2a2a1e;"
-                                    title="Optimize">
                         </div>
                     </div>
                     <hr>
@@ -100,7 +136,7 @@
                                     </div>
                                     <div class="card-body collapse" id="llmrequest-response">
                                         <dl class="row">
-                                            <pre id="llmrequest-content-{{ forloop.counter }}">{{llm_request.response}}</pre>
+                                            <pre id="llmrequest-content-{{ forloop.counter }}">{{ llm_request.response }}</pre>
                                         </dl>
                                     </div>
                                 </div>
@@ -111,11 +147,11 @@
 
 
                     <pre class="d-none" id="div_full_prompt">
-{% for inp_msg in llm_request.input_messages %}
-    ==== Message Role: {{ inp_msg.role }} =========================================
+                        {% for inp_msg in llm_request.input_messages %}
+                            ==== Message Role: {{ inp_msg.role }} =========================================
 
-    {{ inp_msg.content }}
-{% endfor %}
+                            {{ inp_msg.content }}
+                        {% endfor %}
 
                         ==== Response from {{ llm_request.llm_model }} ================================
                         {% if llm_request.response %}
@@ -126,21 +162,8 @@
 </pre>
 
                 </div>
-            </div>
-        </div>
-    </div>
 
-
-
-
-    <div class="modal fade modal-lg"
-         id="modal_llmrequest_debug"
-         tabindex="-1"
-         aria-hidden="true"
-    >
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-body">
+                <div class="tab-pane " id="chat" role="tabpanel" aria-labelledby="chat-tab">
                     <form id="frm_llm_question" action="{% url 'action_llm_debug_ask' llm_request.id %}">
                         {% csrf_token %}
                         <div class="mb-3">
@@ -161,8 +184,121 @@
                                 <a id="btn_ask" class="ms-3 btn btn-secondary pull-right" href="#">Ask</a>
                             </div>
                         </div>
-                        <div id="txt_question_response" style="height: 55vh; overflow-y: scroll">
+                        <div id="txt_question_response">
                         </div>
+                    </form>
+                </div>
+
+                <div class="tab-pane " id="optimize" role="tabpanel" aria-labelledby="optimize-tab">
+                    <form id="frm_llm_optimize" action="{% url 'action_llm_debug_ask' llm_request.id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="prompt"
+                               value="Please review context and response and look to optimize this interaction"/>
+                        <input type="hidden" name="optimize" value="True"/>
+                        <div class="mb-3">
+                            <label class="ms-1">Optimize Using</label>
+                            <div class="mt-1 d-flex justify-content-end">
+                                <select name="llm_model" class="form-select">
+                                    {% for model_choice in model_choices %}
+                                        <option value="{{ model_choice.value }}"
+                                                {% if model_choice.value == model_choice_value %}selected{% endif %}>
+                                            {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <a id="btn_optimize" class="ms-3 btn btn-secondary pull-right" href="#">Optimize</a>
+                            </div>
+                        </div>
+                        <div id="txt_optimize_response">
+                        </div>
+                    </form>
+                </div>
+
+                <div class="tab-pane active" id="compare" role="tabpanel" aria-labelledby="compare-tab">
+                    <form id="frm_llm_compare" action="{% url 'action_llm_debug_compare' llm_request.id %}">
+                        {% csrf_token %}
+                        <table class="w-100">
+                            <thead style="border-bottom: 1px solid #6c757d;">
+                            <tr valign=top>
+                                <th class="pb-2">
+                                    <label class="ms-1">Existing Response</label>
+                                    <div class="mt-3 d-flex justify-content-start">
+                                        Model: {{ llm_request.llm_model }};
+                                        Reasoning: {{ llm_request.reasoning_effort|default_if_none:"medium" }};
+                                        Verbosity: {{ llm_request.verbosity|default_if_none:"medium" }}
+                                    </div>
+                                </th>
+                                <th class="pb-2">
+                                    <label class="ms-1">Compare With</label>
+                                    <div class="mt-1 d-flex justify-content-end">
+                                        <select name="llm_model" class="form-select">
+                                            {% for model_choice in model_choices %}
+                                                <option value="{{ model_choice.value }}"
+                                                        {% if model_choice.value == model_choice_value %}selected{% endif %}>
+                                                    {{ model_choice.label }}
+                                                </option>
+                                            {% endfor %}
+                                        </select>
+                                        <a id="btn_compare" class="ms-3 btn btn-secondary pull-right"
+                                           href="#">Compare</a>
+                                    </div>
+                                </th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <tr valign=top>
+                                <td class="pe-2 ">
+                                    <div class="w-100 d-flex justify-content-between">
+                                        <div>
+                                            ${{ llm_request.price|floatformat:3 }}
+                                            | {{ llm_request.chat_millis|intcomma }}ms
+                                        </div>
+                                        <div>
+                                            <button class="btn btn-sm ms-3 copy-btn bi bi-copy "
+                                                    style="color: white;"
+                                                    data-target="#txt_compare_orig_response"
+                                                    onclick="event.stopPropagation(); return false;"
+                                                    title="Copy to clipboard">
+                                            </button>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="ps-1">
+                                    <div class="w-100 d-flex justify-content-between">
+                                        <div id="td_compare_price">
+                                        </div>
+                                        <div>
+                                            <button id="btn_compare_response_diff"
+                                                    class="btn btn-sm ms-3 bi bi-file-diff d-none"
+                                                    style="color: white;"
+                                                    title="Diff">
+                                            </button>
+                                            <button id="btn_compare_response_copy"
+                                                    class="btn btn-sm ms-3 copy-btn bi bi-copy d-none"
+                                                    style="color: white;"
+                                                    data-target="#txt_compare_response"
+                                                    onclick="event.stopPropagation(); return false;"
+                                                    title="Copy to clipboard">
+                                            </button>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td colspan=2>&nbsp;</td>
+                            </tr>
+                            <tr valign=top>
+                                <td class="pe-2">
+                                    <pre id="txt_compare_orig_response"
+                                         style="width: calc(50vw - 200px); overflow-x: auto;">{{ llm_request.response|default_if_none:"" }}</pre>
+                                </td>
+                                <td>
+                                    <pre id="txt_compare_response" style="width: calc(50vw - 200px); overflow-x: auto;">
+                                    </pre>
+                                </td>
+                            </tr>
+                            </tbody>
+                        </table>
                     </form>
                 </div>
             </div>
@@ -170,7 +306,29 @@
     </div>
 
 
+    <div class="modal fade modal-lg"
+         id="modal_diff"
+         tabindex="-1"
+         aria-hidden="true"
+    >
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-body">
+                    <div class="d-flex justify-content-end">
+                        <button id="btn_compare_response_copy"
+                                class="btn btn-sm ms-3 copy-btn bi bi-copy"
+                                style="color: white;"
+                                data-target="#compare_diff"
+                                onclick="event.stopPropagation(); return false;"
+                                title="Copy to clipboard">
+                        </button>
+                    </div>
 
+                    <pre id="compare_diff" class="w-100 code_diff"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
 
 
 

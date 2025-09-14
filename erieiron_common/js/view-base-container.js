@@ -5,6 +5,7 @@ BaseContainerView = ErieView.extend({
         'mousedown .resizer_bar-horiz': 'horiz_resizer_mousedown',
         'mousedown .resizer_bar-vert': 'vert_resizer_mousedown',
 
+        'click .list-group-item': 'nav_click',
         'change #txt_llm_search': 'txt_llm_search_change',
         'change #statusFilter': 'statusFilter_change',
         'click .modal .btn-cancel': 'modal_cancel_click',
@@ -37,9 +38,24 @@ BaseContainerView = ErieView.extend({
             $("input[type=text]").first().focus();
         }, 100);
 
+
+        const selected_tab_id = get_cookie("selected_tab_id");
+        let the_tab = null;
+        if (selected_tab_id) {
+            the_tab = $(`#${selected_tab_id}`);
+        }
+        if (the_tab == null || the_tab.length === 0) {
+            the_tab = $(".list-group-item").first()
+        } else {
+            $(".list-group-item.active").removeClass("active");
+        }
+        the_tab.addClass("active");
+        $(".tab-pane.active").removeClass("active");
+        $(`#${the_tab.attr("aria-controls")}`).addClass("active")
+
         this.init_page();
 
-        $(".tab-pane:first-child").addClass("active").addClass("show");
+
         const hash = window.location.hash;
         if (hash) {
             const tabTrigger = document.querySelector(`button[data-bs-target="${hash}"]`);
@@ -135,6 +151,8 @@ BaseContainerView = ErieView.extend({
                 }
             }, 100);
         }, 2000);
+
+
     },
 
     delegate_events_tester_click(target_el) {
@@ -457,6 +475,14 @@ BaseContainerView = ErieView.extend({
                 set_cookie(btn.attr("id"), is_on ? 1 : 0)
             }
 
+        }
+    },
+
+    nav_click: function (ev) {
+        const id = $(ev.target).attr("id");
+        if (id) {
+            set_cookie("selected_tab_id", id);
+            console.log("Saved tab id:", id);
         }
     },
 

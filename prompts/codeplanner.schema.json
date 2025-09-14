@@ -148,6 +148,11 @@
               },
               "guidance": {
                 "type": "string",
+                "minLength": 1,
+                "description": "Strategic advice for the code writer; this field is mandatory and must be written for the code writer (not meta-commentary)."
+              },
+              "validator": {
+                "type": "string",
                 "description": "Strategic advice for the code writer based on trends or previous iteration summaries"
               },
               "instructions": {

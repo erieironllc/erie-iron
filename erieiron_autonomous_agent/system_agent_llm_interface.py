@@ -1,9 +1,9 @@
-import itertools
 import logging
 import os
 import traceback
 from pathlib import Path
 
+import settings
 from erieiron_autonomous_agent.models import LlmRequest, Business, Initiative, SelfDrivingTaskIteration
 from erieiron_common import common
 from erieiron_common.common import assert_exists
@@ -144,6 +144,7 @@ def llm_chat(
         verbosity: LlmVerbosity = None,
         code_response=False
 ) -> LlmResponse:
+    input_model = model
     messages = common.flatten(messages)
     
     if isinstance(tag_entity, SelfDrivingTaskIteration):
@@ -164,13 +165,14 @@ def llm_chat(
         raise ValueError(f"invalid tag entity {tag_entity}")
     
     if output_schema:
-        logging.info(f"llm chat: {description} ({output_schema})")
+        logging.info(f"llm chat: {description} ({output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}")
     else:
-        logging.info(f"llm chat: {description}")
+        logging.info(f"llm chat: {description}; Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}")
     
     token_count = LlmMessage.get_total_token_count(model, messages)
     
     llm_resp = None
+    llm_request_url = ""
     for i in range(2):
         llm_messages = LlmMessage.parse_prompt(model, messages, code_response=code_response)
         
@@ -189,6 +191,7 @@ def llm_chat(
                 "content": sanitize_prompt(m.text)
             } for m in llm_messages]
         )
+        llm_request_url = f"{settings.BASE_URL}/llm/debug/{llm_request.id}"
         
         try:
             max_tokens = MODEL_TO_MAX_TOKENS.get(model)
@@ -197,19 +200,25 @@ def llm_chat(
                 model=model,
                 output_schema=PROMPTS_DIR / output_schema if output_schema else None,
                 code_response=code_response,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
                 debug=False
             )
+            llm_resp.set_llm_request_id(llm_request.id)
             
             resp_json = llm_resp.__dict__.copy()
             resp_json.pop("text", None)
             resp_json.pop("parsed_json", None)
             
             LlmRequest.objects.filter(id=llm_request.id).update(
+                llm_model=llm_resp.model,
+                chat_millis=llm_resp.chat_millis,
                 response=llm_resp.text,
                 resp_json=resp_json,
                 token_count=llm_resp.token_count,
                 price=llm_resp.price_total
             )
+            llm_request.refresh_from_db(fields=["llm_model", "chat_millis", "response", "resp_json", "token_count", "price"])
             
             break
         except Exception as e:
@@ -223,6 +232,14 @@ def llm_chat(
                 raise e
             else:
                 model = MODEL_BACKUPS[model]
+    
+    if output_schema:
+        logging.info(f"llm chat complete: {description} ({output_schema}); {llm_request_url}")
+    else:
+        logging.info(f"llm chat complete: {description}; {llm_request_url}")
+    
+    if LlmModel(llm_resp.model) != LlmModel(input_model):
+        logging.info(f"INPUT MODEL DIFFERENT {input_model} THAN OUTPUT MODEL {llm_resp.model}; {llm_request_url}")
     
     return llm_resp
 

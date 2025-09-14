@@ -12,8 +12,7 @@
     "gulp-terser": "^2.1.0",
     "gulp-uglify": "^3.0.2",
     "sass": "^1.58.3",
-    "stylelint": "^16.22.0",
-    "tone": "^15.1"
+    "stylelint": "^16.22.0"
   },
   "dependencies": {
     "backbone": "^1.6.0",

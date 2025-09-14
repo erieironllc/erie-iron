@@ -908,6 +908,18 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         else:
             return False
     
+    def get_error_llm_msg(self, label:str) -> list[LlmMessage]:
+        error_summary, error_logs = self.get_error()
+        return LlmMessage.user_from_data(
+            label,
+            {
+                "iteration_id": self.id,
+                "iteration_version": self.version_number,
+                "summary": error_summary,
+                "logs": error_logs
+            }
+        )
+    
     def get_error(self) -> tuple[str, str]:
         evaluation_json = self.evaluation_json
         if evaluation_json is None:
@@ -994,6 +1006,7 @@ class LlmRequest(BaseErieIronModel):
     initiative = models.ForeignKey(Initiative, on_delete=models.SET_NULL, null=True)
     task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True)
     token_count = models.IntegerField()
+    chat_millis = models.IntegerField(default=0)
     title = models.TextField(null=True, default="Unknown")
     price = models.FloatField()
     llm_model = models.TextField(null=True)

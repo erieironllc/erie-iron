@@ -542,8 +542,8 @@ def update_rds_secret_from_cloudformation_stack(
     secret_dict = json.loads(resp["SecretString"])
     
     output_varname_to_envname = {
-        "RdsInstanceDBName": "ERIEIRON_DB_NAME", 
-        "RdsInstancePort": "ERIEIRON_DB_PORT", 
+        "RdsInstanceDBName": "ERIEIRON_DB_NAME",
+        "RdsInstancePort": "ERIEIRON_DB_PORT",
         "RdsInstanceEndpoint": "ERIEIRON_DB_HOST"
     }
     
@@ -1337,10 +1337,13 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     stack_name = config.self_driving_task.get_cloudformation_stack_name(aws_env)
     stack_status = get_stack_status(stack_name, cf_client)
     
-    messages += LlmMessage.user_from_data("Cloudformation Status", {
-        "stack_status": stack_status,
-        "allow_goal_achieved": "True" if stack_status == "DEPLOY_COMPLETE" else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
-    })
+    messages += LlmMessage.user_from_data(
+        "Cloudformation Status",
+        {
+            "stack_status": stack_status,
+            "allow_goal_achieved": "True" if stack_status == "DEPLOY_COMPLETE" else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
+        }
+    )
     
     if isinstance(exception, ExecutionException):
         messages += LlmMessage.user_from_data(
@@ -1413,7 +1416,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
             ], replacements=[
                 ("<env_vars>", get_env_var_names(config)),
             ]),
-            *LlmMessage.user_from_data(
+            LlmMessage.user_from_data(
                 f"**Iteration Evaluations**",
                 previous_iteration_evals
             )
@@ -1865,50 +1868,42 @@ def perform_code_review(
                 "common--credentials_architecture.md"
             ]
         ),
-        *get_architecture_docs(config),
-        *common.ensure_list(
-            get_tombstone_message(config)
+        get_architecture_docs(
+            config
         ),
-        # *common.ensure_list(
-        #     get_relevant_code_files(config, current_iteration, iteration_to_modify)
-        # ),
-        *common.ensure_list(
-            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.has_error() else []
+        get_tombstone_message(
+            config
         ),
-        *common.ensure_list(
-            get_prev_attemp_summaries(config)
+        get_file_structure_msg(
+            config.sandbox_root_dir
+        ) if not iteration_to_modify.has_error() else [],
+        get_prev_attemp_summaries(
+            config
         ),
-        *common.ensure_list(
-            LlmMessage.user_from_data(
-                "Relevant past lessons",
-                get_lessons(config)
-            )
+        get_lessons_msg(
+            "Relevant past lessons",
+            config
         ),
-        *common.ensure_list(
-            config.guidance
+        config.guidance,
+        LlmMessage.user_from_data(
+            "Code Review Input: Proposed Code Changes for Current Iteration",
+            [
+                cv.get_llm_message_data()
+                for cv in current_iteration.get_all_code_versions()
+            ]
         ),
-        *common.ensure_list(
-            LlmMessage.user_from_data(
-                "Code Review Input: Proposed Code Changes for Current Iteration",
-                [
-                    cv.get_llm_message_data()
-                    for cv in current_iteration.get_all_code_versions()
-                ]
-            )
-        ),
-        LlmMessage.user(f'''
-The code changes to review are in support of the following goal:
+        f'''The code changes to review are in support of the following goal:
 
-# Goal
-{task.description}
+        # Goal
+        {task.description}
 
-# Test Plan
-{task.test_plan or 'none'}
+        # Test Plan
+        {task.test_plan or 'none'}
 
-# Risk Notes
-{task.risk_notes or 'none'}
-            '''),
-        LlmMessage.user("Please perform the code review")
+        # Risk Notes
+        {task.risk_notes or 'none'}'''
+        ,
+        "Please perform the code review"
     ]
     
     code_review_data = llm_chat(
@@ -1962,12 +1957,32 @@ def get_prev_attemp_summaries(config: SelfDriverConfig, disabled=True) -> list[d
     )
 
 
+def get_lessons_msg(
+        title: str,
+        config,
+        task_desc=None,
+        all_lessons=True,
+        exclude_invalid=True,
+        skip=False
+) -> list[LlmMessage]:
+    return LlmMessage.user_from_data(
+        title,
+        get_lessons(
+            config,
+            task_desc,
+            all_lessons,
+            exclude_invalid,
+            skip
+        )
+    )
+
+
 def get_lessons(
         config,
         task_desc=None,
         all_lessons=True,
         exclude_invalid=True, skip=False
-) -> list[dict]:
+) -> list[LlmMessage]:
     if skip:
         return []
     
@@ -2026,7 +2041,6 @@ def get_lessons(
                 unique_indices.append(i)
         
         lessons = [lessons[i] for i in unique_indices]
-    
     return {
         "important_quote": "Those who don't learn from history are doomed to repeat it",
         "lessons": [
@@ -2048,11 +2062,15 @@ def extract_lessons(
         "Extract Lessons",
         [
             get_sys_prompt("lesson_extractor.md"),
-            LlmMessage.user(task.get_work_desc()),
-            *LlmMessage.user_from_data(f"Log Content from the '{agent_step}' step", log_content),
-            *LlmMessage.user_from_data(
+            task.get_work_desc(),
+            LlmMessage.user_from_data(
+                f"Log Content from the '{agent_step}' step",
+                log_content
+            ),
+            get_lessons_msg(
                 "Existing Lessons (Don't repeat these)",
-                get_lessons(config, exclude_invalid=False)
+                config,
+                exclude_invalid=False
             )
         ],
         output_schema="lesson_extractor.md.schema.json",
@@ -2313,7 +2331,7 @@ def write_test(
                     ("<env_vars>", get_env_var_names(config)),
                     ("<business_tag>", config.business.service_token),
                 ]),
-                *user_messages
+                user_messages
             ]
             
             if config.self_driving_task.test_file_path and (config.sandbox_root_dir / config.self_driving_task.test_file_path).exists():
@@ -2323,12 +2341,12 @@ def write_test(
                 )
             
             if previous_exception:
-                messages.append(LlmMessage.user(f"""
+                messages.append(f"""
     Your previous attempt at writing this code failed with this exception:
     {previous_exception}
 
     Please attempt to write the code again and avoid causing this error
-                """))
+                """)
             
             code = llm_chat(
                 description,
@@ -2426,45 +2444,41 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
         routing_data = llm_chat(
             "Identify Development Route",
             [
-                *common.ensure_list(
-                    get_sys_prompt(
-                        [
-                            "failure_router.md",
-                            "common--iam_role.md",
-                            "common--forbidden_actions.md",
-                            "common--credentials_architecture.md",
-                            "common--environment_variables.md"
-                        ],
-                        replacements=[
-                            ("<env_vars>", get_env_var_names(config)),
-                            get_readonly_files_replacement(config)
-                        ]
-                    ),
+                get_sys_prompt(
+                    [
+                        "failure_router.md",
+                        "common--iam_role.md",
+                        "common--forbidden_actions.md",
+                        "common--credentials_architecture.md",
+                        "common--environment_variables.md"
+                    ],
+                    replacements=[
+                        ("<env_vars>", get_env_var_names(config)),
+                        get_readonly_files_replacement(config)
+                    ]
                 ),
-                *get_architecture_docs(config),
-                *common.ensure_list(
-                    LlmMessage.user_from_data(
-                        "Error with previous code iteration",
-                        {
-                            "summary": error_summary,
-                            "logs": error_logs
-                        }
-                    )
+                get_architecture_docs(
+                    config
                 ),
-                *common.ensure_list(
-                    get_tombstone_message(config)
+                previous_iteration.get_error_llm_msg(
+                    f"Error observed while executing the previous code iteration (Iteration {previous_iteration.version_number})"
                 ),
-                *common.ensure_list(
-                    get_prev_attemp_summaries(config)
+                iteration_to_modify.get_error_llm_msg(
+                    f"Error observed while executing the code iteration we are modifying (Iteration {iteration_to_modify.version_number})"
                 ),
-                *common.ensure_list(
-                    LlmMessage.user_from_data(
-                        "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                        get_lessons(config)
-                    )
+                get_tombstone_message(
+                    config
                 ),
-                *common.ensure_list(
-                    get_dependencies_msg(config, for_planning=True)
+                get_prev_attemp_summaries(
+                    config
+                ),
+                get_lessons_msg(
+                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                    config
+                ),
+                get_dependencies_msg(
+                    config,
+                    for_planning=True
                 ),
                 "Please perform the routing analysis"
             ],
@@ -2495,54 +2509,54 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     planning_data = llm_chat(
         "Plan aws provisioning code changes",
         [
-            *common.ensure_list(
-                get_sys_prompt(
-                    [
-                        "codeplanner--aws_provisioning.md",
-                        "common--general_coding_rules.md",
-                        "codeplanner--common.md",
-                        "common--llm_chat.md",
-                        "common--iam_role.md",
-                        "common--forbidden_actions.md",
-                        "common--environment_variables.md",
-                        "common--infrastructure_rules.md",
-                        "common--credentials_architecture.md"
-                    ], replacements=[
-                        ("<business_tag>", config.business.service_token),
-                        ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                        ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                        ("<env_vars>", get_env_var_names(config)),
-                        ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
-                        ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
-                        get_readonly_files_replacement(config)
-                    ]
-                ),
+            get_sys_prompt(
+                [
+                    "codeplanner--aws_provisioning.md",
+                    "common--general_coding_rules.md",
+                    "codeplanner--common.md",
+                    "common--llm_chat.md",
+                    "common--iam_role.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md",
+                    "common--infrastructure_rules.md",
+                    "common--credentials_architecture.md"
+                ], replacements=[
+                    ("<business_tag>", config.business.service_token),
+                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                    ("<env_vars>", get_env_var_names(config)),
+                    ("<stack_name_dev>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.DEV)),
+                    ("<stack_name_prod>", config.self_driving_task.get_cloudformation_stack_name(AwsEnv.PRODUCTION)),
+                    get_readonly_files_replacement(config)
+                ]
             ),
-            *get_architecture_docs(config),
-            *config.business.get_existing_required_credentials_llmm(),
-            *common.ensure_list(
-                get_prev_attemp_summaries(config)
+            get_architecture_docs(
+                config
             ),
-            *common.ensure_list(
-                LlmMessage.user_from_data(
-                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                    get_lessons(config)
-                )
+            config.business.get_existing_required_credentials_llmm(),
+            get_prev_attemp_summaries(
+                config
             ),
-            *common.ensure_list(
-                build_cloudformation_durations_context_messages(config)
+            get_lessons_msg(
+                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                config
             ),
-            *common.ensure_list(
-                build_previous_iteration_context_messages(config, title="structured error reports")
+            build_cloudformation_durations_context_messages(
+                config
             ),
-            *common.ensure_list(
-                get_relevant_code_files(config, context_files)
+            build_previous_iteration_context_messages(
+                config,
+                title="structured error reports"
             ),
-            *common.ensure_list(
-                LlmMessage.user_from_data("structured failure triage object", routing_json)
+            get_relevant_code_files(
+                config,
+                context_files
+            ),
+            LlmMessage.user_from_data(
+                "structured failure triage object",
+                routing_json
             ),
             "Please produce a development plan that addresses this issue"
-        
         ],
         config.model_code_planning,
         tag_entity=config.current_iteration,
@@ -2595,46 +2609,48 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
     planning_data = llm_chat(
         "Plan quick fix code changes",
         [
-            *common.ensure_list(
-                get_sys_prompt([
-                    "codeplanner--quick_fix.md",
-                    "common--general_coding_rules.md",
-                    "codeplanner--common.md",
-                    "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--credentials_architecture.md",
-                    "common--infrastructure_rules.md"
-                ], replacements=[
-                    ("<business_tag>", config.business.service_token),
-                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                    ("<env_vars>", get_env_var_names(config)),
-                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    get_readonly_files_replacement(config)
-                ]),
+            get_sys_prompt([
+                "codeplanner--quick_fix.md",
+                "common--general_coding_rules.md",
+                "codeplanner--common.md",
+                "common--llm_chat.md",
+                "common--iam_role.md",
+                "common--forbidden_actions.md",
+                "common--environment_variables.md",
+                "common--credentials_architecture.md",
+                "common--infrastructure_rules.md"
+            ], replacements=[
+                ("<business_tag>", config.business.service_token),
+                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                ("<env_vars>", get_env_var_names(config)),
+                ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                get_readonly_files_replacement(config)
+            ]),
+            get_architecture_docs(
+                config
             ),
-            *get_architecture_docs(config),
-            *config.business.get_existing_required_credentials_llmm(),
-            *common.ensure_list(
-                get_prev_attemp_summaries(config)
+            config.business.get_existing_required_credentials_llmm(),
+            get_prev_attemp_summaries(
+                config
             ),
-            *common.ensure_list(
-                LlmMessage.user_from_data(
-                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                    get_lessons(config)
-                )
+            get_lessons_msg(
+                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                config
             ),
-            *common.ensure_list(
-                build_cloudformation_durations_context_messages(config)
+            build_cloudformation_durations_context_messages(
+                config
             ),
-            *common.ensure_list(
-                build_previous_iteration_context_messages(config, title="structured error reports")),
-            *common.ensure_list(
-                get_relevant_code_files(config, routing_json.get("context_files", []))
+            build_previous_iteration_context_messages(
+                config,
+                title="structured error reports"
             ),
-            *common.ensure_list(
-                LlmMessage.user_from_data("structured failure triage object", routing_json)
+            get_relevant_code_files(
+                config,
+                routing_json.get("context_files", [])
+            ),
+            LlmMessage.user_from_data(
+                "structured failure triage object",
+                routing_json
             ),
             "Please produce a development plan that addresses this issue"
         ],
@@ -2704,56 +2720,49 @@ def plan_full_code_changes(config: SelfDriverConfig):
                 get_readonly_files_replacement(config)
             ]
         ),
-        *get_architecture_docs(config),
-        *config.business.get_existing_required_credentials_llmm(),
-        *common.ensure_list(
-            get_budget_message(config)
+        get_architecture_docs(
+            config
         ),
-        *common.ensure_list(
-            build_cloudformation_durations_context_messages(config)
+        config.business.get_existing_required_credentials_llmm(),
+        get_budget_message(
+            config
         ),
-        *common.ensure_list(
-            get_tombstone_message(config)
+        build_cloudformation_durations_context_messages(
+            config
         ),
-        *common.ensure_list(
-            build_previous_iteration_context_messages(config)
+        get_tombstone_message(
+            config
         ),
-        *common.ensure_list(
-            get_dependencies_msg(config, for_planning=True)
+        build_previous_iteration_context_messages(
+            config
         ),
-        *common.ensure_list(
-            relevant_code_files
+        get_dependencies_msg(
+            config,
+            for_planning=True
         ),
-        *common.ensure_list(
-            get_docs_msg(config)
+        relevant_code_files,
+        get_docs_msg(
+            config
         ),
-        *common.ensure_list(
-            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.has_error() else []
+        get_file_structure_msg(
+            config.sandbox_root_dir
+        ) if not iteration_to_modify.has_error() else [],
+        config.guidance,
+        get_prev_attemp_summaries(
+            config
         ),
-        *common.ensure_list(
-            config.guidance
+        get_lessons_msg(
+            "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+            config
         ),
-        *common.ensure_list(
-            get_prev_attemp_summaries(config)
-        ),
-        *common.ensure_list(
-            LlmMessage.user_from_data(
-                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                get_lessons(config)
-            )
-        ),
-        *common.ensure_list(
-            LlmMessage.user(f"""
-The previous iteration failed at the deployment stage.   
+        f"""The previous iteration failed at the deployment stage.   
 
-**Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
-- Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
-- You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
+        **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
+        - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
+        - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
 
-**YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM**
-            """)
-            if iteration_to_modify.has_error() else get_goal_msg(config)
-        )
+        **YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM** """
+        if iteration_to_modify.has_error() else get_goal_msg(config)
     ]
     
     planning_data = llm_chat(
@@ -2817,19 +2826,20 @@ def write_code_file(
                 ("<env_vars>", get_env_var_names(config))
             ]
         ),
-        *get_architecture_docs(config),
-        *build_previous_iteration_context_messages(
+        get_architecture_docs(
+            config
+        ),
+        build_previous_iteration_context_messages(
             config,
             title="previous iteration evaluations - learn from these past attempts. **you must not repeat these errors**"
         ),
-        *common.ensure_list(
-            get_tombstone_message(config)
+        get_tombstone_message(
+            config
         ),
-        *common.ensure_list(
-            LlmMessage.sys(
-                "## Forbidden Actions\n• You **MUST NEVER** wrap the code in Markdown-style code fences such as ```<filetype>. Output must be raw code syntax only.")
-            if not code_file_name.endswith(".md") else []
+        LlmMessage.sys(
+            "## Forbidden Actions\n• You **MUST NEVER** wrap the code in Markdown-style code fences such as ```<filetype>. Output must be raw code syntax only."
         )
+        if not code_file_name.endswith(".md") else []
     ]
     if code_file_name == "infrastructure.yaml":
         messages += build_cloudformation_durations_context_messages(config)
@@ -2898,7 +2908,7 @@ def write_code_file(
     
     fix_prompt = common.get(current_iteration, ["routing_json", "fix_prompt"])
     if fix_prompt:
-        messages.append(LlmMessage.user(f"suggested prompt to assist in fixing the issue:  {fix_prompt}"))
+        messages.append(f"suggested prompt to assist in fixing the issue:  {fix_prompt}")
     
     coding_task_data = {
         "guidance": code_file_data.get("guidance"),
@@ -2936,7 +2946,7 @@ def write_code_file(
     )
     
     code = llm_chat(
-        f"Write code for {code_file_name}",
+        f"Write code for {code_file_name} {code_file_data.get('validator')}",
         messages,
         code_writing_model,
         tag_entity=config.current_iteration,
@@ -2955,7 +2965,8 @@ def write_code_file(
             return validate_code(
                 config,
                 code_file_path,
-                code
+                code,
+                code_file_data.get("validator")
             )
         except CodeCompilationError as code_compilation_error:
             config.log(f"Primary code failed validation. Attempting fix using cheaper model.  Fix attempt {i + 1} of 5")
@@ -2984,18 +2995,20 @@ def fix_code_compilation(config, code_file_path, code, e):
     code = llm_chat(
         "Fix compilation error cheaply",
         [
-            LlmMessage.sys("You are a code fixer. Your job is to fix syntax or compilation errors in a code file."),
-            LlmMessage.user(f"""
-This is the code (from file {code_file_path}) that failed validation:
-```
-{code}
-```
+            LlmMessage.sys(
+                "You are a code fixer. Your job is to fix syntax or compilation errors in a code file."
+            ),
+            LlmMessage.user(
+                f"""This is the code (from file {code_file_path}) that failed validation:
+                ```
+                {code}
+                ```
 
-Here is the exception message:
-{str(e)}
+                Here is the exception message:
+                {str(e)}
 
-Please return only the corrected version of the code. No explanation, no formatting.
-""")
+                Please return only the corrected version of the code. No explanation, no formatting."""
+            )
         ],
         model=LlmModel.OPENAI_GPT_5_MINI,
         tag_entity=config.current_iteration,
@@ -3071,10 +3084,23 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
 def validate_code(
         config: SelfDriverConfig,
         code_file_path: Path,
-        code: str
+        code: str,
+        validator=None
 ) -> str:
     code_file_name = code_file_path.name.lower()
-    if code_file_name.endswith(".js"):
+    if validator == "jinja":
+        try:
+            from jinja2 import Environment
+            Environment().parse(code)
+        except Exception as e:
+            raise CodeCompilationError(code, f"Jinja syntax error: {e}")
+    elif validator == "django_template":
+        from django.template import Template, TemplateSyntaxError
+        try:
+            Template(code)
+        except TemplateSyntaxError as e:
+            raise CodeCompilationError(code, f"Django template syntax error: {e}")
+    elif code_file_name.endswith(".js"):
         import subprocess
         import tempfile
         try:

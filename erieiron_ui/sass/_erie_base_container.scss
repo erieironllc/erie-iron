@@ -2,6 +2,16 @@ body {
   background-color: $body-bg;
   color: $body-color;
   overflow: hidden;
+  
+  .col-sidebar{
+    @extend .col-md-3;
+    width: 20%;
+  }
+  
+  .col-main-content{
+    @extend .col-md-9;
+    width: 80%;
+  }
 
   font-family: 'Inter', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
 

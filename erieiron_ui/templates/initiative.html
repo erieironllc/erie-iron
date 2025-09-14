@@ -4,12 +4,12 @@
 {% block content %}
     <!-- Sidebar navigation -->
     <div class="row">
-        <div class="col-md-3">
+        <div class="col-sidebar">
 
             <div class="list-group" id="initiativeSidebar" role="tablist">
                 <h3>Initiative</h3>
 
-                <a class="list-group-item list-group-item-action active" id="overview-tab" data-bs-toggle="list"
+                <a class="list-group-item list-group-item-action" id="overview-tab" data-bs-toggle="list"
                    href="#overview"
                    role="tab" aria-controls="overview">
                     {{ initiative.title }}
@@ -79,7 +79,7 @@
                 </a>
             </div>
         </div>
-        <div class="col-md-9">
+        <div class="col-main-content">
             <div class="tab-content" id="initiativeTabContent">
 
                 <div class="tab-pane  " id="overview" role="tabpanel" aria-labelledby="overview-tab">

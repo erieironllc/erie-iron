@@ -246,6 +246,10 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
                 - `"This logic must run within an ECS task, not Lambda"`
                 - `"Preserve compatibility with the analytics pipeline schema v2"`
             - This field is mandatory. Do not skimp. Treat it as a chance to transfer hard-won insights to the code writer.
+        - `validator`:  
+            - The validator to use to validate the code.  Only used in for the following content types:  `jinja`, `django_template`
+            - If the code file is `Jinja` or `Jinja2` Templating markup, **you must** set the value to `jinja`
+            - If the code file is Django Templating markup, **you must** set the value to `django_template`
         - `dependencies`: 
             - If the codefile is an AWS Lambda, dependencies shall define the list of PyPI package names (strings) required at runtime by the code in this file
             - This list must every package that is needed by the lambda . 
@@ -324,6 +328,21 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
     },
 
     "code_files": [
+          {
+            "code_file_path": "email_template.txt",
+            "related_code_file_paths": [],
+            "code_writing_model": "gpt-5-nano",
+            "guidance": "Ensure that the Dockerfile exposes all required build arguments as environment variables for downstream consumption...",
+            "validator": "jinja",
+            "dependencies": [],
+            "dsl_instructions": [
+              { "action": "add_env_variable", "language": "dockerfile", "variable": "MY_VAR", "source": "build_arg", "default": "dev", "description": "Expose MY_VAR as build arg" }
+            ],
+            "lessons_applied": [
+              "Do not create files that already exist",
+              "Always check required environment variables before execution"
+            ]
+          },
         {
             "code_file_path": "Dockerfile",
             "related_code_file_paths": ["settings.py"],

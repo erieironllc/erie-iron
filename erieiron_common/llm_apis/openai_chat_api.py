@@ -70,7 +70,7 @@ def chat(
         
         supports_verbosity = model_name.startswith(("gpt-5", "gpt-4o"))
         if verbosity and supports_verbosity:
-            kwargs["verbosity"] = verbosity.value
+            kwargs["text"] = {"verbosity": verbosity.value}
         
         resp = client.responses.create(**kwargs)
         chat_time = (time.time() - start_time) * 1000
@@ -100,6 +100,7 @@ def chat(
         # else:
         #     return call_completions()
     except Exception as e:
+        logging.exception(e)
         err = str(e)
         if "only supported in v1/responses" in err:
             return call_responses()

@@ -11,6 +11,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 DEBUG = True
 
 BASE_DIR = Path(__file__).resolve().parent
+BASE_URL = "http://localhost:8020"
 TIME_ZONE = 'America/Los_Angeles'
 STATIC_ROOT = os.path.join(Path(__file__).resolve().parent, "erieiron_ui", "static")
 SECRET_KEY = "django-insecure-4yp%)5s=rx5ph(+zs7mhk&zj9&sko+15(bi=nx-94^m-hrd&2v"

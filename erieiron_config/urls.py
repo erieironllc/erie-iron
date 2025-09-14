@@ -33,6 +33,7 @@ urlpatterns = [
     
     path("llm/debug/<uuid:llm_request_id>", views.view_llm_request, name="view_llm_request"),
     path("llm/ask/<uuid:llm_request_id>", views.action_llm_debug_ask, name="action_llm_debug_ask"),
+    path("llm/compare/<uuid:llm_request_id>", views.action_llm_debug_compare, name="action_llm_debug_compare"),
     
     path("self_driver_iteration/<str:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
     path("iteration/delete/<uuid:iteration_id>", views.action_delete_iteration, name="action_delete_iteration"),

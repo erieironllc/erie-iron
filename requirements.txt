@@ -26,6 +26,7 @@ google-generativeai
 gunicorn
 iterative-stratification
 llvmlite>=0.39
+Jinja2
 markdown
 matplotlib
 mido
@@ -36,7 +37,7 @@ onnx2torch
 onnx==1.16.2
 onnxruntime==1.20.1
 openai>=1.102.0
-pandas
+pandas==2.3.1
 pgvector
 pillow
 psutil

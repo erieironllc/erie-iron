@@ -133,3 +133,9 @@ The test code must:
 ## Forbidden Actions
 - Do not use mocks in acceptance/smoke tests. These must connect to real system components end to end. Only the explicitly pre-approved stubs may be used if necessary.
 - Mocks are permitted in unit tests but cannot substitute for the acceptance/smoke test.
+
+
+## Test Policy (Non‑negotiable)
+1) Integration and acceptance tests must hit real AWS resources. Do not suggest skipping, mocking, or providing local stubs when external infra is unavailable.
+2) When required cloud resources or env vars are missing, tests must fail fast. Strategic guidance must route to AWS provisioning to create the resources and inject env via CloudFormation.
+3) CI pre‑checks are allowed only as a fail‑fast diagnostic gate (clear error and exit). They must not downgrade, skip, or mark integration tests as xfailed.

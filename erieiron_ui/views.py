@@ -1,8 +1,11 @@
+import difflib
 import json
 import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime
+
+from django.utils.html import escape
 
 from django.contrib import messages
 from django.http import HttpResponse, Http404
@@ -20,7 +23,7 @@ from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, json_endpoint
 
 
 def hello(request):
@@ -192,6 +195,13 @@ def view_task(request, task_id):
         is_running=True
     ).count()
     
+    test_code_version = None
+    if self_driving_task and self_driving_task.test_file_path:
+        try:
+            test_code_version = CodeFile.get(business, self_driving_task.test_file_path).get_latest_version()
+        except Exception as e:
+            logging.exception(e)
+    
     return send_response(
         request, "task.html",
         {
@@ -312,6 +322,18 @@ def action_resolve_task(request, task_id):
     )
     
     return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_task_regenerate_test(request, task_id):
+    task = get_object_or_404(Task, pk=task_id)
+    
+    # PubSubManager.publish_id(
+    #     PubSubMessageType.RESET_TASK_TEST,
+    #     task_id
+    # )
+    on_reset_task_test(task_id)
+    
+    return redirect(reverse('view_task', args=[task_id]) + "#testcode")
 
 
 def action_retry_task(request, task_id):
@@ -836,6 +858,45 @@ def action_toggle_lesson_validity(request, lesson_id):
         return redirect(reverse('view_businesses'))
 
 
+@json_endpoint
+def action_llm_debug_compare(request, llm_request_id):
+    llm_model_unparsed = rget(request, "llm_model")
+    llm_model, verbosity, reasoning_effort = llm_model_unparsed.split(";")
+    
+    orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
+    
+    resp = system_agent_llm_interface.llm_chat(
+        description=f"Compare {orig_llm_request.title} response using {llm_model_unparsed}",
+        messages=orig_llm_request.input_messages,
+        model=LlmModel(llm_model),
+        tag_entity=(
+                orig_llm_request.task_iteration
+                or orig_llm_request.initiative
+                or orig_llm_request.business
+                or Business.get_erie_iron_business()
+        ),
+        reasoning_effort=LlmReasoningEffort(reasoning_effort),
+        verbosity=LlmVerbosity(verbosity)
+    )
+    
+    diff_lines = difflib.unified_diff(
+        orig_llm_request.response.splitlines(),
+        resp.text.splitlines(),
+        fromfile=f"Model: {orig_llm_request.llm_model}; Reasoning: {orig_llm_request.reasoning_effort}; Verbosity: {orig_llm_request.verbosity}",
+        tofile=f"Model: {resp.model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}",
+        lineterm=""
+    )
+    diff = "\n".join(diff_lines)
+    
+    return {
+        "url": reverse(view_llm_request, args=[resp.llm_request_id]),
+        "diff": diff,
+        "chat_millis": f"{int(resp.chat_millis):,}ms",
+        "price": f"${resp.price_total:.3f}",
+        "llm_response_text": escape(resp.text)
+    }
+
+
 def action_llm_debug_ask(request, llm_request_id):
     optimize = rget_bool(request, "optimize")
     prompt = rget(request, "prompt")
@@ -853,15 +914,15 @@ def action_llm_debug_ask(request, llm_request_id):
             ),
             prompt
         ],
-        model=LlmModel.OPENAI_GPT_5_NANO if optimize else LlmModel(llm_model),
+        model=LlmModel(llm_model),
         tag_entity=(
                 orig_llm_request.task_iteration
                 or orig_llm_request.initiative
                 or orig_llm_request.business
                 or Business.get_erie_iron_business()
         ),
-        reasoning_effort=LlmReasoningEffort.LOW if optimize else LlmReasoningEffort(reasoning_effort),
-        verbosity=LlmVerbosity.MEDIUM if optimize else LlmVerbosity(verbosity)
+        reasoning_effort=LlmReasoningEffort(reasoning_effort),
+        verbosity=LlmVerbosity(verbosity)
     )
     
     return send_response(
@@ -895,7 +956,7 @@ def view_llm_request(request, llm_request_id):
                 breadcrumbs.append(
                     (f"{reverse(view_self_driver_iteration, args=[llm_request.task_iteration_id])}#", f"Iteration {llm_request.task_iteration.version_number}")
                 )
-
+    
     model_choices = []
     for m in LlmModel:
         if m == LlmModel.OPENAI_GPT_5:

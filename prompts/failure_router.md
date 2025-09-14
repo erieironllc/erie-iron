@@ -61,9 +61,9 @@ Why did you choose the recovery path you chose?
 
 ### Write a Fix Prompt
 field name:  "fix_prompt"
-Compose a concise prompt that could be given to an autonomous agent to fix the issue.
-- This field is used to generate a focused follow-up question for a code-fixing agent. 
-- It should be narrowly scoped and actionable, allowing the downstream agent to make a minimal, high-confidence edit.
+Compose a concise prompt that could be given to an LLM to diagnose the issue
+- This field is used to give additional context to a downstream code fixing agent
+- It should be narrowly scoped and easily comprehendable by a downstream agent
 - If routing due to tombstone violations, explicitly list the matched tombstoned names and (when available) their `replace_with` values in the prompt so downstream agents can apply `migration_steps` deterministically.
 
 
