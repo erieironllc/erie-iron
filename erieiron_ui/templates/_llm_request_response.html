@@ -1,2 +1,22 @@
+{% load humanize %}
 {% load erieiron_common_tags %}
-<div class="markdown-container">{{ llm_response_text|markdown }}</div>
+<div class="w-100 ps-1 d-flex justify-content-between">
+    <div>
+        <small class="me-3">
+            Model: {{ llm_response.model }};
+            Reasoning: {{ llm_response.reasoning_effort|default_if_none:"???" }};
+            Verbosity: {{ llm_response.verbosity|default_if_none:"???" }}
+        </small>
+        <small class="me-3">
+            {{ llm_response.token_count }} tokens
+        </small>
+        <small class="me-3">
+            {{ llm_response.chat_millis|floatformat:0|intcomma }}ms
+        </small>
+        <small class="me-3">
+            ${{ llm_response.price_total|floatformat:3 }}
+        </small>
+    </div>
+    {% include "_copy_clipboard_btn.html" with target_el="#div_llm_response_content" %}
+</div>
+<div id="div_llm_response_content" class="markdown-container ps-1">{{ llm_response.text|markdown }}</div>

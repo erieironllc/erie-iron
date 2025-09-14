@@ -24,6 +24,7 @@ LlmRequestView = ErieView.extend({
             (resp) => {
                 clearInterval(t);
                 $("#txt_optimize_response").empty().append(resp);
+                this.delegateEvents();
             })
         return last_stop(ev)
     },
@@ -75,6 +76,7 @@ LlmRequestView = ErieView.extend({
             (resp) => {
                 clearInterval(t);
                 $("#txt_question_response").empty().append(resp);
+                this.delegateEvents();
             })
         return last_stop(ev)
     }

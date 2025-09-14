@@ -314,9 +314,7 @@
                             <div class="d-flex justify-content-between">
                                 <input type="text" class="form-control w-75"
                                        value="{{ task.selfdrivingtask.sandbox_path }}" disabledk>
-                                <button class="btn btn-secondary bi-copy copy-btn"
-                                        data-target="#div_iteration_debug_link">&nbsp;ln
-                                </button>
+                                {% include "_copy_clipboard_btn.html" with target_el="#div_iteration_debug_link" %}
                                 <div id="div_iteration_debug_link" class="d-none">rm ~/src/iteration_debug && ln
                                     -s {{ task.selfdrivingtask.sandbox_path }} ~/src/iteration_debug
                                 </div>
@@ -453,8 +451,7 @@
                     <button type="submit" class="btn btn-primary">Save Changes</button>
                     <a href="{% url 'view_task' task.id %}" class="btn btn-secondary ms-2">Cancel</a>
                 </form>
-                <hr>
-                <div class="d-flex">
+                <div class="d-flex justify-content-end" style="margin-top: -38px">
                     <form method="post" action="{% url 'action_restart_task' task.id %}" class="me-3 d-inline">
                         {% csrf_token %}
                         <button type="submit" class="btn btn-warning"

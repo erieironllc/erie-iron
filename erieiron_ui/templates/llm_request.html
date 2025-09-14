@@ -82,12 +82,7 @@
                             </small>
                         </div>
                         <div>
-                            <button class="btn btn-sm ms-3 copy-btn bi bi-copy "
-                                    style="color: white;"
-                                    data-target="#div_full_prompt"
-                                    onclick="event.stopPropagation(); return false;"
-                                    title="Copy to clipboard">
-                            </button>
+                            {% include "_copy_clipboard_btn.html" with target_el="#div_full_prompt" %}
                         </div>
                     </div>
                     <hr>
@@ -181,7 +176,7 @@
                                         </option>
                                     {% endfor %}
                                 </select>
-                                <a id="btn_ask" class="ms-3 btn btn-secondary pull-right" href="#">Ask</a>
+                                <a id="btn_ask" class="ms-3 btn btn-outline-primary pull-right" href="#">Ask</a>
                             </div>
                         </div>
                         <div id="txt_question_response">
@@ -254,12 +249,7 @@
                                             | {{ llm_request.chat_millis|intcomma }}ms
                                         </div>
                                         <div>
-                                            <button class="btn btn-sm ms-3 copy-btn bi bi-copy "
-                                                    style="color: white;"
-                                                    data-target="#txt_compare_orig_response"
-                                                    onclick="event.stopPropagation(); return false;"
-                                                    title="Copy to clipboard">
-                                            </button>
+                                            {% include "_copy_clipboard_btn.html" with target_el="#txt_compare_orig_response" %}
                                         </div>
                                     </div>
                                 </td>
@@ -273,13 +263,7 @@
                                                     style="color: white;"
                                                     title="Diff">
                                             </button>
-                                            <button id="btn_compare_response_copy"
-                                                    class="btn btn-sm ms-3 copy-btn bi bi-copy d-none"
-                                                    style="color: white;"
-                                                    data-target="#txt_compare_response"
-                                                    onclick="event.stopPropagation(); return false;"
-                                                    title="Copy to clipboard">
-                                            </button>
+                                            {% include "_copy_clipboard_btn.html" with target_el="#txt_compare_response" %}
                                         </div>
                                     </div>
                                 </td>
@@ -315,13 +299,7 @@
             <div class="modal-content">
                 <div class="modal-body">
                     <div class="d-flex justify-content-end">
-                        <button id="btn_compare_response_copy"
-                                class="btn btn-sm ms-3 copy-btn bi bi-copy"
-                                style="color: white;"
-                                data-target="#compare_diff"
-                                onclick="event.stopPropagation(); return false;"
-                                title="Copy to clipboard">
-                        </button>
+                        {% include "_copy_clipboard_btn.html" with target_el="#compare_diff" %}
                     </div>
 
                     <pre id="compare_diff" class="w-100 code_diff"></pre>

@@ -5,12 +5,11 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 
-from django.utils.html import escape
-
 from django.contrib import messages
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils.html import escape
 
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
@@ -352,6 +351,13 @@ def action_retry_task(request, task_id):
 
 def action_restart_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
+    
+    try:
+        common.delete_dir(task.selfdrivingtask.sandbox_path)
+    except:
+        ...
+    SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=task_id).delete()
+    CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
     
     # Reset task status and clear any existing executions
     Task.objects.filter(id=task_id).update(
@@ -929,7 +935,7 @@ def action_llm_debug_ask(request, llm_request_id):
         request,
         "_llm_request_response.html",
         {
-            "llm_response_text": resp.text
+            "llm_response": resp
         }
     )
 

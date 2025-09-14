@@ -36,45 +36,5 @@
     {% include '_base_templates/_base_scripting_compontents.html' %}
     </body>
     
-    <script>
-        $(document).ready(function () {
-            // Handle chevron rotation for collapsible LLM requests
-            $('.card-header[data-bs-toggle="collapse"]:not(.copy-btn)').on('click', function() {
-                const chevron = $(this).find('.collapse-icon');
-                const target = $($(this).data('bs-target'));
-                
-                if (target.hasClass('show')) {
-                    chevron.removeClass('fa-chevron-down').addClass('fa-chevron-right');
-                } else {
-                    chevron.removeClass('fa-chevron-right').addClass('fa-chevron-down');
-                }
-            });
-            
-            // Handle copy to clipboard functionality
-            $('.copy-btn').on('click', function(ev) {
-                ev.preventDefault();
-                ev.stopPropagation();
-                
-                const targetSelector = $(this).data('target');
-                const content = $(targetSelector).text();
-                
-                navigator.clipboard.writeText(content).then(function() {
-                    // Show temporary success feedback
-                    const btn = $(this);
-                    const originalIcon = btn.find('i');
-                    originalIcon.removeClass('fa-copy').addClass('fa-check');
-                    setTimeout(function() {
-                        originalIcon.removeClass('fa-check').addClass('fa-copy');
-                    }, 2000);
-                }.bind(this)).catch(function(err) {
-                    console.error('Failed to copy text: ', err);
-                    alert('Failed to copy to clipboard');
-                });
-                
-                return false;
-            });
-        });
-    </script>
-
     </html>
 {% endif %}

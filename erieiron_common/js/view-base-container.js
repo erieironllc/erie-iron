@@ -19,7 +19,7 @@ BaseContainerView = ErieView.extend({
 
         'click': 'body_onclick',
         'click .btn-viewmode': 'viewmode_onclick',
-        'click .copy_to_clipboard': 'copy_to_clipboard_click',
+        'click .copy-btn': 'copy_to_clipboard_click',
 
         'click .nav_search': 'nav_search_click',
         'blur .nav_search_input input': 'nav_search_blur',
@@ -33,6 +33,21 @@ BaseContainerView = ErieView.extend({
 
     init_view: function (options) {
         this.tooltip_instances = [];
+
+
+        $(document).ready(function () {
+            // Handle chevron rotation for collapsible LLM requests
+            $('.card-header[data-bs-toggle="collapse"]:not(.copy-btn)').on('click', function () {
+                const chevron = $(this).find('.collapse-icon');
+                const target = $($(this).data('bs-target'));
+
+                if (target.hasClass('show')) {
+                    chevron.removeClass('fa-chevron-down').addClass('fa-chevron-right');
+                } else {
+                    chevron.removeClass('fa-chevron-right').addClass('fa-chevron-down');
+                }
+            });
+        });
 
         setTimeout(() => {
             $("input[type=text]").first().focus();
@@ -151,6 +166,8 @@ BaseContainerView = ErieView.extend({
                 }
             }, 100);
         }, 2000);
+        
+        this.delegateEvents()
 
 
     },
@@ -495,10 +512,8 @@ BaseContainerView = ErieView.extend({
                 const card_text = $("pre", el)[0].innerText.toLowerCase();
                 if (card_text.indexOf(search_val) >= 0) {
                     $(el).show();
-                    $(".card-body", el).removeClass("collapse");
                 } else {
                     $(el).hide();
-                    $(".card-body", el).addClass("collapse");
                 }
             })
         }
@@ -723,10 +738,31 @@ BaseContainerView = ErieView.extend({
     },
 
     copy_to_clipboard_click: function (ev) {
-        const btn = $(ev.target).closest(".copy_to_clipboard");
-        const target_el = $(btn.attr("target"));
+        const btn = $(ev.target);
+        this.hide_all_tooltips();
 
-        navigator.clipboard.writeText(target_el.text().trim());
+        const targetSelector = btn.data('target');
+        const content = $(targetSelector).text();
+
+        navigator.clipboard.writeText(content).then(function () {
+            if (btn.hasClass("bi")) {
+                btn.removeClass('bi-copy').addClass('bi-check');
+                setTimeout(function () {
+                    btn.removeClass('bi-check').addClass('bi-copy');
+                }, 2000);
+            } else {
+                const originalIcon = btn.find('i');
+                originalIcon.removeClass('bi-copy').addClass('bi-check');
+                setTimeout(function () {
+                    originalIcon.removeClass('bi-check').addClass('bi-copy');
+                }, 2000);
+            }
+        }.bind(this)).catch(function (err) {
+            console.error('Failed to copy text: ', err);
+            alert('Failed to copy to clipboard');
+        });
+
+
         return last_stop(ev);
     },
 

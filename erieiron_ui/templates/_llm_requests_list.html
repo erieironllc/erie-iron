@@ -39,11 +39,7 @@
                         In Progress
                     </small>
                 {% endif %}
-                <button class="btn btn-sm ms-3 copy-btn bi bi-copy"
-                        data-target="#llmrequest-content-{{ forloop.counter }}"
-                        onclick="event.stopPropagation(); return false;"
-                        title="Copy to clipboard">
-                </button>
+                {% include "_copy_clipboard_btn.html" with target_el="#llmrequest-content-{{ forloop.counter }}" %}
             </div>
         </div>
         <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
