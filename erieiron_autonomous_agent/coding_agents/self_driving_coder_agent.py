@@ -23,6 +23,7 @@ from erieiron_public import agent_tools
 from sentence_transformers import SentenceTransformer
 
 import settings
+from erieiron_autonomous_agent.business_level_agents import domain_manager
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION
 from erieiron_autonomous_agent.enums import TaskStatus
@@ -52,6 +53,13 @@ def execute(task_id: str, reset=False):
         task_id,
         reset
     )
+    
+    # execute_iteration(
+    #     SelfDriverConfig(self_driving_task),
+    #     AwsEnv.DEV,
+    #     force_stack_update=True
+    # )
+    # return
     
     for i in range(100):
         config = SelfDriverConfig(self_driving_task)
@@ -203,6 +211,8 @@ def handle_goal_achieved(config):
         )
         
         config.git.cleanup()
+        
+        delete_subdomain(config.self_driving_task)
         
         delete_cloudformation_stack(
             config,
@@ -362,6 +372,8 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     config.set_phase(SdaPhase.INIT)
     self_driving_task.get_git().pull()
     
+    create_task_subdomain(self_driving_task)
+    
     if not config.business.codefile_set.exists():
         config.iterate_if_necessary()
         config.business.snapshot_code(
@@ -385,6 +397,58 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
         write_task_tdd_test(config)
     
     return self_driving_task
+
+
+@transaction.atomic
+def create_task_subdomain(self_driving_task: SelfDrivingTask):
+    business_domain = self_driving_task.business.domain
+    if not business_domain:
+        raise AgentBlocked(f"no domain for business {self_driving_task.business.service_token}")
+    
+    task_label = sanitize_aws_name([str(self_driving_task.task_id)], max_length=63).lower()
+    if not task_label:
+        raise AgentBlocked("unable to derive a valid subdomain label from task_id")
+    
+    if self_driving_task.domain:
+        sub_domain = self_driving_task.domain
+    else:
+        sub_domain = f"{task_label}.{business_domain}".rstrip('.')
+        self_driving_task.domain = sub_domain
+        self_driving_task.save()
+    
+    try:
+        domain_manager.execute_subdomain_action(
+            business_domain,
+            sub_domain,
+            "UPSERT",
+            f"Auto-created by Erie Iron for task {self_driving_task.task_id}"
+        )
+    except Exception as e:
+        logging.exception(e)
+        raise AgentBlocked(f"failed to create Route53 record for {sub_domain}: {e}")
+
+
+def delete_subdomain(self_driving_task: SelfDrivingTask):
+    if not self_driving_task.domain:
+        return
+    
+    subdomain_to_delete = self_driving_task.domain
+    business_domain = self_driving_task.business.domain
+    if not business_domain:
+        # Cannot delete if parent domain is not known
+        logging.warning(f"Cannot delete subdomain {subdomain_to_delete}: business domain not set.")
+        return
+    
+    try:
+        domain_manager.execute_subdomain_action(
+            business_domain,
+            subdomain_to_delete,
+            "DELETE",
+            f"Auto-deleted by Erie Iron for task {self_driving_task.task_id}"
+        )
+        logging.info(f"Deleted Route53 CNAME record for {subdomain_to_delete}")
+    except Exception as e:
+        logging.exception(f"Failed to delete Route53 record for {subdomain_to_delete}: {e}")
 
 
 def build_docker_image(
@@ -457,52 +521,7 @@ def exec_docker_prune():
         raise AgentBlocked("unable to run docker prune - is docker running?")
 
 
-def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv, os_env: dict):
-    stack_name = config.self_driving_task.get_cloudformation_stack_name(aws_env)
-    if not stack_name:
-        raise AgentBlocked("unable to determine stack name")
-    
-    region = get_aws_region()
-    if not region:
-        raise AgentBlocked("unable to determine regions")
-    
-    stack_descriptions = aws_utils.client(
-        "cloudformation"
-    ).describe_stacks(
-        StackName=stack_name
-    ).get("Stacks")
-    
-    if not stack_descriptions:
-        raise AgentBlocked(f"no stack descriptions found for {stack_name}")
-    
-    outputs = common.ensure_list(common.first(stack_descriptions).get("Outputs"))
-    if not outputs:
-        raise AgentBlocked(f"no stack outputs found for {stack_name}")
-    
-    role_arn = None
-    # Prefer explicit key, else fall back to anything that looks like a task role arn
-    for o in outputs:
-        if o.get("OutputKey") == "DjangoEcsTaskRoleArn" and o.get("OutputValue"):
-            role_arn = o["OutputValue"]
-            break
-    
-    if not role_arn:
-        for o in outputs:
-            val = o.get("OutputValue", "")
-            if ":role/" in val:
-                role_arn = val
-                break
-    if role_arn:
-        logging.info(f"Resolved role to assume from CloudFormation outputs: {role_arn}")
-    
-    if not role_arn:
-        # Nothing to do; caller may rely on container-provided identity (e.g., ECS task role)
-        raise BadPlan("infrastructure.yaml does not define a TaskRoleArn")
-    
-    return role_arn
-
-
-def update_rds_secret_from_cloudformation_stack(
+def update_rds_env_vars(
         config: SelfDriverConfig,
         aws_env: AwsEnv,
         docker_env: dict
@@ -537,10 +556,6 @@ def update_rds_secret_from_cloudformation_stack(
     secret_arn_env_var = rds_credential_def.get("secret_arn_env_var")
     docker_env[secret_arn_env_var] = rds_secret_arn
     
-    secrets = aws_utils.client("secretsmanager")
-    resp = secrets.get_secret_value(SecretId=rds_secret_arn)
-    secret_dict = json.loads(resp["SecretString"])
-    
     output_varname_to_envname = {
         "RdsInstanceDBName": "ERIEIRON_DB_NAME",
         "RdsInstancePort": "ERIEIRON_DB_PORT",
@@ -564,11 +579,25 @@ def get_env_var_names(config: SelfDriverConfig) -> str:
 
 
 def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
-    env = {}
+    aws_credentials = botocore.session.Session(
+        profile=os.environ.get("AWS_PROFILE")
+    ).get_credentials().get_frozen_credentials()
     
-    required_credentials = config.business.required_credentials
+    env = {
+        "DOMAIN_NAME": config.self_driving_task.domain,
+        "AWS_DEFAULT_REGION": settings.AWS_DEFAULT_REGION_NAME,
+        "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
+        "AWS_ACCESS_KEY_ID": aws_credentials.access_key,
+        "AWS_SECRET_ACCESS_KEY": aws_credentials.secret_key,
+        "AWS_SESSION_TOKEN": aws_credentials.token,
+        "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
+        "TASK_NAMESPACE": config.self_driving_task.get_cloudformation_stack_name(aws_env),
+        "CLOUDFORMATION_STACK_NAME": config.self_driving_task.get_cloudformation_stack_name(aws_env),
+        "DOCKER_BUILDKIT": "1",
+        "PATH": os.getenv("PATH")
+    }
     
-    for credential_service_name, cred_def in required_credentials.items():
+    for credential_service_name, cred_def in config.business.required_credentials.items():
         if credential_service_name == CredentialService.RDS.value:
             # cloudformation and rds handle the rds secret - we update this as a special case later
             continue
@@ -581,20 +610,6 @@ def build_env(config: SelfDriverConfig, aws_env: AwsEnv) -> dict:
             cred_def
         )
         env[secret_arn_env_var] = secrent_arn
-    
-    aws_credentials = botocore.session.Session(
-        profile=os.environ.get("AWS_PROFILE")
-    ).get_credentials().get_frozen_credentials()
-    
-    env["AWS_DEFAULT_REGION"] = settings.AWS_DEFAULT_REGION_NAME
-    env["AWS_ACCOUNT_ID"] = settings.AWS_ACCOUNT_ID
-    env["AWS_ACCESS_KEY_ID"] = aws_credentials.access_key
-    env["AWS_SECRET_ACCESS_KEY"] = aws_credentials.secret_key
-    env["AWS_SESSION_TOKEN"] = aws_credentials.token
-    env["LLM_API_KEYS_SECRET_ARN"] = settings.LLM_API_KEYS_SECRET_ARN
-    env["TASK_NAMESPACE"] = env["CLOUDFORMATION_STACK_NAME"] = config.self_driving_task.get_cloudformation_stack_name(aws_env)
-    env["DOCKER_BUILDKIT"] = "1"
-    env["PATH"] = os.getenv("PATH")
     
     for k in list(env.keys()):
         if env.get(k) is None:
@@ -622,7 +637,7 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     lambda_datas = get_stack_lambdas(config)
     
     for lambda_data in lambda_datas:
-        dependencies = lambda_data["lambda_datas"]
+        dependencies = lambda_data["dependencies"]
         code_file_path = lambda_data["code_file_path"]
         full_lambda_path = config.sandbox_root_dir / code_file_path
         
@@ -641,18 +656,18 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
                     "pip", "install", "-r", str(req_file), "-t", str(temp_dir_path)
                 ], check=True)
             
-            s3_key_name = aws_utils.sanitize_aws_name("-".join([
+            s3_key_name = aws_utils.sanitize_aws_name(common.safe_join([
                 config.task.id,
                 config.current_iteration.version_number
-            ]), 1000) + ".zip"
+            ], "-"), 1000) + ".zip"
             
             logging.info(f"Packaging Lambda: {code_file_path} → {s3_key_name} with dependencies: {dependencies}")
             
             zip_path = temp_dir_path / s3_key_name
             shutil.make_archive(zip_path.with_suffix(""), 'zip', root_dir=temp_dir_path)
             
-            s3.upload_fileobj(
-                zip_path,
+            s3.upload_file(
+                str(zip_path),
                 LAMBDA_PACKAGES_BUCKET,
                 s3_key_name
             )
@@ -997,7 +1012,7 @@ def extract_cloudwatch_lambda_logs(
     return "\n\n".join(combined)
 
 
-def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
+def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_update=False) -> str:
     running_process = None
     
     iteration = config.current_iteration
@@ -1045,7 +1060,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         else:
             need_stack_update = True
         
-        if need_stack_update:
+        if need_stack_update or force_stack_update:
             lambda_datas = None
             try:
                 lambda_datas = deploy_lambda_packages(config)
@@ -1079,7 +1094,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv) -> str:
         
         if CredentialService.RDS.value in config.business.required_credentials:
             # special handling for RDS
-            update_rds_secret_from_cloudformation_stack(
+            update_rds_env_vars(
                 config,
                 aws_env,
                 docker_env
@@ -1322,6 +1337,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         get_sys_prompt([
             "iteration_summarizer.md",
             "common--iam_role.md",
+            "common--domain_management.md",
             "common--forbidden_actions.md",
             "common--environment_variables.md"
         ], replacements=[
@@ -1408,6 +1424,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
             get_sys_prompt([
                 "iteration_selector.md",
                 "common--iam_role.md",
+                "common--domain_management.md",
                 "common--forbidden_actions.md",
                 "common--environment_variables.md"
             ], replacements=[
@@ -2250,7 +2267,7 @@ def write_initiative_tdd_test(config: SelfDriverConfig):
         user_messages=[
             *get_architecture_docs(config),
             *LlmMessage.user_from_data(
-                "Please write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
+                "Please one-shot write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
                 {
                     "name": initiative.title,
                     "description": initiative.description
@@ -2283,7 +2300,7 @@ def write_task_tdd_test(config: SelfDriverConfig):
         test_file_name=f"test_{task.id}.py",
         system_prompt_name="codewriter--python_tdd_task.md",
         user_messages=LlmMessage.user_from_data(
-            "**Please write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
+            "**Please one-shot write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
             {
                 "GOAL": task.description,
                 "test_plan": task.test_plan,
@@ -2320,13 +2337,14 @@ def write_test(
                     "common--infrastructure_rules.md",
                     "codewriter--common.md",
                     "common--iam_role.md",
+                    "common--domain_management.md",
                     "common--llm_chat.md",
                     "common--credentials_architecture.md",
                     "common--forbidden_actions.md",
                     "common--environment_variables.md"
                 ], replacements=[
                     ("<env_vars>", get_env_var_names(config)),
-                    ("<business_tag>", config.business.service_token),
+                    ("<business_tag>", config.business.service_token)
                 ]),
                 user_messages
             ]
@@ -2444,6 +2462,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                     [
                         "failure_router.md",
                         "common--iam_role.md",
+                        "common--domain_management.md",
                         "common--forbidden_actions.md",
                         "common--credentials_architecture.md",
                         "common--environment_variables.md"
@@ -2512,6 +2531,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     "codeplanner--common.md",
                     "common--llm_chat.md",
                     "common--iam_role.md",
+                    "common--domain_management.md",
                     "common--forbidden_actions.md",
                     "common--environment_variables.md",
                     "common--infrastructure_rules.md",
@@ -2610,6 +2630,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 "codeplanner--common.md",
                 "common--llm_chat.md",
                 "common--iam_role.md",
+                "common--domain_management.md",
                 "common--forbidden_actions.md",
                 "common--environment_variables.md",
                 "common--credentials_architecture.md",
@@ -2686,6 +2707,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
         "codeplanner--common.md",
         "common--llm_chat.md",
         "common--iam_role.md",
+        "common--domain_management.md",
         "common--forbidden_actions.md",
         "common--credentials_architecture.md",
         "common--environment_variables.md",
@@ -2809,6 +2831,7 @@ def write_code_file(
                 *get_codewriter_system_prompt(code_file_path),
                 "codewriter--common.md",
                 "common--iam_role.md",
+                "common--domain_management.md",
                 "common--credentials_architecture.md",
                 "common--forbidden_actions.md"
             ],
@@ -3626,6 +3649,7 @@ def get_stack_parameters(
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
         "ClientIpForRemoteAccess": common.get_ip_address(),
         "TaskRoleArn": role_arn,
+        "DomainName": self_driving_task.domain,
         "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         
@@ -3704,6 +3728,13 @@ def get_stack_parameters(
         }
         for k in required_parameters
     ]
+    
+    for k in parameters_metadata:
+        if k not in required_parameters and k in known_params:
+            params.append({
+                "ParameterKey": k,
+                "ParameterValue": str(known_params.get(k, ""))
+            })
     
     for p in params:
         key = p.get("ParameterKey")

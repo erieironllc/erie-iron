@@ -742,7 +742,7 @@ BaseContainerView = ErieView.extend({
         this.hide_all_tooltips();
 
         const targetSelector = btn.data('target');
-        const content = $(targetSelector).text();
+        const content = $(targetSelector).text().trim();
 
         navigator.clipboard.writeText(content).then(function () {
             if (btn.hasClass("bi")) {

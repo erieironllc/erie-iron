@@ -315,9 +315,6 @@
                                 <input type="text" class="form-control w-75"
                                        value="{{ task.selfdrivingtask.sandbox_path }}" disabledk>
                                 {% include "_copy_clipboard_btn.html" with target_el="#div_iteration_debug_link" %}
-                                <div id="div_iteration_debug_link" class="d-none">rm ~/src/iteration_debug && ln
-                                    -s {{ task.selfdrivingtask.sandbox_path }} ~/src/iteration_debug
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -437,6 +434,7 @@
                                                
                                                
                                                
+                                               
                                                {% if task.execution_start_time %}{{ task.execution_start_time|date:'Y-m-d\TH:i' }}{% endif %}">
                             </div>
 
@@ -469,5 +467,8 @@
                 </div>
             </div>
         </div>
+    </div>
+    <div id="div_iteration_debug_link" class="d-none">
+        rm -rf ~/src/iteration_debug && ln -s {{ task.selfdrivingtask.sandbox_path }} ~/src/iteration_debug
     </div>
 {% endblock %}

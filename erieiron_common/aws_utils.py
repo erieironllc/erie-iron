@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib
@@ -186,7 +187,17 @@ def sanitize_aws_name(name: str, max_length: int = 128) -> str:
         lengths[idx] -= 1
     
     truncated_parts = [p[:l] for p, l in zip(parts, lengths)]
-    return "-".join(truncated_parts)
+    s = "-".join(truncated_parts)
+    
+    # consecutive dashes not allowed
+    while "--" in s:
+        s = s.replace("--", "-")
+    s = s.strip("-")
+    
+    if not re.match(r"^[a-z]", s):
+        s = ("t" + s)[:max_length]
+
+    return s
 
 
 def assert_account_name(required_account_name):

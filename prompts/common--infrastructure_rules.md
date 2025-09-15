@@ -123,7 +123,17 @@ agent_tools.parse_cloudformation_yaml(Path(<path to yaml>))  # ✅ Correct
 yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 ```
 
+---
+
+## Resource Name Namespacing
+
+- All resource names (like s3 bucket names, SQS queue names, etc) must be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
+    - if you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them
+
+
 --- 
 ## Additional Forbidden Actions
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
 - **Never** add a new Parameter to infrastructure.yaml without a default value.  If you add a new parameter to infrastructure.yaml without a default value, deployment will fail
+- **Never** hardcode resource names (like s3 bucket names, SQS queue names, etc).  all resource names must be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
+    - if you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them

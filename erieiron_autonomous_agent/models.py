@@ -107,7 +107,7 @@ class Business(BaseErieIronModel):
     def get_latest_capacity(self):
         return BusinessCapacityAnalysis.objects.filter(business=self).order_by("created_timestamp").last()
     
-    def get_latest_analysist(self) -> 'BusinessAnalysis':
+    def get_latest_analysist(self) -> tuple['BusinessAnalysis', 'BusinessLegalAnalysis']:
         return (BusinessAnalysis.objects.filter(business=self).order_by("created_timestamp").last(),
                 BusinessLegalAnalysis.objects.filter(business=self).order_by("created_timestamp").last())
     
@@ -681,6 +681,7 @@ class SelfDrivingTask(BaseErieIronModel):
     main_name = models.TextField(null=False)
     test_file_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
+    domain = models.TextField(null=True)
     cloudformation_stack_name = models.TextField(null=True)
     cloudformation_stack_id = models.TextField(null=True)
     goal = models.TextField(null=False)
@@ -782,7 +783,8 @@ class SelfDrivingTask(BaseErieIronModel):
         return sanitize_aws_name(self.get_cloudformation_stack_name(environment), max_length=40)
     
     def get_cloudformation_stack_name(self, environment: AwsEnv):
-        from erieiron_common.aws_utils import sanitize_aws_name
+        if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name:
+            return self.cloudformation_stack_name
         
         cloudformation_stack_name = [
             self.business.service_token,
@@ -796,6 +798,7 @@ class SelfDrivingTask(BaseErieIronModel):
                 self.task_id
             ]
         
+        from erieiron_common.aws_utils import sanitize_aws_name
         cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=128)
         
         if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name != cloudformation_stack_name:
@@ -910,7 +913,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         else:
             return False
     
-    def get_error_llm_msg(self, label:str) -> list[LlmMessage]:
+    def get_error_llm_msg(self, label: str) -> list[LlmMessage]:
         error_summary, error_logs = self.get_error()
         return LlmMessage.user_from_data(
             label,

@@ -25,8 +25,6 @@ def manage_domain(business: Business):
     hosted_zone_id = create_hosted_zone(business.domain)
     
     update_dns(business.domain, hosted_zone_id)
-    
-    add_ses_forwarding(business)
 
 
 def register_domain(chosen_domain):
@@ -40,37 +38,6 @@ def register_domain(chosen_domain):
         PrivacyProtectAdminContact=True,
         PrivacyProtectRegistrantContact=True,
         PrivacyProtectTechContact=True
-    )
-
-
-def add_ses_forwarding(business):
-    ses = aws_utils.client("ses")
-    
-    rule_set_name = "erieiron-autogen"
-    
-    # Ensure rule set exists
-    try:
-        ses.describe_receipt_rule_set(RuleSetName=rule_set_name)
-    except ses.exceptions.RuleSetDoesNotExistException:
-        ses.create_receipt_rule_set(RuleSetName=rule_set_name)
-    
-    bucket_name = "erieiron-ses-inbound"
-    ses.create_receipt_rule(
-        RuleSetName=rule_set_name,
-        Rule={
-            "Name": f"store-info-{business.service_token}",
-            "Enabled": True,
-            "Recipients": [f"info@{business.domain}"],
-            "Actions": [
-                {
-                    "S3Action": {
-                        "BucketName": bucket_name,
-                        "ObjectKeyPrefix": f"{business.service_token}/"
-                    }
-                }
-            ],
-            "ScanEnabled": True
-        }
     )
 
 
@@ -178,3 +145,35 @@ def find_domain(business: Business):
                 unavail_domains.append(d)
     
     raise Exception(f"unable to find a domain for {business.service_token}")
+
+
+def execute_subdomain_action(business_domain: str, sub_domain: str, action: str, comment: str):
+    r53 = aws_utils.client("route53")
+    
+    # find the hosted zone that exactly matches the business domain
+    hz_resp = r53.list_hosted_zones_by_name(DNSName=business_domain.rstrip('.') + ".", MaxItems="1")
+    hosted_zones = hz_resp.get("HostedZones", [])
+    if not hosted_zones or hosted_zones[0].get("Name", "").rstrip('.') != business_domain.rstrip('.'):
+        raise Exception(f"Hosted zone for {business_domain} not found; cannot delete subdomain {sub_domain}")
+    
+    hosted_zone_id = hosted_zones[0]["Id"]
+    # normalize the target to have a trailing dot for cname
+    cname_target = business_domain.rstrip('.') + "."
+    # delete the cname record for subdomain_to_delete
+    r53.change_resource_record_sets(
+        HostedZoneId=hosted_zone_id,
+        ChangeBatch={
+            "Comment": comment,
+            "Changes": [
+                {
+                    "Action": action,
+                    "ResourceRecordSet": {
+                        "Name": sub_domain,
+                        "Type": "CNAME",
+                        "TTL": 300,
+                        "ResourceRecords": [{"Value": cname_target}]
+                    }
+                }
+            ]
+        }
+    )
