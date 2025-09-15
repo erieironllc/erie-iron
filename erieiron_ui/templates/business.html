@@ -635,6 +635,22 @@
                                        placeholder="https://github.com/username/repo">
                             </div>
 
+                            <div class="mb-3">
+                                <label for="domain" class="form-label">Domain</label>
+                                <input type="url" name="domain" id="domain" class="form-control"
+                                       value="{{ business.domain|default:"" }}"
+                                       readonly disabled />
+                            </div>
+
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" name="needs_domain" id="needs_domain"
+                                       class="form-check-input"
+                                       {% if business.needs_domain %}checked{% endif %}>
+                                <label for="allow_autonomous_shutdown" class="form-check-label">
+                                    Needs Domain
+                                </label>
+                            </div>
+
                             <div class="mb-3 form-check">
                                 <input type="checkbox" name="allow_autonomous_shutdown" id="allow_autonomous_shutdown"
                                        class="form-check-input"

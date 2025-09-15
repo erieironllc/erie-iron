@@ -731,7 +731,8 @@ def action_update_business(request, business_id):
         business_plan = rget(request, 'business_plan', '').strip()
         architecture = rget(request, 'architecture', '').strip()
         allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
-        
+        needs_domain = request.POST.get('needs_domain') == 'on'
+
         # Prepare update data
         update_data = {
             'name': name,
@@ -747,7 +748,8 @@ def action_update_business(request, business_id):
             'github_repo_url': github_repo_url or None,
             'business_plan': business_plan or None,
             'architecture': architecture or None,
-            'allow_autonomous_shutdown': allow_autonomous_shutdown
+            'allow_autonomous_shutdown': allow_autonomous_shutdown,
+            'needs_domain': needs_domain
         }
         
         # Handle optional autonomy_level

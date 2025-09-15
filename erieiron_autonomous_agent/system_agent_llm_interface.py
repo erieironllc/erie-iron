@@ -164,11 +164,6 @@ def llm_chat(
     else:
         raise ValueError(f"invalid tag entity {tag_entity}")
     
-    if output_schema:
-        logging.info(f"llm chat: {description} ({output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}")
-    else:
-        logging.info(f"llm chat: {description}; Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}")
-    
     token_count = LlmMessage.get_total_token_count(model, messages)
     
     llm_resp = None
@@ -192,6 +187,11 @@ def llm_chat(
             } for m in llm_messages]
         )
         llm_request_url = f"{settings.BASE_URL}/llm/debug/{llm_request.id}"
+        
+        if output_schema:
+            logging.info(f"llm chat: {description} ({output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; {llm_request_url}")
+        else:
+            logging.info(f"llm chat: {description}; Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; {llm_request_url}")
         
         try:
             max_tokens = MODEL_TO_MAX_TOKENS.get(model)

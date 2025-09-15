@@ -32,7 +32,7 @@ from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, LlmVerbosity, CredentialService
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
 
@@ -466,12 +466,12 @@ def get_role_from_cloudformation_stack(config: SelfDriverConfig, aws_env: AwsEnv
     if not region:
         raise AgentBlocked("unable to determine regions")
     
-    stack_descriptions = boto3.client(
-        "cloudformation",
-        region_name=region
+    stack_descriptions = aws_utils.client(
+        "cloudformation"
     ).describe_stacks(
         StackName=stack_name
     ).get("Stacks")
+    
     if not stack_descriptions:
         raise AgentBlocked(f"no stack descriptions found for {stack_name}")
     
@@ -515,7 +515,7 @@ def update_rds_secret_from_cloudformation_stack(
     if not region:
         raise AgentBlocked("unable to determine regions")
     
-    cf_client = boto3.client("cloudformation", region_name=region)
+    cf_client = aws_utils.client("cloudformation")
     try:
         stack_descriptions = cf_client.describe_stacks(StackName=stack_name).get("Stacks")
     except Exception as e:
@@ -537,7 +537,7 @@ def update_rds_secret_from_cloudformation_stack(
     secret_arn_env_var = rds_credential_def.get("secret_arn_env_var")
     docker_env[secret_arn_env_var] = rds_secret_arn
     
-    secrets = boto3.client("secretsmanager", region_name=get_aws_region())
+    secrets = aws_utils.client("secretsmanager")
     resp = secrets.get_secret_value(SecretId=rds_secret_arn)
     secret_dict = json.loads(resp["SecretString"])
     
@@ -617,7 +617,7 @@ def build_env_flags(env):
 
 
 def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
-    s3 = boto3.client("s3", region_name=get_aws_region())
+    s3 = aws_utils.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
     
@@ -737,7 +737,7 @@ def push_image_to_ecr(
 ):
     region = envinronment.get_aws_region()
     ecr_client = boto3.client("ecr", region_name=region)
-    account_id = boto3.client("sts").get_caller_identity()["Account"]
+    account_id = aws_utils.client("sts").get_caller_identity()["Account"]
     
     repo_name = sanitize_aws_name(config.business.service_token)
     ecr_repo_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}"
@@ -916,7 +916,7 @@ def extract_cloudwatch_lambda_logs(
     if not request_ids:
         return ""
     
-    logs = boto3.client("logs", region_name=get_aws_region())
+    logs = aws_utils.client("logs")
     
     # Discover Lambda log groups (limit to keep queries bounded)
     log_groups = []
@@ -1898,8 +1898,8 @@ def perform_code_review(
         {task.test_plan or 'none'}
 
         # Risk Notes
-        {task.risk_notes or 'none'}'''
-        ,
+        {task.risk_notes or 'none'}
+        ''',
         "Please perform the code review"
     ]
     
@@ -3086,10 +3086,10 @@ def validate_code(
         except Exception as e:
             raise CodeCompilationError(code, f"Jinja syntax error: {e}")
     elif validator == "django_template":
-        from django.template import Template, TemplateSyntaxError
+        from django.template import Template
         try:
             Template(code)
-        except TemplateSyntaxError as e:
+        except Exception as e:
             raise CodeCompilationError(code, f"Django template syntax error: {e}")
     elif code_file_name.endswith(".js"):
         import subprocess
@@ -3834,7 +3834,7 @@ def delete_cloudformation_stack(config, aws_env: AwsEnv, block_while_waiting=Tru
     if not stack_name:
         return
     
-    cf_client = boto3.client("cloudformation", region_name=get_aws_region())
+    cf_client = aws_utils.client("cloudformation")
     existing = get_stack(stack_name, cf_client)
     if not existing:
         config.log(f"CloudFormation stack {stack_name} does not exist. Nothing to delete.")
@@ -3854,7 +3854,7 @@ def delete_cloudformation_stack(config, aws_env: AwsEnv, block_while_waiting=Tru
 def empty_stack_buckets(config: SelfDriverConfig):
     stack_name = config.self_driving_task.cloudformation_stack_name
     
-    cf_client = boto3.client("cloudformation", region_name=get_aws_region())
+    cf_client = aws_utils.client("cloudformation")
     existing = get_stack(stack_name, cf_client)
     if not existing:
         return
@@ -3875,7 +3875,7 @@ def empty_stack_buckets(config: SelfDriverConfig):
         return
     
     config.log(f"Found {len(s3_buckets)} S3 bucket(s) in stack {stack_name}, emptying before deletion...")
-    s3_client = boto3.client("s3", region_name=get_aws_region())
+    s3_client = aws_utils.client("s3")
     
     for bucket_resource in s3_buckets:
         bucket_name = bucket_resource['PhysicalResourceId']
@@ -3931,8 +3931,8 @@ def extract_cloudwatch_stack_logs_for_window(
     provided [start_time, end_time] window (epoch seconds). Returns a concatenated text block.
     """
     try:
-        cf = boto3.client("cloudformation", region_name=get_aws_region())
-        logs = boto3.client("logs", region_name=get_aws_region())
+        cf = aws_utils.client("cloudformation")
+        logs = aws_utils.client("logs")
     except Exception as e:
         config.log(f"Unable to create AWS clients: {e}")
         return ""

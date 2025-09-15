@@ -26,12 +26,20 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
 
+def client(client_name) -> boto3.session.Session.client:
+    return boto3.client(client_name, region_name=get_aws_region())
+
+
+def get_aws_region() -> str:
+    return os.getenv("AWS_REGION", "us-west-2")
+
+
 def ensure_network_access(
         db_host: str,
         aws_region=settings.AWS_DEFAULT_REGION_NAME
 ):
-    rds = boto3.client("rds", region_name=aws_region)
-    ec2 = boto3.client("ec2", region_name=aws_region)
+    rds = client("rds")
+    ec2 = client("ec2")
     
     my_cidr = common.get_ip_address()
     db_instance, db_cluster = get_db_instance_and_cluster(db_host, aws_region)
@@ -74,7 +82,7 @@ def get_db_instance_and_cluster(
     db_instance = None
     db_cluster = None
     
-    rds = boto3.client("rds", region_name=aws_region)
+    rds = client("rds")
     paginator = rds.get_paginator("describe_db_instances")
     for page in paginator.paginate():
         for inst in page.get("DBInstances", []):
@@ -193,10 +201,7 @@ def assert_account_name(required_account_name):
 
 
 def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
-    response = boto3.client(
-        "autoscaling",
-        region_name=settings_common.AWS_DEFAULT_REGION_NAME
-    ).describe_auto_scaling_groups(
+    response = client("autoscaling").describe_auto_scaling_groups(
         AutoScalingGroupNames=[auto_scaling_group.value]
     )
     
@@ -217,20 +222,14 @@ def set_asg_desired_capacity(auto_scaling_group, count: int):
         return
     
     common.log_info(f"UPDATING ASG Capacity {auto_scaling_group.value} to {count}")
-    response = boto3.client(
-        'autoscaling',
-        region_name=settings_common.AWS_DEFAULT_REGION_NAME
-    ).update_auto_scaling_group(
+    response = client('autoscaling').update_auto_scaling_group(
         AutoScalingGroupName=auto_scaling_group.value,
         DesiredCapacity=count
     )
 
 
 def set_ecs_service_tasks(cluster_name, service_name, desired_count):
-    boto3.client(
-        'ecs',
-        region_name=settings_common.AWS_DEFAULT_REGION_NAME
-    ).update_service(
+    client('ecs').update_service(
         cluster=cluster_name,
         service=service_name,
         desiredCount=desired_count
@@ -264,13 +263,8 @@ def get_secret_arn(secret_name: str):
     if isinstance(secret_name, str) and secret_name.startswith("arn:aws:secretsmanager:"):
         return secret_name
     
-    client = boto3.client(
-        'secretsmanager',
-        region_name=os.getenv('AWS_REGION', 'us-west-2')
-    )
-    
     try:
-        resp = client.describe_secret(SecretId=secret_name)
+        resp = client('secretsmanager').describe_secret(SecretId=secret_name)
         arn = resp.get('ARN')
         if not arn:
             raise RuntimeError(f"DescribeSecret returned no ARN for {secret_name}")
@@ -293,17 +287,14 @@ def put_secret(secret_name: str, val: dict):
     if not isinstance(val, dict):
         raise ValueError("put_secret expects `val` to be a dict")
     
-    client = boto3.client(
-        'secretsmanager',
-        region_name=os.getenv("AWS_REGION", "us-west-2")
-    )
+    secrets_manager = client('secretsmanager')
     
     secret_string = json.dumps(val)
     
     try:
         # Check if the secret exists
         try:
-            client.describe_secret(SecretId=secret_name)
+            secrets_manager.describe_secret(SecretId=secret_name)
             exists = True
         except ClientError as e:
             err = e.response.get('Error', {}).get('Code')
@@ -313,13 +304,13 @@ def put_secret(secret_name: str, val: dict):
                 raise
         
         if exists:
-            resp = client.put_secret_value(
+            resp = secrets_manager.put_secret_value(
                 SecretId=secret_name,
                 SecretString=secret_string
             )
             logging.info(f"Updated secret value for {secret_name}")
         else:
-            resp = client.create_secret(
+            resp = secrets_manager.create_secret(
                 Name=secret_name,
                 SecretString=secret_string
             )
@@ -362,10 +353,7 @@ def get_secret(secret_name: str):
 
 @lru_cache
 def get_cloudfron_url_signing_private_key():
-    response = boto3.client(
-        "secretsmanager",
-        region_name=os.getenv("AWS_REGION", "us-west-2")
-    ).get_secret_value(
+    response = client("secretsmanager").get_secret_value(
         SecretId=settings_common.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
     )
     
@@ -415,12 +403,7 @@ def get_aws_interface():
 
 class AwsInterface:
     def __init__(self):
-        s3_client = boto3.client(
-            's3',
-            region_name=os.getenv("AWS_REGION", "us-west-2")
-        )
-        
-        self.s3_passthrough_cache = S3LocalCache(s3_client)
+        self.s3_passthrough_cache = S3LocalCache(client('s3'))
     
     def generate_presigned_url(self, bucket: str, file_key: str, content_type: str, expiration_minutes=1000):
         return boto3.client("s3").generate_presigned_url(
@@ -437,10 +420,7 @@ class AwsInterface:
         raise Exception("Expecting test interface, but got real one")
     
     def transcribe_audio(self, bucket, key):
-        transcribe = boto3.client(
-            'transcribe',
-            region_name=settings_common.AWS_DEFAULT_REGION_NAME
-        )
+        transcribe = client('transcribe')
         
         job_name = f"{key}_{uuid.uuid4()}"
         

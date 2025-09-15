@@ -5,6 +5,7 @@ import uuid
 
 from django.db import transaction
 
+from erieiron_autonomous_agent.business_level_agents import domain_manager
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Initiative, Task, ProductRequirement, Business, SelfDrivingTask
@@ -296,6 +297,8 @@ def process_response(initiative, eng_lead_response):
 
 def bootstrap_buiness(business_id):
     business = Business.objects.get(id=business_id)
+    
+    domain_manager.manage_domain(business)
     
     if business.id == Business.get_erie_iron_business().id:
         return
