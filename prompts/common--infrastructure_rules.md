@@ -130,10 +130,46 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 - All resource names (like s3 bucket names, SQS queue names, etc) must be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
     - if you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them
 
+---
+
+## Required Parameters
+The following parameters are required in every `infrastructure.yaml` file. They must be written **exactly** as follows with no modifications
+```
+  StackIdentifier:
+    Type: String
+    AllowedPattern: '^[a-z0-9-]{1,40}$'
+    ConstraintDescription: 'Lowercase letters, numbers, and dashes only; max 40 chars.'
+    Description: Combined project name and environment identifier (e.g., "project-env")
+  TaskRoleArn:
+    Type: String
+    Description: "Required: IAM Role ARN to be used by this stack for ECS tasks, Lambda, and other services. The stack will not create service-specific roles; provide a full role ARN (e.g., arn:aws:iam::123456789012:role/MyTaskRole)."
+    ConstraintDescription: "Must be a valid IAM Role ARN (not a role name) and assumable by your CI/CD principal; the role's trust policy should include lambda.amazonaws.com and/or ecs-tasks.amazonaws.com as applicable. Provide an ARN (not a short name)."
+  ClientIpForRemoteAccess:
+    Type: String
+    Description: "Your current public IPv4 address in CIDR format (e.g., 203.0.113.25/32)"
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$"
+    ConstraintDescription: "Must be a valid IPv4 address in /32 CIDR notation"
+  DeletePolicy:
+    Type: String
+    Description: "Required: Specifies the deletion and replacement policy for resources. For development or non-production, this value will be 'Delete', for production this value will be 'Retain'"
+```
+
+### DeletePolicy usage
+
+- The delete policy for all stack resources is passed in as a parameter named DeletePolicy
+- Use this value for any resource (ie RDS) that accepts a delete (or replace) policy
+- For example, RDS configurations **must** use the policy from the parameter like this:
+```yaml
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: !Ref DeletePolicy
+    UpdateReplacePolicy: !Ref DeletePolicy
+```
 
 --- 
 ## Additional Forbidden Actions
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
 - **Never** add a new Parameter to infrastructure.yaml without a default value.  If you add a new parameter to infrastructure.yaml without a default value, deployment will fail
-- **Never** hardcode resource names (like s3 bucket names, SQS queue names, etc).  all resource names must be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
-    - if you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them
+- **Never** hardcode resource names (like S3 bucket names, SQS queue names, etc. - this applies to **any and all** named aws service or resources)  
+    - all resource names **must** be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
+    - if you discover hardcoded resource names in the infrastructure.yaml, you **must** fix them by namespacing them with `!Sub "${StackIdentifier}-<resource_name>"`

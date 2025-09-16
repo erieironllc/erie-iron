@@ -35,9 +35,9 @@ All Lambda function configuration in `infrastructure.yaml` must follow these rul
     S3Key: !Ref MyLambdaZipS3Key
   ```
     The `S3Bucket` value must be hardcoded to "erieiron-lambda-packages"
-    The `S3Key` value must be passed in as a CloudFormation `Parameter`. Do not hardcode S3Key values.
+    The `S3Key` value must be passed in as a CloudFormation `Parameter`. **never** hardcode S3Key values.
 - For every Lambda zip file, define a corresponding `Parameter` (e.g., `MyLambdaZipS3Key`) and reference it in the function’s `Code.S3Key` field.
-- All Lambda functions must use `Role: !Ref TaskRoleArn`. Do **not** create IAM roles or include any role-related parameters other than `TaskRoleArn`.
+- All Lambda functions must use `Role: !Ref TaskRoleArn`. **never** create IAM roles or include any role-related parameters other than `TaskRoleArn`.
 - You do **not** need to handle code packaging or uploading. Your responsibility is to correctly wire the S3 bucket and parameterized key into the function configuration.
 - Each Lambda resource must include a `Metadata` block with a `SourceFile` field set to the full relative path of the Lambda `.py` source file (e.g., `lambda/my_handler.py`). This is required for deployment mapping.
   - Exception: the `RdsSecretUpdaterLambda` must embed its code inline via `Code.ZipFile` as specified in the "Required Lambda for RDS Secret Population" section. Do not reference S3 for this Lambda.
@@ -71,6 +71,7 @@ When provisioning RDS the following rules **must** be followed
   - `!GetAtt RDSInstance.MasterUserSecret.SecretArn`
   - `!GetAtt RDSInstance.MasterUserSecret.SecretName`
 - No Lambda functions or custom resources are needed for secret updates.
+
 
 ---
 
@@ -122,23 +123,25 @@ Resources:
       Type: String
       Value: !GetAtt MyLambdaFunction.Arn
 
-  MyRDSInstance:
+  RDSInstance:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: !Ref DeletePolicy
+    UpdateReplacePolicy: !Ref DeletePolicy
     Properties:
-      DBInstanceIdentifier: !Sub "${StackIdentifier}-mydb"
+      DBInstanceIdentifier: !Sub "${StackIdentifier}-db"
       # ... other properties ...
-  MyRDSArnParam:
+  RDSArnParam:
     Type: AWS::SSM::Parameter
     Properties:
       Name: !Sub "/${StackIdentifier}/MyRdsArn"
       Type: String
-      Value: !GetAtt MyRDSInstance.Arn
-  MyRDSAddressParam:
+      Value: !GetAtt RDSInstance.Arn
+  RDSAddressParam:
     Type: AWS::SSM::Parameter
     Properties:
       Name: !Sub "/${StackIdentifier}/MyRdsEndpoint"
       Type: String
-      Value: !GetAtt MyRDSInstance.Endpoint.Address
+      Value: !GetAtt RDSInstance.Endpoint.Address
 ```
 
 - Create an SSM parameter to expose the ARN of `RdsSecretUpdaterLambda`:
@@ -265,30 +268,9 @@ When planning or modifying AWS CloudFormation templates:
 ---
 
 ## Hard Prohibitions 
-- No `AWS::IAM::Role`, `AWS::IAM::InstanceProfile`, or `AWS::IAM::Policy` resources.
-- No alternate role parameters (only `TaskRoleArn`).
+- No new `AWS::IAM::Role` resources
+- No alternate role parameters (only `TaskRoleArn`)
 - No role creation via nested stacks or macros.
-
----
-
-## Required Parameters
-The following parameters are required in every `infrastructure.yaml` files.  They must be written **exactly** as follows with no modifications
-```
-  StackIdentifier:
-    Type: String
-    AllowedPattern: '^[a-z0-9-]{1,40}$'
-    ConstraintDescription: 'Lowercase letters, numbers, and dashes only; max 40 chars.'
-    Description: Combined project name and environment identifier (e.g., "project-env")
-  TaskRoleArn:
-    Type: String
-    Description: "Required: IAM Role ARN to be used by this stack for ECS tasks, Lambda, and other services. The stack will not create service-specific roles; provide a full role ARN (e.g., arn:aws:iam::123456789012:role/MyTaskRole)."
-    ConstraintDescription: "Must be a valid IAM Role ARN (not a role name) and assumable by your CI/CD principal; the role's trust policy should include lambda.amazonaws.com and/or ecs-tasks.amazonaws.com as applicable. Provide an ARN (not a short name)."
-  ClientIpForRemoteAccess:
-    Type: String
-    Description: "Your current public IPv4 address in CIDR format (e.g., 203.0.113.25/32)"
-    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$"
-    ConstraintDescription: "Must be a valid IPv4 address in /32 CIDR notation"
-```
 
 ---
 

@@ -222,6 +222,7 @@ def llm_chat(
             
             break
         except Exception as e:
+            logging.exception(e)
             LlmRequest.objects.filter(id=llm_request.id).update(
                 response=traceback.format_exc(),
                 token_count=0,

@@ -11,7 +11,7 @@ The system enforces a single-role model per {business, env}. The role is **const
 - Any other service fields that accept a role ARN must also reference `!Ref TaskRoleArn`.
 
 **Prohibited**
-- Do not add resources of type `AWS::IAM::Role`, `AWS::IAM::InstanceProfile`, or `AWS::IAM::Policy`.
+- Do not add resources of type `AWS::IAM::Role`
 - Do not add parameters that select or generate additional roles.
 - Do not add 'AllowedPattern' to the 'TaskRoleArn' parameter definition.
     - If the existing 'TaskRoleArn' parameter definition has an 'AllowedPattern' value, **you must** remove it

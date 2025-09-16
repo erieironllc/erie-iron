@@ -15,11 +15,38 @@ from pygments.formatters.html import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 
 from erieiron_autonomous_agent.models import LlmRequest
-from erieiron_common import common, date_utils, settings_common
+from erieiron_common import common, date_utils, settings_common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.enums import LlmModel
 
 register = template.Library()
+
+
+@register.filter(name='json_to_div')
+def json_to_div(json_content):
+    if not json_content:
+        return ""
+    
+    try:
+        if not isinstance(json_content, dict):
+            json_content = json.loads(json_content)
+    
+        parts = []
+        for k,v in json_content.items():
+            if isinstance(v, dict):
+                v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
+                
+            parts.append(f"""
+            <div class="json_to_div--container">
+                <label>{k}</label>
+                <pre>{v}</pre>
+            </div>
+            """)
+            ...
+        
+        return mark_safe("".join(parts))
+    except Exception as e:
+        raise e
 
 
 @register.filter(name='highlight')

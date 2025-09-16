@@ -38,7 +38,7 @@ When planning Lambda-based functionality, follow these rules:
   - Do **not** embed code using `ZipFile`, `InlineCode`, or `CodeUri` in `infrastructure.yaml`.
   - Each Lambda must be defined using the `Code.S3Bucket` and `Code.S3Key` fields.
   - The `S3Bucket` must be hardcoded (`erieiron-lambda-packages`).
-  - The `S3Key` must be passed in via a CloudFormation `Parameter`. Do **not** hardcode S3 keys.
+  - The `S3Key` must be passed in via a CloudFormation `Parameter`.  **never** hardcode S3 keys.
 - Each Lambda resource in `infrastructure.yaml` **must** include a `Metadata` section with the field `SourceFile` set to the full relative path of the Lambda `.py` file (e.g., `lambda/my_handler.py`). 
     - This is used during deployment to associate Lambda resources with their source files.
 - For every Lambda, you must emit a `dependencies` list that includes **only** the PyPI packages required by that file.

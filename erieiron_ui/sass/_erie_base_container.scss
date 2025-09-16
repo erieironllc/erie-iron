@@ -13,7 +13,7 @@ body {
     width: 80%;
   }
 
-  font-family: 'Inter', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  font-family: $base-font;
 
   a:hover {
     color: $link-hover-color !important;

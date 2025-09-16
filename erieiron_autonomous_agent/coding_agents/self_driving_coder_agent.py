@@ -88,7 +88,7 @@ def execute(task_id: str, reset=False):
                 try:
                     config.set_iteration(self_driving_task.iterate())
                     
-                    if config.iteration_to_modify:
+                    if config.iteration_to_modify and i > 0:
                         config.iteration_to_modify.write_to_disk()
                     
                     planning_data = plan_code_changes(config)
@@ -3649,6 +3649,7 @@ def get_stack_parameters(
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
         "ClientIpForRemoteAccess": common.get_ip_address(),
         "TaskRoleArn": role_arn,
+        "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
         "DomainName": self_driving_task.domain,
         "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,

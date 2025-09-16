@@ -14,8 +14,20 @@
                    data-bs-toggle="list"
                    aria-controls="messages"
                 >
-                    Messages and Response
+                    Messages
                 </a>
+
+                {%  if llm_request.response %}
+                    <a id="response-tab"
+                       href="#response"
+                       class="list-group-item list-group-item-action"
+                       role="tab"
+                       data-bs-toggle="list"
+                       aria-controls="response"
+                    >
+                        Response
+                    </a>
+                {% endif %}
 
                 <a id="chat-tab"
                    href="#chat"
@@ -156,6 +168,10 @@
                         {% endif %}
 </pre>
 
+                </div>
+
+                <div class="tab-pane " id="response" role="tabpanel" aria-labelledby="response-tab">
+                    {{ llm_request.response|json_to_div }}
                 </div>
 
                 <div class="tab-pane " id="chat" role="tabpanel" aria-labelledby="chat-tab">

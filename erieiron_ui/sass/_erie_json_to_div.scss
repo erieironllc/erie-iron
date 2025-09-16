@@ -1,0 +1,11 @@
+.json_to_div--container{
+  margin-bottom: 2rem;
+ label{
+    font-weight: bold ;
+  }
+  pre{
+    width: 100%;
+    white-space: break-spaces;
+    font-family: $base-font;
+  }
+}
