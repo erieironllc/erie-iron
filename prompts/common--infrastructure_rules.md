@@ -32,7 +32,7 @@
 ### RDS Secret Management Contract
 - Use `ManageMasterUserPassword: true` in `AWS::RDS::DBInstance`.
 - The DBInstanceIdentifier must be parameterized (e.g. `!Sub "${StackIdentifier}-db"`) to namespace the auto-generated secret.
-- CloudFormation must output both `!GetAtt RDSInstance.MasterUserSecret.SecretArn` and `!GetAtt RDSInstance.MasterUserSecret.SecretName`.
+- CloudFormation must output `!GetAtt RDSInstance.MasterUserSecret.SecretArn` **only**; do not create a `RdsMasterSecretName` (or any secret name) output parameter.
 - No `Parameters.RdsSecretArn`, no `SecretTargetAttachment`, and no Lambda custom resource are required for this pattern.
     
 

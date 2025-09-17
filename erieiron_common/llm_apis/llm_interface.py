@@ -10,7 +10,7 @@ from jsonschema import validate as jsonschema_validate
 from erieiron_common import common
 from erieiron_common.enums import LlmModel, LlmMessageType, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.json_encoder import ErieIronJSONEncoder
-from erieiron_common.llm_apis.llm_constants import CODE_PLANNING_MODELS_IN_ORDER, CHAT_MODELS_IN_ORDER, MODEL_TO_IMPL, MODEL_TO_MAX_TOKENS, get_token_count
+from erieiron_common.llm_apis.llm_constants import MODEL_TO_IMPL, MODEL_TO_MAX_TOKENS, get_token_count
 from erieiron_common.llm_apis.llm_response import LlmResponse
 
 
@@ -34,7 +34,7 @@ def chat(
         ]
     
     if not model:
-        models = CODE_PLANNING_MODELS_IN_ORDER if code_response else CHAT_MODELS_IN_ORDER
+        models = [LlmModel.OPENAI_GPT_5]
     else:
         models = common.ensure_list(model)
     
@@ -442,6 +442,11 @@ Begin chat with {model}
 
 
 def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
+    if isinstance(e, Exception):
+        e = common.get_stack_trace_as_string(e)
+    else:
+        e = str(e)
+        
     messages = [
         LlmMessage.sys(
             f"""
@@ -464,7 +469,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
         LlmMessage.user_from_data("JSON Data", {
             "JSON text": json_text,
             "JSON schema": schema,
-            "Error Message": e
+            "Error Message": str(e)
         })
     ]
     
@@ -477,6 +482,8 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
             response = chat(
                 messages=messages,
                 model=LlmModel.OPENAI_GPT_5_MINI,
+                verbosity=LlmVerbosity.LOW,
+                reasoning_effort=LlmVerbosity.HIGH,
                 code_response=True
             )
             
@@ -489,7 +496,9 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
         logging.error(f"fixing invalid json - final attempt")
         response = chat(
             messages=messages,
-            model=LlmModel.OPENAI_GPT_4o,
+            model=LlmModel.OPENAI_GPT_5,
+            verbosity=LlmVerbosity.LOW,
+            reasoning_effort=LlmVerbosity.HIGH,
             code_response=True
         )
         return json.loads(response.text)

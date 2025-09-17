@@ -2,12 +2,7 @@ from erieiron_common.enums import LlmModel
 from erieiron_common.llm_apis import openai_chat_api, gemini_chat_api, claude_chat_api, deepseek_chat_api
 
 SYSTEM_AGENT_MODELS_IN_ORDER = [
-    LlmModel.OPENAI_O3,
-    LlmModel.GEMINI_2_5_PRO,
-    # LlmModel.OPENAI_GPT_4o,
-    # LlmModel.OPENAI_GPT_4_1_NANO,
-    # LlmModel.OPENAI_O3_PRO,
-    # LlmModel.CLAUDE_3_7
+    LlmModel.OPENAI_GPT_5
 ]
 
 # want these to be cheap and fast- only need to parse a simple prompt and return json
@@ -17,22 +12,6 @@ PARSE_MODELS_IN_ORDER = [
     LlmModel.DEEPSEEK_CODER
 ]
 
-CHAT_MODELS_IN_ORDER = [
-    LlmModel.OPENAI_GPT_4o,
-    LlmModel.OPENAI_GPT_4_1_MINI,
-    LlmModel.GEMINI_2_5_PRO,
-    LlmModel.OPENAI_O3_MINI,
-    LlmModel.CLAUDE_3_7,
-    LlmModel.DEEPSEEK_CHAT,
-]
-
-CODE_PLANNING_MODELS_IN_ORDER = [
-    LlmModel.OPENAI_O3,
-    LlmModel.GEMINI_2_5_PRO,
-    # LlmModel.OPENAI_GPT_4o,
-    # LlmModel.DEEPSEEK_CODER,
-    # LlmModel.CLAUDE_3_7 # context window too small
-]
 
 MODEL_TO_IMPL = {
     LlmModel.OPENAI_GPT_5: openai_chat_api,
@@ -68,7 +47,7 @@ MODEL_TO_IMPL = {
 }
 
 MODEL_BACKUPS = {
-    LlmModel.OPENAI_GPT_5: LlmModel.GEMINI_2_5_PRO,
+    LlmModel.OPENAI_GPT_5: LlmModel.CLAUDE_3_7,
     LlmModel.OPENAI_GPT_5_MINI: LlmModel.CLAUDE_3_7,
     LlmModel.OPENAI_GPT_5_NANO: LlmModel.CLAUDE_3_5,
     
@@ -85,12 +64,12 @@ MODEL_BACKUPS = {
 
     # OpenAI 'O'-series fallbacks (prioritize variety)
     LlmModel.OPENAI_O3_MINI: LlmModel.GEMINI_2_0_FLASH,
-    LlmModel.OPENAI_O3_PRO: LlmModel.GEMINI_2_5_PRO,
+    LlmModel.OPENAI_O3_PRO: LlmModel.CLAUDE_3_7,
     LlmModel.OPENAI_O1: LlmModel.CLAUDE_3_5,
     LlmModel.OPENAI_O1_MINI: LlmModel.GEMINI_2_0_FLASH,
     LlmModel.OPENAI_O3: LlmModel.CLAUDE_3_7,
     LlmModel.OPENAI_O4: LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE,
-    LlmModel.OPENAI_O4_MINI: LlmModel.GEMINI_2_5_PRO,
+    LlmModel.OPENAI_O4_MINI: LlmModel.CLAUDE_3_7,
 
     # Claude and Gemini fallbacks
     LlmModel.CLAUDE_3_7: LlmModel.OPENAI_GPT_4o,

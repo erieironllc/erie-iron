@@ -67,9 +67,7 @@ When provisioning RDS the following rules **must** be followed
 - RDS secrets must be managed using `ManageMasterUserPassword: true` on the `AWS::RDS::DBInstance` resource.
 - The resulting secret is automatically created and managed by RDS in AWS Secrets Manager.
 - The `DBInstanceIdentifier` must be parameterized using `!Sub "${StackIdentifier}-db"` to namespace the secret name.
-- Templates must output both:
-  - `!GetAtt RDSInstance.MasterUserSecret.SecretArn`
-  - `!GetAtt RDSInstance.MasterUserSecret.SecretName`
+- Templates must output only `!GetAtt RDSInstance.MasterUserSecret.SecretArn`; do **not** create an output for the secret name (e.g., `RdsMasterSecretName`).
 - No Lambda functions or custom resources are needed for secret updates.
 
 
