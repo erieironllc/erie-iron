@@ -1827,3 +1827,17 @@ def get_ip_address():
     ip_txt = urllib.request.urlopen("https://checkip.amazonaws.com", timeout=5).read().decode().strip()
     return f"{ipaddress.ip_address(ip_txt)}/32"
 
+
+def safe_positive_int(value) -> int | None:
+    try:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            ivalue = int(value)
+            return ivalue if ivalue >= 0 else None
+        if isinstance(value, str) and value.strip().isdigit():
+            ivalue = int(value.strip())
+            return ivalue if ivalue >= 0 else None
+    except Exception:
+        return None
+    return None

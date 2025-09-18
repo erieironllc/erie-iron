@@ -36,6 +36,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService
+from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
 
@@ -56,6 +57,14 @@ def execute(task_id: str, reset=False):
         reset
     )
     
+    # config = SelfDriverConfig(self_driving_task)
+    # config.set_iteration(
+    #     SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
+    # )
+    # codex_exec(config, config.current_iteration.planning_json)
+    # plan_and_implement_code_changes(
+    #     config
+    # )
     # execute_iteration(
     #     SelfDriverConfig(self_driving_task),
     #     AwsEnv.DEV,
@@ -314,16 +323,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         except Exception as err:
             config.log("Failed to collect previous iteration error details", err)
     
-    lessons_payload = get_lessons(
-        config,
-        task_desc=TASK_DESC_CODE_WRITING
-    )
-    lesson_lines = []
-    if isinstance(lessons_payload, dict):
-        for lesson in common.ensure_list(lessons_payload.get("lessons")):
-            if lesson:
-                lesson_lines.append(f"- {lesson}")
-    
     readonly_entries = get_readonly_files_paths(config)
     readonly_lines = []
     for entry in common.ensure_list(readonly_entries):
@@ -351,32 +350,8 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     initiative = config.initiative
     task = config.task
     
-    routing_data = config.current_iteration.routing_json or {}
-    routing_excerpt = None
-    if routing_data:
-        routing_excerpt = json.dumps(routing_data, indent=2, default=str)
-        if len(routing_excerpt) > 2000:
-            routing_excerpt = f"{routing_excerpt[:2000]}\n... [truncated]"
-    
     plan_path = config.artifacts_dir / f"{config.current_iteration.id}_plan.json"
     plan_path.write_text(json.dumps(planning_data, indent=2, default=str), encoding="utf-8")
-    
-    routing_path = None
-    if routing_data:
-        routing_path = config.artifacts_dir / f"{config.current_iteration.id}_routing.json"
-        routing_path.write_text(
-            json.dumps(routing_data, indent=2, default=str),
-            encoding="utf-8"
-        )
-    
-    error_log_path = None
-    error_logs_excerpt = None
-    if error_logs:
-        error_log_path = config.artifacts_dir / f"{config.current_iteration.id}_previous_error.log"
-        error_log_path.write_text(error_logs, encoding="utf-8")
-        error_logs_excerpt = error_logs[:2000]
-        if len(error_logs) > 2000:
-            error_logs_excerpt += "\n... [truncated]"
     
     guidance_text = config.guidance.text if config.guidance else None
     
@@ -400,12 +375,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         Do not commit or push changes; the orchestrator handles git commits.
         """),
         textwrap.dedent(f"""
-        ## Task Goal
-        {task.description}
-
-        ### Test Plan
-        {task.test_plan or 'None provided.'}
-
         ### Risk Notes
         {task.risk_notes or 'None provided.'}
         """),
@@ -413,12 +382,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         ## Business & Architecture Context
         Business Service Token: {business.service_token}
         Initiative ID: {initiative.id}
-
-        ### Business Architecture
-        {business.architecture or 'No business-level architecture notes provided.'}
-
-        ### Initiative Architecture
-        {initiative.architecture or 'No initiative-specific architecture notes provided.'}
         """)
     ]
     
@@ -427,31 +390,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         ## Additional Guidance
         {guidance_text}
         """))
-    
-    if routing_excerpt:
-        prompt_parts.append(textwrap.dedent(f"""
-        ## Routing Decision
-        The failure router recommended this recovery path. Full JSON is saved at {routing_path}.
-
-        {routing_excerpt}
-        """))
-    
-    if error_summary or error_logs_excerpt:
-        failure_section_lines = []
-        if error_summary:
-            failure_section_lines.append(f"Summary: {error_summary}")
-        if error_logs_excerpt:
-            failure_section_lines.append(
-                f"Log excerpt (full logs available at {error_log_path}):\n{error_logs_excerpt}"
-            )
-        prompt_parts.append(textwrap.dedent("""
-        ## Previous Iteration Failure
-        """ + "\n".join(failure_section_lines)))
-    
-    if lesson_lines:
-        prompt_parts.append(textwrap.dedent("""
-        ## Previously Learned Lessons (do not repeat these mistakes)
-        """ + "\n".join(lesson_lines)))
     
     if readonly_lines:
         prompt_parts.append(textwrap.dedent("""
@@ -471,12 +409,10 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
 
     ## Execution Checklist
     1. Read the full development plan at {plan_path}.
-    2. Inspect any supporting artefacts (routing JSON: {routing_path or 'n/a'}, previous error log: {error_log_path or 'n/a'}).
-    3. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
-    4. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
-    5. Run the relevant tests (unit, integration, or manual steps) described in the plan or task test plan. Capture results in the CLI transcript.
-    6. Ensure infrastructure updates never introduce an `RdsMasterSecretName` output parameter.
-    7. Leave the repository with changes ready for review; do not commit.
+    2. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
+    3. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
+    4. Leave the repository with changes ready for review; do not commit.
+    5. Write the current date and time as a comment at the top of infrastructure.yaml
     """))
     
     prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
@@ -489,8 +425,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     augmented_plan["codex_metadata"] = {
         "plan_path": str(plan_path),
         "prompt_path": str(prompt_path),
-        "routing_json_path": str(routing_path) if routing_path else None,
-        "previous_error_log_path": str(error_log_path) if error_log_path else None,
         "code_file_paths": code_file_paths,
     }
     with transaction.atomic():
@@ -507,6 +441,7 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         "codex",
         "exec",
         "--full-auto",
+        "--json",
         "--cd",
         str(config.sandbox_root_dir),
         "--output-last-message",
@@ -515,7 +450,10 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     ]
     
     config.log("Running Codex CLI", codex_cmd, f"Prompt saved to {prompt_path}")
+    print(" ".join(codex_cmd))
     
+    codex_start_time = time.time()
+    prior_file_checksum_map = get_file_checksum_map(config.sandbox_root_dir)
     codex_result = subprocess.run(
         codex_cmd,
         input=prompt_text,
@@ -531,10 +469,19 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     # Update the planning JSON with execution artefacts regardless of success so failures retain context.
     planning_record = copy.deepcopy(config.current_iteration.planning_json or augmented_plan)
     codex_metadata = planning_record.get("codex_metadata", {})
+    usage_metrics = _extract_codex_usage(
+        codex_result.stdout,
+        codex_result.stderr,
+        last_message_path,
+        config
+    )
+    if usage_metrics:
+        codex_metadata.update(usage_metrics)
     codex_metadata.update({
         "stdout_path": str(stdout_path),
         "stderr_path": str(stderr_path),
         "last_message_path": str(last_message_path) if last_message_path.exists() else None,
+        "codex_start_time": codex_start_time,
         "return_code": codex_result.returncode,
         "execution_completed_at": time.time()
     })
@@ -564,7 +511,8 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     
     persisted_code_files = _persist_codex_code_versions(
         config,
-        config.current_iteration.planning_json or augmented_plan
+        planning_data,
+        prior_file_checksum_map
     )
     
     if persisted_code_files:
@@ -586,8 +534,16 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     config.git.add_files()
 
 
-def _persist_codex_code_versions(config: SelfDriverConfig, planning_data: dict | None) -> list[str]:
-    changed_paths = _collect_repo_changed_files(config)
+def _persist_codex_code_versions(
+        config: SelfDriverConfig,
+        planning_data: dict,
+        prior_file_checksum_map: dict[Path, int]
+) -> list[str]:
+    changed_paths = _collect_repo_changed_files(
+        config,
+        prior_file_checksum_map
+    )
+    
     if not changed_paths:
         return []
     
@@ -644,23 +600,21 @@ def _persist_codex_code_versions(config: SelfDriverConfig, planning_data: dict |
     return persisted
 
 
-def _collect_repo_changed_files(config: SelfDriverConfig) -> list[str]:
-    sandbox_root = config.sandbox_root_dir
-    commands = [
-        ["git", "diff", "--name-only"],
-        ["git", "diff", "--name-only", "--cached"],
-        ["git", "ls-files", "--others", "--exclude-standard"],
+def _collect_repo_changed_files(config: SelfDriverConfig, prior_file_checksum_map: dict[Path, int]) -> list[Path]:
+    current_file_mtime_map = get_file_checksum_map(config.sandbox_root_dir)
+    
+    return [
+        f
+        for f, checksum in current_file_mtime_map.items()
+        if checksum != prior_file_checksum_map.get(f)
     ]
-    
-    changed = set()
-    for cmd in commands:
-        result = common.run_cmd(sandbox_root, cmd)
-        for line in result.stdout.splitlines():
-            normalized = _normalize_relative_path(line)
-            if normalized:
-                changed.add(normalized)
-    
-    return sorted(changed)
+
+
+def get_file_checksum_map(dir: Path) -> dict[Path, int]:
+    return {
+        f: common.get_checksum(dir / f)
+        for f in common.iterate_files_deep(dir) if not _should_skip_code_version(f)
+    }
 
 
 def _build_instruction_lookup(planning_data: dict | None) -> dict[str, list | dict]:
@@ -698,6 +652,7 @@ def _should_skip_code_version(relative_path: str) -> bool:
     if not relative_path:
         return True
     
+    relative_path = str(relative_path)
     lowered = relative_path.lower()
     if relative_path.split("/", 1)[0] == "artifacts":
         return True
@@ -706,6 +661,268 @@ def _should_skip_code_version(relative_path: str) -> bool:
         return True
     
     return False
+
+
+def _extract_codex_usage(
+        stdout_text: str | None,
+        stderr_text: str | None,
+        last_message_path: Path,
+        config: SelfDriverConfig
+) -> dict:
+    metrics: dict[str, float | int] = {}
+    sources: list[str] = []
+    
+    if last_message_path and last_message_path.exists():
+        try:
+            sources.append(last_message_path.read_text(encoding="utf-8"))
+        except Exception:
+            ...
+    
+    if stdout_text:
+        sources.append(stdout_text)
+    if stderr_text:
+        sources.append(stderr_text)
+    
+    token_records: list[dict] = []
+    for text in sources:
+        parsed_metrics, token_info = _extract_codex_usage_from_text(text)
+        metrics.update({k: v for k, v in parsed_metrics.items() if v is not None})
+        if token_info:
+            token_records.append(token_info)
+        if metrics.get("total_tokens") and metrics.get("total_cost_usd") is not None:
+            break
+    
+    if not metrics.get("total_tokens"):
+        last_token_record = next((record for record in reversed(token_records) if record.get("total_tokens") is not None), None)
+        if last_token_record:
+            metrics["total_tokens"] = last_token_record["total_tokens"]
+            # Use breakdown to fill prompt/completion tokens when available.
+            if last_token_record.get("input_tokens") is not None:
+                metrics.setdefault("prompt_tokens", last_token_record.get("input_tokens"))
+            if last_token_record.get("output_tokens") is not None:
+                metrics.setdefault("completion_tokens", last_token_record.get("output_tokens"))
+            if last_token_record.get("cached_input_tokens") is not None:
+                metrics.setdefault("cached_input_tokens", last_token_record.get("cached_input_tokens"))
+            if last_token_record.get("reasoning_output_tokens") is not None:
+                metrics.setdefault("reasoning_output_tokens", last_token_record.get("reasoning_output_tokens"))
+    
+    if metrics.get("total_tokens") and metrics.get("total_cost_usd") is None:
+        metrics["total_cost_usd"] = _estimate_codex_cost(metrics, config)
+    
+    return metrics
+
+
+def _extract_codex_usage_from_text(text: str) -> tuple[dict, dict]:
+    metrics: dict[str, float | int | None] = {}
+    token_info: dict[str, int | None] = {}
+    if not text:
+        return metrics, token_info
+    
+    json_metrics = _extract_codex_usage_from_json(text)
+    if json_metrics:
+        metrics.update(json_metrics)
+        token_info = json_metrics.pop("_token_info", token_info)
+        if metrics.get("total_tokens") and metrics.get("total_cost_usd") is not None:
+            return metrics, token_info
+    
+    regex_metrics = _extract_codex_usage_with_regex(text)
+    metrics.update({k: v for k, v in regex_metrics.items() if v is not None})
+    return metrics, token_info
+
+
+def _extract_codex_usage_from_json(text: str) -> dict:
+    def try_parse_json(candidate: str):
+        candidate = candidate.strip()
+        if not candidate:
+            return None
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return None
+    
+    def find_usage(node):
+        if isinstance(node, dict):
+            if "usage" in node and isinstance(node["usage"], dict):
+                return node["usage"], node
+            for value in node.values():
+                result = find_usage(value)
+                if result:
+                    return result
+        elif isinstance(node, list):
+            for item in node:
+                result = find_usage(item)
+                if result:
+                    return result
+        return None
+    
+    metrics: dict[str, float | int] = {}
+    parsed_objects = []
+    
+    full_obj = try_parse_json(text)
+    if full_obj is not None:
+        parsed_objects.append(full_obj)
+    else:
+        for line in text.splitlines():
+            obj = try_parse_json(line)
+            if obj is not None:
+                parsed_objects.append(obj)
+    
+    for obj in parsed_objects:
+        usage_tuple = find_usage(obj)
+        if not usage_tuple:
+            if isinstance(obj, dict) and obj.get("msg", {}).get("type") == "token_count":
+                total_usage = obj["msg"].get("info", {}).get("total_token_usage", {})
+                token_info = {
+                    "input_tokens": _coerce_int_from_dict(total_usage, ["input_tokens", "inputTokens"]),
+                    "cached_input_tokens": _coerce_int_from_dict(total_usage, ["cached_input_tokens", "cachedInputTokens"]),
+                    "output_tokens": _coerce_int_from_dict(total_usage, ["output_tokens", "outputTokens"]),
+                    "reasoning_output_tokens": _coerce_int_from_dict(total_usage, ["reasoning_output_tokens", "reasoningOutputTokens"]),
+                    "total_tokens": _coerce_int_from_dict(total_usage, ["total_tokens", "totalTokens"])
+                }
+                if any(v is not None for v in token_info.values()):
+                    metrics["_token_info"] = token_info
+                    if token_info.get("total_tokens") is not None:
+                        metrics.setdefault("total_tokens", token_info["total_tokens"])
+                    if token_info.get("input_tokens") is not None:
+                        metrics.setdefault("prompt_tokens", token_info["input_tokens"])
+                    if token_info.get("output_tokens") is not None:
+                        metrics.setdefault("completion_tokens", token_info["output_tokens"])
+                    if token_info.get("cached_input_tokens") is not None:
+                        metrics.setdefault("cached_input_tokens", token_info["cached_input_tokens"])
+                    if token_info.get("reasoning_output_tokens") is not None:
+                        metrics.setdefault("reasoning_output_tokens", token_info["reasoning_output_tokens"])
+            continue
+        usage_dict, container = usage_tuple
+        prompt_tokens = _coerce_int_from_dict(usage_dict, ["prompt_tokens", "input_tokens", "promptTokens"])
+        completion_tokens = _coerce_int_from_dict(usage_dict, ["completion_tokens", "output_tokens", "completionTokens"])
+        total_tokens = _coerce_int_from_dict(usage_dict, ["total_tokens", "totalTokens"])
+        cost_usd = _coerce_float_from_dict(
+            usage_dict,
+            ["total_cost", "total_cost_usd", "cost", "usd_cost", "totalCost", "totalCostUsd"]
+        )
+        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+        if cost_usd is None:
+            cost_usd = _coerce_float_from_dict(
+                container,
+                ["total_cost", "total_cost_usd", "cost", "usd_cost", "totalCost", "totalCostUsd"]
+            )
+        
+        if prompt_tokens is not None:
+            metrics["prompt_tokens"] = prompt_tokens
+        if completion_tokens is not None:
+            metrics["completion_tokens"] = completion_tokens
+        if total_tokens is not None:
+            metrics["total_tokens"] = total_tokens
+        if cost_usd is not None:
+            metrics["total_cost_usd"] = cost_usd
+    
+    return metrics
+
+
+def _extract_codex_usage_with_regex(text: str) -> dict:
+    metrics: dict[str, float | int | None] = {}
+    if not text:
+        return metrics
+    
+    prompt_match = re.search(r"(?:prompt|input)\s+tokens?\s*[:=]\s*(\d+)", text, re.IGNORECASE)
+    completion_match = re.search(r"(?:completion|output)\s+tokens?\s*[:=]\s*(\d+)", text, re.IGNORECASE)
+    total_match = re.search(r"total\s+tokens?(?:\s+used)?\s*[:=]\s*(\d+)", text, re.IGNORECASE)
+    
+    cost_match = re.search(
+        r"(?:total\s+cost|cost)\s*[:=]\s*\$?\s*([0-9]+(?:\.[0-9]+)?)",
+        text,
+        re.IGNORECASE
+    )
+    
+    if prompt_match:
+        metrics["prompt_tokens"] = int(prompt_match.group(1))
+    if completion_match:
+        metrics["completion_tokens"] = int(completion_match.group(1))
+    if total_match:
+        metrics["total_tokens"] = int(total_match.group(1))
+    elif metrics.get("prompt_tokens") is not None and metrics.get("completion_tokens") is not None:
+        metrics["total_tokens"] = metrics["prompt_tokens"] + metrics["completion_tokens"]
+    
+    if cost_match:
+        try:
+            metrics["total_cost_usd"] = float(cost_match.group(1))
+        except ValueError:
+            ...
+    
+    return metrics
+
+
+def _estimate_codex_cost(metrics: dict, config: SelfDriverConfig) -> float | None:
+    total_tokens = metrics.get("total_tokens")
+    if not total_tokens:
+        return None
+    
+    # Default to the planner's configured model; fall back to the primary system planning model.
+    planning_model = getattr(config, "model_code_planning", None) or LlmModel.OPENAI_GPT_5
+    planning_model = LlmModel(planning_model)
+    
+    pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(planning_model)
+    if not pricing:
+        return None
+    
+    token_breakdown = {
+        "prompt_tokens": metrics.get("prompt_tokens"),
+        "completion_tokens": metrics.get("completion_tokens"),
+        "cached_input_tokens": metrics.get("cached_input_tokens")
+    }
+    prompt_tokens = common.safe_positive_int(token_breakdown.get("prompt_tokens"))
+    completion_tokens = common.safe_positive_int(token_breakdown.get("completion_tokens"))
+    cached_tokens = common.safe_positive_int(token_breakdown.get("cached_input_tokens")) or 0
+    
+    if prompt_tokens is None and completion_tokens is None:
+        prompt_tokens = total_tokens
+        completion_tokens = 0
+    elif prompt_tokens is None:
+        prompt_tokens = max(total_tokens - completion_tokens, 0)
+    elif completion_tokens is None:
+        completion_tokens = max(total_tokens - prompt_tokens, 0)
+    
+    prompt_billable = max(prompt_tokens - cached_tokens, 0)
+    completion_billable = completion_tokens
+    
+    cost_input = prompt_billable * pricing.get("input", 0) / 1_000_000
+    cost_output = completion_billable * pricing.get("output", 0) / 1_000_000
+    
+    return round(cost_input + cost_output, 6)
+
+
+def _coerce_int_from_dict(data: dict, keys: list[str]) -> int | None:
+    for key in keys:
+        if key in data:
+            value = data.get(key)
+            try:
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, (int, float)):
+                    return int(value)
+                if isinstance(value, str) and value.strip().isdigit():
+                    return int(value.strip())
+            except Exception:
+                continue
+    return None
+
+
+def _coerce_float_from_dict(data: dict, keys: list[str]) -> float | None:
+    for key in keys:
+        if key in data:
+            value = data.get(key)
+            try:
+                if value is None or isinstance(value, bool):
+                    continue
+                if isinstance(value, (int, float)):
+                    return float(value)
+                if isinstance(value, str):
+                    cleaned = value.strip().replace("$", "")
+                    return float(cleaned)
+            except Exception:
+                continue
+    return None
 
 
 def plan_code_changes(config):
