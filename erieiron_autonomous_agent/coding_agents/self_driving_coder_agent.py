@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -6,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import time
 import traceback
 from collections import defaultdict
@@ -25,7 +27,7 @@ from sentence_transformers import SentenceTransformer
 import settings
 from erieiron_autonomous_agent.business_level_agents import domain_manager
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
@@ -91,9 +93,8 @@ def execute(task_id: str, reset=False):
                     if config.iteration_to_modify and i > 0:
                         config.iteration_to_modify.write_to_disk()
                     
-                    planning_data = plan_code_changes(config)
-                    
-                    do_coding(config, planning_data)
+                    plan_and_implement_code_changes(config)
+                
                 finally:
                     config.reset_log()
             
@@ -101,7 +102,8 @@ def execute(task_id: str, reset=False):
             try:
                 execute_iteration(
                     config,
-                    AwsEnv.DEV
+                    AwsEnv.DEV,
+                    force_stack_update=i == 0
                 )
             except BadPlan as bpe:
                 config.log(bpe)
@@ -182,6 +184,16 @@ full logs:
             config.cleanup_iteration()
 
 
+def plan_and_implement_code_changes(config):
+    planning_data = plan_code_changes(config)
+    config.set_phase(SdaPhase.CODING)
+    
+    if USE_CODEX:
+        codex_exec(config, planning_data)
+    else:
+        do_coding(config, planning_data)
+
+
 def handle_agent_blocked(config, agent_blocked):
     if not config.self_driving_task.task_id:
         return
@@ -240,8 +252,6 @@ def handle_goal_achieved(config):
 
 
 def do_coding(config, planning_data):
-    config.set_phase(SdaPhase.CODING)
-    
     cr_exception = None
     failed_code_reviews = []
     for review_iteration_idx in range(5):
@@ -289,6 +299,413 @@ def on_reset_task_test(task_id):
     config = SelfDriverConfig(self_driving_task)
     write_task_tdd_test(config)
     return config
+
+
+def codex_exec(config: SelfDriverConfig, planning_data: dict):
+    """Execute the plan using the Codex CLI pipeline."""
+    config.log("Starting Codex CLI planning/execution pipeline")
+    
+    iteration_to_modify = config.iteration_to_modify
+    error_summary = None
+    error_logs = None
+    if iteration_to_modify:
+        try:
+            error_summary, error_logs = iteration_to_modify.get_error()
+        except Exception as err:
+            config.log("Failed to collect previous iteration error details", err)
+    
+    lessons_payload = get_lessons(
+        config,
+        task_desc=TASK_DESC_CODE_WRITING
+    )
+    lesson_lines = []
+    if isinstance(lessons_payload, dict):
+        for lesson in common.ensure_list(lessons_payload.get("lessons")):
+            if lesson:
+                lesson_lines.append(f"- {lesson}")
+    
+    readonly_entries = get_readonly_files_paths(config)
+    readonly_lines = []
+    for entry in common.ensure_list(readonly_entries):
+        if not entry:
+            continue
+        description_parts = [entry.get("description")]
+        if entry.get("alternatives"):
+            description_parts.append(
+                f"If a change is required, route it to {entry['alternatives']} instead."
+            )
+        description_text = "; ".join([p for p in description_parts if p])
+        readonly_lines.append(
+            f"- {entry.get('path')}: {description_text or 'This path is read-only.'}"
+        )
+    
+    code_file_entries = common.ensure_list(planning_data.get("code_files"))
+    code_file_paths = [
+        entry.get("code_file_path")
+        for entry in code_file_entries
+        if isinstance(entry, dict) and entry.get("code_file_path")
+    ]
+    code_file_summary_lines = [f"- {path}" for path in code_file_paths]
+    
+    business = config.business
+    initiative = config.initiative
+    task = config.task
+    
+    routing_data = config.current_iteration.routing_json or {}
+    routing_excerpt = None
+    if routing_data:
+        routing_excerpt = json.dumps(routing_data, indent=2, default=str)
+        if len(routing_excerpt) > 2000:
+            routing_excerpt = f"{routing_excerpt[:2000]}\n... [truncated]"
+    
+    plan_path = config.artifacts_dir / f"{config.current_iteration.id}_plan.json"
+    plan_path.write_text(json.dumps(planning_data, indent=2, default=str), encoding="utf-8")
+    
+    routing_path = None
+    if routing_data:
+        routing_path = config.artifacts_dir / f"{config.current_iteration.id}_routing.json"
+        routing_path.write_text(
+            json.dumps(routing_data, indent=2, default=str),
+            encoding="utf-8"
+        )
+    
+    error_log_path = None
+    error_logs_excerpt = None
+    if error_logs:
+        error_log_path = config.artifacts_dir / f"{config.current_iteration.id}_previous_error.log"
+        error_log_path.write_text(error_logs, encoding="utf-8")
+        error_logs_excerpt = error_logs[:2000]
+        if len(error_logs) > 2000:
+            error_logs_excerpt += "\n... [truncated]"
+    
+    guidance_text = config.guidance.text if config.guidance else None
+    
+    reference_prompts = [
+        "prompts/common--general_coding_rules.md",
+        "prompts/common--infrastructure_rules.md",
+        "prompts/common--credentials_architecture.md",
+        "prompts/codewriter--common.md",
+        "prompts/codewriter--python_coder.md",
+        "prompts/codewriter--aws_cloudformation_coder.md",
+        "prompts/codewriter--requirements.txt.md",
+    ]
+    
+    prompt_parts = [
+        textwrap.dedent(f"""
+        You are the Codex CLI agent assisting Erie Iron's self-driving coding workflow.
+        Operate strictly within the sandboxed repository at {config.sandbox_root_dir}.
+        Follow the approved development plan saved at {plan_path} and summarised below.
+        Before editing a file, consult the relevant engineering standards from the prompts
+        directory (see the Reference Prompts section).
+        Do not commit or push changes; the orchestrator handles git commits.
+        """),
+        textwrap.dedent(f"""
+        ## Task Goal
+        {task.description}
+
+        ### Test Plan
+        {task.test_plan or 'None provided.'}
+
+        ### Risk Notes
+        {task.risk_notes or 'None provided.'}
+        """),
+        textwrap.dedent(f"""
+        ## Business & Architecture Context
+        Business Service Token: {business.service_token}
+        Initiative ID: {initiative.id}
+
+        ### Business Architecture
+        {business.architecture or 'No business-level architecture notes provided.'}
+
+        ### Initiative Architecture
+        {initiative.architecture or 'No initiative-specific architecture notes provided.'}
+        """)
+    ]
+    
+    if guidance_text:
+        prompt_parts.append(textwrap.dedent(f"""
+        ## Additional Guidance
+        {guidance_text}
+        """))
+    
+    if routing_excerpt:
+        prompt_parts.append(textwrap.dedent(f"""
+        ## Routing Decision
+        The failure router recommended this recovery path. Full JSON is saved at {routing_path}.
+
+        {routing_excerpt}
+        """))
+    
+    if error_summary or error_logs_excerpt:
+        failure_section_lines = []
+        if error_summary:
+            failure_section_lines.append(f"Summary: {error_summary}")
+        if error_logs_excerpt:
+            failure_section_lines.append(
+                f"Log excerpt (full logs available at {error_log_path}):\n{error_logs_excerpt}"
+            )
+        prompt_parts.append(textwrap.dedent("""
+        ## Previous Iteration Failure
+        """ + "\n".join(failure_section_lines)))
+    
+    if lesson_lines:
+        prompt_parts.append(textwrap.dedent("""
+        ## Previously Learned Lessons (do not repeat these mistakes)
+        """ + "\n".join(lesson_lines)))
+    
+    if readonly_lines:
+        prompt_parts.append(textwrap.dedent("""
+        ## Read-only Paths
+        These paths must not be modified unless explicitly planned otherwise.
+        """ + "\n".join(readonly_lines)))
+    
+    if code_file_summary_lines:
+        prompt_parts.append(textwrap.dedent("""
+        ## Files Highlighted by the Plan
+        Review the instructions for each file in the plan JSON and modify only what is necessary.
+        """ + "\n".join(code_file_summary_lines)))
+    
+    prompt_parts.append(textwrap.dedent(f"""
+    ## Reference Prompts
+    {os.linesep.join(f"- {path}" for path in reference_prompts)}
+
+    ## Execution Checklist
+    1. Read the full development plan at {plan_path}.
+    2. Inspect any supporting artefacts (routing JSON: {routing_path or 'n/a'}, previous error log: {error_log_path or 'n/a'}).
+    3. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
+    4. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
+    5. Run the relevant tests (unit, integration, or manual steps) described in the plan or task test plan. Capture results in the CLI transcript.
+    6. Ensure infrastructure updates never introduce an `RdsMasterSecretName` output parameter.
+    7. Leave the repository with changes ready for review; do not commit.
+    """))
+    
+    prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
+    
+    prompt_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_prompt.txt"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+    
+    # Persist Codex-specific metadata onto the planning JSON for future debugging.
+    augmented_plan = copy.deepcopy(planning_data)
+    augmented_plan["codex_metadata"] = {
+        "plan_path": str(plan_path),
+        "prompt_path": str(prompt_path),
+        "routing_json_path": str(routing_path) if routing_path else None,
+        "previous_error_log_path": str(error_log_path) if error_log_path else None,
+        "code_file_paths": code_file_paths,
+    }
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            planning_json=augmented_plan
+        )
+    config.current_iteration.refresh_from_db(fields=["planning_json"])
+    
+    stdout_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_stdout.log"
+    stderr_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_stderr.log"
+    last_message_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_last_message.txt"
+    
+    codex_cmd = [
+        "codex",
+        "exec",
+        "--full-auto",
+        "--cd",
+        str(config.sandbox_root_dir),
+        "--output-last-message",
+        str(last_message_path),
+        "-"
+    ]
+    
+    config.log("Running Codex CLI", codex_cmd, f"Prompt saved to {prompt_path}")
+    
+    codex_result = subprocess.run(
+        codex_cmd,
+        input=prompt_text,
+        text=True,
+        capture_output=True,
+        cwd=str(config.sandbox_root_dir),
+        env=os.environ.copy()
+    )
+    
+    stdout_path.write_text(codex_result.stdout or "", encoding="utf-8")
+    stderr_path.write_text(codex_result.stderr or "", encoding="utf-8")
+    
+    # Update the planning JSON with execution artefacts regardless of success so failures retain context.
+    planning_record = copy.deepcopy(config.current_iteration.planning_json or augmented_plan)
+    codex_metadata = planning_record.get("codex_metadata", {})
+    codex_metadata.update({
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "last_message_path": str(last_message_path) if last_message_path.exists() else None,
+        "return_code": codex_result.returncode,
+        "execution_completed_at": time.time()
+    })
+    planning_record["codex_metadata"] = codex_metadata
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            planning_json=planning_record
+        )
+    config.current_iteration.refresh_from_db(fields=["planning_json"])
+    
+    if codex_result.returncode != 0:
+        raise ExecutionException(
+            f"Codex CLI exited with code {codex_result.returncode}. See {stdout_path} and {stderr_path} for details."
+        )
+    
+    if last_message_path.exists():
+        config.log("Codex CLI final message:", last_message_path.read_text(encoding="utf-8"))
+    
+    config.log(
+        "Codex CLI completed successfully",
+        {
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "last_message_path": str(last_message_path)
+        }
+    )
+    
+    persisted_code_files = _persist_codex_code_versions(
+        config,
+        config.current_iteration.planning_json or augmented_plan
+    )
+    
+    if persisted_code_files:
+        planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
+        if not isinstance(planning_record, dict):
+            planning_record = {}
+        codex_metadata = planning_record.get("codex_metadata", {})
+        codex_metadata["persisted_code_files"] = persisted_code_files
+        planning_record["codex_metadata"] = codex_metadata
+        with transaction.atomic():
+            SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                planning_json=planning_record
+            )
+        config.current_iteration.refresh_from_db(fields=["planning_json"])
+        config.log("Stored code versions for Codex-modified files", persisted_code_files)
+    else:
+        config.log("Codex CLI produced no persistable file changes (skipping code version update)")
+    
+    config.git.add_files()
+
+
+def _persist_codex_code_versions(config: SelfDriverConfig, planning_data: dict | None) -> list[str]:
+    changed_paths = _collect_repo_changed_files(config)
+    if not changed_paths:
+        return []
+    
+    instruction_lookup = _build_instruction_lookup(planning_data)
+    sandbox_root = config.sandbox_root_dir
+    
+    persisted = []
+    skipped_non_text = []
+    
+    for rel_path in changed_paths:
+        if _should_skip_code_version(rel_path):
+            continue
+        
+        normalized_path = _normalize_relative_path(rel_path)
+        absolute_path = sandbox_root / normalized_path
+        
+        if not absolute_path.exists() or absolute_path.is_dir():
+            continue
+        
+        try:
+            common.assert_in_sandbox(
+                sandbox_root,
+                absolute_path
+            )
+        except ValueError as ve:
+            config.log(
+                f"Skipping file outside sandbox when persisting code version: {rel_path}",
+                ve
+            )
+            continue
+        
+        try:
+            CodeFile.update_from_path(
+                config.current_iteration,
+                absolute_path,
+                code_instructions=instruction_lookup.get(normalized_path)
+            )
+            persisted.append(normalized_path)
+        except UnicodeDecodeError:
+            skipped_non_text.append(normalized_path)
+            config.log(
+                f"Skipping non-text file while persisting code version: {normalized_path}"
+            )
+        except Exception as err:
+            config.log(
+                f"Failed to persist code version for {normalized_path}",
+                err
+            )
+            raise
+    
+    if skipped_non_text:
+        config.log("Codex change tracking skipped non-text files", skipped_non_text)
+    
+    return persisted
+
+
+def _collect_repo_changed_files(config: SelfDriverConfig) -> list[str]:
+    sandbox_root = config.sandbox_root_dir
+    commands = [
+        ["git", "diff", "--name-only"],
+        ["git", "diff", "--name-only", "--cached"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    ]
+    
+    changed = set()
+    for cmd in commands:
+        result = common.run_cmd(sandbox_root, cmd)
+        for line in result.stdout.splitlines():
+            normalized = _normalize_relative_path(line)
+            if normalized:
+                changed.add(normalized)
+    
+    return sorted(changed)
+
+
+def _build_instruction_lookup(planning_data: dict | None) -> dict[str, list | dict]:
+    lookup: dict[str, list | dict] = {}
+    if not planning_data:
+        return lookup
+    
+    for entry in common.ensure_list(planning_data.get("code_files")):
+        path = _normalize_relative_path(entry.get("code_file_path"))
+        if not path:
+            continue
+        
+        instructions = entry.get("instructions")
+        dsl_instructions = entry.get("dsl_instructions")
+        
+        if instructions:
+            lookup[path] = copy.deepcopy(instructions)
+        elif dsl_instructions:
+            lookup[path] = copy.deepcopy(dsl_instructions)
+    
+    return lookup
+
+
+def _normalize_relative_path(path: str | None) -> str:
+    if not path:
+        return ""
+    
+    normalized = str(path).strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _should_skip_code_version(relative_path: str) -> bool:
+    if not relative_path:
+        return True
+    
+    lowered = relative_path.lower()
+    if relative_path.split("/", 1)[0] == "artifacts":
+        return True
+    
+    if lowered.endswith(".ds_store"):
+        return True
+    
+    return False
 
 
 def plan_code_changes(config):
@@ -1077,12 +1494,11 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
             except Exception as e:
                 raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
             
-            if AwsEnv.DEV.eq(aws_env):
-                try:
-                    empty_stack_buckets(config)
-                except Exception as e:
-                    logging.exception(e)
-                    raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
+            try:
+                empty_stack_buckets(config, aws_env)
+            except Exception as e:
+                logging.exception(e)
+                raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
             
             deploy_cloudformation_stacks(
                 config,
@@ -1220,15 +1636,11 @@ def is_stack_modified(config):
 
 
 def is_stack_exists(config: SelfDriverConfig, aws_env: AwsEnv, docker_env: dict) -> bool:
-    try:
-        matching_stack = get_stack(
-            config.self_driving_task.get_cloudformation_stack_name(aws_env),
-            boto3.client("cloudformation", region_name=docker_env['AWS_DEFAULT_REGION'])
-        )
-        
-        return matching_stack is not None
-    except:
-        return False
+    stack_status = get_stack_status(
+        config.self_driving_task.get_cloudformation_stack_name(aws_env),
+        boto3.client("cloudformation", region_name=docker_env['AWS_DEFAULT_REGION'])
+    )
+    return stack_status in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]
 
 
 def manage_db(
@@ -2870,7 +3282,14 @@ def write_code_file(
             config.log(f"ERROR: related_code_file_path {cfp} is the same as the file to be edited")
             continue
         
-        version = CodeFile.get(business=config.business, code_file_path=cfp).get_version(current_iteration, default_to_latest=True)
+        version = CodeFile.get(
+            business=config.business,
+            relative_path=cfp
+        ).get_version(
+            current_iteration,
+            default_to_latest=True
+        )
+        
         if not version:
             config.log(f"ERROR: not version for {cfp} exists")
             continue
@@ -3308,7 +3727,7 @@ def get_relevant_code_files(
             iteration_code_versions.append(
                 CodeFile.get(
                     business=config.business,
-                    code_file_path=f
+                    relative_path=f
                 ).get_version_for_iteration(
                     iteration_to_modify
                 )
@@ -3883,7 +4302,10 @@ def delete_cloudformation_stack(config, aws_env: AwsEnv, block_while_waiting=Tru
         config.log(f"Delete request finished for stack {stack_name}")
 
 
-def empty_stack_buckets(config: SelfDriverConfig):
+def empty_stack_buckets(config: SelfDriverConfig, aws_env: AwsEnv):
+    if not AwsEnv.DEV.eq(aws_env):
+        return
+    
     stack_name = config.self_driving_task.cloudformation_stack_name
     
     cf_client = aws_utils.client("cloudformation")
@@ -3910,7 +4332,10 @@ def empty_stack_buckets(config: SelfDriverConfig):
     s3_client = aws_utils.client("s3")
     
     for bucket_resource in s3_buckets:
-        bucket_name = bucket_resource['PhysicalResourceId']
+        bucket_name = bucket_resource.get('PhysicalResourceId')
+        if not bucket_name:
+            continue
+        
         try:
             # Check if bucket exists before trying to empty it
             s3_client.head_bucket(Bucket=bucket_name)
@@ -3945,9 +4370,13 @@ def empty_stack_buckets(config: SelfDriverConfig):
                     )
             
             config.log(f"Successfully emptied S3 bucket: {bucket_name}")
+            
+            # Delete the bucket after emptying
+            s3_client.delete_bucket(Bucket=bucket_name)
+            config.log(f"Deleted S3 bucket: {bucket_name}")
         
-        except s3_client.exceptions.NoSuchBucket:
-            config.log(f"S3 bucket {bucket_name} no longer exists, skipping...")
+        except Exception as e:
+            config.log(f"S3 bucket {bucket_name} no longer exists ({e}), skipping...")
 
 
 # Helper to extract CloudWatch stack logs for a time window

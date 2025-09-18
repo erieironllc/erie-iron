@@ -33,15 +33,17 @@
             <a class="list-group-item me-3" href="{% url 'view_self_driver_latest_iteration' task.id %}">Latest
                 Iteration</a>
 
+
+        {% if iteration.planning_json %}
             <div class="list-group-item disabled text-center">
                 <hr class="my-2">
             </div>
-
 
             <a class="list-group-item list-group-item-action" id="planning-tab" data-bs-toggle="list" href="#planning"
                role="tab" aria-controls="planning">
                 Code Planning
             </a>
+        {%  endif %}
 
             {% if iteration.codeversion_set.exists %}
                 <a class="list-group-item list-group-item-action" id="code-tab" data-bs-toggle="list" href="#code"

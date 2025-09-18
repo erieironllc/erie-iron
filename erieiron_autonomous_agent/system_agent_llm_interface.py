@@ -169,7 +169,11 @@ def llm_chat(
     llm_resp = None
     llm_request_url = ""
     for i in range(2):
-        llm_messages = LlmMessage.parse_prompt(model, messages, code_response=code_response)
+        llm_messages = LlmMessage.parse_prompt(
+            model, 
+            messages, 
+            code_response=code_response
+        )
         
         llm_request = LlmRequest.objects.create(
             title=description,

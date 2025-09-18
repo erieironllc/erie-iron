@@ -1083,13 +1083,13 @@ class CodeFile(BaseErieIronModel):
         return closest_version
     
     @staticmethod
-    def get(business: Business, code_file_path: Path) -> 'CodeFile':
-        if str(code_file_path).startswith("/"):
-            asdf = 1
+    def get(business: Business, relative_path: Path) -> 'CodeFile':
+        if str(relative_path).startswith("/"):
+            raise Exception(f"CodeFile needs to be a relative path.  got {relative_path}")
         
         return CodeFile.objects.get_or_create(
             business=business,
-            file_path=code_file_path
+            file_path=relative_path
         )[0]
     
     @staticmethod
@@ -1135,21 +1135,19 @@ class CodeFile(BaseErieIronModel):
     @staticmethod
     def update_from_path(
             task_iteration: SelfDrivingTaskIteration,
-            file_path: Path,
+            abs_file_path: Path,
             code_instructions=None
     ) -> 'CodeVersion':
+        abs_file_path = common.assert_exists(abs_file_path)
+        
         self_driving_task = task_iteration.self_driving_task
         business = self_driving_task.business
         
-        code = file_path.read_text()
-        
+        code = abs_file_path.read_text()
         with transaction.atomic():
-            try:
-                relative_path = file_path.relative_to(self_driving_task.sandbox_path)
-            except:
-                relative_path = file_path
-            
+            relative_path = abs_file_path.relative_to(self_driving_task.sandbox_path)
             code_file = CodeFile.get(business, relative_path)
+            
             return code_file.update(
                 task_iteration=task_iteration,
                 code=code,

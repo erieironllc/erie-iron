@@ -21,7 +21,7 @@ def chat(
         code_response=False,
         debug=False
 ) -> 'LlmResponse':
-    messages = common.ensure_list(messages)
+    messages = common.flatten(messages)
     
     if messages and output_schema and output_schema.exists():
         code_response = True
@@ -489,6 +489,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
             
             return json.loads(response.text)
         except Exception as e:
+            logging.exception(e)
             last_exception = e
     
     # Fallback once to OPENAI_GPT_4O
@@ -503,6 +504,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
         )
         return json.loads(response.text)
     except Exception as e:
+        logging.exception(e)
         last_exception = e
     
     # If all attempts fail, raise the last exception
