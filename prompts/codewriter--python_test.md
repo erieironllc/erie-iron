@@ -133,6 +133,7 @@ The test code must:
 ## Forbidden Actions
 - Do not use mocks in acceptance/smoke tests. These must connect to real system components end to end. Only the explicitly pre-approved stubs may be used if necessary.
 - Mocks are permitted in unit tests but cannot substitute for the acceptance/smoke test.
+- Tests must **never** assert the presence of Lambda environment variables starting with `AWS_` (e.g., asserting an `AWS_DEFAULT_REGION` variable is forbidden).
 
 
 ## Test Policy (Non‑negotiable)

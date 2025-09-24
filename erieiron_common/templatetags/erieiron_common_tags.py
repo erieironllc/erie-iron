@@ -94,7 +94,7 @@ def json_dumps(value, indent=2):
 def highlight_code(code, lang='python'):
     try:
         lexer = get_lexer_by_name(lang, stripall=True)
-        formatter = HtmlFormatter(linenos=True, cssclass="highlight")
+        formatter = HtmlFormatter(linenos=False, cssclass="highlight")
         return mark_safe(highlight(code, lexer, formatter))
     except Exception as e:
         return code

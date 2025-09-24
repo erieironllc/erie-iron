@@ -1,5 +1,5 @@
-<div class="list-group" id="taskSidebar" role="tablist">
-    <h3 style="white-space: nowrap;">Task</h3>
+<div class="list-group" role="tablist">
+    <h3 style="white-space: nowrap;">{{ sidebar_title }}</h3>
     {% for tab in tabs %}
         {% if tab.is_divider %}
             <div class="list-group-item disabled text-center">

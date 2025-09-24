@@ -170,18 +170,26 @@ def _tab_context_edit(business: Business) -> dict:
 def _build_business_tabs(business: Business) -> list[dict]:
     tabs = []
     for definition in BUSINESS_TAB_DEFINITIONS:
-        slug = definition["slug"]
-        available = definition["availability_fn"](business)
-        if slug == "overview":
-            url = reverse('view_business', args=[business.id])
+        if definition.get("is_divider"):
+            tabs.append(definition)
         else:
-            url = reverse('view_business_tab', args=[slug, business.id])
-        tabs.append({
-            "slug": slug,
-            "label": definition["label"],
-            "url": url,
-            "available": available,
-        })
+            slug = definition["slug"]
+            available = definition["availability_fn"](business)
+            if slug == "overview":
+                url = reverse('view_business', args=[business.id])
+            else:
+                url = reverse('view_business_tab', args=[slug, business.id])
+            tab_data = {
+                **definition,
+                "url": url,
+                "available": available,
+            }
+            
+            if slug == "overview":
+                tab_data['label'] = business.name
+                
+            tabs.append(tab_data)
+
     return tabs
 
 
@@ -216,78 +224,185 @@ def view_business(request, business_id, tab='overview'):
     
     return send_response(
         request,
-        "business/base.html",
+        "business/business_base.html",
         context,
         breadcrumbs=breadcrumbs
     )
 
 
-def view_initiative(request, initiative_id):
-    initiative = get_object_or_404(Initiative, pk=initiative_id)
-    business = initiative.business
-    
-    tasks = list(initiative.tasks.order_by("created_timestamp"))
-    
-    sdt_dict = {
-        sdt.id: sdt
-        for sdt in SelfDrivingTask.objects.filter(task__in=tasks).order_by("created_at")
+def _initiative_tab_available_overview(initiative: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_overview(initiative: Initiative) -> dict:
+    return {}
+
+
+def _initiative_tab_available_requirements(initiative: Initiative) -> bool:
+    return initiative.requirements.exists()
+
+
+def _initiative_tab_context_requirements(initiative: Initiative) -> dict:
+    return {
+        "requirements": initiative.requirements.all()
     }
-    
-    task_sdti_dict = defaultdict(list)
-    for sdti in SelfDrivingTaskIteration.objects.filter(self_driving_task__task=tasks).order_by("timestamp"):
-        sdt: SelfDrivingTask = sdt_dict.get(sdti.self_driving_task_id)
-        task_sdti_dict[sdt.task_id].append(sdti)
-    
-    task_execution_dict = defaultdict(list)
-    for te in TaskExecution.objects.filter(task__in=tasks).order_by("executed_time"):
-        task_execution_dict[te.task_id].append(te)
-    
-    task_type_tasks = defaultdict(list)
+
+
+def _initiative_tab_available_architecture(initiative: Initiative) -> bool:
+    return bool(initiative.architecture)
+
+
+def _initiative_tab_context_architecture(initiative: Initiative) -> dict:
+    return {}
+
+
+def _initiative_tab_available_tasks(initiative: Initiative) -> bool:
+    return initiative.tasks.exists()
+
+
+def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
+    tasks = list(initiative.tasks.order_by("created_timestamp"))
+    if not tasks:
+        return {"tasks": tasks}
+
+    task_ids = [task.id for task in tasks]
+    self_driving_tasks = list(
+        SelfDrivingTask.objects.filter(task_id__in=task_ids).order_by("created_at")
+    )
+    sdt_id_to_task_id = {
+        sdt.id: sdt.task_id
+        for sdt in self_driving_tasks
+        if sdt.task_id
+    }
+
+    task_iterations = defaultdict(list)
+    for iteration in SelfDrivingTaskIteration.objects.filter(
+        self_driving_task__task_id__in=task_ids
+    ).order_by("timestamp"):
+        task_id = sdt_id_to_task_id.get(iteration.self_driving_task_id)
+        if task_id:
+            task_iterations[task_id].append(iteration)
+
+    task_executions = defaultdict(list)
+    for execution in TaskExecution.objects.filter(task_id__in=task_ids).order_by("executed_time"):
+        task_executions[execution.task_id].append(execution)
+
     for task in tasks:
-        # Add iteration and execution data to each task
-        first_iteration = common.first(task_sdti_dict[task.id])
-        last_execution = common.last(task_execution_dict[task.id])
-        last_execution_time = None
-        if last_execution:
-            last_execution_time = last_execution.executed_time
-        
+        iterations = task_iterations.get(task.id, [])
+        executions = task_executions.get(task.id, [])
+
+        first_iteration = common.first(iterations)
+        last_execution = common.last(executions)
+
+        last_execution_time = last_execution.executed_time if last_execution else None
         if not last_execution_time:
-            last_iteration = common.last(task_sdti_dict[task.id])
-            if last_iteration:
-                last_execution_time = last_iteration.timestamp
-            else:
-                last_execution_time = None
-        
+            last_iteration = common.last(iterations)
+            last_execution_time = last_iteration.timestamp if last_iteration else None
+
         task.first_iteration_time = first_iteration.timestamp if first_iteration else None
         task.last_execution_time = last_execution_time
-        
-        task_type_tasks[TaskStatus(task.status)].append(task)
-    
-    task_datas = tasks
-    # for status in TaskStatus.get_sorted_status():
-    #     for task in task_type_tasks[status]:
-    #         task_datas.append(task)
-    
-    # Get all running processes for tasks in this initiative
-    running_processes = list(RunningProcess.objects.filter(
+
+    return {"tasks": tasks}
+
+
+def _initiative_tab_available_processes(initiative: Initiative) -> bool:
+    return RunningProcess.objects.filter(task_execution__task__initiative=initiative).exists()
+
+
+def _initiative_tab_context_processes(initiative: Initiative) -> dict:
+    running_processes_qs = RunningProcess.objects.filter(
         task_execution__task__initiative=initiative
-    ).order_by('-started_at'))
-    running_processes_count = RunningProcess.objects.filter(task_execution__task__initiative=initiative, is_running=True).count()
-    
+    ).order_by('-started_at')
+    running_processes = list(running_processes_qs)
+    return {
+        "running_processes": running_processes,
+        "running_processes_count": sum(1 for process in running_processes if process.is_running)
+    }
+
+
+def _initiative_tab_available_llmrequests(initiative: Initiative) -> bool:
+    return initiative.llmrequest_set.exists()
+
+
+def _initiative_tab_context_llmrequests(initiative: Initiative) -> dict:
+    return {
+        "llm_requests": initiative.llmrequest_set.order_by("-timestamp")
+    }
+
+
+def _initiative_tab_available_edit(initiative: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_edit(initiative: Initiative) -> dict:
+    return {}
+
+
+def _build_initiative_tabs(initiative: Initiative) -> list[dict]:
+    tabs: list[dict] = []
+    for definition in INITIATIVE_TAB_DEFINITIONS:
+        if definition.get("is_divider"):
+            tabs.append(definition)
+            continue
+
+        slug = definition["slug"]
+        available = definition["availability_fn"](initiative)
+        if slug == "overview":
+            url = reverse('view_initiative', args=[initiative.id])
+        else:
+            url = reverse('view_initiative_tab', args=[slug, initiative.id])
+
+        tab_entry = {
+            **definition,
+            "url": url,
+            "available": available,
+        }
+
+        if slug == "overview":
+            tab_entry["label"] = initiative.title
+
+        tabs.append(tab_entry)
+
+    return tabs
+
+
+def view_initiative(request, initiative_id, tab='overview'):
+    initiative = get_object_or_404(Initiative, pk=initiative_id)
+    business = initiative.business
+
+    tab_slug = (tab or 'overview').lower()
+    if tab_slug not in INITIATIVE_TAB_MAP:
+        raise Http404
+
+    tabs = _build_initiative_tabs(initiative)
+    tab_definition = INITIATIVE_TAB_MAP[tab_slug]
+
+    active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
+    if not active_tab_entry or not active_tab_entry.get('available'):
+        raise Http404
+
+    context = {
+        "initiative": initiative,
+        "business": business,
+        "tabs": tabs,
+        "active_tab": tab_slug,
+        "tab_template": tab_definition["template"],
+    }
+    context.update(tab_definition["context_fn"](initiative))
+
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse('view_business', args=[business.id]), business.name),
+        (reverse('view_initiative', args=[initiative.id]), initiative.title)
+    ]
+    if tab_slug != 'overview':
+        breadcrumbs.append((reverse('view_initiative_tab', args=[tab_slug, initiative.id]), tab_definition["label"]))
+
     return send_response(
-        request, "initiative.html",
-        {
-            "tasks": task_datas,
-            "initiative": initiative,
-            "llm_requests": initiative.llmrequest_set.order_by("-timestamp"),
-            "running_processes_count": running_processes_count,
-            "running_processes": running_processes
-        },
-        breadcrumbs=[
-            (reverse(view_businesses), Business.get_erie_iron_business().name),
-            (reverse(view_business, args=[business.id]), business.name),
-            (reverse(view_initiative, args=[initiative.id]), initiative.title)
-        ]
+        request,
+        "initiative/initiative_base.html",
+        context,
+        breadcrumbs=breadcrumbs
     )
 
 
@@ -337,7 +452,7 @@ def _task_tab_available_iterations(task, business, self_driving_task) -> bool:
 def _task_tab_context_latest_iteration(task, business, self_driving_task) -> dict:
     iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
     
-    return {"iteration": iterations}
+    return {"iteration": iteration}
 
 
 def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
@@ -742,7 +857,7 @@ def action_initiative_regenerate_architecture(request, initiative_id):
     # )
     eng_lead.write_initiative_architecture(initiative)
     
-    return redirect(reverse('view_initiative', args=[initiative_id]) + "#testcode")
+    return redirect(reverse('view_initiative_tab', args=['architecture', initiative_id]))
 
 
 def action_initiative_regenerate_tasks(request, initiative_id):
@@ -751,7 +866,7 @@ def action_initiative_regenerate_tasks(request, initiative_id):
     initiative.tasks.all().delete()
     eng_lead.define_tasks_for_initiative(initiative_id)
     
-    return redirect(reverse('view_initiative', args=[initiative_id]) + "#testcode")
+    return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
 
 
 def action_delete_business(request, business_id):
@@ -857,7 +972,7 @@ def action_update_initiative(request, initiative_id):
         Initiative.objects.filter(id=initiative_id).update(**update_data)
         
         messages.success(request, 'Initiative updated successfully!')
-        return redirect(reverse('view_initiative', args=[initiative_id]) + '#edit')
+        return redirect(reverse('view_initiative_tab', args=['edit', initiative_id]))
     except Initiative.DoesNotExist:
         messages.error(request, 'Initiative not found.')
         return redirect(reverse('view_businesses'))
@@ -1248,7 +1363,7 @@ def view_llm_request(request, llm_request_id):
         )
         if llm_request.initiative:
             breadcrumbs.append(
-                (f"{reverse(view_initiative, args=[llm_request.initiative_id])}#tasks", llm_request.initiative.title),
+                (reverse('view_initiative_tab', args=['tasks', llm_request.initiative_id]), llm_request.initiative.title),
             )
             if llm_request.task_iteration:
                 task = llm_request.task_iteration.self_driving_task.task
@@ -1289,6 +1404,66 @@ def view_llm_request(request, llm_request_id):
 TAB_DIVIDER = {
     "slug": "divider",
     "is_divider": True
+}
+
+INITIATIVE_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "initiative/tabs/overview.html",
+        "availability_fn": _initiative_tab_available_overview,
+        "context_fn": _initiative_tab_context_overview,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "requirements",
+        "label": "Requirements",
+        "template": "initiative/tabs/requirements.html",
+        "availability_fn": _initiative_tab_available_requirements,
+        "context_fn": _initiative_tab_context_requirements,
+    },
+    {
+        "slug": "architecture",
+        "label": "Architecture",
+        "template": "initiative/tabs/architecture.html",
+        "availability_fn": _initiative_tab_available_architecture,
+        "context_fn": _initiative_tab_context_architecture,
+    },
+    {
+        "slug": "tasks",
+        "label": "Tasks",
+        "template": "initiative/tabs/tasks.html",
+        "availability_fn": _initiative_tab_available_tasks,
+        "context_fn": _initiative_tab_context_tasks,
+    },
+    {
+        "slug": "processes",
+        "label": "Processes",
+        "template": "initiative/tabs/processes.html",
+        "availability_fn": _initiative_tab_available_processes,
+        "context_fn": _initiative_tab_context_processes,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "initiative/tabs/llmrequests.html",
+        "availability_fn": _initiative_tab_available_llmrequests,
+        "context_fn": _initiative_tab_context_llmrequests,
+    },
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "initiative/tabs/edit.html",
+        "availability_fn": _initiative_tab_available_edit,
+        "context_fn": _initiative_tab_context_edit,
+    },
+]
+
+INITIATIVE_TAB_MAP = {
+    definition["slug"]: definition
+    for definition in INITIATIVE_TAB_DEFINITIONS
+    if not definition.get("is_divider")
 }
 
 TASK_TAB_DEFINITIONS = [

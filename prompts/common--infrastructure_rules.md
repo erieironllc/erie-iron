@@ -216,6 +216,8 @@ Conditions:
 --- 
 ## Additional Forbidden Actions
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
+- **Never** define a Lambda function with an environment variable name beginning with `AWS_`.  
+    - These prefixes are reserved by AWS and will cause the CloudFormation deployment to fail.
 - **Never** introduce a new CloudFormation parameter without a default value.  
     - If a new parameter is needed, you **must** supply a default.  
     - If no suitable default can be provided, you must raise `agent blocked` instead of generating the parameter.  

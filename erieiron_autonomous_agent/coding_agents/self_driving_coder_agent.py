@@ -1999,7 +1999,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         "Cloudformation Status",
         {
             "stack_status": stack_status,
-            "allow_goal_achieved": "True" if stack_status in ["CREATE_COMPLETE", "DEPLOY_COMPLETE"] else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
+            "allow_goal_achieved": "True" if stack_status in ["CREATE_COMPLETE", "UPDATE_COMPLETE", "DEPLOY_COMPLETE"] else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
         }
     )
     
@@ -2960,6 +2960,7 @@ def write_task_tdd_test(config: SelfDriverConfig):
         config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
+
 def write_test(
         config: SelfDriverConfig,
         description: str,
@@ -2967,6 +2968,7 @@ def write_test(
         system_prompt_name: str,
         user_messages: list[LlmMessage]
 ):
+    user_messages = common.ensure_list(user_messages)
     task = config.task
     
     previous_exception = None
@@ -4464,8 +4466,10 @@ def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):
 
 def ecr_login(config: SelfDriverConfig, ecr_repo_uri):
     region = parse_region_from_ecr_uri(ecr_repo_uri)
+    cmd = f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo_uri}"
+    print(cmd)
     subprocess.run(
-        f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo_uri}",
+        cmd,
         shell=True,
         check=True,
         stdout=config.log_f,

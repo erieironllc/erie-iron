@@ -5,7 +5,7 @@
 {% block content %}
     <div class="row">
         <div class="col-sidebar">
-            {% include "task/task_sidebar.html" %}
+            {% include "_base_templates/_sidebar.html" with sidebar_title="Task" %}
         </div>
         <div class="col-main-content">
             {% include tab_template %}

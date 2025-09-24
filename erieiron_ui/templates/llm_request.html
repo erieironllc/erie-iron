@@ -63,7 +63,7 @@
         </div>
         <div class="col-main-content">
             <div class="tab-content" id="iterationTabContent">
-                <div class="tab-pane show" id="messages" role="tabpanel" aria-labelledby="messages-tab">
+                <div class="tab-pane show active" id="messages" role="tabpanel" aria-labelledby="messages-tab">
                     <h5>
                         {{ llm_request.title }}
                     </h5>
@@ -184,7 +184,7 @@
                                       id="txt_debug_prompt"
                                       name="prompt"
                                       rows="3"
-                                      placeholder="Ask a question about this interation"></textarea>
+                                      placeholder="Ask a question about this interaction"></textarea>
                             <div class="mt-1 d-flex justify-content-end">
                                 <select name="llm_model" class="form-select">
                                     {% for model_choice in model_choices %}
@@ -227,7 +227,7 @@
                     </form>
                 </div>
 
-                <div class="tab-pane active" id="compare" role="tabpanel" aria-labelledby="compare-tab">
+                <div class="tab-pane " id="compare" role="tabpanel" aria-labelledby="compare-tab">
                     <form id="frm_llm_compare" action="{% url 'action_llm_debug_compare' llm_request.id %}">
                         {% csrf_token %}
                         <table class="w-100">

@@ -15,6 +15,7 @@ urlpatterns = [
     path("_business/delete/<uuid:business_id>", views.action_delete_business, name="action_delete_business"),
     
     path("initiative/<str:initiative_id>", views.view_initiative, name="view_initiative"),
+    path("initiative/<slug:tab>/<str:initiative_id>", views.view_initiative, name="view_initiative_tab"),
     path("_initiative/add", views.action_add_initiative, name="action_add_initiative"),
     path("_initiative/update/<str:initiative_id>", views.action_update_initiative, name="action_update_initiative"),
     path("_initiative/delete/<str:initiative_id>", views.action_delete_initiative, name="action_delete_initiative"),
