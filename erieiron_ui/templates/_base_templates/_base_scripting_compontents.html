@@ -4,8 +4,101 @@
     const error_tokens = {{ allowed_back_dests|safe }};
     {#    intentionally obfuscating the var name#}
 
+    function resetScrollableContainers() {
+        try {
+            var scrollableSelectors = [
+                'body',
+                'html',
+                '.col-main-content',
+                '.col-sidebar',
+                '.tab-pane',
+                '.list-group',
+                '.scrollable'
+            ];
+            scrollableSelectors.forEach(function (selector) {
+                document.querySelectorAll(selector).forEach(function (el) {
+                    if (!el) {
+                        return;
+                    }
+                    if (typeof el.scrollTo === 'function') {
+                        el.scrollTo({top: 0, behavior: 'auto'});
+                    } else if (typeof el.scrollTop === 'number') {
+                        el.scrollTop = 0;
+                    }
+                });
+            });
+            window.scrollTo({top: 0, behavior: 'auto'});
+        } catch (err) {
+            console.warn('Failed to reset scroll positions', err);
+        }
+    }
+
+    function activateSidebarFromHash(hash) {
+        if (!hash || hash.length <= 1) {
+            return;
+        }
+
+        try {
+            var triggerEl = document.querySelector(hash);
+            if (triggerEl && triggerEl.matches('[data-bs-toggle="list"], [data-bs-toggle="tab"]')) {
+                // hash is the ID of the trigger element itself
+            } else {
+                triggerEl = document.querySelector('[data-bs-toggle="list"][href="' + hash + '"]') ||
+                    document.querySelector('[data-bs-toggle="tab"][href="' + hash + '"]');
+            }
+
+            if (!triggerEl) {
+                return;
+            }
+
+            var tabInstance = bootstrap.Tab.getInstance(triggerEl);
+            if (!tabInstance) {
+                tabInstance = new bootstrap.Tab(triggerEl);
+            }
+            tabInstance.show();
+
+            var targetId = triggerEl.getAttribute('href') || hash;
+            if (targetId) {
+                var targetPane = document.querySelector(targetId);
+                if (targetPane) {
+                    targetPane.scrollIntoView({behavior: 'smooth', block: 'start'});
+                }
+            }
+
+            resetScrollableContainers();
+        } catch (err) {
+            console.warn('Failed to activate sidebar item from hash', err);
+        }
+    }
+
     $(document).ready(function () {
         erie_common_init();
+        activateSidebarFromHash(window.location.hash);
+
+        $(window).on('hashchange', function () {
+            activateSidebarFromHash(window.location.hash);
+        });
+
+        $(document).on('shown.bs.tab', '[data-bs-toggle="list"],[data-bs-toggle="tab"]', function (event) {
+            try {
+                var tabId = event.target.id;
+                if (tabId) {
+                    if (window.location.hash !== '#' + tabId) {
+                        history.replaceState(null, '', '#' + tabId);
+                    }
+                } else {
+                    var href = event.target.getAttribute('href');
+                    if (href && window.location.hash !== href) {
+                        history.replaceState(null, '', href);
+                    }
+                }
+
+                resetScrollableContainers();
+            } catch (err) {
+                console.warn('Failed to update hash for tab change', err);
+            }
+        });
+
         {% if websocket_url %}
             getServerCommsManager().init_websocket_connection(
                 "{{ websocket_url|default:"" }}"

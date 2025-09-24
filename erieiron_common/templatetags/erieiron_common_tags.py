@@ -23,9 +23,17 @@ register = template.Library()
 
 
 @register.filter(name='json_to_div')
-def json_to_div(json_content):
+def json_to_div(json_content, filter_def=None):
     if not json_content:
         return ""
+    
+    only_fields = []
+    exclude_fields = []
+    for filter_def_item in common.safe_split(filter_def, ","):
+        if filter_def_item.startswith("-"):
+            exclude_fields.append(filter_def_item[1:])
+        else:
+            only_fields.append(filter_def_item)
     
     try:
         if not isinstance(json_content, dict):
@@ -33,9 +41,15 @@ def json_to_div(json_content):
     
         parts = []
         for k,v in json_content.items():
+            if only_fields and k not in only_fields:
+                continue
+            
+            if k in exclude_fields:
+                continue
+            
             if isinstance(v, dict):
                 v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
-                
+            
             parts.append(f"""
             <div class="json_to_div--container">
                 <label>{k}</label>

@@ -59,6 +59,7 @@ The architecture document must be formatted in markdown and include the followin
 - Key modules or components involved.
 - Expected data flow or architecture.
 - All required AWS resources (e.g., RDS, S3, Lambda, ECS, etc.) must be listed explicitly. For each resource, specify intended usage, sizing, and cost-related constraints. The design must favor the least expensive AWS option that meets the needs of the scope.
+- Document network access patterns. For RDS, explicitly state that connectivity is limited to the application VPC and the CloudFormation parameter `ClientIpForRemoteAccess` to support local development while keeping the database private to Erie Iron infrastructure.
 - Any third-party services, libraries, or APIs to be used.
 - Function signatures (if relevant).
 

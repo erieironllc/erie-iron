@@ -619,12 +619,22 @@ class Task(BaseErieIronModel):
             )
             self_driving_task.refresh_from_db(fields=["sandbox_path"])
         
+        from erieiron_autonomous_agent.business_level_agents.eng_lead import bootstrap_repo
         git = self_driving_task.get_git()
-        
-        if git.source_exists():
-            git.pull()
-        else:
-            git.clone(business.github_repo_url)
+        try:
+            if git.source_exists():
+                git.pull()
+            else:
+                git.clone(business.github_repo_url)
+        except Exception as e:
+            if "repository not found" in str(e).lower():
+                bootstrap_repo(business, git)
+                if git.source_exists():
+                    git.pull()
+                else:
+                    git.clone(business.github_repo_url)
+            else:
+                raise e
         
         return self_driving_task
     
@@ -780,7 +790,10 @@ class SelfDrivingTask(BaseErieIronModel):
     
     def get_cloudformation_key_prefix(self, environment: AwsEnv):
         from erieiron_common.aws_utils import sanitize_aws_name
-        return sanitize_aws_name(self.get_cloudformation_stack_name(environment), max_length=40)
+        return sanitize_aws_name(
+            self.get_cloudformation_stack_name(environment),
+            max_length=40
+        )
     
     def get_cloudformation_stack_name(self, environment: AwsEnv):
         if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name:
@@ -908,22 +921,24 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             return None
     
     def has_error(self) -> bool:
-        if self.get_error()[0]:
-            return True
-        else:
-            return False
+        return any([
+            "error" in self.evaluation_json,
+            "test_errors" in self.evaluation_json
+        ])
     
     def get_error_llm_msg(self, label: str) -> list[LlmMessage]:
-        error_summary, error_logs = self.get_error()
-        return LlmMessage.user_from_data(
-            label,
-            {
-                "iteration_id": self.id,
-                "iteration_version": self.version_number,
-                "summary": error_summary,
-                "logs": error_logs
-            }
-        )
+        d = {
+            "iteration_id": self.id,
+            "iteration_version": self.version_number,
+        }
+        
+        if "error" in self.evaluation_json:
+            d["error"] = self.evaluation_json.get("error")
+        
+        if "test_errors" in self.evaluation_json:
+            d["test_errors"] = self.evaluation_json.get("test_errors")
+            
+        return LlmMessage.user_from_data(label, d)
     
     def get_error(self) -> tuple[str, str]:
         evaluation_json = self.evaluation_json

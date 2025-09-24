@@ -36,7 +36,7 @@
                    data-bs-toggle="list"
                    aria-controls="chat"
                 >
-                    Chat
+                    Ask a question
                 </a>
 
                 <a id="optimize-tab"
@@ -171,7 +171,9 @@
                 </div>
 
                 <div class="tab-pane " id="response" role="tabpanel" aria-labelledby="response-tab">
-                    {{ llm_request.response|json_to_div }}
+                    {% if llm_request.response %}
+                        {{ llm_request.response|json_to_div }}
+                    {% endif %}
                 </div>
 
                 <div class="tab-pane " id="chat" role="tabpanel" aria-labelledby="chat-tab">

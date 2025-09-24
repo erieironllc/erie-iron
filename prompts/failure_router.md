@@ -59,13 +59,19 @@ field name:  "recovery_path_reason"
 Why did you choose the recovery path you chose?
 
 
-### Write a Fix Prompt
+### Write a Fix Prompt (optional)
 field name:  "fix_prompt"
-Compose a concise prompt that could be given to an LLM to diagnose the issue
+If the error is well defined and understood, skip this field, othersise (if the error is more mysterious) a concise prompt that could be given to an LLM to diagnose the issue
 - This field is used to give additional context to a downstream code fixing agent
 - It should be narrowly scoped and easily comprehendable by a downstream agent
-- If routing due to tombstone violations, explicitly list the matched tombstoned names and (when available) their `replace_with` values in the prompt so downstream agents can apply `migration_steps` deterministically.
 
+**Examples:**
+- Well defined error (no fix_prompt needed): `ImportError: No module named boto3`
+- Mysterious error (include fix_prompt): `ValueError: Failed to parse configuration` → add a fix_prompt like "What configuration format is expected here?"
+
+**Guidance:**  
+- Keep fix_prompts concise (1–2 sentences).  
+- Phrase them as a clear question or request for clarification so downstream agents can act directly.
 
 ### Identify Context Files
 field name:  "context_files"

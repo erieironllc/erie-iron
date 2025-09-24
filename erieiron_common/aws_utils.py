@@ -159,6 +159,9 @@ def ensure_iam_role_exists_and_get_arn(role_name: str) -> str:
 
 
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:
+    if not name:
+        raise Exception("no name supplied")
+    
     if common.is_list_like(name):
         name = common.safe_join(name, "-")
     name = name.replace("_", "-").replace(" ", "-").lower()
@@ -197,7 +200,7 @@ def sanitize_aws_name(name: str, max_length: int = 128) -> str:
     if not re.match(r"^[a-z]", s):
         s = ("t" + s)[:max_length]
 
-    return s
+    return s[0:max_length]
 
 
 def assert_account_name(required_account_name):

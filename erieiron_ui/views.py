@@ -48,26 +48,266 @@ def view_businesses(request):
     )
 
 
-def view_business(request, business_id):
+def _tab_available_overview(business: Business) -> bool:
+    return True
+
+
+def _tab_context_overview(business: Business) -> dict:
+    return {}
+
+
+def _tab_available_business_plan(business: Business) -> bool:
+    return bool(business.business_plan or business.businesskpi_set.exists())
+
+
+def _tab_context_business_plan(business: Business) -> dict:
+    return {
+        "business_kpis": business.businesskpi_set.all().order_by("name")
+    }
+
+
+def _tab_available_business_analysis(business: Business) -> bool:
+    return business.businessanalysis_set.exists()
+
+
+def _tab_context_business_analysis(business: Business) -> dict:
+    return {
+        "business_analysis_list": business.businessanalysis_set.all().order_by("-created_timestamp")
+    }
+
+
+def _tab_available_legal_analysis(business: Business) -> bool:
+    return business.businesslegalanalysis_set.exists()
+
+
+def _tab_context_legal_analysis(business: Business) -> dict:
+    return {
+        "business_legal_analysis_list": business.businesslegalanalysis_set.all().order_by("-created_timestamp")
+    }
+
+
+def _tab_available_capacity_analysis(business: Business) -> bool:
+    return business.businesscapacityanalysis_set.exists()
+
+
+def _tab_context_capacity_analysis(business: Business) -> dict:
+    return {
+        "business_capacity_analysis_list": business.businesscapacityanalysis_set.all().order_by("-created_timestamp")
+    }
+
+
+def _tab_available_architecture(business: Business) -> bool:
+    return bool(business.architecture)
+
+
+def _tab_context_architecture(business: Business) -> dict:
+    return {}
+
+
+def _tab_available_product_initiatives(business: Business) -> bool:
+    return business.initiative_set.exists()
+
+
+def _tab_context_product_initiatives(business: Business) -> dict:
+    return {
+        "initiatives": business.initiative_set.all().order_by("created_timestamp")
+    }
+
+
+def _tab_available_board_guidance(business: Business) -> bool:
+    return business.businessguidance_set.exists()
+
+
+def _tab_context_board_guidance(business: Business) -> dict:
+    return {
+        "business_guidance_list": business.businessguidance_set.all().order_by("-created_timestamp")
+    }
+
+
+def _tab_available_ceo_guidance(business: Business) -> bool:
+    return business.businessceodirective_set.exists()
+
+
+def _tab_context_ceo_guidance(business: Business) -> dict:
+    return {
+        "business_ceo_directives": business.businessceodirective_set.all().order_by("-created_timestamp")
+    }
+
+
+def _tab_available_llmrequests(business: Business) -> bool:
+    return business.llmrequest_set.exists()
+
+
+def _tab_context_llmrequests(business: Business) -> dict:
+    return {
+        "llm_requests": business.llmrequest_set.order_by("-timestamp")
+    }
+
+
+def _tab_available_tasks(business: Business) -> bool:
+    return Task.objects.filter(initiative__business=business).exists()
+
+
+def _tab_context_tasks(business: Business) -> dict:
+    return {
+        "tasks": Task.objects.filter(initiative__business=business).order_by("created_timestamp")
+    }
+
+
+def _tab_available_edit(business: Business) -> bool:
+    return True
+
+
+def _tab_context_edit(business: Business) -> dict:
+    return {
+        "business_status_choices": BusinessStatus.choices(),
+        "business_source_choices": BusinessIdeaSource.choices(),
+        "autonomy_level_choices": Level.choices()
+    }
+
+
+BUSINESS_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "business/tabs/overview.html",
+        "availability_fn": _tab_available_overview,
+        "context_fn": _tab_context_overview,
+    },
+    {
+        "slug": "business-plan",
+        "label": "Business Plan",
+        "template": "business/tabs/business_plan.html",
+        "availability_fn": _tab_available_business_plan,
+        "context_fn": _tab_context_business_plan,
+    },
+    {
+        "slug": "business-analysis",
+        "label": "Business Analysis",
+        "template": "business/tabs/business_analysis.html",
+        "availability_fn": _tab_available_business_analysis,
+        "context_fn": _tab_context_business_analysis,
+    },
+    {
+        "slug": "legal-analysis",
+        "label": "Legal Analysis",
+        "template": "business/tabs/legal_analysis.html",
+        "availability_fn": _tab_available_legal_analysis,
+        "context_fn": _tab_context_legal_analysis,
+    },
+    {
+        "slug": "capacity-analysis",
+        "label": "Capacity Analysis",
+        "template": "business/tabs/capacity_analysis.html",
+        "availability_fn": _tab_available_capacity_analysis,
+        "context_fn": _tab_context_capacity_analysis,
+    },
+    {
+        "slug": "architecture",
+        "label": "Architecture",
+        "template": "business/tabs/architecture.html",
+        "availability_fn": _tab_available_architecture,
+        "context_fn": _tab_context_architecture,
+    },
+    {
+        "slug": "product-initiatives",
+        "label": "Product Initiatives",
+        "template": "business/tabs/product_initiatives.html",
+        "availability_fn": _tab_available_product_initiatives,
+        "context_fn": _tab_context_product_initiatives,
+    },
+    {
+        "slug": "board-guidance",
+        "label": "Board Guidance",
+        "template": "business/tabs/board_guidance.html",
+        "availability_fn": _tab_available_board_guidance,
+        "context_fn": _tab_context_board_guidance,
+    },
+    {
+        "slug": "ceo-guidance",
+        "label": "CEO Guidance",
+        "template": "business/tabs/ceo_guidance.html",
+        "availability_fn": _tab_available_ceo_guidance,
+        "context_fn": _tab_context_ceo_guidance,
+    },
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "business/tabs/llmrequests.html",
+        "availability_fn": _tab_available_llmrequests,
+        "context_fn": _tab_context_llmrequests,
+    },
+    {
+        "slug": "tasks",
+        "label": "Tasks",
+        "template": "business/tabs/tasks.html",
+        "availability_fn": _tab_available_tasks,
+        "context_fn": _tab_context_tasks,
+    },
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "business/tabs/edit.html",
+        "availability_fn": _tab_available_edit,
+        "context_fn": _tab_context_edit,
+    },
+]
+
+BUSINESS_TAB_MAP = {definition["slug"]: definition for definition in BUSINESS_TAB_DEFINITIONS}
+
+
+def _build_business_tabs(business: Business) -> list[dict]:
+    tabs = []
+    for definition in BUSINESS_TAB_DEFINITIONS:
+        slug = definition["slug"]
+        available = definition["availability_fn"](business)
+        if slug == "overview":
+            url = reverse('view_business', args=[business.id])
+        else:
+            url = reverse('view_business_tab', args=[slug, business.id])
+        tabs.append({
+            "slug": slug,
+            "label": definition["label"],
+            "url": url,
+            "available": available,
+        })
+    return tabs
+
+
+def view_business(request, business_id, tab='overview'):
     business = get_object_or_404(Business, pk=business_id)
-    
-    # business.businessceodirective_set
-    tasks = Task.objects.filter(initiative__business=business)
-    
+    tab = (tab or 'overview').lower()
+
+    if tab not in BUSINESS_TAB_MAP:
+        raise Http404
+
+    tabs = _build_business_tabs(business)
+    tab_definition = BUSINESS_TAB_MAP[tab]
+
+    is_available = next((t for t in tabs if t['slug'] == tab), None)
+    if not is_available or not is_available['available']:
+        raise Http404
+
+    context = {
+        "business": business,
+        "tabs": tabs,
+        "active_tab": tab,
+        "tab_template": tab_definition["template"],
+    }
+    context.update(tab_definition["context_fn"](business))
+
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse('view_business', args=[business.id]), business.name)
+    ]
+    if tab != 'overview':
+        breadcrumbs.append((reverse('view_business_tab', args=[tab, business.id]), tab_definition["label"]))
+
     return send_response(
         request,
-        "business.html", {
-            "tasks": tasks,
-            "business": business,
-            "llm_requests": business.llmrequest_set.order_by("-timestamp"),
-            "business_status_choices": BusinessStatus.choices(),
-            "business_source_choices": BusinessIdeaSource.choices(),
-            "autonomy_level_choices": Level.choices()
-        },
-        breadcrumbs=[
-            (reverse(view_businesses), Business.get_erie_iron_business().name),
-            (reverse(view_business, args=[business.id]), business.name)
-        ]
+        "business/base.html",
+        context,
+        breadcrumbs=breadcrumbs
     )
 
 
@@ -437,7 +677,7 @@ def action_business_regenerate_architecture(request, business_id):
     # )
     eng_lead.write_business_architecture(business)
     
-    return redirect(reverse('view_business', args=[business_id]) + "#testcode")
+    return redirect(reverse('view_business_tab', args=['architecture', business_id]))
 
 
 def action_initiative_regenerate_architecture(request, initiative_id):
@@ -762,7 +1002,7 @@ def action_update_business(request, business_id):
         Business.objects.filter(id=business_id).update(**update_data)
         
         messages.success(request, 'Business updated successfully!')
-        return redirect(reverse('view_business', args=[business_id]) + '#edit')
+        return redirect(reverse('view_business_tab', args=['edit', business_id]))
     except Business.DoesNotExist:
         messages.error(request, 'Business not found.')
         return redirect(reverse('view_businesses'))
@@ -784,7 +1024,7 @@ def action_bootstrap_business(request, business_id):
         )
         
         messages.success(request, f'Business "{business.name}" has been bootstrapped successfully!')
-        return redirect(reverse('view_business', args=[business_id]) + '#edit')
+        return redirect(reverse('view_business_tab', args=['edit', business_id]))
     except Business.DoesNotExist:
         messages.error(request, 'Business not found.')
         return redirect(reverse('view_businesses'))
@@ -950,7 +1190,7 @@ def view_llm_request(request, llm_request_id):
     ]
     if llm_request.business_id:
         breadcrumbs.append(
-            (f"{reverse(view_business, args=[llm_request.business_id])}#product-initiatives", llm_request.business.name),
+            (reverse('view_business_tab', args=['product-initiatives', llm_request.business_id]), llm_request.business.name),
         )
         if llm_request.initiative:
             breadcrumbs.append(

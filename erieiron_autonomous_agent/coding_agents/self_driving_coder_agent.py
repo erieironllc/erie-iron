@@ -394,7 +394,7 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     if readonly_lines:
         prompt_parts.append(textwrap.dedent("""
         ## Read-only Paths
-        These paths must not be modified unless explicitly planned otherwise.
+        These paths must **never** be modified 
         """ + "\n".join(readonly_lines)))
     
     if code_file_summary_lines:
@@ -411,8 +411,8 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     1. Read the full development plan at {plan_path}.
     2. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
     3. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
-    4. Leave the repository with changes ready for review; do not commit.
-    5. Write the current date and time as a comment at the top of infrastructure.yaml
+    4. No read-only files modified
+    5. Leave the repository with changes ready for review; do not commit.
     """))
     
     prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
@@ -509,10 +509,16 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         }
     )
     
+    changed_paths = _collect_repo_changed_files(
+        config,
+        prior_file_checksum_map,
+        readonly_entries
+    )
+    
     persisted_code_files = _persist_codex_code_versions(
         config,
-        planning_data,
-        prior_file_checksum_map
+        changed_paths,
+        planning_data
     )
     
     if persisted_code_files:
@@ -536,14 +542,9 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
 
 def _persist_codex_code_versions(
         config: SelfDriverConfig,
-        planning_data: dict,
-        prior_file_checksum_map: dict[Path, int]
+        changed_paths: list,
+        planning_data: dict
 ) -> list[str]:
-    changed_paths = _collect_repo_changed_files(
-        config,
-        prior_file_checksum_map
-    )
-    
     if not changed_paths:
         return []
     
@@ -600,20 +601,35 @@ def _persist_codex_code_versions(
     return persisted
 
 
-def _collect_repo_changed_files(config: SelfDriverConfig, prior_file_checksum_map: dict[Path, int]) -> list[Path]:
+def _collect_repo_changed_files(
+        config: SelfDriverConfig,
+        prior_file_checksum_map: dict[Path, int],
+        readonly_entries: list
+) -> list[Path]:
     current_file_mtime_map = get_file_checksum_map(config.sandbox_root_dir)
     
-    return [
+    read_only_files = [
+        config.sandbox_root_dir / e['path']
+        for e in readonly_entries
+    ]
+    
+    files = [
         f
         for f, checksum in current_file_mtime_map.items()
         if checksum != prior_file_checksum_map.get(f)
     ]
+    
+    for f in files:
+        if (config.sandbox_root_dir / f) in read_only_files:
+            raise BadPlan(f"Codeplanner / writer modified the readonly file '{f}")
+    
+    return files
 
 
-def get_file_checksum_map(dir: Path) -> dict[Path, int]:
+def get_file_checksum_map(dir_name: Path) -> dict[Path, int]:
     return {
-        f: common.get_checksum(dir / f)
-        for f in common.iterate_files_deep(dir) if not _should_skip_code_version(f)
+        f: common.get_checksum(dir_name / f)
+        for f in common.iterate_files_deep(dir_name) if not _should_skip_code_version(f)
     }
 
 
@@ -1009,6 +1025,7 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     create_task_subdomain(self_driving_task)
     
     if not config.business.codefile_set.exists():
+        config.git.mk_venv()
         config.iterate_if_necessary()
         config.business.snapshot_code(
             config.current_iteration,
@@ -1337,7 +1354,7 @@ def get_stack_lambdas(config) -> list[dict]:
             raise Exception(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
         
         if not (config.sandbox_root_dir / candidate_path).exists():
-            raise Exception(f"Bad Lambda {resource_name}: file not found — expected at {candidate_path}")
+            raise BadPlan(f"Bad Lambda {resource_name} definition: file not found — expected at {candidate_path}")
         
         code_file_code = (config.sandbox_root_dir / candidate_path).read_text()
         match = re.search(r'^# LAMBDA_DEPENDENCIES: (\[.*?])', code_file_code, flags=re.MULTILINE)
@@ -1698,6 +1715,8 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
             lambda_datas = None
             try:
                 lambda_datas = deploy_lambda_packages(config)
+            except BadPlan as bpe:
+                raise bpe
             except Exception as e:
                 logging.exception(e)
                 raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
@@ -1708,6 +1727,8 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
                     aws_env,
                     docker_image_tag
                 )
+            except BadPlan as bpe:
+                raise bpe
             except Exception as e:
                 raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
             
@@ -1875,11 +1896,6 @@ def manage_db(
             aws_region_name
         )
         
-        # aws_utils.ensure_network_access(
-        #     rds_secret["host"],
-        #     aws_region_name
-        # )
-        
         run_docker_command(
             config=config,
             aws_env=aws_env,
@@ -1983,7 +1999,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         "Cloudformation Status",
         {
             "stack_status": stack_status,
-            "allow_goal_achieved": "True" if stack_status == "DEPLOY_COMPLETE" else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
+            "allow_goal_achieved": "True" if stack_status in ["CREATE_COMPLETE", "DEPLOY_COMPLETE"] else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
         }
     )
     
@@ -2021,7 +2037,21 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     ).json()
     
     if isinstance(exception, ExecutionException):
-        common.struct_set(eval_data, ['error', 'logs'], str(exception))
+        # ExecutionExceptions generally correspond to infra/deployment/runtime issues,
+        # but could also arise during test runs.
+        if "test" in str(exception).lower():
+            # Attach to test_errors array
+            test_error_entry = {
+                "summary": "ExecutionException during test run",
+                "logs": str(exception)
+            }
+            existing = eval_data.get("test_errors") or []
+            eval_data["test_errors"] = existing + [test_error_entry]
+        else:
+            # Default to single error object
+            eval_data.setdefault("error", {})
+            eval_data["error"].setdefault("summary", "ExecutionException during iteration")
+            eval_data["error"]["logs"] = str(exception)
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
@@ -2231,6 +2261,20 @@ def push_cloudformation(
         
         pprint.pprint(get_stack(stack_name, cf_client))
         
+        # Update SelfDrivingTask.cloudformation_stack_id with the deployed stack's physical ID
+        try:
+            stack_desc = get_stack(stack_name, cf_client)
+            stack_id = stack_desc.get("StackId") if stack_desc else None
+            if stack_id:
+                with transaction.atomic():
+                    SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+                        cloudformation_stack_id=stack_id
+                    )
+            else:
+                config.log(f"Could not resolve StackId for {stack_name}")
+        except Exception as e:
+            config.log(f"Failed to persist cloudformation_stack_id for {stack_name}: {e}")
+        
         cloudformation_wait(
             config,
             cf_client,
@@ -2432,47 +2476,18 @@ def get_iteration_eval_llm_messages(
         else:
             description = "This is an evaluation previous iteration of the code.  It is not the previous iteration neither is it the iteration we are rolling back to"
         
-        evaluation_json: dict = iteration.evaluation_json
-        evaluation_parts = [
-            evaluation_json.get("summary"),
-        ]
-        error_summary, error_logs = iteration.get_error()
-        if error_summary:
-            evaluation_parts.append(f"""
-{error_summary}
-
-# Log Output
-{error_logs}
-            """)
-        else:
-            asdf = 1
-        
         iteration_data = {
             "iteration_id": iteration.id,
             "iteration_version_number": iteration.version_number,
             "iteration_description": description,
+            "evaluation": iteration.evaluation_json
         }
         
-        if not (error_summary or error_logs):
+        if not iteration.has_error():
             iteration_data = {
                 **iteration_data,
                 "error_summary": "None.  No errors detected.  The code executed without error.",
             }
-        
-        if error_summary:
-            iteration_data = {
-                **iteration_data,
-                "error_summary": error_summary,
-            }
-        
-        if error_logs:
-            iteration_data = {
-                **iteration_data,
-                "error_logs": error_logs,
-            }
-        
-        if False and include_strategic_guidance:
-            iteration_data['strategic_guidance'] = evaluation_json.get("strategic_guidance", "none")
         
         messages.append(iteration_data)
     
@@ -4285,6 +4300,7 @@ def get_stack_parameters(
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
         "ClientIpForRemoteAccess": common.get_ip_address(),
         "TaskRoleArn": role_arn,
+        "VpcStrategy": "Shared" if AwsEnv.PRODUCTION.eq(aws_env) else "Unique",
         "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
         "DomainName": self_driving_task.domain,
         "ECRRepositoryArn": ecr_arn,
@@ -4508,7 +4524,7 @@ def delete_cloudformation_stack(config, aws_env: AwsEnv, block_while_waiting=Tru
         config.log(f"CloudFormation stack {stack_name} does not exist. Nothing to delete.")
         return
     
-    empty_stack_buckets(config)
+    empty_stack_buckets(config, aws_env)
     
     config.log(f"Deleting CloudFormation stack {stack_name} in {get_aws_region()}")
     cf_client.delete_stack(StackName=stack_name)

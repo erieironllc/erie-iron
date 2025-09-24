@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "FailureModeRouterOutput",
   "type": "object",
-  "required": ["classification", "recovery_path", "recovery_path_explanation", "fix_prompt"],
+  "required": ["classification", "recovery_path", "recovery_path_explanation"],
   "properties": {
     "classification": {
       "type": "string",
@@ -32,7 +32,7 @@
     },
     "fix_prompt": {
       "type": "string",
-      "description": "A suggested next step or command to fix the issue"
+      "description": "Concise (1–2 sentence) question or request for clarification when the error is ambiguous or 'mysterious'. Leave blank if the error is well defined and self-explanatory."
     },
     "context_files": {
       "type": "array",

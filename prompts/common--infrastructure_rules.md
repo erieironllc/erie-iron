@@ -14,6 +14,7 @@
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
+- If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
 
 ### CloudFormation File Enforcement
 - All infrastructure definitions must go in `infrastructure.yaml` only.
@@ -28,19 +29,50 @@
     - use PostgreSQL engine version >= 16.8
     - Do not assume or configure any locally running PostgreSQL service.
     - Source all connection details from environment variables or AWS Secrets Manager.
-
-### RDS Secret Management Contract
-- Use `ManageMasterUserPassword: true` in `AWS::RDS::DBInstance`.
-- The DBInstanceIdentifier must be parameterized (e.g. `!Sub "${StackIdentifier}-db"`) to namespace the auto-generated secret.
-- CloudFormation must output `!GetAtt RDSInstance.MasterUserSecret.SecretArn` **only**; do not create a `RdsMasterSecretName` (or any secret name) output parameter.
-- No `Parameters.RdsSecretArn`, no `SecretTargetAttachment`, and no Lambda custom resource are required for this pattern.
-    
+    - RDS security groups must only allow inbound traffic from the VPC CIDR (e.g., `VpcCidr`) and the `ClientIpForRemoteAccess` parameter so developers can connect from their current public IP without exposing the database to broader internet ranges.
 
 ### CloudFormation Update Efficiency Guidelines
 Plans must avoid replacement of stateful resources. If replacement is unavoidable, the plan must:
 1) mark will_replace: true for each affected resource,
 2) explain the justification in plan.rationale.updates,
 3) provide a rollback path.
+
+### RDS Configuration
+The RDS cloudformation configuration should always look like this:
+```yaml
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: !Ref DeletePolicy
+    UpdateReplacePolicy: !Ref DeletePolicy
+    Properties:
+      Engine: postgres
+      DBName: appdb
+      DBInstanceIdentifier: !Sub "${StackIdentifier}-db"
+      DBInstanceClass: !Ref DBInstanceClass
+      ManageMasterUserPassword: true
+      MasterUsername: postgres
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      VPCSecurityGroups: !If
+        - CreateNewVPC
+        - [!Ref RDSSecurityGroup]
+        - [!Ref ExistingRDSSecurityGroupId]
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+      PubliclyAccessible: true
+      StorageEncrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${StackIdentifier}-db-instance
+```
+
+### RDS Secret Management Contract
+- Use `ManageMasterUserPassword: true` in `AWS::RDS::DBInstance`.
+- The DBInstanceIdentifier must be parameterized (e.g. `!Sub "${StackIdentifier}-db"`) to namespace the auto-generated secret.
+- CloudFormation must output `!GetAtt RDSInstance.MasterUserSecret.SecretArn` **only**; do not create a `RdsMasterSecretName` (or any secret name) output parameter.
+- No `Parameters.RdsSecretArn`, no `SecretTargetAttachment`, and no Lambda custom resource are required for this pattern.
+- RDSSecurityGroup ingress rules must include **exactly** two sources: the VPC’s internal CIDR block and `ClientIpForRemoteAccess`. Remove any broader public CIDR ranges or legacy rules that would expose the database beyond those endpoints.
 
 ### RDS Secret Attachment Requirements
 - Separate DB instance creation from AWS::SecretsManager::SecretTargetAttachment where possible.
@@ -127,13 +159,15 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 
 ## Resource Name Namespacing
 
-- All resource names (like s3 bucket names, SQS queue names, etc) must be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
-    - if you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them
+- All AWS resource names (S3, SQS, etc.) must be namespaced with the StackIdentifier, for example: `!Sub "${StackIdentifier}-<resource_name>"`.
+    - If you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them.
+    - The only exception is `RDS DBName`, which must always be hardcoded to `appdb`.
 
 ---
 
 ## Required Parameters
-The following parameters are required in every `infrastructure.yaml` file. They must be written **exactly** as follows with no modifications
+- The following parameters are required in every `infrastructure.yaml` file. 
+- This section **must** be written **exactly** as follows with **no modifications**
 ```
   StackIdentifier:
     Type: String
@@ -152,6 +186,19 @@ The following parameters are required in every `infrastructure.yaml` file. They 
   DeletePolicy:
     Type: String
     Description: "Required: Specifies the deletion and replacement policy for resources. For development or non-production, this value will be 'Delete', for production this value will be 'Retain'"
+  VpcStrategy:
+    Type: String
+    AllowedValues: ["Shared", "Unique"]
+    Description: "Choose whether this stack uses a Shared VPC (reuse ExistingVpcId) or a Unique VPC per stack (create a new VPC)."
+Conditions:
+  UseSharedVpc: !Equals [!Ref VpcStrategy, "Shared"]
+  UseUniqueVpc: !Equals [!Ref VpcStrategy, "Unique"]
+  CreateNewVPC: !Or 
+    - !Condition UseUniqueVpc
+    - !And [!Condition UseSharedVpc, !Equals [!Ref ExistingVpcId, ""]]
+  UseExistingVpc: !And [!Condition UseSharedVpc, !Not [!Equals [!Ref ExistingVpcId, ""]]]
+  UseExistingRdsSg: !Not [!Equals [!Ref ExistingRDSSecurityGroupId, ""]]
+  CreateVpcEndpointsInNewVPC: !And [!Condition CreateNewVPC, !Equals [!Ref EnableVpcEndpoints, "true"]]
 ```
 
 ### DeletePolicy usage

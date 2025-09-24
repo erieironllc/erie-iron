@@ -43,11 +43,11 @@ Each task **must** include the following fields
     - `DESIGN_WEB_APPLICATION` – design or UX work  
     - `HUMAN_WORK` – requires human execution or judgment  
 - `depends_on` *(array)* – list of `task_id`s that must finish first  
-- `task_description` *(string)* – clear description of the work  
+- `task_description` *(markdown formatted string)* – clear description of the work formatted for readability
 - `inputs_fields` *(dict[str, list])* – input data dict.  key is upstream task id, value is list of fields the upstream task returns; if depending on another task’s output, reference it as `<task_id>:[<output_fields>]`  
 - `output_fields` *(list[str])* – list of field names on the task's output datastructure
-- `risk_notes` *(string)* – operational or automation risks. Recommended format: `CATEGORY | PROBABILITY | IMPACT | NOTE`
-- `test_plan` *(string)* – description of how success can be autonomously verified  
+- `risk_notes` *(markdown formatted string)* – operational or automation risks. Recommended format: `CATEGORY | PROBABILITY | IMPACT | NOTE`.  format for readability
+- `test_plan` *(markdown formatted string)* – description of how success can be autonomously verified, formatted for readability
     - Test Plan Quality Bar. Every `test_plan` **must**:
         1. Define both success **and** failure expectations  
         2. Include at least one programmatic assertion (exit code 0, log line, HTTP 200, etc.)  

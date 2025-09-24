@@ -80,11 +80,11 @@ Return **a valid JSON object** with exactly these top‑level keys:
   "initiative_token": "<initiative_id>_token",
   "priority": "HIGH | MEDIUM | LOW",
   "title": "<concise human title>",
-  "description": "<why + what (≤3 sentences)>",
+  "description": "<why + what (≤3 sentences)> (markdown formatted for readability)",
   "linked_kpis": ["<kpi_id>", …],
   "linked_goals": ["<goal_id>", …],
   "expected_kpi_lift": { "<kpi_id>": <number> },
-  "assumptions": "<optional notes>",
+  "assumptions": "<optional notes>  (markdown formatted for readability)",
   "requirements": [ /* Requirement objects – see below */ ]
 }
 ```
@@ -93,9 +93,9 @@ Example: "Assumes user has opted into feature X."
 ### 3.2 Requirement object schema
 ```jsonc
 {
-  "summary": "<observable user behaviour>",
+  "summary": "<observable user behaviour> (markdown formatted for readability)",
   "requirement_token": "<business>_<slug>",
-  "acceptance_criteria": "<single testable statement>",
+  "acceptance_criteria": "<single testable statement> (markdown formatted for readability)",
   "testable": true, // testable: true | false depending on whether QA can verify behavior without ambiguity
 }
 ```

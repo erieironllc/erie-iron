@@ -34,7 +34,7 @@ Goal and KPI IDs must be namespaced to the business, such as "articleinsight_ret
 {
   "goal_id": "string",
   "kpi_id": "string",
-  "description": "What the business is trying to achieve",
+  "description": "What the business is trying to achieve  (markdown formatted for readability)",
   "target_value": float,
   "unit": "string",
   "due_date": "YYYY-MM-DD",

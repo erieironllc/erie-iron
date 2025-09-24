@@ -8,12 +8,7 @@ from erieiron_common import common
 
 class Command(BaseCommand):
     def handle(self, *args, **options):
-        for f in CodeFile.objects.filter(file_path__startswith="/"):
-            print(f.file_path)
-            for v in f.codeversion_set.all():
-                SelfDrivingTaskIteration.objects.filter(id=v.task_iteration_id).delete()
-            CodeFile.objects.filter(id=f.id).delete()
-            
-        # business = Business.objects.get(id="09fc9301-f50f-492a-9d9d-93a3b3bf1fad")
+        business = Business.objects.get(id="09fc9301-f50f-492a-9d9d-93a3b3bf1fad")
+        business.codefile_set.all().delete()
         # domain_manager.manage_domain(business)
 

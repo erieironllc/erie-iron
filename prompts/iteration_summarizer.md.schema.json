@@ -1,38 +1,56 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/iteration-evaluator-output.schema.json",
-  "title": "IterationEvaluatorOutput",
-  "description": "Structured output from the iteration_evaluator agent.",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Iteration Summarizer Output Schema",
   "type": "object",
-  "required": [
-    "goal_achieved",
-    "summary",
-    "error"
-  ],
   "properties": {
     "goal_achieved": {
       "type": "boolean",
-      "description": "True if the GOAL was successfully achieved, false otherwise."
+      "description": "Indicates whether the iteration achieved the stated GOAL."
     },
     "summary": {
       "type": "string",
-      "description": "A multi-sentence high-level summary of the current iteration's behavior, including any overarching interpretations or theories."
+      "description": "A high-level summary of the iteration's execution and test results."
     },
     "error": {
       "type": "object",
-      "description": "The first critical error that prevented execution or testing from completing. If no such error occurred, this field should be omitted.",
-      "required": ["summary", "logs"],
+      "description": "Details of a critical infrastructure, deployment, or compilation error that blocked execution.",
       "properties": {
         "summary": {
           "type": "string",
-          "description": "Short title or classification of the issue (e.g., 'throws KeyError')"
+          "description": "Brief, planner-ready title of the error."
         },
         "logs": {
           "type": "string",
-          "description": "Log output or test results that support the summary."
+          "description": "Relevant log excerpt including surrounding lines and stack trace."
         }
+      },
+      "required": ["summary", "logs"],
+      "additionalProperties": false
+    },
+    "test_errors": {
+      "type": "array",
+      "description": "List of test failures or errors encountered during automated testing.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Short, planner-ready title of the test failure or error."
+          },
+          "logs": {
+            "type": "string",
+            "description": "Full relevant log excerpt for the test failure or error."
+          }
+        },
+        "required": ["summary", "logs"],
+        "additionalProperties": false
       }
     }
   },
-  "additionalProperties": false
+  "required": ["goal_achieved", "summary"],
+  "additionalProperties": false,
+  "oneOf": [
+    { "required": ["error"] },
+    { "required": ["test_errors"] }
+  ]
 }

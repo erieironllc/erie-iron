@@ -6,6 +6,7 @@ urlpatterns = [
     path("", views.view_businesses, name="view_home"),
     path("businesses/", views.view_businesses, name="view_businesses"),
     path("business/<uuid:business_id>", views.view_business, name="view_business"),
+    path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
     path("_business/add", views.action_add_business, name="action_add_business"),
     path("_business/find", views.action_find_business, name="action_find_business"),
     path("_business/update/<uuid:business_id>", views.action_update_business, name="action_update_business"),

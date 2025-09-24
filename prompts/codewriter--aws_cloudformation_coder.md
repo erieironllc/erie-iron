@@ -62,6 +62,7 @@ When provisioning RDS the following rules **must** be followed
           CidrIp: !Ref ClientIpForRemoteAccess
           Description: Allow RDS access from client IP
 ```
+- Remove any broader ingress rules (for example, `0.0.0.0/0`). The only permitted sources are the VPC (`VpcCidr`) and the developer IP provided through `ClientIpForRemoteAccess`.
 
 ### RDS Secret Management
 - RDS secrets must be managed using `ManageMasterUserPassword: true` on the `AWS::RDS::DBInstance` resource.
