@@ -1,0 +1,16 @@
+{% if requirements %}
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>Requirement</th>
+            <th>Acceptance Criteria</th>
+        </tr>
+        </thead>
+        {% for req in requirements %}
+            <tr>
+                <td>{{ req.summary }}</td>
+                <td>{{ req.acceptance_criteria }}</td>
+            </tr>
+        {% endfor %}
+    </table>
+{% endif %}

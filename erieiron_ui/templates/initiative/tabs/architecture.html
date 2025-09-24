@@ -1,0 +1,14 @@
+{% load erieiron_common_tags %}
+<form method="post" action="{% url 'action_initiative_regenerate_architecture' initiative.id %}"
+      class="me-3 d-flex justify-content-end">
+    {% csrf_token %}
+    <button type="submit"
+            class="btn btn-sm bi bi-arrow-counterclockwise"
+            onclick="return confirm('Are you sure you want to regenerate the Architecture?')"
+    >
+        Regenerate Architecture
+    </button>
+</form>
+<div class="markdown-container">
+    {{ initiative.architecture|markdown }}
+</div>

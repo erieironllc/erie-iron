@@ -417,6 +417,14 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     
     prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
     
+    config.log(f"""
+---------------------
+codex prompt
+
+{prompt_text}
+---------------------
+    """)
+
     prompt_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_prompt.txt"
     prompt_path.write_text(prompt_text, encoding="utf-8")
     
@@ -2960,6 +2968,62 @@ def write_task_tdd_test(config: SelfDriverConfig):
         config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
+def get_existing_test_context_messages(
+        config: SelfDriverConfig,
+        excluding_test_path: Path
+) -> list[LlmMessage]:
+    """Build context messages describing other automated tests to avoid duplication."""
+    test_dir = excluding_test_path.parent
+    if not test_dir.exists():
+        return []
+    
+    existing_test_entries: list[dict[str, str]] = []
+    for path in sorted(test_dir.rglob("test*.py")):
+        if path.name == "__init__.py" or not path.is_file():
+            continue
+        
+        if Path(path).absolute() == excluding_test_path.absolute():
+            continue
+        
+        try:
+            code = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        
+        if not code.strip():
+            continue
+        
+        existing_test_entries.append({
+            "path": str(path.relative_to(config.sandbox_root_dir)),
+            "code": code
+        })
+    
+    if not existing_test_entries:
+        return []
+    
+    max_files_to_embed = 8
+    selected_entries = existing_test_entries[:max_files_to_embed]
+    
+    messages = LlmMessage.user_from_data(
+        f"""
+        Existing automated tests that must continue to pass and should not be duplicated.  
+        New tests must complement the provided suites, avoid duplicating coverage, 
+        and remain consistent so all tests can pass together.
+        """,
+        selected_entries,
+        item_name="file"
+    )
+    
+    if len(existing_test_entries) > max_files_to_embed:
+        remaining_paths = [entry["path"] for entry in existing_test_entries[max_files_to_embed:]]
+        messages.append(
+            LlmMessage.user(
+                "Additional existing test files (code omitted for brevity):\n" + "\n".join(remaining_paths)
+            )
+        )
+    
+    return messages
+
 
 def write_test(
         config: SelfDriverConfig,
@@ -2968,11 +3032,19 @@ def write_test(
         system_prompt_name: str,
         user_messages: list[LlmMessage]
 ):
-    user_messages = common.ensure_list(user_messages)
-    task = config.task
+    sanitized_test_file_name = common.sanitize_filename(test_file_name)
+    
+    test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
+    test_file_path_dir.mkdir(parents=True, exist_ok=True)
+    (test_file_path_dir / "__init__.py").touch(exist_ok=True)
+    test_file_path = test_file_path_dir / sanitized_test_file_name
+    
+    user_messages = common.ensure_list(user_messages) + get_existing_test_context_messages(
+        config,
+        test_file_path
+    )
     
     previous_exception = None
-    
     for i in range(3):
         try:
             messages = [
@@ -2995,12 +3067,6 @@ def write_test(
                 user_messages
             ]
             
-            if config.self_driving_task.test_file_path and (config.sandbox_root_dir / config.self_driving_task.test_file_path).exists():
-                messages += LlmMessage.user_from_data(
-                    "current version of the test code",
-                    config.sandbox_root_dir / config.self_driving_task.test_file_path
-                )
-            
             if previous_exception:
                 messages.append(f"""
     Your previous attempt at writing this code failed with this exception:
@@ -3015,11 +3081,6 @@ def write_test(
                 LlmModel.OPENAI_GPT_5,
                 tag_entity=config.current_iteration
             ).text
-            
-            test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
-            test_file_path_dir.mkdir(parents=True, exist_ok=True)
-            (test_file_path_dir / "__init__.py").touch(exist_ok=True)
-            test_file_path = test_file_path_dir / common.sanitize_filename(test_file_name)
             
             for code_validation_idx in range(5):
                 try:
@@ -3048,6 +3109,7 @@ def write_test(
             code_verson = config.current_iteration.get_code_version(test_file_path)
             code_verson.code = code
             code_verson.save()
+            code_verson.write_to_disk(config.sandbox_root_dir)
             
             return test_file_path.relative_to(config.sandbox_root_dir)
         except Exception as e:

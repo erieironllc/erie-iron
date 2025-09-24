@@ -22,6 +22,7 @@ You work in support of test-driven development
 - Use time-bounded polling for eventually-consistent systems; avoid unbounded sleeps
 - Assert externally observable outcomes: API responses, persisted records, emitted events, and log markers
 - Avoid coupling to internal implementation (private functions, internal IDs not surfaced by the API)
+- Expect the prompt to include existing automated tests; study them, avoid duplicating their coverage, and ensure any new tests you add can pass alongside the existing suites without contradiction.
 
 ---
 
@@ -51,4 +52,3 @@ You work in support of test-driven development
     - if you need edits to self_driving_coder_agent.py, you must return as "Blocked"
     - only return "Blocked" in this case if you have no workarounds in the code that you are able to edit
     - if you feel you need to edit self_driving_coder_agent.py, look further at the error.  It's likely the fix is not in self_driving_coder_agent.py, rather the fix is in code that you have access to modify
-

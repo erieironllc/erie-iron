@@ -8,16 +8,18 @@
                 <form method="post" action="{% url 'action_task_regenerate_test' task.id %}"
                       class="me-3 d-inline">
                     {% csrf_token %}
+                    
                     <button type="submit" class="btn btn-sm bi bi-arrow-counterclockwise"
                             onclick="return confirm('Are you sure you want to regenerate this test?')">
                         Regenerate Test
                     </button>
+                    {% include "_copy_clipboard_btn.html" with target_el="#div_task_code" %}
                 </form>
             </div>
             <div class="card-body code-container">
                 <dl class="row">
                     <dd>
-                        <pre class="full_code ">{{ test_code_version.code|highlight }}</pre>
+                        <pre id="div_task_code" class="full_code ">{{ test_code_version.code|highlight }}</pre>
                     </dd>
                 </dl>
             </div>

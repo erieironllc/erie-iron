@@ -18,6 +18,7 @@
 
 ### CloudFormation File Enforcement
 - All infrastructure definitions must go in `infrastructure.yaml` only.
+- Inline IAM policy attachments (e.g., `AWS::IAM::Policy` with `Roles: [!Ref TaskRoleArn]`) belong in `infrastructure.yaml`; runtime code must not create or modify IAM.
 - Creating or modifying any other CloudFormation YAML file is a violation.
 - If a plan attempts to edit a different file, correct the plan to use `infrastructure.yaml` — do **not** return `blocked`.
 
@@ -36,6 +37,7 @@ Plans must avoid replacement of stateful resources. If replacement is unavoidabl
 1) mark will_replace: true for each affected resource,
 2) explain the justification in plan.rationale.updates,
 3) provide a rollback path.
+Inline `AWS::IAM::Policy` attachments should be isolated so they do not introduce replacements or `DependsOn` chains to slow resources like RDS.
 
 ### RDS Configuration
 The RDS cloudformation configuration should always look like this:
@@ -215,6 +217,7 @@ Conditions:
 
 --- 
 ## Additional Forbidden Actions
+- **Never** add `AWS::IAM::Role`. Inline `AWS::IAM::Policy` resources are allowed only when `Roles: [!Ref TaskRoleArn]`, the statements are least privilege, and justification comments explain each permission.
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
 - **Never** define a Lambda function with an environment variable name beginning with `AWS_`.  
     - These prefixes are reserved by AWS and will cause the CloudFormation deployment to fail.

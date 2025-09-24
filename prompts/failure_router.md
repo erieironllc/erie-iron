@@ -88,6 +88,7 @@ Consider any AWS role or permissions WARNING or ERROR messages as the most likel
 - these lines likely contain the string `is not authorized to perform`
 - **you must** prioritize fixing AWS role / permissions errors before attempting other changes
 - If the logs contain AWS role or permissions WARNING or ERROR lines, escalate to 'AWS_PROVISIONING_PLANNER'
+- If a Lambda is created or updated with `VpcConfig`, make sure the plan attaches (or verifies) ENI permissions to `TaskRoleArn` via inline `AWS::IAM::Policy` in-stack unless there is explicit documentation that `AWSLambdaVPCAccessExecutionRole` is already attached externally.
 
 
 ### Localhost connections in cloud environments

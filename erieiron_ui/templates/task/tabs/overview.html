@@ -10,7 +10,6 @@
         {% endif %}
     </p>
 
-    <div>{{ task.description|markdown }}</div>
 
     {% if task.completion_criteria %}
         <h5 class="mt-4">Completion Criteria</h5>
@@ -24,5 +23,10 @@
     <div>
         <h5 class="mt-4">Test Plan</h5>
         {{ task.test_plan|default:"—" }}
+    </div>
+
+    <div>
+        <h5 class="mt-4">Description</h5>
+        {{ task.description|markdown }}
     </div>
 </div>

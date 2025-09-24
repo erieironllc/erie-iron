@@ -126,12 +126,11 @@
                                 href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation"
                         >version {{ iteration_to_modify.version_number}}</a>)</p>
                     {% endif %}
-                    <hr class="mt-4">
-                    <b><a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation-tab"
+                    
+                    <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}#evaluation-tab"
                         >
                             Version {{ iteration_to_modify.version_number }}
                         </a>'s status
-                    </b>
                     <p>{{ iteration_to_modify.evaluation_json.summary }} </p>
                 {% endif %}
 

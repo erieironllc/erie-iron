@@ -37,7 +37,14 @@ def json_to_div(json_content, filter_def=None):
     
     try:
         if not isinstance(json_content, dict):
-            json_content = json.loads(json_content)
+            try:
+                json_content = json.loads(json_content)
+            except:
+                return mark_safe(f"""
+            <div class="json_to_div--container">
+                <pre>{json_content}</pre>
+            </div>
+            """)
     
         parts = []
         for k,v in json_content.items():
@@ -47,16 +54,31 @@ def json_to_div(json_content, filter_def=None):
             if k in exclude_fields:
                 continue
             
-            if isinstance(v, dict):
-                v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
-            
-            parts.append(f"""
-            <div class="json_to_div--container">
-                <label>{k}</label>
-                <pre>{v}</pre>
-            </div>
-            """)
-            ...
+            if common.is_list_like(v):
+                pres = []
+                for v1 in v:
+                    if isinstance(v1, dict):
+                        v1 = json.dumps(v1, indent=4, cls=ErieIronJSONEncoder)
+                    pres.append(f"<pre>{v1}</pre>")
+                
+                pres = "<br>".join(pres)
+                parts.append(f"""
+                <div class="json_to_div--container">
+                    <label>{k}</label>
+                    {pres}
+                </div>
+                """)
+            else:
+                if isinstance(v, dict):
+                    v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
+                
+                parts.append(f"""
+                <div class="json_to_div--container">
+                    <label>{k}</label>
+                    <pre>{v}</pre>
+                </div>
+                """)
+                ...
         
         return mark_safe("".join(parts))
     except Exception as e:

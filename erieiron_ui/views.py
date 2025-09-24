@@ -1395,7 +1395,7 @@ def view_llm_request(request, llm_request_id):
         {
             "llm_request": llm_request,
             "model_choices": model_choices,
-            "model_choice_value": f"{LlmModel.OPENAI_GPT_5.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
+            "model_choice_value": f"{LlmModel.OPENAI_GPT_5.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MINIMAL}"
         },
         breadcrumbs=breadcrumbs
     )

@@ -1,0 +1,15 @@
+{% if tasks|length > 0 %}
+    <div class="mb-3 d-flex justify-content-end">
+        <select id="statusFilter" class="form-select" style="width: auto; display: inline-block;">
+            <option value="">All Statuses</option>
+            <option value="NOT_STARTED">Not Started</option>
+            <option value="IN_PROGRESS">In Progress</option>
+            <option value="COMPLETE">Complete</option>
+            <option value="BLOCKED">Blocked</option>
+            <option value="FAILED">Failed</option>
+        </select>
+    </div>
+    {% for task in tasks|dictsort:"created_timestamp" %}
+        {% include "_task_row.html" %}
+    {% endfor %}
+{% endif %}

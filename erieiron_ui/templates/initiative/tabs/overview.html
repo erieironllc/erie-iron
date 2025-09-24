@@ -1,0 +1,31 @@
+{% load erieiron_common_tags %}
+<div>{{ initiative.description|linebreaksbr }}</div>
+
+{% if initiative.linked_kpis.exists %}
+    <h5 class="mt-4">KPIs</h5>
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Priority</th>
+        </tr>
+        </thead>
+        {% for kpi in initiative.linked_kpis.all|dictsort:"name" %}
+            <tr>
+                <td>{{ kpi.name }}</td>
+                <td>{{ kpi.description }}</td>
+                <td>{{ kpi.priority|label }}</td>
+            </tr>
+        {% endfor %}
+    </table>
+{% endif %}
+
+{% if initiative.expected_kpi_lift %}
+    <h5 class="mt-5">Expected KPI Lift</h5>
+    <ul>
+        {% for kpi_lift, v in initiative.expected_kpi_lift.items %}
+            <li>{{ kpi_lift|label }}: {{ v }}</li>
+        {% endfor %}
+    </ul>
+{% endif %}
