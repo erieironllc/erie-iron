@@ -1,0 +1,9 @@
+<div class="tab-pane-content">
+    <h5>Guidance for next iteration</h5>
+    <form action="{% url 'action_update_task_guidance' task.id %}" method="post">
+        {% csrf_token %}
+        <textarea name="guidance" class="form-control" rows="8"
+                  placeholder="Enter guidance for the next iteration...">{{ task.guidance|default:"" }}</textarea>
+        <button type="submit" class="btn btn-primary mt-2">Save Guidance</button>
+    </form>
+</div>

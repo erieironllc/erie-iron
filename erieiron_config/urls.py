@@ -27,10 +27,11 @@ urlpatterns = [
     path("task/restart/<str:task_id>", views.action_restart_task, name="action_restart_task"),
     path("task/delete/<str:task_id>", views.action_delete_task, name="action_delete_task"),
     path("task/update/<str:task_id>", views.action_update_task, name="action_update_task"),
-    path("task/guidance/<str:task_id>", views.action_update_task_guidance, name="action_update_task_guidance"),
+    path("task/updateguidance/<str:task_id>", views.action_update_task_guidance, name="action_update_task_guidance"),
     path("task/latest_iteration/<str:task_id>", views.view_self_driver_latest_iteration, name="view_self_driver_latest_iteration"),
     path("process/kill/<uuid:process_id>", views.action_kill_process, name="action_kill_process"),
     path("task/<str:task_id>", views.view_task, name="view_task"),
+    path("task/<slug:tab>/<str:task_id>", views.view_task, name="view_task_tab"),
     
     path("llm/debug/<uuid:llm_request_id>", views.view_llm_request, name="view_llm_request"),
     path("llm/ask/<uuid:llm_request_id>", views.action_llm_debug_ask, name="action_llm_debug_ask"),

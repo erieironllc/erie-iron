@@ -1,0 +1,33 @@
+{% load erieiron_common_tags %}
+<div class="tab-pane-content">
+    {% if initiatives %}
+        <table class="table table-striped">
+            <thead>
+            <tr>
+                <th>Sequence</th>
+                <th>Title</th>
+                <th>Description</th>
+                <th>Predicted KPI Lift</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for initiative in initiatives %}
+                <tr>
+                    <td>{{ forloop.counter }}</td>
+                    <td><a href="{% url "view_initiative" initiative.id %}">{{ initiative.title }}</a></td>
+                    <td>{{ initiative.description }}</td>
+                    <td>
+                        <ul>
+                            {% for kpi_lift, v in initiative.expected_kpi_lift.items %}
+                                <li>{{ kpi_lift|label }}: {{ v }}</li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <em class="text-muted">No product initiatives available.</em>
+    {% endif %}
+</div>

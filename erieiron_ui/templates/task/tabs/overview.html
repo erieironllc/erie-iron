@@ -1,0 +1,28 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content">
+    <p>
+        <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">
+            {{ task.status }}
+        </span>
+        {% if task.role_assignee %}
+            &nbsp;Owner: {{ task.role_assignee|label }}
+        {% endif %}
+    </p>
+
+    <div>{{ task.description|markdown }}</div>
+
+    {% if task.completion_criteria %}
+        <h5 class="mt-4">Completion Criteria</h5>
+        <ol>
+            {% for cc in task.completion_criteria %}
+                <li>{{ cc }}</li>
+            {% endfor %}
+        </ol>
+    {% endif %}
+
+    <div>
+        <h5 class="mt-4">Test Plan</h5>
+        {{ task.test_plan|default:"—" }}
+    </div>
+</div>

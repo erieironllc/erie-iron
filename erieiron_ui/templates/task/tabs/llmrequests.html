@@ -1,0 +1,7 @@
+<div class="tab-pane-content">
+    {% if llm_requests %}
+        {% include '_llm_requests_list.html' %}
+    {% else %}
+        <em class="text-muted">No LLM requests for this task.</em>
+    {% endif %}
+</div>

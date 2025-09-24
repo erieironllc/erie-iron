@@ -1,0 +1,51 @@
+<div class="tab-pane-content">
+    {% if business_legal_analysis_list %}
+        {% for business_legal_analysis in business_legal_analysis_list %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <small class="text-muted">{{ business_legal_analysis.created_timestamp }}</small>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Regulatory Risks</dt>
+                        <dd class="col-sm-8">{{ business_legal_analysis.regulatory_risks_summary|default:"—"|linebreaksbr }}</dd>
+
+                        <dt class="col-sm-4">Key Legal Requirements</dt>
+                        <dd class="col-sm-8">
+                            {% if business_legal_analysis.key_legal_requirements %}
+                                <ul class="mb-0">
+                                    {% for requirement in business_legal_analysis.key_legal_requirements %}
+                                        <li>{{ requirement }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <em class="text-muted">None specified</em>
+                            {% endif %}
+                        </dd>
+
+                        <dt class="col-sm-4">Entity Structure Recommendation</dt>
+                        <dd class="col-sm-8">{{ business_legal_analysis.entity_structure_recommendation|default:"—"|linebreaksbr }}</dd>
+
+                        <dt class="col-sm-4">Entity Structure Justification</dt>
+                        <dd class="col-sm-8">{{ business_legal_analysis.entity_structure_justification|default:"—"|linebreaksbr }}</dd>
+
+                        <dt class="col-sm-4">Required Disclaimers or Terms</dt>
+                        <dd class="col-sm-8">
+                            {% if business_legal_analysis.required_disclaimers_or_terms %}
+                                <ul class="mb-0">
+                                    {% for disclaimer in business_legal_analysis.required_disclaimers_or_terms %}
+                                        <li>{{ disclaimer }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <em class="text-muted">None specified</em>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No legal analysis available.</em>
+    {% endif %}
+</div>

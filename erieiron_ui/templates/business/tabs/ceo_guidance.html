@@ -1,0 +1,45 @@
+<div class="tab-pane-content">
+    {% if business_ceo_directives %}
+        {% for business_ceo_directive in business_ceo_directives %}
+            <div class="card my-4">
+                <div class="card-header d-flex justify-content-between">
+                    <small class="text-muted">{{ business_ceo_directive.target_agent }}</small>
+                    <small class="text-muted">{{ business_ceo_directive.created_timestamp }}</small>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-12">{{ business_ceo_directive.directive_summary|linebreaksbr }}</dt>
+
+                        <dt class="mt-3 col-sm-12">Goal Alignment</dt>
+                        <dd class="col-sm-12">
+                            {% if business_ceo_directive.goal_alignment %}
+                                <ul class="mb-0">
+                                    {% for goal in business_ceo_directive.goal_alignment %}
+                                        <li>{{ goal }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <em class="text-muted">None specified</em>
+                            {% endif %}
+                        </dd>
+
+                        <dt class="mt-3 col-sm-12">KPI Targets</dt>
+                        <dd class="col-sm-12">
+                            {% if business_ceo_directive.kpi_targets %}
+                                <dl class="row mb-0">
+                                    {% for key, value in business_ceo_directive.kpi_targets.items %}
+                                        <dt class="col-sm-12">{{ key }}:&nbsp;{{ value }}</dt>
+                                    {% endfor %}
+                                </dl>
+                            {% else %}
+                                <em class="text-muted">None specified</em>
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No CEO guidance available.</em>
+    {% endif %}
+</div>

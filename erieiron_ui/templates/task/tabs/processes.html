@@ -1,0 +1,11 @@
+<div class="tab-pane-content">
+    {% if running_processes %}
+        {% for process in running_processes %}
+            {% include "_process_card.html" %}
+        {% endfor %}
+    {% else %}
+        <div class="alert alert-secondary">
+            No processes are currently running for this task.
+        </div>
+    {% endif %}
+</div>

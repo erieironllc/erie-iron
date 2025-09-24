@@ -1,0 +1,37 @@
+{% load erieiron_common_tags %}
+<div class="tab-pane-content">
+    {% if business_guidance_list %}
+        {% for board_guidance in business_guidance_list %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <small class="text-muted">{{ board_guidance.created_timestamp }}</small>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-12">Board Guidance</dt>
+                        <dd class="col-sm-12">{{ board_guidance.guidance|default:"—"|linebreaksbr }}</dd>
+
+                        {% with board_guidance.justification|to_json as g %}
+                            <dt class="mt-3 col-sm-12">KPI Analysis</dt>
+                            <dd class="col-sm-12">{{ g.kpi_analysis|default:"—"|linebreaksbr }}</dd>
+
+                            <dt class="mt-3 col-sm-12">Budget Alignment</dt>
+                            <dd class="col-sm-12">{{ g.budget_alignment|default:"—"|linebreaksbr }}</dd>
+
+                            <dt class="mt-3 col-sm-12">Legal/Ethical Alignment</dt>
+                            <dd class="col-sm-12">{{ g.legal_ethics|default:"—"|linebreaksbr }}</dd>
+
+                            <dt class="mt-3 col-sm-12">Capacity Alignment</dt>
+                            <dd class="col-sm-12">{{ g.capacity_alignment|default:"—"|linebreaksbr }}</dd>
+
+                            <dt class="mt-3 col-sm-12">Overall</dt>
+                            <dd class="col-sm-12">{{ g.overall_summary|default:"—"|linebreaksbr }}</dd>
+                        {% endwith %}
+                    </dl>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No board guidance available.</em>
+    {% endif %}
+</div>

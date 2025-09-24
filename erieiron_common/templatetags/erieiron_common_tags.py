@@ -26,7 +26,7 @@ register = template.Library()
 def json_to_div(json_content, filter_def=None):
     if not json_content:
         return ""
-    
+
     only_fields = []
     exclude_fields = []
     for filter_def_item in common.safe_split(filter_def, ","):
@@ -61,6 +61,33 @@ def json_to_div(json_content, filter_def=None):
         return mark_safe("".join(parts))
     except Exception as e:
         raise e
+
+
+@register.filter(name='json_dumps')
+def json_dumps(value, indent=2):
+    if value is None:
+        return ""
+
+    try:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return mark_safe(value)
+
+        dump_kwargs = {"cls": ErieIronJSONEncoder}
+
+        try:
+            if indent is not None:
+                indent_int = int(indent)
+                if indent_int >= 0:
+                    dump_kwargs["indent"] = indent_int
+        except (TypeError, ValueError):
+            pass
+
+        return mark_safe(json.dumps(value, **dump_kwargs))
+    except Exception:
+        return mark_safe(str(value))
 
 
 @register.filter(name='highlight')

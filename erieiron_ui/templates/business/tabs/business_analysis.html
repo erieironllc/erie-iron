@@ -1,0 +1,97 @@
+{% load humanize %}
+<div class="tab-pane-content">
+    {% if business_analysis_list %}
+        {% for business_analysis in business_analysis_list %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <small class="text-muted">{{ business_analysis.created_timestamp }}</small>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Final Recommendation Score</dt>
+                        <dd class="col-sm-8">{{ business_analysis.final_recommendation_score_1_to_10 }}</dd>
+
+                        <dt class="col-sm-4">Final Recommendation Justification</dt>
+                        <dd class="col-sm-8">{{ business_analysis.final_recommendation_justification|linebreaks }}</dd>
+
+                        <dt class="col-sm-4">Upfront Investment Needed (USD)</dt>
+                        <dd class="col-sm-8">${{ business_analysis.upfront_investment_estimated_amount_usd|floatformat:0|intcomma }}</dd>
+
+                        <dt class="col-sm-4">TAM Estimate (USD/year)</dt>
+                        <dd class="col-sm-8">${{ business_analysis.total_addressable_market_estimate_usd_per_year|floatformat:0|intcomma }}</dd>
+
+                        <dt class="col-sm-4">TAM Source / Rationale</dt>
+                        <dd class="col-sm-8">{{ business_analysis.total_addressable_market_source_or_rationale|default:"—" }}</dd>
+
+                        <dt class="col-sm-4">Potential Mode</dt>
+                        <dd class="col-sm-8">{{ business_analysis.potential_mode|default:"—" }}</dd>
+
+                        <dt class="col-sm-4">Estimated Monthly Revenue (USD)</dt>
+                        <dd class="col-sm-8">${{ business_analysis.estimated_monthly_revenue_at_steady_state_usd|floatformat:0|intcomma }}</dd>
+
+                        <dt class="col-sm-4">Estimated Time to Profit (months)</dt>
+                        <dd class="col-sm-8">{{ business_analysis.time_to_profit_estimate_months }}</dd>
+
+                        <dt class="col-sm-4">Estimated Monthly Operating Cost (USD)</dt>
+                        <dd class="col-sm-8">${{ business_analysis.estimated_operating_total_cost_per_month_usd|floatformat:0|intcomma }}</dd>
+
+                        {% if business_analysis.use_of_funds_data %}
+                            <dt class="col-sm-4">Use of Funds</dt>
+                            <dd class="col-sm-8">{{ business_analysis.use_of_funds_data }}</dd>
+                        {% endif %}
+
+                        {% if business_analysis.macro_trends_data %}
+                            <dt class="col-sm-4">Macro Trends</dt>
+                            <dd class="col-sm-8">
+                                <ul class="mb-0">
+                                    {% for item in business_analysis.macro_trends_data %}
+                                        <li>{{ item }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </dd>
+                        {% endif %}
+
+                        {% if business_analysis.risks_data %}
+                            <dt class="col-sm-4">Risks</dt>
+                            <dd class="col-sm-8">
+                                <ul class="mb-0">
+                                    {% for item in business_analysis.risks_data %}
+                                        <li>{{ item }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </dd>
+                        {% endif %}
+
+                        {% if business_analysis.monthly_expenses_data %}
+                            <dt class="col-sm-4">Monthly Expenses</dt>
+                            <dd class="col-sm-8">
+                                <ul class="mb-0">
+                                    {% for item in business_analysis.monthly_expenses_data %}
+                                        <li>${{ item.monthly_expense_usd|intcomma }}: {{ item.name }} - {{ item.purpose }}</li>
+                                    {% endfor %}
+                                </ul>
+                            </dd>
+                        {% endif %}
+
+                        {% if business_analysis.customer_acquisition_data %}
+                            <dt class="col-sm-4">Customer Acquisition Strategy</dt>
+                            <dd class="col-sm-8">{{ business_analysis.customer_acquisition_data }}</dd>
+                        {% endif %}
+
+                        {% if business_analysis.sales_strategy_data %}
+                            <dt class="col-sm-4">Sales Strategy</dt>
+                            <dd class="col-sm-8">{{ business_analysis.sales_strategy_data }}</dd>
+                        {% endif %}
+
+                        {% if business_analysis.customer_retention_data %}
+                            <dt class="col-sm-4">Customer Retention Strategy</dt>
+                            <dd class="col-sm-8">{{ business_analysis.customer_retention_data }}</dd>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No business analysis reports available.</em>
+    {% endif %}
+</div>

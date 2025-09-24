@@ -1,0 +1,6 @@
+<div class="tab-pane-content">
+    <div>{{ business.summary|default_if_none:"" }}</div>
+    <hr>
+    <h5>The Pitch</h5>
+    <div>{{ business.raw_idea|linebreaksbr }}</div>
+</div>

@@ -1,0 +1,17 @@
+<div class="list-group" id="taskSidebar" role="tablist">
+    <h3 style="white-space: nowrap;">Task</h3>
+    {% for tab in tabs %}
+        {% if tab.is_divider %}
+            <div class="list-group-item disabled text-center">
+                <hr class="my-2">
+            </div>
+        {% elif tab.available %}
+            <a class="list-group-item list-group-item-action{% if tab.slug == active_tab %} active{% endif %}"
+               style="white-space: nowrap"
+               id="{{ tab.slug }}-tab"
+               href="{{ tab.url }}">
+                {{ tab.label }}
+            </a>
+        {% endif %}
+    {% endfor %}
+</div>

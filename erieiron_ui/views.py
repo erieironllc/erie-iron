@@ -4,6 +4,7 @@ import logging
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from urllib.parse import quote
 
 from django.contrib import messages
 from django.http import HttpResponse, Http404
@@ -19,7 +20,7 @@ from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, 
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, json_endpoint
@@ -166,96 +167,6 @@ def _tab_context_edit(business: Business) -> dict:
     }
 
 
-BUSINESS_TAB_DEFINITIONS = [
-    {
-        "slug": "overview",
-        "label": "Overview",
-        "template": "business/tabs/overview.html",
-        "availability_fn": _tab_available_overview,
-        "context_fn": _tab_context_overview,
-    },
-    {
-        "slug": "business-plan",
-        "label": "Business Plan",
-        "template": "business/tabs/business_plan.html",
-        "availability_fn": _tab_available_business_plan,
-        "context_fn": _tab_context_business_plan,
-    },
-    {
-        "slug": "business-analysis",
-        "label": "Business Analysis",
-        "template": "business/tabs/business_analysis.html",
-        "availability_fn": _tab_available_business_analysis,
-        "context_fn": _tab_context_business_analysis,
-    },
-    {
-        "slug": "legal-analysis",
-        "label": "Legal Analysis",
-        "template": "business/tabs/legal_analysis.html",
-        "availability_fn": _tab_available_legal_analysis,
-        "context_fn": _tab_context_legal_analysis,
-    },
-    {
-        "slug": "capacity-analysis",
-        "label": "Capacity Analysis",
-        "template": "business/tabs/capacity_analysis.html",
-        "availability_fn": _tab_available_capacity_analysis,
-        "context_fn": _tab_context_capacity_analysis,
-    },
-    {
-        "slug": "architecture",
-        "label": "Architecture",
-        "template": "business/tabs/architecture.html",
-        "availability_fn": _tab_available_architecture,
-        "context_fn": _tab_context_architecture,
-    },
-    {
-        "slug": "product-initiatives",
-        "label": "Product Initiatives",
-        "template": "business/tabs/product_initiatives.html",
-        "availability_fn": _tab_available_product_initiatives,
-        "context_fn": _tab_context_product_initiatives,
-    },
-    {
-        "slug": "board-guidance",
-        "label": "Board Guidance",
-        "template": "business/tabs/board_guidance.html",
-        "availability_fn": _tab_available_board_guidance,
-        "context_fn": _tab_context_board_guidance,
-    },
-    {
-        "slug": "ceo-guidance",
-        "label": "CEO Guidance",
-        "template": "business/tabs/ceo_guidance.html",
-        "availability_fn": _tab_available_ceo_guidance,
-        "context_fn": _tab_context_ceo_guidance,
-    },
-    {
-        "slug": "llmrequests",
-        "label": "LLM Requests",
-        "template": "business/tabs/llmrequests.html",
-        "availability_fn": _tab_available_llmrequests,
-        "context_fn": _tab_context_llmrequests,
-    },
-    {
-        "slug": "tasks",
-        "label": "Tasks",
-        "template": "business/tabs/tasks.html",
-        "availability_fn": _tab_available_tasks,
-        "context_fn": _tab_context_tasks,
-    },
-    {
-        "slug": "edit",
-        "label": "Edit",
-        "template": "business/tabs/edit.html",
-        "availability_fn": _tab_available_edit,
-        "context_fn": _tab_context_edit,
-    },
-]
-
-BUSINESS_TAB_MAP = {definition["slug"]: definition for definition in BUSINESS_TAB_DEFINITIONS}
-
-
 def _build_business_tabs(business: Business) -> list[dict]:
     tabs = []
     for definition in BUSINESS_TAB_DEFINITIONS:
@@ -277,17 +188,17 @@ def _build_business_tabs(business: Business) -> list[dict]:
 def view_business(request, business_id, tab='overview'):
     business = get_object_or_404(Business, pk=business_id)
     tab = (tab or 'overview').lower()
-
+    
     if tab not in BUSINESS_TAB_MAP:
         raise Http404
-
+    
     tabs = _build_business_tabs(business)
     tab_definition = BUSINESS_TAB_MAP[tab]
-
+    
     is_available = next((t for t in tabs if t['slug'] == tab), None)
     if not is_available or not is_available['available']:
         raise Http404
-
+    
     context = {
         "business": business,
         "tabs": tabs,
@@ -295,14 +206,14 @@ def view_business(request, business_id, tab='overview'):
         "tab_template": tab_definition["template"],
     }
     context.update(tab_definition["context_fn"](business))
-
+    
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
         (reverse('view_business', args=[business.id]), business.name)
     ]
     if tab != 'overview':
         breadcrumbs.append((reverse('view_business_tab', args=[tab, business.id]), tab_definition["label"]))
-
+    
     return send_response(
         request,
         "business/base.html",
@@ -380,89 +291,231 @@ def view_initiative(request, initiative_id):
     )
 
 
-def view_task(request, task_id):
-    task = get_object_or_404(Task, pk=task_id)
-    initiative = task.initiative
-    business = initiative.business
-    
-    # Add iteration and execution data for related tasks
-    def add_task_metadata(t):
-        self_driving_task = SelfDrivingTask.objects.filter(task_id=t.id).first()
-        if self_driving_task:
-            first_iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
-            t.first_iteration_time = first_iteration.timestamp if first_iteration else None
-        else:
-            t.first_iteration_time = None
-        
-        last_execution = t.taskexecution_set.order_by("-executed_time").first()
-        t.last_execution_time = last_execution.executed_time if last_execution else None
-        return t
-    
-    # Add metadata to dependent tasks
-    for dependent_task in task.depends_on.all():
-        add_task_metadata(dependent_task)
-    
-    for blocking_task in task.dependent_tasks.all():
-        add_task_metadata(blocking_task)
-    
-    self_driving_task = SelfDrivingTask.objects.filter(task_id=task_id).first()
+def _annotate_task_metadata(task_obj):
+    self_driving_task = SelfDrivingTask.objects.filter(task_id=task_obj.id).first()
     if self_driving_task:
-        iterations = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp")
+        first_iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
+        task_obj.first_iteration_time = first_iteration.timestamp if first_iteration else None
     else:
-        iterations = []
+        task_obj.first_iteration_time = None
+    
+    last_execution = task_obj.taskexecution_set.order_by("-executed_time").first()
+    task_obj.last_execution_time = last_execution.executed_time if last_execution else None
+    return task_obj
+
+
+def _task_tab_available_overview(task, business, self_driving_task) -> bool:
+    return True
+
+
+def _task_tab_context_overview(task, business, self_driving_task) -> dict:
+    return {}
+
+
+def _task_tab_available_blocked_by(task, business, self_driving_task) -> bool:
+    return task.depends_on.exists()
+
+
+def _task_tab_context_blocked_by(task, business, self_driving_task) -> dict:
+    blocked_tasks = [_annotate_task_metadata(t) for t in task.depends_on.all()]
+    return {"blocked_tasks": blocked_tasks}
+
+
+def _task_tab_available_blocks(task, business, self_driving_task) -> bool:
+    return task.dependent_tasks.exists()
+
+
+def _task_tab_context_blocks(task, business, self_driving_task) -> dict:
+    blocking_tasks = [_annotate_task_metadata(t) for t in task.dependent_tasks.all()]
+    return {"blocking_tasks": blocking_tasks}
+
+
+def _task_tab_available_iterations(task, business, self_driving_task) -> bool:
+    return bool(self_driving_task and self_driving_task.selfdrivingtaskiteration_set.exists())
+
+
+def _task_tab_context_latest_iteration(task, business, self_driving_task) -> dict:
+    iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
+    
+    return {"iteration": iterations}
+
+
+def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
+    if not self_driving_task:
+        return {"iterations": []}
+    
+    iterations = list(self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp"))
+    if not iterations:
+        return {"iterations": []}
     
     dict_iteration_llmsrequests = defaultdict(list)
-    for llm_request in LlmRequest.objects.filter(task_iteration__self_driving_task=self_driving_task):
+    for llm_request in LlmRequest.objects.filter(task_iteration__self_driving_task=self_driving_task).order_by("timestamp"):
         dict_iteration_llmsrequests[llm_request.task_iteration_id].append(llm_request)
     
     llm_cost_total = 0
     for iteration in sorted(iterations, key=lambda i: i.timestamp):
-        iteration_price = 0
-        for llm_request in dict_iteration_llmsrequests[iteration.id]:
-            llm_cost_total += llm_request.price
-            iteration_price += llm_request.price
+        iteration_price = sum(request.price for request in dict_iteration_llmsrequests.get(iteration.id, []))
+        llm_cost_total += iteration_price
         iteration.price = iteration_price
         iteration.total_price = llm_cost_total
     
+    return {"iterations": iterations}
+
+
+def _task_tab_available_executions(task, business, self_driving_task) -> bool:
+    return task.taskexecution_set.exists()
+
+
+def _task_tab_context_executions(task, business, self_driving_task) -> dict:
     task_executions = list(task.taskexecution_set.order_by("-executed_time"))
-    
-    running_processes = list(RunningProcess.objects.filter(
-        task_execution__task=task
-    ))
-    running_processes_count = RunningProcess.objects.filter(
-        task_execution__task=task,
-        is_running=True
-    ).count()
-    
+    return {"task_executions": task_executions}
+
+
+def _task_tab_available_processes(task, business, self_driving_task) -> bool:
+    return RunningProcess.objects.filter(task_execution__task=task).exists()
+
+
+def _task_tab_context_processes(task, business, self_driving_task) -> dict:
+    running_processes = list(RunningProcess.objects.filter(task_execution__task=task).order_by('-started_at'))
+    return {"running_processes": running_processes}
+
+
+def _task_tab_available_llmrequests(task, business, self_driving_task) -> bool:
+    return LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).exists()
+
+
+def _task_tab_context_llmrequests(task, business, self_driving_task) -> dict:
+    llm_requests = list(LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).order_by("-timestamp"))
+    return {"llm_requests": llm_requests}
+
+
+def _task_tab_available_guidance(task, business, self_driving_task) -> bool:
+    return True
+
+
+def _task_tab_context_guidance(task, business, self_driving_task) -> dict:
+    return {}
+
+
+def _task_tab_available_testcode(task, business, self_driving_task) -> bool:
+    return bool(self_driving_task and self_driving_task.test_file_path)
+
+
+def _task_tab_context_testcode(task, business, self_driving_task) -> dict:
     test_code_version = None
     if self_driving_task and self_driving_task.test_file_path:
         try:
             test_code_version = CodeFile.get(business, self_driving_task.test_file_path).get_latest_version()
-        except Exception as e:
-            logging.exception(e)
+        except Exception as exc:  # pragma: no cover - logging intended
+            logging.exception(exc)
+    
+    return {"test_code_version": test_code_version}
+
+
+def _task_tab_available_resolve(task, business, self_driving_task) -> bool:
+    role_assignee = getattr(task, "role_assignee", None)
+    return role_assignee == "HUMAN" and task.status != TaskStatus.COMPLETE.value
+
+
+def _task_tab_context_resolve(task, business, self_driving_task) -> dict:
+    return {}
+
+
+def _task_tab_available_edit(task, business, self_driving_task) -> bool:
+    return True
+
+
+def _task_tab_context_edit(task, business, self_driving_task) -> dict:
+    sandbox_path = self_driving_task.sandbox_path if self_driving_task else ""
+    
+    cloudformation_stack_name = None
+    cloudformation_stack_url = None
+    if self_driving_task and self_driving_task.cloudformation_stack_id:
+        cloudformation_stack_name = self_driving_task.cloudformation_stack_name or self_driving_task.cloudformation_stack_id
+        encoded_stack_id = quote(self_driving_task.cloudformation_stack_id, safe="")
+        cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
+    
+    return {
+        "sandbox_path": sandbox_path,
+        "cloudformation_stack_name": cloudformation_stack_name,
+        "cloudformation_stack_url": cloudformation_stack_url,
+        "task_status_choices": TaskStatus.choices(),
+        "task_execution_schedule_choices": TaskExecutionSchedule.choices(),
+        "task_type_choices": TaskType.choices(),
+        "task_role_choices": Role.choices() if hasattr(Role, 'choices') else [],
+        "task_phase_choices": [],
+    }
+
+
+def _build_task_tabs(task, business, self_driving_task):
+    tabs = []
+    for definition in TASK_TAB_DEFINITIONS:
+        if definition.get("is_divider"):
+            tabs.append(definition)
+        else:
+            slug = definition["slug"]
+            available = definition["availability_fn"](task, business, self_driving_task)
+            if slug == "overview":
+                url = reverse('view_task', args=[task.id])
+            else:
+                url = reverse('view_task_tab', args=[slug, task.id])
+                
+            tab_data = {
+                **definition,
+                "url": url,
+                "available": available,
+            }
+            
+            if slug == "overview":
+                tab_data['label'] = task.get_name()
+            
+            tabs.append(tab_data)
+    return tabs
+
+
+def view_task(request, task_id, tab='overview'):
+    task = get_object_or_404(Task, pk=task_id)
+    initiative = task.initiative
+    business = initiative.business
+    
+    tab_slug = (tab or 'overview').lower()
+    if tab_slug not in TASK_TAB_MAP:
+        raise Http404
+    
+    self_driving_task = SelfDrivingTask.objects.filter(task_id=task.id).first()
+    tabs = _build_task_tabs(task, business, self_driving_task)
+    tab_definition = TASK_TAB_MAP[tab_slug]
+    
+    tab_entry = next((t for t in tabs if t['slug'] == tab_slug), None)
+    if not tab_entry or not tab_entry['available']:
+        raise Http404
+    
+    context = {
+        "task": task,
+        "initiative": initiative,
+        "business": business,
+        "self_driving_task": self_driving_task,
+        "task_display_name": task.get_name(),
+        "tabs": tabs,
+        "active_tab": tab_slug,
+        "tab_template": tab_definition["template"],
+    }
+    context.update(tab_definition["context_fn"](task, business, self_driving_task))
+    
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse('view_business', args=[business.id]), business.name),
+        (reverse(view_initiative, args=[initiative.id]), initiative.title),
+        (reverse('view_task', args=[task.id]), task.get_name()),
+    ]
+    if tab_slug != 'overview':
+        breadcrumbs.append((reverse('view_task_tab', args=[tab_slug, task.id]), tab_definition["label"]))
     
     return send_response(
-        request, "task.html",
-        {
-            "task_name": task.get_name(),
-            "task_executions": task_executions,
-            "iterations": iterations,
-            "self_driving_task": self_driving_task,
-            "test_code_version": test_code_version,
-            "task": task,
-            "llm_requests": LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).order_by("-timestamp"),
-            "running_processes": running_processes,
-            "running_processes_count": running_processes_count,
-            "task_status_choices": TaskStatus.choices(),
-            "task_execution_schedule_choices": TaskExecutionSchedule.choices(),
-            "task_type_choices": TaskType.choices()
-        },
-        breadcrumbs=[
-            (reverse(view_businesses), Business.get_erie_iron_business().name),
-            (reverse(view_business, args=[business.id]), business.name),
-            (reverse(view_initiative, args=[initiative.id]), initiative.title),
-            (reverse(view_task, args=[task.id]), task.get_name())
-        ]
+        request,
+        "task/task_base.html",
+        context,
+        breadcrumbs=breadcrumbs
     )
 
 
@@ -572,7 +625,7 @@ def action_task_regenerate_test(request, task_id):
     # )
     on_reset_task_test(task_id)
     
-    return redirect(reverse('view_task', args=[task_id]) + "#testcode")
+    return redirect(reverse('view_task_tab', args=['testcode', task_id]))
 
 
 def action_retry_task(request, task_id):
@@ -860,7 +913,7 @@ def action_update_task_guidance(request, task_id):
         Task.objects.filter(id=task_id).update(guidance=guidance)
         
         messages.success(request, 'Task guidance updated successfully!')
-        return redirect(reverse('view_task', args=[task_id]) + '#guidance')
+        return redirect(reverse('view_task_tab', args=['guidance', task_id]))
     except Task.DoesNotExist:
         messages.error(request, 'Task not found.')
         return redirect(reverse('view_businesses'))
@@ -906,7 +959,7 @@ def action_update_task(request, task_id):
                 update_data['timeout_seconds'] = int(timeout_seconds or 0)
             except ValueError:
                 messages.error(request, 'Invalid timeout value.')
-                return redirect(reverse('view_task', args=[task_id]) + '#edit')
+                return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['timeout_seconds'] = None
         
@@ -916,7 +969,7 @@ def action_update_task(request, task_id):
                 update_data['max_budget_usd'] = float(max_budget_usd)
             except ValueError:
                 messages.error(request, 'Invalid budget value.')
-                return redirect(reverse('view_task', args=[task_id]) + '#edit')
+                return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['max_budget_usd'] = None
         
@@ -931,7 +984,7 @@ def action_update_task(request, task_id):
                 update_data['execution_start_time'] = datetime.fromisoformat(execution_start_time.replace('T', ' '))
             except ValueError:
                 messages.error(request, 'Invalid execution start time format.')
-                return redirect(reverse('view_task', args=[task_id]) + '#edit')
+                return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['execution_start_time'] = None
         
@@ -939,7 +992,7 @@ def action_update_task(request, task_id):
         Task.objects.filter(id=task_id).update(**update_data)
         
         messages.success(request, 'Task updated successfully!')
-        return redirect(reverse('view_task', args=[task_id]) + '#edit')
+        return redirect(reverse('view_task_tab', args=['edit', task_id]))
     except Task.DoesNotExist:
         messages.error(request, 'Task not found.')
         return redirect(reverse('view_businesses'))
@@ -972,7 +1025,7 @@ def action_update_business(request, business_id):
         architecture = rget(request, 'architecture', '').strip()
         allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
         needs_domain = request.POST.get('needs_domain') == 'on'
-
+        
         # Prepare update data
         update_data = {
             'name': name,
@@ -1046,7 +1099,7 @@ def action_kill_process(request, process_id):
             redirect_url = reverse('view_self_driver_iteration', args=[running_process.task_execution.iteration_id]) + '#processes'
         elif running_process.task_execution.task:
             task_id = running_process.task_execution.task.id
-            redirect_url = reverse('view_task', args=[task_id]) + '#processes'
+            redirect_url = reverse('view_task_tab', args=['processes', task_id])
         else:
             redirect_url = reverse('view_businesses')
         
@@ -1070,12 +1123,13 @@ def action_delete_iteration(request, iteration_id):
     
     try:
         iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
-        task_id = iteration.self_driving_task.task.id
+        task = iteration.self_driving_task.task
+        task_id = task.id
         
         iteration.delete()
         
         messages.success(request, f'Iteration {iteration_id} deleted successfully!')
-        return redirect(reverse('view_task', args=[task_id]) + '#iterations')
+        return redirect(reverse('view_task_tab', args=['iterations', task_id]))
     except SelfDrivingTaskIteration.DoesNotExist:
         messages.error(request, 'Iteration not found.')
         return redirect(reverse('view_businesses'))
@@ -1230,3 +1284,194 @@ def view_llm_request(request, llm_request_id):
         },
         breadcrumbs=breadcrumbs
     )
+
+
+TAB_DIVIDER = {
+    "slug": "divider",
+    "is_divider": True
+}
+
+TASK_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "task/tabs/overview.html",
+        "availability_fn": _task_tab_available_overview,
+        "context_fn": _task_tab_context_overview,
+    },
+    {
+        "slug": "blocked-by",
+        "label": "Blocked By",
+        "template": "task/tabs/blocked_by.html",
+        "availability_fn": _task_tab_available_blocked_by,
+        "context_fn": _task_tab_context_blocked_by,
+    },
+    {
+        "slug": "blocks",
+        "label": "Blocks",
+        "template": "task/tabs/blocks.html",
+        "availability_fn": _task_tab_available_blocks,
+        "context_fn": _task_tab_context_blocks,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "iterations",
+        "label": "Code Iterations",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": _task_tab_available_iterations,
+        "context_fn": _task_tab_context_iterations,
+    },
+    {
+        "slug": "latest_iteration",
+        "label": "Latest Iteration",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": _task_tab_available_iterations,
+        "context_fn": _task_tab_context_latest_iteration,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "guidance",
+        "label": "Guidance",
+        "template": "task/tabs/guidance.html",
+        "availability_fn": _task_tab_available_guidance,
+        "context_fn": _task_tab_context_guidance,
+    },
+    {
+        "slug": "testcode",
+        "label": "Test Code",
+        "template": "task/tabs/testcode.html",
+        "availability_fn": _task_tab_available_testcode,
+        "context_fn": _task_tab_context_testcode,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "resolve",
+        "label": "Resolve",
+        "template": "task/tabs/resolve.html",
+        "availability_fn": _task_tab_available_resolve,
+        "context_fn": _task_tab_context_resolve,
+    },
+    {
+        "slug": "executions",
+        "label": "Executions",
+        "template": "task/tabs/executions.html",
+        "availability_fn": _task_tab_available_executions,
+        "context_fn": _task_tab_context_executions,
+    },
+    # {
+    #     "slug": "processes",
+    #     "label": "Processes",
+    #     "template": "task/tabs/processes.html",
+    #     "availability_fn": _task_tab_available_processes,
+    #     "context_fn": _task_tab_context_processes,
+    # },
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "task/tabs/llmrequests.html",
+        "availability_fn": _task_tab_available_llmrequests,
+        "context_fn": _task_tab_context_llmrequests,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "task/tabs/edit.html",
+        "availability_fn": _task_tab_available_edit,
+        "context_fn": _task_tab_context_edit,
+    },
+]
+
+BUSINESS_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "business/tabs/overview.html",
+        "availability_fn": _tab_available_overview,
+        "context_fn": _tab_context_overview,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "business-plan",
+        "label": "Business Plan",
+        "template": "business/tabs/business_plan.html",
+        "availability_fn": _tab_available_business_plan,
+        "context_fn": _tab_context_business_plan,
+    },
+    {
+        "slug": "business-analysis",
+        "label": "Business Analysis",
+        "template": "business/tabs/business_analysis.html",
+        "availability_fn": _tab_available_business_analysis,
+        "context_fn": _tab_context_business_analysis,
+    },
+    {
+        "slug": "legal-analysis",
+        "label": "Legal Analysis",
+        "template": "business/tabs/legal_analysis.html",
+        "availability_fn": _tab_available_legal_analysis,
+        "context_fn": _tab_context_legal_analysis,
+    },
+    {
+        "slug": "capacity-analysis",
+        "label": "Capacity Analysis",
+        "template": "business/tabs/capacity_analysis.html",
+        "availability_fn": _tab_available_capacity_analysis,
+        "context_fn": _tab_context_capacity_analysis,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "architecture",
+        "label": "Architecture",
+        "template": "business/tabs/architecture.html",
+        "availability_fn": _tab_available_architecture,
+        "context_fn": _tab_context_architecture,
+    },
+    {
+        "slug": "product-initiatives",
+        "label": "Product Initiatives",
+        "template": "business/tabs/product_initiatives.html",
+        "availability_fn": _tab_available_product_initiatives,
+        "context_fn": _tab_context_product_initiatives,
+    },
+    {
+        "slug": "board-guidance",
+        "label": "Board Guidance",
+        "template": "business/tabs/board_guidance.html",
+        "availability_fn": _tab_available_board_guidance,
+        "context_fn": _tab_context_board_guidance,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "ceo-guidance",
+        "label": "CEO Guidance",
+        "template": "business/tabs/ceo_guidance.html",
+        "availability_fn": _tab_available_ceo_guidance,
+        "context_fn": _tab_context_ceo_guidance,
+    },
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "business/tabs/llmrequests.html",
+        "availability_fn": _tab_available_llmrequests,
+        "context_fn": _tab_context_llmrequests,
+    },
+    {
+        "slug": "tasks",
+        "label": "Tasks",
+        "template": "business/tabs/tasks.html",
+        "availability_fn": _tab_available_tasks,
+        "context_fn": _tab_context_tasks,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "business/tabs/edit.html",
+        "availability_fn": _tab_available_edit,
+        "context_fn": _tab_context_edit,
+    },
+]
+
+BUSINESS_TAB_MAP = {definition["slug"]: definition for definition in BUSINESS_TAB_DEFINITIONS if "slug" in definition}
+TASK_TAB_MAP = {definition["slug"]: definition for definition in TASK_TAB_DEFINITIONS if "slug" in definition}

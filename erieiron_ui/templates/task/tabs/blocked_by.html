@@ -1,0 +1,9 @@
+<div class="tab-pane-content">
+    {% if blocked_tasks %}
+        {% for dependent_task in blocked_tasks %}
+            {% include "_task_row.html" with task=dependent_task %}
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No upstream dependencies.</em>
+    {% endif %}
+</div>

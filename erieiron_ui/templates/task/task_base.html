@@ -1,0 +1,19 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load humanize %}
+{% load erieiron_common_tags %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-sidebar">
+            {% include "task/task_sidebar.html" %}
+        </div>
+        <div class="col-main-content">
+            {% include tab_template %}
+        </div>
+    </div>
+    {% if self_driving_task and self_driving_task.sandbox_path %}
+        <div id="div_iteration_debug_link" class="d-none">
+            rm -rf ~/src/iteration_debug && ln -s {{ self_driving_task.sandbox_path }} ~/src/iteration_debug
+        </div>
+    {% endif %}
+{% endblock %}

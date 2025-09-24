@@ -216,7 +216,9 @@ Conditions:
 --- 
 ## Additional Forbidden Actions
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
-- **Never** add a new Parameter to infrastructure.yaml without a default value.  If you add a new parameter to infrastructure.yaml without a default value, deployment will fail
-- **Never** hardcode resource names (like S3 bucket names, SQS queue names, etc. - this applies to **any and all** named aws service or resources)  
+- **Never** introduce a new CloudFormation parameter without a default value.  
+    - If a new parameter is needed, you **must** supply a default.  
+    - If no suitable default can be provided, you must raise `agent blocked` instead of generating the parameter.  
+- **Never** hardcode resource names (like S3 bucket names, SQS queue names, etc. - this applies to **any and all** named aws service or resources - the only exception is RDS DBName, which is always `appdb`)  
     - all resource names **must** be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
     - if you discover hardcoded resource names in the infrastructure.yaml, you **must** fix them by namespacing them with `!Sub "${StackIdentifier}-<resource_name>"`

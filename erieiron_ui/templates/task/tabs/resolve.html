@@ -1,0 +1,8 @@
+<div class="tab-pane-content">
+    <h3>Task Output</h3>
+    <form action="{% url 'action_resolve_task' task.id %}" method="post">
+        {% csrf_token %}
+        <textarea name="output" style="width: 100%; height: 8rem;"></textarea>
+        <input type="submit" value="Resolve" class="btn btn-primary mt-2"/>
+    </form>
+</div>

@@ -1,0 +1,28 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content">
+    {% if test_code_version and test_code_version.code %}
+        <div class="card mb-4 iteration_card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <small class="text-muted">{{ self_driving_task.test_file_path }}</small>
+                <form method="post" action="{% url 'action_task_regenerate_test' task.id %}"
+                      class="me-3 d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm bi bi-arrow-counterclockwise"
+                            onclick="return confirm('Are you sure you want to regenerate this test?')">
+                        Regenerate Test
+                    </button>
+                </form>
+            </div>
+            <div class="card-body code-container">
+                <dl class="row">
+                    <dd>
+                        <pre class="full_code ">{{ test_code_version.code|highlight }}</pre>
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    {% else %}
+        <em class="text-muted">No test file registered for this task.</em>
+    {% endif %}
+</div>

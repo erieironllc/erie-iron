@@ -1,0 +1,9 @@
+<div class="tab-pane-content">
+    {% if tasks %}
+        {% for task in tasks %}
+            {% include "_task_row.html" with task=task %}
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No tasks available.</em>
+    {% endif %}
+</div>

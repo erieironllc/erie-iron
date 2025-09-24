@@ -1,0 +1,39 @@
+<div class="tab-pane-content">
+    {% if business_capacity_analysis_list %}
+        {% for business_capacity_analysis in business_capacity_analysis_list %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <small class="text-muted">{{ business_capacity_analysis.created_timestamp }}</small>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-4">Cash Capacity</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge bg-{{ business_capacity_analysis.cash_capacity_status|lower }}">{{ business_capacity_analysis.cash_capacity_status }}</span>
+                        </dd>
+
+                        <dt class="col-sm-4">Compute Capacity</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge bg-{{ business_capacity_analysis.compute_capacity_status|lower }}">{{ business_capacity_analysis.compute_capacity_status }}</span>
+                        </dd>
+
+                        <dt class="col-sm-4">Human Capacity</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge bg-{{ business_capacity_analysis.human_capacity_status|lower }}">{{ business_capacity_analysis.human_capacity_status }}</span>
+                        </dd>
+
+                        <dt class="col-sm-4">Overall Recommendation</dt>
+                        <dd class="col-sm-8">
+                            <span class="badge bg-{{ business_capacity_analysis.recommendation|lower }}">{{ business_capacity_analysis.recommendation }}</span>
+                        </dd>
+
+                        <dt class="col-sm-4">Justification</dt>
+                        <dd class="col-sm-8">{{ business_capacity_analysis.justification|default:"—"|linebreaksbr }}</dd>
+                    </dl>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No capacity analysis available.</em>
+    {% endif %}
+</div>

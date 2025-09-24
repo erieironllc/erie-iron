@@ -1,0 +1,35 @@
+{% load erieiron_common_tags %}
+<div class="tab-pane-content">
+{% load erieiron_common_tags %}
+
+{% if business.business_plan %}
+        <div class="markdown-container">
+            {{ business.business_plan|markdown }}
+        </div>
+    {% else %}
+        <em class="text-muted">No business plan available.</em>
+    {% endif %}
+
+    {% if business_kpis %}
+        <hr>
+        <h3>KPIs</h3>
+        <table class="table table-striped">
+            <thead>
+            <tr>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Priority</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for kpi in business_kpis %}
+                <tr>
+                    <td>{{ kpi.name }}</td>
+                    <td>{{ kpi.description }}</td>
+                    <td>{{ kpi.priority }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+</div>

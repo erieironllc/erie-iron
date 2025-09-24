@@ -1,0 +1,9 @@
+<div class="tab-pane-content">
+    {% if blocking_tasks %}
+        {% for blocking_task in blocking_tasks %}
+            {% include "_task_row.html" with task=blocking_task %}
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No downstream tasks are blocked by this task.</em>
+    {% endif %}
+</div>

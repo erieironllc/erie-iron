@@ -1,0 +1,46 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content">
+    {% if task_executions %}
+        {% for execution in task_executions %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <small class="text-muted">
+                        {% if execution.status == "COMPLETE" %}
+                            <span class="badge bg-success">Successfully Executed</span>
+                        {% else %}
+                            <span class="badge bg-danger">Execution Failed</span>
+                        {% endif %}
+                        <span class="ms-3">
+                            created: {{ execution.created_time }}&nbsp;|&nbsp;completed: {{ execution.executed_time|default_if_none:"never completed" }}
+                        </span>
+                    </small>
+                </div>
+                <div class="card-body">
+                    <dl class="row">
+                        {% if execution.input %}
+                            <dt>Input</dt>
+                            <dd><pre>{{ execution.input|pprint_json }}</pre></dd>
+                        {% endif %}
+                        {% if execution.output %}
+                            <dt>Output</dt>
+                            <dd><pre>{{ execution.output|pprint_json }}</pre></dd>
+                        {% endif %}
+                        {% if execution.error_msg %}
+                            <dt>Error Message</dt>
+                            <dd><pre>{{ execution.error_msg|safe }}</pre></dd>
+                        {% endif %}
+                        {% if execution.process.log_tail %}
+                            <dt class="col-sm-3">Recent Output</dt>
+                            <dd class="col-sm-9">
+                                <pre class="pre_log_output bg-dark text-light p-2">{{ execution.process.log_tail }}</pre>
+                            </dd>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No executions have been recorded.</em>
+    {% endif %}
+</div>

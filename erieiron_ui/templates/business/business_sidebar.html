@@ -1,0 +1,12 @@
+<div class="list-group" id="businessSidebar" role="tablist">
+    <h3>{{ business.name|capfirst }}</h3>
+    {% for tab in tabs %}
+        {% if tab.available %}
+            <a class="list-group-item list-group-item-action{% if tab.slug == active_tab %} active{% endif %}"
+               id="{{ tab.slug }}-tab"
+               href="{{ tab.url }}">
+                {{ tab.label }}
+            </a>
+        {% endif %}
+    {% endfor %}
+</div>
