@@ -15,6 +15,8 @@ Do not over-engineer – use the simplest viable architecture.
 Do not define a new Dockerfile – all tasks must run in the existing container.  
 Do not create separate test-only tasks. If a task requires testing, set the boolean field `requires_test: true` and provide success criteria in `test_plan`.  
 Do not embed inline source code in `task_description`. Instead, reference file paths.
+Do not create HUMAN_WORK tasks for DNS, SES identity verification, DKIM/MX/TXT setup, or activating SES receipt rule sets. These must be automated via CloudFormation (Route53) or explicit API-backed resources.
+Do not rely on manual DNS or SES domain verification when the domain lives in Route53. Handle verification in-stack; if the domain is external, return `blocked` with `category: "infra_boundary"` instead of creating HUMAN_WORK tasks.
 
 # Exemptions
 You do not need to create tasks for:  
@@ -71,7 +73,7 @@ Each task **must** include the following fields
 # Task Definition Guidance 
 
 ## High Level
-    - Aim for full autonomy – before assigning work to a human, explore every reasonable way to automate it.
+    - Aim for full autonomy – before assigning work to a human, explore every reasonable way to automate it. Manual DNS/SES steps are not permitted. Prefer Route53 automation; otherwise, return blocked with a precise infra boundary reason.
     - Split mixed work – if only part of a task needs human help, break it into smaller tasks so the autonomous portion can run independently.
     - Enforce atomicity – every task must be self‑contained, dependency‑clean, and include a concrete test_plan.
     - Separate design from code – create a DESIGN_WEB_APPLICATION task first; all UI engineering tasks must depend on it.
@@ -81,6 +83,7 @@ Each task **must** include the following fields
     - Combine them for one‑off, immediate actions.
 
 ## Decision Matrix
+    - External steps (like DNS) must be automated if they can be represented in CloudFormation. If they cannot and the domain is external, respond with blocked (`infra_boundary`), not HUMAN_WORK.
     - One‑time + immediate → single task
     - One‑time + delayed → implementation task then execution task
     - Recurring → implementation task then scheduled execution task
@@ -240,4 +243,3 @@ by **task_implement_email_ingestion_lambda** (code only)
 - Prioritize simplicity, maintainability, and cost efficiency  
 - Surface operational risks early; suggest automation wherever viable  
 - Choose timeouts conservatively – long enough for normal completion, short enough to detect hangs.
-

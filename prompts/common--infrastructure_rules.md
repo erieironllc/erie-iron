@@ -12,9 +12,14 @@
 - If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
+- When defining an `AWS::EC2::VPCGatewayAttachment` (InternetGatewayAttachment), always include `DependsOn: [DefaultPublicRoute]` so CloudFormation tears down routes before detaching the internet gateway.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
+
+### SES
+- If `DomainName` is managed in Route53 in the same AWS account, you must create Route53 record sets in `infrastructure.yaml` to publish the SES verification TXT record, DKIM CNAMEs, and MX records. Do not rely on manual DNS steps.
+- If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
 
 ### CloudFormation File Enforcement
 - All infrastructure definitions must go in `infrastructure.yaml` only.

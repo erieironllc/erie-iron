@@ -95,6 +95,8 @@ All planning logic and file instructions must explicitly support resolving the d
 
 If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, serialization, logging, permissions), plan all necessary edits in this iteration.
 
+- When a plan introduces or updates an `AWS::EC2::VPCGatewayAttachment` (InternetGatewayAttachment), require `DependsOn: [DefaultPublicRoute]` so route resources delete before CloudFormation detaches the internet gateway.
+
 ---
 
 ### Service Naming

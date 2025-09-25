@@ -21,6 +21,7 @@ You are a **Principal Software Engineer** who an expert in AWS CloudFormation an
     - Reference parameters or use `AWS::SecretsManager` where applicable.
 - Only generate resources within the boundaries defined by the assigned task. Avoid creating global infrastructure unless explicitly required.
 - **Do not** apply `DeletionPolicy: Retain`. Stacks must support clean deletion without manual cleanup.
+- When authoring an `AWS::EC2::VPCGatewayAttachment` (InternetGatewayAttachment), always include `DependsOn: [DefaultPublicRoute]` so the route is removed before detaching the internet gateway during stack deletion.
 
 ---
 

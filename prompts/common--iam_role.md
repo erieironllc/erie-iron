@@ -31,6 +31,9 @@ The system enforces a single-role model per {business, env}. The role is **const
 **Assumptions**
 - Trust and permissions for the provided role are managed outside this template unless you explicitly attach least-privilege inline policies as described above.
 
+## SES Automation Contract
+- SES domain identity and DKIM tokens must be surfaced as CloudFormation outputs, and the same template must create the corresponding Route53 `AWS::Route53::RecordSet` resources. HUMAN_WORK for SES activation is disallowed; automate or emit `blocked` with a clear infra boundary reason.
+
 ---
 
 ## Permissions Attachment Rules

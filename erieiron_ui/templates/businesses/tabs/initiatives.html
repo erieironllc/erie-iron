@@ -1,0 +1,36 @@
+{% load erieiron_common_tags %}
+
+<table class="table table-striped">
+    <thead>
+    <tr>
+        <th>Title</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Created</th>
+        <th>Actions</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for initiative in initiatives %}
+        <tr>
+            <td nowrap=true><a href="{% url "view_initiative" initiative.id %}">{{ initiative.title }}</a></td>
+            <td>{{ initiative.initiative_type|label }}</td>
+            <td>{{ initiative.description|truncatewords:20 }}</td>
+            <td nowrap=true>{{ initiative.created_timestamp|date:"M j, Y" }}</td>
+            <td>
+                <form method="post" action="{% url 'action_delete_initiative' initiative.id %}" style="display: inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                            onclick="return confirm('Are you sure you want to delete this initiative?')">
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+    {% empty %}
+        <tr>
+            <td colspan="5" class="text-muted text-center">No initiatives created yet.</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>

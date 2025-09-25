@@ -5,6 +5,7 @@ from erieiron_ui import views
 urlpatterns = [
     path("", views.view_businesses, name="view_home"),
     path("businesses/", views.view_businesses, name="view_businesses"),
+    path("businesses/<slug:tab>/", views.view_businesses, name="view_businesses_tab"),
     path("business/<uuid:business_id>", views.view_business, name="view_business"),
     path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
     path("_business/add", views.action_add_business, name="action_add_business"),

@@ -1,5 +1,4 @@
 <div class="tab-pane-content">
-    <h5>Edit Business Fields</h5>
     <form action="{% url 'action_update_business' business.id %}" method="post">
         {% csrf_token %}
         <div class="row">

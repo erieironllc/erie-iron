@@ -1,0 +1,302 @@
+<style>
+    .llm-spend-chart canvas {
+        width: 100%;
+        height: 280px;
+    }
+
+    .llm-spend-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 12px;
+        font-size: 0.875rem;
+    }
+
+    .llm-spend-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .llm-spend-legend-swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+        display: inline-block;
+    }
+</style>
+
+<div id="llm-spend-meta"
+     data-bucket="{{ llm_spend_bucket_type }}"
+     data-range="{{ llm_spend_selected_range }}">
+</div>
+
+{% if llm_spend_show_range_selector %}
+    <div class="d-flex justify-content-end mb-3">
+        <form method="get" class="d-flex align-items-center gap-2" id="llm-spend-range-form">
+            <label for="llm-spend-range-select" class="form-label mb-0" style="white-space: nowrap">Date Range</label>
+            {% if request %}
+                {% for key, value in request.GET.items %}
+                    {% if key != 'range' %}
+                        <input type="hidden" name="{{ key }}" value="{{ value }}">
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+            <select class="form-select form-select-sm" id="llm-spend-range-select" name="range">
+                {% for option in llm_spend_range_options %}
+                    <option value="{{ option.slug }}" {% if option.slug == llm_spend_selected_range %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+{% endif %}
+
+{% if not llm_spend_has_data %}
+    <div class="alert alert-info">
+        We have not recorded any LLM spend yet. Once requests are processed, this dashboard will populate automatically.
+    </div>
+{% else %}
+    <div class="mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Total LLM Spend</span>
+                <span class="fw-semibold">${{ llm_spend_total_amount|floatformat:2 }}</span>
+            </div>
+            <div class="card-body">
+                <div class="llm-spend-chart">
+                    <canvas id="llm-spend-total-chart"></canvas>
+                </div>
+                <div class="llm-spend-legend" id="llm-spend-total-legend"></div>
+            </div>
+        </div>
+    </div>
+
+    {% if llm_spend_initiative_series %}
+        <div class="card mt-4">
+            <div class="card-header">Daily Spend by Initiative</div>
+            <div class="card-body">
+                <div class="llm-spend-chart">
+                    <canvas id="llm-spend-initiative-chart"></canvas>
+                </div>
+                <div class="llm-spend-legend" id="llm-spend-initiative-legend"></div>
+
+                <div class="table-responsive mt-4">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                        <tr>
+                            <th scope="col">Initiative</th>
+                            <th scope="col" class="text-end">Total Spend</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for series in llm_spend_initiative_series %}
+                            <tr>
+                                <td>
+                                    {% if series.initiative_id %}
+                                        <a href="{% url 'view_initiative_tab' 'llm-spend' series.initiative_id %}">{{ series.initiative }}</a>
+                                    {% else %}
+                                        {{ series.initiative }}
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">${{ series.total|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    {% if llm_spend_task_series %}
+        <div class="card mt-4">
+            <div class="card-header">Daily Spend by Task</div>
+            <div class="card-body">
+                <div class="llm-spend-chart">
+                    <canvas id="llm-spend-task-chart"></canvas>
+                </div>
+                <div class="llm-spend-legend" id="llm-spend-task-legend"></div>
+
+                <div class="table-responsive mt-4">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                        <tr>
+                            <th scope="col">Task</th>
+                            <th scope="col" class="text-end">Total Spend</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for series in llm_spend_task_series %}
+                            <tr>
+                                <td>
+                                    {% if series.task_id %}
+                                        <a href="{% url 'view_task_tab' 'llm-spend' series.task_id %}">{{ series.task }}</a>
+                                    {% else %}
+                                        {{ series.task }}
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">${{ series.total|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    {% if llm_spend_iteration_series %}
+        <div class="card mt-4">
+            <div class="card-header">Spend by Task Iteration</div>
+            <div class="card-body">
+                <div class="llm-spend-chart">
+                    <canvas id="llm-spend-iteration-chart"></canvas>
+                </div>
+                <div class="llm-spend-legend" id="llm-spend-iteration-legend"></div>
+
+                <div class="table-responsive mt-4">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                        <tr>
+                            <th scope="col">Iteration</th>
+                            <th scope="col" class="text-end">Total Spend</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for series in llm_spend_iteration_series %}
+                            <tr>
+                                <td>
+                                    {% if series.iteration_id %}
+                                        <a href="{% url 'view_self_driver_iteration' series.iteration_id %}">{{ series.iteration }}</a>
+                                    {% else %}
+                                        {{ series.iteration }}
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">${{ series.total|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    {% if llm_spend_business_series %}
+        <div class="card mt-4">
+            <div class="card-header">Daily Spend by Business</div>
+            <div class="card-body">
+                <div class="llm-spend-chart">
+                    <canvas id="llm-spend-business-chart"></canvas>
+                </div>
+                <div class="llm-spend-legend" id="llm-spend-business-legend"></div>
+
+                <div class="table-responsive mt-4">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                        <tr>
+                            <th scope="col">Business</th>
+                            <th scope="col" class="text-end">Total Spend</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for series in llm_spend_business_series %}
+                            <tr>
+                                <td>
+                                    {% if series.business_id %}
+                                        <a href="{% url 'view_business_tab' 'llm-spend' series.business_id %}">{{ series.business }}</a>
+                                    {% else %}
+                                        {{ series.business }}
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">${{ series.total|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    <div class="card mt-4">
+        <div class="card-header">Daily Spend by Vendor</div>
+        <div class="card-body">
+            <div class="llm-spend-chart">
+                <canvas id="llm-spend-vendor-chart"></canvas>
+            </div>
+            <div class="llm-spend-legend" id="llm-spend-vendor-legend"></div>
+
+            {% if llm_spend_vendor_series %}
+                <div class="table-responsive mt-4">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                        <tr>
+                            <th scope="col">Vendor</th>
+                            <th scope="col" class="text-end">Total Spend</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for series in llm_spend_vendor_series %}
+                            <tr>
+                                <td class="text-capitalize">{{ series.vendor }}</td>
+                                <td class="text-end">${{ series.total|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if llm_spend_title_series %}
+        <div class="card mt-4">
+            <div class="card-header">Daily Spend by Request Title</div>
+            <div class="card-body">
+                <div class="llm-spend-chart">
+                    <canvas id="llm-spend-title-chart"></canvas>
+                </div>
+                <div class="llm-spend-legend" id="llm-spend-title-legend"></div>
+
+                <div class="table-responsive mt-4">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                        <tr>
+                            <th scope="col">Request Title</th>
+                            <th scope="col" class="text-end">Total Spend</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for series in llm_spend_title_series %}
+                            <tr>
+                                <td>{{ series.title }}</td>
+                                <td class="text-end">${{ series.total|floatformat:2 }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+{% endif %}
+
+{{ llm_spend_total_series|json_script:"llm-spend-total-data" }}
+{{ llm_spend_vendor_series|json_script:"llm-spend-vendor-data" }}
+{{ llm_spend_business_series|json_script:"llm-spend-business-data" }}
+{{ llm_spend_initiative_series|json_script:"llm-spend-initiative-data" }}
+{{ llm_spend_task_series|json_script:"llm-spend-task-data" }}
+{{ llm_spend_iteration_series|json_script:"llm-spend-iteration-data" }}
+{{ llm_spend_title_series|json_script:"llm-spend-title-data" }}
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const rangeSelect = document.getElementById('llm-spend-range-select');
+        if (rangeSelect) {
+            rangeSelect.addEventListener('change', function () {
+                rangeSelect.form?.submit();
+            });
+        }
+    });
+</script>

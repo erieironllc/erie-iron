@@ -403,9 +403,13 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         Review the instructions for each file in the plan JSON and modify only what is necessary.
         """ + "\n".join(code_file_summary_lines)))
     
+    for path in reference_prompts:
+        prompt_parts.append(textwrap.dedent(f"""
+        
+        {Path(path).read_text()}
+        """))
+        
     prompt_parts.append(textwrap.dedent(f"""
-    ## Reference Prompts
-    {os.linesep.join(f"- {path}" for path in reference_prompts)}
 
     ## Execution Checklist
     1. Read the full development plan at {plan_path}.
@@ -1727,7 +1731,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
                 raise bpe
             except Exception as e:
                 logging.exception(e)
-                raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
+                raise BadPlan(f"task {task.id} is failing to push lambdas to s3. {e}")
             
             try:
                 full_image_uri, ecr_arn = push_image_to_ecr(
@@ -1738,7 +1742,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
             except BadPlan as bpe:
                 raise bpe
             except Exception as e:
-                raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+                raise BadPlan(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
             
             try:
                 empty_stack_buckets(config, aws_env)

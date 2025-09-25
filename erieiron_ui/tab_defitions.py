@@ -1,0 +1,322 @@
+from erieiron_ui import views
+
+TAB_DIVIDER = {
+    "slug": "divider",
+    "is_divider": True
+}
+
+INITIATIVE_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "initiative/tabs/overview.html",
+        "availability_fn": views._initiative_tab_available_overview,
+        "context_fn": views._initiative_tab_context_overview,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "requirements",
+        "label": "Requirements",
+        "template": "initiative/tabs/requirements.html",
+        "availability_fn": views._initiative_tab_available_requirements,
+        "context_fn": views._initiative_tab_context_requirements,
+    },
+    {
+        "slug": "architecture",
+        "label": "Architecture",
+        "template": "initiative/tabs/architecture.html",
+        "availability_fn": views._initiative_tab_available_architecture,
+        "context_fn": views._initiative_tab_context_architecture,
+    },
+    {
+        "slug": "tasks",
+        "label": "Tasks",
+        "template": "initiative/tabs/tasks.html",
+        "availability_fn": views._initiative_tab_available_tasks,
+        "context_fn": views._initiative_tab_context_tasks,
+    },
+    {
+        "slug": "processes",
+        "label": "Processes",
+        "template": "initiative/tabs/processes.html",
+        "availability_fn": views._initiative_tab_available_processes,
+        "context_fn": views._initiative_tab_context_processes,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "initiative/tabs/llmrequests.html",
+        "availability_fn": views._initiative_tab_available_llmrequests,
+        "context_fn": views._initiative_tab_context_llmrequests,
+    },
+    {
+        "slug": "llm-spend",
+        "label": "LLM Spend",
+        "template": "initiative/tabs/llm_spend.html",
+        "availability_fn": views._initiative_tab_available_llm_spend,
+        "context_fn": views._initiative_tab_context_llm_spend,
+    },
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "initiative/tabs/edit.html",
+        "availability_fn": views._initiative_tab_available_edit,
+        "context_fn": views._initiative_tab_context_edit,
+    },
+]
+
+INITIATIVE_TAB_MAP = {
+    definition["slug"]: definition
+    for definition in INITIATIVE_TAB_DEFINITIONS
+    if not definition.get("is_divider")
+}
+
+BUSINESSES_TAB_DEFINITIONS = [
+    {
+        "slug": "portfolio",
+        "label": "Portfolio",
+        "template": "businesses/tabs/portfolio.html",
+        "availability_fn": views._businesses_tab_available_portfolio,
+        "context_fn": views._businesses_tab_context_portfolio,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "capacity",
+        "label": "Capacity",
+        "template": "businesses/tabs/capacity.html",
+        "availability_fn": views._businesses_tab_available_capacity,
+        "context_fn": views._businesses_tab_context_capacity,
+    },
+    {
+        "slug": "initiatives",
+        "label": "Initiatives",
+        "template": "businesses/tabs/initiatives.html",
+        "availability_fn": views._businesses_tab_available_initiatives,
+        "context_fn": views._businesses_tab_context_initiatives,
+    },
+    {
+        "slug": "lessons",
+        "label": "Lessons",
+        "template": "businesses/tabs/lessons.html",
+        "availability_fn": views._businesses_tab_available_lessons,
+        "context_fn": views._businesses_tab_context_lessons,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "llm-spend",
+        "label": "LLM Spend",
+        "template": "businesses/tabs/llm_spend.html",
+        "availability_fn": views._businesses_tab_available_llm_spend,
+        "context_fn": views._businesses_tab_context_llm_spend,
+    },
+    {
+        "slug": "tools",
+        "label": "Tools",
+        "template": "businesses/tabs/tools.html",
+        "availability_fn": views._businesses_tab_available_tools,
+        "context_fn": views._businesses_tab_context_tools,
+    },
+]
+
+BUSINESSES_TAB_MAP = {
+    definition["slug"]: definition
+    for definition in BUSINESSES_TAB_DEFINITIONS
+    if not definition.get("is_divider")
+}
+
+TASK_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "task/tabs/overview.html",
+        "availability_fn": views._task_tab_available_overview,
+        "context_fn": views._task_tab_context_overview,
+    },
+    {
+        "slug": "blocked-by",
+        "label": "Blocked By",
+        "template": "task/tabs/blocked_by.html",
+        "availability_fn": views._task_tab_available_blocked_by,
+        "context_fn": views._task_tab_context_blocked_by,
+    },
+    {
+        "slug": "blocks",
+        "label": "Blocks",
+        "template": "task/tabs/blocks.html",
+        "availability_fn": views._task_tab_available_blocks,
+        "context_fn": views._task_tab_context_blocks,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "latest_iteration",
+        "label": "Latest Iteration",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": views._task_tab_available_iterations,
+        "context_fn": views._task_tab_context_latest_iteration,
+    },
+    {
+        "slug": "iterations",
+        "label": "Code Iterations",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": views._task_tab_available_iterations,
+        "context_fn": views._task_tab_context_iterations,
+    },
+    {
+        "slug": "executions",
+        "label": "Executions",
+        "template": "task/tabs/executions.html",
+        "availability_fn": views._task_tab_available_executions,
+        "context_fn": views._task_tab_context_executions,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "guidance",
+        "label": "Guidance",
+        "template": "task/tabs/guidance.html",
+        "availability_fn": views._task_tab_available_guidance,
+        "context_fn": views._task_tab_context_guidance,
+    },
+    {
+        "slug": "testcode",
+        "label": "Test Code",
+        "template": "task/tabs/testcode.html",
+        "availability_fn": views._task_tab_available_testcode,
+        "context_fn": views._task_tab_context_testcode,
+    },
+    {
+        "slug": "resolve",
+        "label": "Resolve",
+        "template": "task/tabs/resolve.html",
+        "availability_fn": views._task_tab_available_resolve,
+        "context_fn": views._task_tab_context_resolve,
+    },
+    # {
+    #     "slug": "processes",
+    #     "label": "Processes",
+    #     "template": "task/tabs/processes.html",
+    #     "availability_fn": views._task_tab_available_processes,
+    #     "context_fn": views._task_tab_context_processes,
+    # },
+    TAB_DIVIDER,
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "task/tabs/llmrequests.html",
+        "availability_fn": views._task_tab_available_llmrequests,
+        "context_fn": views._task_tab_context_llmrequests,
+    },
+    {
+        "slug": "llm-spend",
+        "label": "LLM Spend",
+        "template": "task/tabs/llm_spend.html",
+        "availability_fn": views._task_tab_available_llm_spend,
+        "context_fn": views._task_tab_context_llm_spend,
+    },
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "task/tabs/edit.html",
+        "availability_fn": views._task_tab_available_edit,
+        "context_fn": views._task_tab_context_edit,
+    },
+]
+
+BUSINESS_TAB_DEFINITIONS = [
+    {
+        "slug": "overview",
+        "label": "Overview",
+        "template": "business/tabs/overview.html",
+        "availability_fn": views._tab_available_overview,
+        "context_fn": views._tab_context_overview,
+    },
+    {
+        "slug": "product-initiatives",
+        "label": "Product Initiatives",
+        "template": "business/tabs/product_initiatives.html",
+        "availability_fn": views._tab_available_product_initiatives,
+        "context_fn": views._tab_context_product_initiatives,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "business-plan",
+        "label": "Business Plan",
+        "template": "business/tabs/business_plan.html",
+        "availability_fn": views._tab_available_business_plan,
+        "context_fn": views._tab_context_business_plan,
+    },
+    {
+        "slug": "business-analysis",
+        "label": "Business Analysis",
+        "template": "business/tabs/business_analysis.html",
+        "availability_fn": views._tab_available_business_analysis,
+        "context_fn": views._tab_context_business_analysis,
+    },
+    {
+        "slug": "legal-analysis",
+        "label": "Legal Analysis",
+        "template": "business/tabs/legal_analysis.html",
+        "availability_fn": views._tab_available_legal_analysis,
+        "context_fn": views._tab_context_legal_analysis,
+    },
+    {
+        "slug": "capacity-analysis",
+        "label": "Capacity Analysis",
+        "template": "business/tabs/capacity_analysis.html",
+        "availability_fn": views._tab_available_capacity_analysis,
+        "context_fn": views._tab_context_capacity_analysis,
+    },
+    {
+        "slug": "board-guidance",
+        "label": "Board Guidance",
+        "template": "business/tabs/board_guidance.html",
+        "availability_fn": views._tab_available_board_guidance,
+        "context_fn": views._tab_context_board_guidance,
+    },
+    {
+        "slug": "ceo-guidance",
+        "label": "CEO Guidance",
+        "template": "business/tabs/ceo_guidance.html",
+        "availability_fn": views._tab_available_ceo_guidance,
+        "context_fn": views._tab_context_ceo_guidance,
+    },
+    {
+        "slug": "architecture",
+        "label": "Architecture",
+        "template": "business/tabs/architecture.html",
+        "availability_fn": views._tab_available_architecture,
+        "context_fn": views._tab_context_architecture,
+    },
+    TAB_DIVIDER,
+    # {
+    #     "slug": "tasks",
+    #     "label": "Tasks",
+    #     "template": "business/tabs/tasks.html",
+    #     "availability_fn": views._tab_available_tasks,
+    #     "context_fn": views._tab_context_tasks,
+    # },
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "business/tabs/llmrequests.html",
+        "availability_fn": views._tab_available_llmrequests,
+        "context_fn": views._tab_context_llmrequests,
+    },
+    {
+        "slug": "llm-spend",
+        "label": "LLM Spend",
+        "template": "business/tabs/llm_spend.html",
+        "availability_fn": views._tab_available_llm_spend,
+        "context_fn": views._tab_context_llm_spend,
+    },
+    {
+        "slug": "edit",
+        "label": "Edit",
+        "template": "business/tabs/edit.html",
+        "availability_fn": views._tab_available_edit,
+        "context_fn": views._tab_context_edit,
+    },
+]
+
+BUSINESS_TAB_MAP = {definition["slug"]: definition for definition in BUSINESS_TAB_DEFINITIONS if "slug" in definition}
+TASK_TAB_MAP = {definition["slug"]: definition for definition in TASK_TAB_DEFINITIONS if "slug" in definition}

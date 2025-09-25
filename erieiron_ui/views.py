@@ -3,13 +3,14 @@ import json
 import logging
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from urllib.parse import quote
 
 from django.contrib import messages
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.html import escape
 
 from erieiron_autonomous_agent import system_agent_llm_interface
@@ -26,26 +27,561 @@ from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, json_endpoint
 
 
+LLM_SPEND_RANGE_DEFAULT = "15d"
+LLM_SPEND_RANGE_OPTIONS = [
+    {"slug": "24h", "label": "Last 24 Hours"},
+    {"slug": "15d", "label": "Last 15 Days"},
+    {"slug": "30d", "label": "Last 30 Days"},
+    {"slug": "all", "label": "All Time"},
+]
+
+
 def hello(request):
     return HttpResponse("hello world")
 
 
-def view_businesses(request):
+def _businesses_tab_available_portfolio(_: Business) -> bool:
+    return True
+
+
+def _businesses_tab_context_portfolio(erieiron_business: Business) -> dict:
+    return {
+        "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at"),
+    }
+
+
+def _businesses_tab_available_capacity(erieiron_business: Business) -> bool:
+    return erieiron_business.businesscapacityanalysis_set.exists()
+
+
+def _businesses_tab_context_capacity(erieiron_business: Business) -> dict:
+    return {
+        "business_capacity_analysis_list": erieiron_business.businesscapacityanalysis_set.all().order_by("-created_timestamp"),
+    }
+
+
+def _businesses_tab_available_initiatives(erieiron_business: Business) -> bool:
+    return erieiron_business.initiative_set.exists()
+
+
+def _businesses_tab_context_initiatives(erieiron_business: Business) -> dict:
+    return {
+        "initiatives": erieiron_business.initiative_set.all().order_by("created_timestamp"),
+    }
+
+
+def _businesses_tab_available_lessons(_: Business) -> bool:
+    return AgentLesson.objects.exists()
+
+
+def _businesses_tab_context_lessons(_: Business) -> dict:
+    return {
+        "agent_lessons": AgentLesson.objects.all().order_by("-timestamp"),
+    }
+
+
+def _businesses_tab_available_tools(_: Business) -> bool:
+    return True
+
+
+def _businesses_tab_context_tools(_: Business) -> dict:
+    return {
+        "all_running_processes": RunningProcess.objects.filter(is_running=True).order_by('-started_at')
+    }
+
+
+def _resolve_llm_vendor(llm_model: str | None) -> str:
+    if not llm_model:
+        return "unknown"
+
+    normalized = (llm_model or "").strip().lower()
+    enum_name = ""
+    try:
+        enum_name = LlmModel(llm_model).name.lower()
+    except (ValueError, TypeError):
+        enum_name = ""
+
+    candidates = [enum_name, normalized]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate.startswith(("openai", "gpt", "o1", "o3", "o4")):
+            return "openai"
+        if candidate.startswith("gemini"):
+            return "gemini"
+        if candidate.startswith(("claude", "anthropic")):
+            return "anthropic"
+        if candidate.startswith("deepseek"):
+            return "deepseek"
+
+    if "gemini" in normalized:
+        return "gemini"
+    if "claude" in normalized or "anthropic" in normalized:
+        return "anthropic"
+    if "deepseek" in normalized:
+        return "deepseek"
+    if normalized.startswith("o"):
+        return "openai"
+    return "other"
+
+
+def _resolve_llm_title_group(title: str | None) -> str:
+    val = (title or "Untitled").strip()
+    lower_val = val.lower()
+
+    prefix_map = {
+        "compare write initial test": "Compare Write initial test",
+        "debug": "Debug",
+        "write code": "Write code",
+    }
+
+    plan_exact_set = {
+        "plan aws provisioning code changes",
+        "plan quick fix code changes",
+        "plan code changes",
+    }
+
+    if lower_val in plan_exact_set:
+        return "Plan Changes"
+
+    for prefix, label in prefix_map.items():
+        if lower_val.startswith(prefix):
+            return label
+
+    return val or "Untitled"
+
+
+def _start_of_week(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def _businesses_tab_available_llm_spend(_: Business) -> bool:
+    return True
+
+
+def _build_llm_spend_context(
+    business: Business | None = None,
+    request=None,
+    initiative: Initiative | None = None,
+    task: Task | None = None,
+    enable_range_selection: bool = True,
+) -> dict:
+    selected_range = LLM_SPEND_RANGE_DEFAULT
+    if enable_range_selection and request:
+        selected_candidate = (request.GET.get("range") or "").lower()
+        if any(option["slug"] == selected_candidate for option in LLM_SPEND_RANGE_OPTIONS):
+            selected_range = selected_candidate
+
+    if not enable_range_selection:
+        selected_range = "custom"
+
+    bucket_type = "day"
+    now_dt = timezone.now()
+    today = timezone.localdate()
+    current_tz = timezone.get_current_timezone()
+
+    requests_qs = LlmRequest.objects.exclude(price__isnull=True)
+    if business:
+        requests_qs = requests_qs.filter(business=business)
+    if initiative:
+        requests_qs = requests_qs.filter(initiative=initiative)
+    if task:
+        requests_qs = requests_qs.filter(task_iteration__self_driving_task__task=task)
+
+    bucket_keys: list = []
+
+    if not enable_range_selection:
+        bucket_type = "hour"
+        first_ts = requests_qs.order_by("timestamp").values_list("timestamp", flat=True).first()
+        last_ts = requests_qs.order_by("-timestamp").values_list("timestamp", flat=True).first()
+
+        if first_ts and last_ts:
+            start_bucket = timezone.localtime(first_ts, current_tz).replace(minute=0, second=0, microsecond=0)
+            end_bucket = timezone.localtime(last_ts, current_tz).replace(minute=0, second=0, microsecond=0)
+        else:
+            start_bucket = timezone.localtime(now_dt, current_tz).replace(minute=0, second=0, microsecond=0)
+            end_bucket = start_bucket
+
+        if start_bucket > end_bucket:
+            start_bucket, end_bucket = end_bucket, start_bucket
+
+        requests_qs = requests_qs.filter(
+            timestamp__gte=start_bucket,
+            timestamp__lt=end_bucket + timedelta(hours=1)
+        )
+
+        current = start_bucket
+        while current <= end_bucket:
+            bucket_keys.append(current)
+            current += timedelta(hours=1)
+
+    elif selected_range == "24h":
+        bucket_type = "hour"
+        end_bucket = timezone.localtime(now_dt, current_tz).replace(minute=0, second=0, microsecond=0)
+        start_bucket = end_bucket - timedelta(hours=23)
+        requests_qs = requests_qs.filter(timestamp__gte=start_bucket)
+
+        current = start_bucket
+        while current <= end_bucket:
+            bucket_keys.append(current)
+            current += timedelta(hours=1)
+    elif selected_range == "30d":
+        bucket_type = "day"
+        window_end_date = today
+        window_start_date = window_end_date - timedelta(days=29)
+        requests_qs = requests_qs.filter(timestamp__date__gte=window_start_date)
+
+        current = window_start_date
+        while current <= window_end_date:
+            bucket_keys.append(current)
+            current += timedelta(days=1)
+    elif selected_range == "all":
+        bucket_type = "week"
+        first_timestamp = requests_qs.order_by("timestamp").values_list("timestamp", flat=True).first()
+        if first_timestamp:
+            first_date = timezone.localtime(first_timestamp, current_tz).date()
+        else:
+            first_date = today
+
+        start_week = _start_of_week(first_date)
+        end_week = _start_of_week(today)
+
+        current = start_week
+        while current <= end_week:
+            bucket_keys.append(current)
+            current += timedelta(weeks=1)
+    else:  # default last 15 days
+        bucket_type = "day"
+        window_end_date = today
+        window_start_date = window_end_date - timedelta(days=14)
+        requests_qs = requests_qs.filter(timestamp__date__gte=window_start_date)
+
+        current = window_start_date
+        while current <= window_end_date:
+            bucket_keys.append(current)
+            current += timedelta(days=1)
+
+    if not bucket_keys:
+        if bucket_type == "hour":
+            bucket_keys = [timezone.localtime(now_dt, current_tz).replace(minute=0, second=0, microsecond=0)]
+        elif bucket_type == "week":
+            bucket_keys = [_start_of_week(today)]
+        else:
+            bucket_keys = [today]
+
+    totals_by_bucket: dict = defaultdict(float)
+    vendor_daily: dict = defaultdict(lambda: defaultdict(float))
+    business_daily: dict = defaultdict(lambda: defaultdict(float))
+    title_daily: dict = defaultdict(lambda: defaultdict(float))
+    initiative_daily: dict = defaultdict(lambda: defaultdict(float))
+    task_daily: dict = defaultdict(lambda: defaultdict(float))
+    iteration_daily: dict = defaultdict(lambda: defaultdict(float))
+
+    request_fields = [
+        "timestamp",
+        "price",
+        "llm_model",
+        "business__name",
+        "business__id",
+        "initiative__id",
+        "initiative__title",
+        "task_iteration__self_driving_task__task__id",
+        "task_iteration__self_driving_task__task__description",
+        "task_iteration__id",
+        "task_iteration__version_number",
+        "title",
+    ]
+
+    for record in requests_qs.values(*request_fields):
+        timestamp = record.get("timestamp")
+        if not timestamp:
+            continue
+
+        local_ts = timezone.localtime(timestamp, current_tz)
+        if bucket_type == "hour":
+            bucket = local_ts.replace(minute=0, second=0, microsecond=0)
+        elif bucket_type == "week":
+            bucket = _start_of_week(local_ts.date())
+        else:
+            bucket = local_ts.date()
+
+        price = float(record.get("price") or 0.0)
+
+        totals_by_bucket[bucket] += price
+
+        vendor = _resolve_llm_vendor(record.get("llm_model"))
+        vendor_daily[vendor][bucket] += price
+
+        business_name = record.get("business__name") or "Unassigned"
+        business_id = record.get("business__id")
+        business_key = (business_id, business_name)
+        business_daily[business_key][bucket] += price
+
+        initiative_id = record.get("initiative__id")
+        initiative_title = record.get("initiative__title") or "Unassigned"
+        initiative_key = (initiative_id, initiative_title)
+        initiative_daily[initiative_key][bucket] += price
+
+        task_id = record.get("task_iteration__self_driving_task__task__id")
+        task_label = record.get("task_iteration__self_driving_task__task__description") or "Task"
+        if task_id:
+            task_key = (task_id, task_label)
+            task_daily[task_key][bucket] += price
+
+        iteration_id = record.get("task_iteration__id")
+        iteration_version = record.get("task_iteration__version_number")
+        if iteration_id:
+            iteration_label = f"Iteration {iteration_version}" if iteration_version is not None else f"Iteration {iteration_id}"
+            iteration_key = (iteration_id, iteration_label)
+            iteration_daily[iteration_key][bucket] += price
+
+        title_value = _resolve_llm_title_group(record.get("title"))
+        title_daily[title_value][bucket] += price
+
+    def _bucket_iso(bucket_value):
+        if isinstance(bucket_value, datetime):
+            return bucket_value.isoformat()
+        return bucket_value.isoformat()
+
+    total_series = [
+        {
+            "date": _bucket_iso(bucket),
+            "total": round(totals_by_bucket.get(bucket, 0.0), 4),
+        }
+        for bucket in bucket_keys
+    ]
+
+    vendor_series: list[dict] = []
+    for vendor, bucket_map in sorted(vendor_daily.items()):
+        vendor_total = 0.0
+        points = []
+        for bucket in bucket_keys:
+            amount = round(bucket_map.get(bucket, 0.0), 4)
+            vendor_total += amount
+            points.append({
+                "date": _bucket_iso(bucket),
+                "total": amount,
+            })
+
+        if vendor_total > 0:
+            vendor_series.append({
+                "vendor": vendor,
+                "points": points,
+                "total": round(vendor_total, 4),
+            })
+
+    business_series: list[dict] = []
+    for business_key, bucket_map in sorted(business_daily.items(), key=lambda item: (item[0][1] or "").lower()):
+        business_id, business_name = business_key
+        business_total = 0.0
+        points = []
+        for bucket in bucket_keys:
+            amount = round(bucket_map.get(bucket, 0.0), 4)
+            business_total += amount
+            points.append({
+                "date": _bucket_iso(bucket),
+                "total": amount,
+            })
+
+        if business_total > 0:
+            business_series.append({
+                "business": business_name,
+                "business_id": business_id,
+                "points": points,
+                "total": round(business_total, 4),
+            })
+
+    title_series: list[dict] = []
+    for title_name, bucket_map in title_daily.items():
+        title_total = 0.0
+        points = []
+        for bucket in bucket_keys:
+            amount = round(bucket_map.get(bucket, 0.0), 4)
+            title_total += amount
+            points.append({
+                "date": _bucket_iso(bucket),
+                "total": amount,
+            })
+
+        if title_total > 0:
+            title_series.append({
+                "title": title_name,
+                "points": points,
+                "total": round(title_total, 4),
+            })
+
+    title_series.sort(key=lambda entry: entry["total"], reverse=True)
+
+    initiative_series: list[dict] = []
+    for initiative_key, bucket_map in sorted(initiative_daily.items(), key=lambda item: (item[0][1] or "").lower()):
+        initiative_id, initiative_title = initiative_key
+        initiative_total = 0.0
+        points = []
+        for bucket in bucket_keys:
+            amount = round(bucket_map.get(bucket, 0.0), 4)
+            initiative_total += amount
+            points.append({
+                "date": _bucket_iso(bucket),
+                "total": amount,
+            })
+
+        if initiative_total > 0:
+            initiative_series.append({
+                "initiative": initiative_title,
+                "initiative_id": initiative_id,
+                "points": points,
+                "total": round(initiative_total, 4),
+            })
+
+    initiative_series.sort(key=lambda entry: entry["total"], reverse=True)
+
+    task_series: list[dict] = []
+    for task_key, bucket_map in sorted(task_daily.items(), key=lambda item: (item[0][1] or "").lower()):
+        task_id, task_label = task_key
+        task_total = 0.0
+        points = []
+        for bucket in bucket_keys:
+            amount = round(bucket_map.get(bucket, 0.0), 4)
+            task_total += amount
+            points.append({
+                "date": _bucket_iso(bucket),
+                "total": amount,
+            })
+
+        if task_total > 0:
+            task_series.append({
+                "task": task_label,
+                "task_id": task_id,
+                "points": points,
+                "total": round(task_total, 4),
+            })
+
+    task_series.sort(key=lambda entry: entry["total"], reverse=True)
+
+    iteration_series: list[dict] = []
+    for iteration_key, bucket_map in iteration_daily.items():
+        iteration_id, iteration_label = iteration_key
+        iteration_total = 0.0
+        points = []
+        for bucket in bucket_keys:
+            amount = round(bucket_map.get(bucket, 0.0), 4)
+            iteration_total += amount
+            points.append({
+                "date": _bucket_iso(bucket),
+                "total": amount,
+            })
+
+        if iteration_total > 0:
+            iteration_series.append({
+                "iteration": iteration_label,
+                "iteration_id": iteration_id,
+                "points": points,
+                "total": round(iteration_total, 4),
+            })
+
+    iteration_series.sort(key=lambda entry: entry["total"], reverse=True)
+
+    overall_total = round(sum(entry["total"] for entry in total_series), 4)
+    has_data = any(series_point["total"] > 0 for series_point in total_series)
+
+    show_initiative_series = (initiative is None and task is None)
+    show_task_series = (initiative is not None and task is None)
+    show_iteration_series = task is not None
+
+    return {
+        "llm_spend_total_series": total_series,
+        "llm_spend_vendor_series": vendor_series,
+        "llm_spend_business_series": business_series if (business is None and initiative is None and task is None) else [],
+        "llm_spend_initiative_series": initiative_series if show_initiative_series else [],
+        "llm_spend_task_series": task_series if show_task_series else [],
+        "llm_spend_iteration_series": iteration_series if show_iteration_series else [],
+        "llm_spend_title_series": title_series,
+        "llm_spend_has_data": has_data,
+        "llm_spend_total_amount": overall_total,
+        "llm_spend_range_options": LLM_SPEND_RANGE_OPTIONS if enable_range_selection else [],
+        "llm_spend_selected_range": selected_range,
+        "llm_spend_bucket_type": bucket_type,
+        "llm_spend_show_range_selector": enable_range_selection,
+    }
+
+
+def _businesses_tab_context_llm_spend(_: Business, request=None) -> dict:
+    return _build_llm_spend_context(request=request)
+
+
+def _tab_available_llm_spend(business: Business) -> bool:
+    return business.llmrequest_set.exists()
+
+
+def _tab_context_llm_spend(business: Business, request=None) -> dict:
+    return _build_llm_spend_context(business=business, request=request)
+
+
+def _build_businesses_tabs(erieiron_business: Business) -> list[dict]:
+    from erieiron_ui import tab_defitions
+    tabs: list[dict] = []
+    
+    for definition in tab_defitions.BUSINESSES_TAB_DEFINITIONS:
+        if definition.get("is_divider"):
+            tabs.append(definition)
+            continue
+
+        slug = definition["slug"]
+        available = definition["availability_fn"](erieiron_business)
+        if slug == "portfolio":
+            url = reverse('view_businesses')
+        else:
+            url = reverse('view_businesses_tab', args=[slug])
+
+        tab_entry = {
+            **definition,
+            "url": url,
+            "available": available,
+        }
+
+        tabs.append(tab_entry)
+
+    return tabs
+
+
+def view_businesses(request, tab: str = 'portfolio'):
+    from erieiron_ui import tab_defitions
     erieiron_business = Business.get_erie_iron_business()
+    tab_slug = (tab or 'portfolio').lower()
     
-    # Get all running processes for the businesses page
-    all_running_processes = RunningProcess.objects.filter(is_running=True).order_by('-started_at')
-    
+    if tab_slug not in tab_defitions.BUSINESSES_TAB_MAP:
+        raise Http404
+
+    tabs = _build_businesses_tabs(erieiron_business)
+    tab_definition = tab_defitions.BUSINESSES_TAB_MAP[tab_slug]
+
+    active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
+    if not active_tab_entry or not active_tab_entry.get('available'):
+        raise Http404
+
+    context = {
+        "erieiron_business": erieiron_business,
+        "tabs": tabs,
+        "active_tab": tab_slug,
+        "tab_template": tab_definition["template"],
+        "sidebar_title": "Erie Iron",
+    }
+    if tab_slug == 'llm-spend':
+        context.update(_businesses_tab_context_llm_spend(erieiron_business, request=request))
+    else:
+        context.update(tab_definition["context_fn"](erieiron_business))
+
+    breadcrumbs = [
+        (reverse(view_businesses), erieiron_business.name)
+    ]
+    if tab_slug != 'portfolio':
+        breadcrumbs.append((reverse('view_businesses_tab', args=[tab_slug]), tab_definition["label"]))
+
     return send_response(
-        request, "businesses.html", {
-            "erieiron_business": erieiron_business,
-            "agent_lessons": AgentLesson.objects.all().order_by("-timestamp"),  # ("agent_step", "invalid_lesson", "pattern"),
-            "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at"),
-            "all_running_processes": all_running_processes
-        },
-        breadcrumbs=[
-            (reverse(view_businesses), erieiron_business.name)
-        ]
+        request,
+        "businesses/businesses_base.html",
+        context,
+        breadcrumbs=breadcrumbs
     )
 
 
@@ -168,8 +704,10 @@ def _tab_context_edit(business: Business) -> dict:
 
 
 def _build_business_tabs(business: Business) -> list[dict]:
+    from erieiron_ui import tab_defitions
+    
     tabs = []
-    for definition in BUSINESS_TAB_DEFINITIONS:
+    for definition in tab_defitions.BUSINESS_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
         else:
@@ -186,7 +724,7 @@ def _build_business_tabs(business: Business) -> list[dict]:
             }
             
             if slug == "overview":
-                tab_data['label'] = business.name
+                tab_data['label'] = business.name.title()
                 
             tabs.append(tab_data)
 
@@ -194,14 +732,16 @@ def _build_business_tabs(business: Business) -> list[dict]:
 
 
 def view_business(request, business_id, tab='overview'):
+    from erieiron_ui import tab_defitions
+    
     business = get_object_or_404(Business, pk=business_id)
     tab = (tab or 'overview').lower()
     
-    if tab not in BUSINESS_TAB_MAP:
+    if tab not in tab_defitions.BUSINESS_TAB_MAP:
         raise Http404
     
     tabs = _build_business_tabs(business)
-    tab_definition = BUSINESS_TAB_MAP[tab]
+    tab_definition = tab_defitions.BUSINESS_TAB_MAP[tab]
     
     is_available = next((t for t in tabs if t['slug'] == tab), None)
     if not is_available or not is_available['available']:
@@ -213,7 +753,10 @@ def view_business(request, business_id, tab='overview'):
         "active_tab": tab,
         "tab_template": tab_definition["template"],
     }
-    context.update(tab_definition["context_fn"](business))
+    if tab == 'llm-spend':
+        context.update(_tab_context_llm_spend(business, request=request))
+    else:
+        context.update(tab_definition["context_fn"](business))
     
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
@@ -330,6 +873,14 @@ def _initiative_tab_context_llmrequests(initiative: Initiative) -> dict:
     }
 
 
+def _initiative_tab_available_llm_spend(initiative: Initiative) -> bool:
+    return initiative.llmrequest_set.exists()
+
+
+def _initiative_tab_context_llm_spend(initiative: Initiative, request=None) -> dict:
+    return _build_llm_spend_context(initiative=initiative, request=request)
+
+
 def _initiative_tab_available_edit(initiative: Initiative) -> bool:
     return True
 
@@ -339,8 +890,10 @@ def _initiative_tab_context_edit(initiative: Initiative) -> dict:
 
 
 def _build_initiative_tabs(initiative: Initiative) -> list[dict]:
+    from erieiron_ui import tab_defitions
+    
     tabs: list[dict] = []
-    for definition in INITIATIVE_TAB_DEFINITIONS:
+    for definition in tab_defitions.INITIATIVE_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
@@ -367,15 +920,17 @@ def _build_initiative_tabs(initiative: Initiative) -> list[dict]:
 
 
 def view_initiative(request, initiative_id, tab='overview'):
+    from erieiron_ui import tab_defitions
+    
     initiative = get_object_or_404(Initiative, pk=initiative_id)
     business = initiative.business
 
     tab_slug = (tab or 'overview').lower()
-    if tab_slug not in INITIATIVE_TAB_MAP:
+    if tab_slug not in tab_defitions.INITIATIVE_TAB_MAP:
         raise Http404
 
     tabs = _build_initiative_tabs(initiative)
-    tab_definition = INITIATIVE_TAB_MAP[tab_slug]
+    tab_definition = tab_defitions.INITIATIVE_TAB_MAP[tab_slug]
 
     active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
     if not active_tab_entry or not active_tab_entry.get('available'):
@@ -388,7 +943,10 @@ def view_initiative(request, initiative_id, tab='overview'):
         "active_tab": tab_slug,
         "tab_template": tab_definition["template"],
     }
-    context.update(tab_definition["context_fn"](initiative))
+    if tab_slug == 'llm-spend':
+        context.update(_initiative_tab_context_llm_spend(initiative, request=request))
+    else:
+        context.update(tab_definition["context_fn"](initiative))
 
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
@@ -562,9 +1120,26 @@ def _task_tab_context_edit(task, business, self_driving_task) -> dict:
     }
 
 
+def _task_tab_available_llm_spend(task: Task, business: Business, self_driving_task) -> bool:
+    return LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).exists()
+
+
+def _task_tab_context_llm_spend(task: Task, business: Business, self_driving_task, request=None) -> dict:
+    initiative = task.initiative
+    return _build_llm_spend_context(
+        business=business,
+        initiative=initiative,
+        task=task,
+        request=request,
+        enable_range_selection=False,
+    )
+
+
 def _build_task_tabs(task, business, self_driving_task):
+    from erieiron_ui import tab_defitions
+    
     tabs = []
-    for definition in TASK_TAB_DEFINITIONS:
+    for definition in tab_defitions.TASK_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
         else:
@@ -589,17 +1164,19 @@ def _build_task_tabs(task, business, self_driving_task):
 
 
 def view_task(request, task_id, tab='overview'):
+    from erieiron_ui import tab_defitions
+    
     task = get_object_or_404(Task, pk=task_id)
     initiative = task.initiative
     business = initiative.business
     
     tab_slug = (tab or 'overview').lower()
-    if tab_slug not in TASK_TAB_MAP:
+    if tab_slug not in tab_defitions.TASK_TAB_MAP:
         raise Http404
     
     self_driving_task = SelfDrivingTask.objects.filter(task_id=task.id).first()
     tabs = _build_task_tabs(task, business, self_driving_task)
-    tab_definition = TASK_TAB_MAP[tab_slug]
+    tab_definition = tab_defitions.TASK_TAB_MAP[tab_slug]
     
     tab_entry = next((t for t in tabs if t['slug'] == tab_slug), None)
     if not tab_entry or not tab_entry['available']:
@@ -615,7 +1192,10 @@ def view_task(request, task_id, tab='overview'):
         "active_tab": tab_slug,
         "tab_template": tab_definition["template"],
     }
-    context.update(tab_definition["context_fn"](task, business, self_driving_task))
+    if tab_slug == 'llm-spend':
+        context.update(_task_tab_context_llm_spend(task, business, self_driving_task, request=request))
+    else:
+        context.update(tab_definition["context_fn"](task, business, self_driving_task))
     
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
@@ -811,11 +1391,11 @@ def action_add_business(request):
     
     if not business_name:
         messages.error(request, 'Business name is required.')
-        return redirect(reverse('view_businesses'))
-    
+        return redirect(reverse('view_businesses_tab', args=['tools']))
+
     if not business_description:
         messages.error(request, 'Business description is required.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['tools']))
     
     business = Business.objects.create(
         name=business_name,
@@ -897,15 +1477,15 @@ def action_add_initiative(request):
     
     if not title:
         messages.error(request, 'Initiative title is required.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['tools']))
     
     if not initiative_type:
         messages.error(request, 'Initiative type is required.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['tools']))
     
     if not description:
         messages.error(request, 'Initiative description is required.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['tools']))
     
     erieiron_business = Business.get_erie_iron_business()
     
@@ -924,7 +1504,7 @@ def action_add_initiative(request):
     )
     
     messages.success(request, 'Initiative created successfully!')
-    return redirect(f"{reverse('view_businesses')}#initiatives")
+    return redirect(reverse('view_businesses_tab', args=['initiatives']))
 
 
 def action_dowork_initiative(request, initiative_id):
@@ -944,7 +1524,7 @@ def action_dowork_initiative(request, initiative_id):
     except Exception as e:
         messages.error(request, f'Error with initiative: {str(e)}')
     
-    return redirect(f"{reverse('view_businesses')}#initiatives")
+    return redirect(reverse('view_businesses_tab', args=['initiatives']))
 
 
 def action_update_initiative(request, initiative_id):
@@ -975,7 +1555,7 @@ def action_update_initiative(request, initiative_id):
         return redirect(reverse('view_initiative_tab', args=['edit', initiative_id]))
     except Initiative.DoesNotExist:
         messages.error(request, 'Initiative not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['initiatives']))
     except Exception as e:
         messages.error(request, f'Error updating initiative: {str(e)}')
         return redirect(reverse('view_initiative', args=[initiative_id]))
@@ -995,7 +1575,7 @@ def action_delete_initiative(request, initiative_id):
     except Exception as e:
         messages.error(request, f'Error deleting initiative: {str(e)}')
     
-    return redirect(f"{reverse('view_businesses')}#initiatives")
+    return redirect(reverse('view_businesses_tab', args=['initiatives']))
 
 
 def action_find_business(request):
@@ -1014,7 +1594,7 @@ def action_find_business(request):
         }
     )
     
-    return redirect(reverse('view_businesses'))
+    return redirect(reverse('view_businesses_tab', args=['tools']))
 
 
 def action_update_task_guidance(request, task_id):
@@ -1216,7 +1796,7 @@ def action_kill_process(request, process_id):
             task_id = running_process.task_execution.task.id
             redirect_url = reverse('view_task_tab', args=['processes', task_id])
         else:
-            redirect_url = reverse('view_businesses')
+            redirect_url = reverse('view_businesses_tab', args=['tools'])
         
         if running_process.kill_process():
             messages.success(request, f'Process {process_id} killed successfully!')
@@ -1226,10 +1806,10 @@ def action_kill_process(request, process_id):
         return redirect(redirect_url)
     except RunningProcess.DoesNotExist:
         messages.error(request, 'Process not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['tools']))
     except Exception as e:
         messages.error(request, f'Error killing process: {str(e)}')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['tools']))
 
 
 def action_delete_iteration(request, iteration_id):
@@ -1266,13 +1846,13 @@ def action_toggle_lesson_validity(request, lesson_id):
         
         status = "invalid" if lesson.invalid_lesson else "valid"
         messages.success(request, f'Lesson marked as {status}!')
-        return redirect(reverse('view_businesses') + '#lessons')
+        return redirect(reverse('view_businesses_tab', args=['lessons']))
     except AgentLesson.DoesNotExist:
         messages.error(request, 'Lesson not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['lessons']))
     except Exception as e:
         messages.error(request, f'Error updating lesson: {str(e)}')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_businesses_tab', args=['lessons']))
 
 
 @json_endpoint
@@ -1399,254 +1979,3 @@ def view_llm_request(request, llm_request_id):
         },
         breadcrumbs=breadcrumbs
     )
-
-
-TAB_DIVIDER = {
-    "slug": "divider",
-    "is_divider": True
-}
-
-INITIATIVE_TAB_DEFINITIONS = [
-    {
-        "slug": "overview",
-        "label": "Overview",
-        "template": "initiative/tabs/overview.html",
-        "availability_fn": _initiative_tab_available_overview,
-        "context_fn": _initiative_tab_context_overview,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "requirements",
-        "label": "Requirements",
-        "template": "initiative/tabs/requirements.html",
-        "availability_fn": _initiative_tab_available_requirements,
-        "context_fn": _initiative_tab_context_requirements,
-    },
-    {
-        "slug": "architecture",
-        "label": "Architecture",
-        "template": "initiative/tabs/architecture.html",
-        "availability_fn": _initiative_tab_available_architecture,
-        "context_fn": _initiative_tab_context_architecture,
-    },
-    {
-        "slug": "tasks",
-        "label": "Tasks",
-        "template": "initiative/tabs/tasks.html",
-        "availability_fn": _initiative_tab_available_tasks,
-        "context_fn": _initiative_tab_context_tasks,
-    },
-    {
-        "slug": "processes",
-        "label": "Processes",
-        "template": "initiative/tabs/processes.html",
-        "availability_fn": _initiative_tab_available_processes,
-        "context_fn": _initiative_tab_context_processes,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "llmrequests",
-        "label": "LLM Requests",
-        "template": "initiative/tabs/llmrequests.html",
-        "availability_fn": _initiative_tab_available_llmrequests,
-        "context_fn": _initiative_tab_context_llmrequests,
-    },
-    {
-        "slug": "edit",
-        "label": "Edit",
-        "template": "initiative/tabs/edit.html",
-        "availability_fn": _initiative_tab_available_edit,
-        "context_fn": _initiative_tab_context_edit,
-    },
-]
-
-INITIATIVE_TAB_MAP = {
-    definition["slug"]: definition
-    for definition in INITIATIVE_TAB_DEFINITIONS
-    if not definition.get("is_divider")
-}
-
-TASK_TAB_DEFINITIONS = [
-    {
-        "slug": "overview",
-        "label": "Overview",
-        "template": "task/tabs/overview.html",
-        "availability_fn": _task_tab_available_overview,
-        "context_fn": _task_tab_context_overview,
-    },
-    {
-        "slug": "blocked-by",
-        "label": "Blocked By",
-        "template": "task/tabs/blocked_by.html",
-        "availability_fn": _task_tab_available_blocked_by,
-        "context_fn": _task_tab_context_blocked_by,
-    },
-    {
-        "slug": "blocks",
-        "label": "Blocks",
-        "template": "task/tabs/blocks.html",
-        "availability_fn": _task_tab_available_blocks,
-        "context_fn": _task_tab_context_blocks,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "iterations",
-        "label": "Code Iterations",
-        "template": "task/tabs/iterations.html",
-        "availability_fn": _task_tab_available_iterations,
-        "context_fn": _task_tab_context_iterations,
-    },
-    {
-        "slug": "latest_iteration",
-        "label": "Latest Iteration",
-        "template": "task/tabs/iterations.html",
-        "availability_fn": _task_tab_available_iterations,
-        "context_fn": _task_tab_context_latest_iteration,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "guidance",
-        "label": "Guidance",
-        "template": "task/tabs/guidance.html",
-        "availability_fn": _task_tab_available_guidance,
-        "context_fn": _task_tab_context_guidance,
-    },
-    {
-        "slug": "testcode",
-        "label": "Test Code",
-        "template": "task/tabs/testcode.html",
-        "availability_fn": _task_tab_available_testcode,
-        "context_fn": _task_tab_context_testcode,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "resolve",
-        "label": "Resolve",
-        "template": "task/tabs/resolve.html",
-        "availability_fn": _task_tab_available_resolve,
-        "context_fn": _task_tab_context_resolve,
-    },
-    {
-        "slug": "executions",
-        "label": "Executions",
-        "template": "task/tabs/executions.html",
-        "availability_fn": _task_tab_available_executions,
-        "context_fn": _task_tab_context_executions,
-    },
-    # {
-    #     "slug": "processes",
-    #     "label": "Processes",
-    #     "template": "task/tabs/processes.html",
-    #     "availability_fn": _task_tab_available_processes,
-    #     "context_fn": _task_tab_context_processes,
-    # },
-    {
-        "slug": "llmrequests",
-        "label": "LLM Requests",
-        "template": "task/tabs/llmrequests.html",
-        "availability_fn": _task_tab_available_llmrequests,
-        "context_fn": _task_tab_context_llmrequests,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "edit",
-        "label": "Edit",
-        "template": "task/tabs/edit.html",
-        "availability_fn": _task_tab_available_edit,
-        "context_fn": _task_tab_context_edit,
-    },
-]
-
-BUSINESS_TAB_DEFINITIONS = [
-    {
-        "slug": "overview",
-        "label": "Overview",
-        "template": "business/tabs/overview.html",
-        "availability_fn": _tab_available_overview,
-        "context_fn": _tab_context_overview,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "business-plan",
-        "label": "Business Plan",
-        "template": "business/tabs/business_plan.html",
-        "availability_fn": _tab_available_business_plan,
-        "context_fn": _tab_context_business_plan,
-    },
-    {
-        "slug": "business-analysis",
-        "label": "Business Analysis",
-        "template": "business/tabs/business_analysis.html",
-        "availability_fn": _tab_available_business_analysis,
-        "context_fn": _tab_context_business_analysis,
-    },
-    {
-        "slug": "legal-analysis",
-        "label": "Legal Analysis",
-        "template": "business/tabs/legal_analysis.html",
-        "availability_fn": _tab_available_legal_analysis,
-        "context_fn": _tab_context_legal_analysis,
-    },
-    {
-        "slug": "capacity-analysis",
-        "label": "Capacity Analysis",
-        "template": "business/tabs/capacity_analysis.html",
-        "availability_fn": _tab_available_capacity_analysis,
-        "context_fn": _tab_context_capacity_analysis,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "architecture",
-        "label": "Architecture",
-        "template": "business/tabs/architecture.html",
-        "availability_fn": _tab_available_architecture,
-        "context_fn": _tab_context_architecture,
-    },
-    {
-        "slug": "product-initiatives",
-        "label": "Product Initiatives",
-        "template": "business/tabs/product_initiatives.html",
-        "availability_fn": _tab_available_product_initiatives,
-        "context_fn": _tab_context_product_initiatives,
-    },
-    {
-        "slug": "board-guidance",
-        "label": "Board Guidance",
-        "template": "business/tabs/board_guidance.html",
-        "availability_fn": _tab_available_board_guidance,
-        "context_fn": _tab_context_board_guidance,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "ceo-guidance",
-        "label": "CEO Guidance",
-        "template": "business/tabs/ceo_guidance.html",
-        "availability_fn": _tab_available_ceo_guidance,
-        "context_fn": _tab_context_ceo_guidance,
-    },
-    {
-        "slug": "llmrequests",
-        "label": "LLM Requests",
-        "template": "business/tabs/llmrequests.html",
-        "availability_fn": _tab_available_llmrequests,
-        "context_fn": _tab_context_llmrequests,
-    },
-    {
-        "slug": "tasks",
-        "label": "Tasks",
-        "template": "business/tabs/tasks.html",
-        "availability_fn": _tab_available_tasks,
-        "context_fn": _tab_context_tasks,
-    },
-    TAB_DIVIDER,
-    {
-        "slug": "edit",
-        "label": "Edit",
-        "template": "business/tabs/edit.html",
-        "availability_fn": _tab_available_edit,
-        "context_fn": _tab_context_edit,
-    },
-]
-
-BUSINESS_TAB_MAP = {definition["slug"]: definition for definition in BUSINESS_TAB_DEFINITIONS if "slug" in definition}
-TASK_TAB_MAP = {definition["slug"]: definition for definition in TASK_TAB_DEFINITIONS if "slug" in definition}

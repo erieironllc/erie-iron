@@ -1,0 +1,13 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load erieiron_common_tags %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-sidebar">
+            {% include "_base_templates/_sidebar.html" with sidebar_title=sidebar_title %}
+        </div>
+        <div class="col-main-content">
+            {% include tab_template %}
+        </div>
+    </div>
+{% endblock %}

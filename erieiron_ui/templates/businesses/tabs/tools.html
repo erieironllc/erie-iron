@@ -1,0 +1,104 @@
+{% load erieiron_common_tags %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="d-flex">
+        <button type="button" class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#addInitiativeModal">
+            Add Initiative
+        </button>
+        <button type="button" class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#addBusinessModal">
+            Add Your Business Idea
+        </button>
+        <a href="{% url 'action_find_business' %}" type="button" class="btn btn-primary">
+            Find a Business Idea
+        </a>
+    </div>
+</div>
+
+{% if all_running_processes %}
+    <div class="card">
+        <div class="card-header">
+            Running Processes
+        </div>
+        <ul class="list-group list-group-flush">
+            {% for process in all_running_processes %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span>{{ process }}</span>
+                    <small class="text-muted">Started {{ process.started_at }}</small>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+{% else %}
+    <p class="text-muted">No automation processes currently running.</p>
+{% endif %}
+
+<!-- Add Business Modal -->
+<div class="modal fade" id="addBusinessModal" tabindex="-1" aria-labelledby="addBusinessModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addBusinessModalLabel">Add New Business</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="addBusinessForm" method="post" action="{% url 'action_add_business' %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="businessName" class="form-label">Business Name</label>
+                        <input type="text" class="form-control" id="businessName" name="business_name" placeholder="Enter the business name..." required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="businessDescription" class="form-label">Business Description</label>
+                        <textarea class="form-control" id="businessDescription" name="business_description" rows="10" placeholder="Describe the business idea, market opportunity, business model, and any other relevant details..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Submit Business</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Add Initiative Modal -->
+<div class="modal fade" id="addInitiativeModal" tabindex="-1" aria-labelledby="addInitiativeModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addInitiativeModalLabel">Add New Initiative</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form id="addInitiativeForm" method="post" action="{% url 'action_add_initiative' %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="initiativeTitle" class="form-label">Title</label>
+                        <input type="text" class="form-control" id="initiativeTitle" name="title" placeholder="Enter initiative title..." required>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="requiresUnitTests" name="requires_unit_tests" checked>
+                        <label class="form-check-label" for="requiresUnitTests">Require Unit Test</label>
+                    </div>
+                    <div class="mb-3">
+                        <label for="initiativeType" class="form-label">Initiative Type</label>
+                        <select class="form-control" id="initiativeType" name="initiative_type" required>
+                            <option value="">Select initiative type...</option>
+                            <option value="PRODUCT">Product</option>
+                            <option value="ENGINEERING">Engineering</option>
+                            <option value="SALES">Sales</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="initiativeDescription" class="form-label">Description</label>
+                        <textarea class="form-control" id="initiativeDescription" name="description" rows="10" placeholder="Describe the initiative, its goals, and expected outcomes..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Initiative</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

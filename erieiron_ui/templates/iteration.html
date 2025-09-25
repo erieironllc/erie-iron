@@ -90,6 +90,10 @@
                 </a>
             {% endif %}
 
+            <div class="list-group-item disabled text-center">
+                <hr class="my-2">
+            </div>
+
             {% if llm_requests %}
                 <a class="list-group-item list-group-item-action" id="llmrequests-tab" data-bs-toggle="list"
                    href="#llmrequests"
@@ -97,10 +101,6 @@
                     LLM Requests
                 </a>
             {% endif %}
-
-            <div class="list-group-item disabled text-center">
-                <hr class="my-2">
-            </div>
 
             <a class="list-group-item list-group-item-action" id="tools-tab" data-bs-toggle="list"
                href="#tools"
