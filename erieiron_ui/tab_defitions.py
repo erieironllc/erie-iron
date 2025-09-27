@@ -13,6 +13,13 @@ INITIATIVE_TAB_DEFINITIONS = [
         "availability_fn": views._initiative_tab_available_overview,
         "context_fn": views._initiative_tab_context_overview,
     },
+    {
+        "slug": "tasks",
+        "label": "Tasks",
+        "template": "initiative/tabs/tasks.html",
+        "availability_fn": views._initiative_tab_available_tasks,
+        "context_fn": views._initiative_tab_context_tasks,
+    },
     TAB_DIVIDER,
     {
         "slug": "requirements",
@@ -27,13 +34,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "template": "initiative/tabs/architecture.html",
         "availability_fn": views._initiative_tab_available_architecture,
         "context_fn": views._initiative_tab_context_architecture,
-    },
-    {
-        "slug": "tasks",
-        "label": "Tasks",
-        "template": "initiative/tabs/tasks.html",
-        "availability_fn": views._initiative_tab_available_tasks,
-        "context_fn": views._initiative_tab_context_tasks,
     },
     {
         "slug": "processes",

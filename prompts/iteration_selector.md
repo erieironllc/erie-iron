@@ -57,19 +57,6 @@ You will not have access to execution logs or raw test output — only high-leve
    - Be pragmatic, not theoretical—focus on observable progress from the current logs.
    - Think of `"status_report"` as the daily standup update you'd give if you were a human engineer on this codebase. It should reflect observable system state based on logs—not speculative planning.
 
-6. **Provide Strategic Guidance**
-   - **Field**: `strategic_guidance`
-   - Remember:  
-      - No skipping/mocking of integration tests
-      - Route infra gaps to CloudFormation + IAM + Env injection
-      - Prefer fail‑fast over resilience when external infra is missing
-   - Optionally provide structured recommendations for future planning based on trend analysis.
-   - Use when recurring issues or reliable improvements suggest clear next steps.
-   - Each recommendation should include:
-     - **suggested_action**: What to do next.
-     - **justification**: Why it's a good idea, with reference to trends or results.
-     - **confidence**: Your confidence score in this guidance (between 0 and 1).
-
 ---
 
 ## Missing‑Infra Routing
@@ -87,19 +74,7 @@ If evaluations show failures like “Missing required configuration … EMAIL_IN
   "best_iteration_id": "abc123",
   "iteration_id_to_modify": "latest",
   "rollback_reason": "The latest iteration improved stability and fixed 2/3 major bugs identified in the prior version, so continuing from it is most efficient.",
-  "previous_iteration_count": 1,
-  "strategic_guidance": [
-    {
-      "suggested_action": "Prioritize correctness over speculative optimizations",
-      "justification": "Repeated attempts at optimization have introduced regressions; focusing on correctness will yield more stable progress.",
-      "confidence": 0.95
-    },
-    {
-      "suggested_action": "Maintain architectural simplicity",
-      "justification": "Simplifications have consistently improved stability and reduced errors.",
-      "confidence": 0.9
-    }
-  ]
+  "previous_iteration_count": 1
 }
 ```
 

@@ -2479,12 +2479,10 @@ def get_iteration_eval_llm_messages(
         evaluation_json__isnull=True
     ).order_by("timestamp"):
         description = ""
-        include_strategic_guidance = False
         if iteration == previous_iteration and previous_iteration != iteration_to_modify:
             description = "This is the evalutation of the execution of a previous iteration of the code"
         elif iteration == iteration_to_modify:
             description = "We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code"
-            include_strategic_guidance = True
         else:
             description = "This is an evaluation previous iteration of the code.  It is not the previous iteration neither is it the iteration we are rolling back to"
         
@@ -2635,6 +2633,9 @@ def get_lessons_msg(
         exclude_invalid=True,
         skip=False
 ) -> list[LlmMessage]:
+    if skip:
+        return
+    
     return LlmMessage.user_from_data(
         title,
         get_lessons(
@@ -2724,8 +2725,11 @@ def extract_lessons(
         config: SelfDriverConfig,
         agent_step: str,
         log_content,
-        skip=True
+        skip=False
 ):
+    if skip:
+        return 
+    
     current_iteration = config.current_iteration
     task = config.task
     lessons_data = llm_chat(

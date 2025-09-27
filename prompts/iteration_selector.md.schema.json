@@ -32,19 +32,6 @@
       "type": "string",
       "description": "(optional) A detailed justification explaining why this iteration was chosen as the one to modify next."
     },
-    "strategic_guidance": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "suggested_action": { "type": "string" },
-          "justification": { "type": "string" },
-          "confidence": { "type": "number" }
-        },
-        "required": ["suggested_action", "justification", "confidence"]
-      },
-      "description": "Optional structured recommendations based on multi-iteration trend analysis."
-    },
     "status_report": {
       "type": "string",
       "description": "Standup-style summary of what the system currently does, what is partially working, and what is not yet functioning, based on logs from this iteration."
