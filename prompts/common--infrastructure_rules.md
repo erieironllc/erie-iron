@@ -20,6 +20,7 @@
 ### SES
 - If `DomainName` is managed in Route53 in the same AWS account, you must create Route53 record sets in `infrastructure.yaml` to publish the SES verification TXT record, DKIM CNAMEs, and MX records. Do not rely on manual DNS steps.
 - If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
+- When deleting SES ReceiptRuleSets, you must explicitly set the active rule set to empty ("") first using a custom resource (e.g. Custom::ActivateSesRuleSet) so that CloudFormation can cleanly delete the rule set. Always add a DependsOn on the deactivation resource before deleting the ReceiptRuleSet.
 
 ### CloudFormation File Enforcement
 - All infrastructure definitions must go in `infrastructure.yaml` only.
