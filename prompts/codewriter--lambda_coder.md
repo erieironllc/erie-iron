@@ -46,3 +46,10 @@
 
 ## Retry & Idempotency Awareness
 - Lambda functions may be retried automatically. Design your logic to be safe to execute more than once unless explicitly told otherwise.
+
+---
+
+## SES Receipt Rule Set Delete Handling
+Insert a step in the deletion handler:
+- On `DELETE`, send a request with `"RuleSetName": ""` to SES before attempting to remove the resource.
+- If an error `"RuleSetName is required"` is returned, retry with empty string.

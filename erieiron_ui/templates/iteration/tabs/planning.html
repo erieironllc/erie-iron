@@ -1,0 +1,29 @@
+{% if iteration.planning_json %}
+    {% for code_file in iteration.planning_json.code_files %}
+        <div class="card mb-4 iteration_card">
+            <div class="card-header d-flex justify-content-start">
+                <small class="text-muted">
+                    {{ code_file.code_file_path }}
+                </small>
+            </div>
+            <div class="card-body">
+                <dl class="row">
+                    <label>{{ code_file.guidance }}</label>
+                    <dd>
+                        {% if code_file.instructions|dictsort:"step_number" %}
+                            <ol>
+                                {% for instruction in code_file.instructions|dictsort:"step_number" %}
+                                    <li class="mt-3">
+                                        <b>{{ instruction.action }}</b><br><i>{{ instruction.details }}</i>
+                                    </li>
+                                {% endfor %}
+                            </ol>
+                        {% else %}
+                            <pre>{{ code_file.code_instructions|default_if_none:"" }}</pre>
+                        {% endif %}
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    {% endfor %}
+{% endif %}

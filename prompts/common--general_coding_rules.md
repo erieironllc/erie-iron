@@ -74,6 +74,7 @@ If the required file type does not match one of the codewriters listed below, yo
 - `*.css` → `css code writer`
 - `*.txt` → `txt code writer`
 - `*.ini` → `ini code writer`
+- When editing `.md` files that include URLs, prefer dynamic placeholders (e.g., `{DOMAIN_NAME}`). If tests scan for a literal, include a separate "Example" line that resolves the placeholder using DOMAIN_NAME from evaluator logs.
 
 ### Forbidden Files
 - Any `.env*` file is forbidden. All environment variables must come from the OS environment.
@@ -89,4 +90,3 @@ Always use the correct file name for each file in your planning output - ensure 
 - **Never** design or deploy Lambdas that can recursively trigger themselves directly or indirectly.
 - Guard against unbounded loops, runaway retries, or unbounded concurrency when invoking external services.
 - Include runtime safeguards (e.g., counters, rate limits, timeout handling) to prevent uncontrolled execution.
-

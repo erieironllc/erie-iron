@@ -185,8 +185,7 @@ class SelfDriverConfig:
                                     if new_content:
                                         new_content = common.truncate_text_lines(new_content)
                                         for line in new_content.splitlines():
-                                            # logging.info(line)
-                                            print(line)
+                                            logging.info(line)
                                 
                                 last_position = current_size
                         

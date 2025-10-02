@@ -88,8 +88,11 @@ Consider any AWS role or permissions WARNING or ERROR messages as the most likel
 - these lines likely contain the string `is not authorized to perform`
 - **you must** prioritize fixing AWS role / permissions errors before attempting other changes
 - If the logs contain AWS role or permissions WARNING or ERROR lines, escalate to 'AWS_PROVISIONING_PLANNER'
-- If a Lambda is created or updated with `VpcConfig`, make sure the plan attaches (or verifies) ENI permissions to `TaskRoleArn` via inline `AWS::IAM::Policy` in-stack unless there is explicit documentation that `AWSLambdaVPCAccessExecutionRole` is already attached externally.
+- If a Lambda is created or updated with `VpcConfig`, make sure the plan attaches (or verifies) ENI permissions to that Lambda's stack-defined role (prefixed by `StackIdentifier`) via inline `AWS::IAM::Policy` unless there is explicit documentation that an attached managed policy already covers them.
 
+
+### SES Receipt Rule Set Cleanup Failures
+If CloudFormation reports DELETE_FAILED on `Custom::ActivateSesRuleSet` with "RuleSetName is required", fix by setting the active rule set to none ("").
 
 ### Localhost connections in cloud environments
 If the error indicates a failed connection to a local resource (e.g., `localhost`, `127.0.0.1`, `file:///`) for a service that the architecture expects to be AWS-hosted (e.g., RDS, S3, SQS), route to `AWS_PROVISIONING_PLANNER`.

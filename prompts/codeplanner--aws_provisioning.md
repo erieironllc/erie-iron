@@ -34,9 +34,9 @@ All planning logic and file instructions must explicitly support resolving the d
 - If `error` is present, focus exclusively on resolving that one error.
 - If `test_errors` is present, plan fixes for all test failures in parallel.
 - Always prioritize resolving `error` over `test_errors` if both ever appear by mistake.
+- If a test requires a specific literal but conflicts with dynamic-domain policy, satisfy the test by adding a clearly marked example line while preserving a primary dynamic representation.
 
 ---
-
 
 ### General Planning Responsibilities
 
@@ -65,6 +65,9 @@ All planning logic and file instructions must explicitly support resolving the d
     - Use this reasoning step to anticipate not only the immediate fix, but also any related issues likely to surface in the next execution cycle. Your goal is to reduce iteration count by proactively addressing clusters of related errors and by forecasting likely consequences of the proposed plan. If implementing Step A is likely to require Step B (e.g., updated imports, schema alignment, config updates, IAM permissions), propose both now.
         - If an initial design document exists, examine its logic before proposing file edits. Do not blindly follow its plan—evaluate whether its suggestions still align with the current error and system state.
         - If following the design would cause regressions, circular logic, or incomplete fixes, deviate from it and explain why in the planning output.
+    - When a failure involves domain names, prefer edits that preserve dynamic domain derivation (via DOMAIN_NAME). If a test requires a literal example, include both:
+        • The dynamic template (https://{DOMAIN_NAME}/unsubscribe?token=...)
+        • A single literal example line using the current DOMAIN_NAME from evaluator context, clearly labeled as an example only.
 
 4. **Plan Deterministic Edits**
     - Emit only `code_files` plans—stepwise, deterministic instructions for modifying code files.
@@ -84,6 +87,7 @@ All planning logic and file instructions must explicitly support resolving the d
     - If your fix alters behavior, check whether test coverage exists. If it doesn’t, add it. If it does, verify the test expectations still match.
     - Avoid adding new files unless absolutely necessary. Creating new files for small fixes leads to sprawl and fragmentation.
     - Avoid wrapping existing logic in new functions unless it provides meaningful reuse or separation of concerns. Reuse in-place when the fix is localized.
+    - Do not replace dynamic domain references with hardcoded strings in code or docs. If a literal is necessary for a test, include it in addition to the dynamic form.
 
 **5. Anticipate Secondary Consequences**
     - Treat each change not just as a patch, but as part of a system. Ask:

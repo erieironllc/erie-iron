@@ -10,7 +10,7 @@
 
             <div class="ms-2 me-2" style="max-width: 250px; overflow-x: hidden; white-space: nowrap">
                 {% if process.task_execution.iteration_id %}
-                    <a href="{% url "view_self_driver_iteration" process.task_execution.iteration_id %}#processes">
+                    <a href="{% url 'view_self_driver_iteration_tab' 'processes' process.task_execution.iteration_id %}">
                         {{ process.task_execution.task.description }}
                     </a>
                 {% else %}

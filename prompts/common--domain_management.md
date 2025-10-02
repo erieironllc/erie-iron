@@ -4,7 +4,14 @@ The system passes the task-specific subdomain
 - into CloudFormation as the required parameter `DomainName`.
 - into the operating system environment under the environment variable name `DOMAIN_NAME`.
 
-`DomainName` (CloudFormation) and `DOMAIN_NAME` (environment variable) are always identical and represent the single source of truth for the task-specific subdomain.
+
+### Documentation Examples Policy
+
+- Documentation and examples must show DOMAIN_NAME as a dynamic value, not a hardcoded literal.
+- Prefer one of:
+  - A parameterized form that uses the exact variable name: https://{DOMAIN_NAME}/unsubscribe?token=...
+  - Or a dual-format approach: provide both a dynamic template and, if tests require a literal, include a clearly marked example line generated from the current DOMAIN_NAME provided by the evaluator.
+- Never hardcode a specific domain (e.g., task-design-forward-digest-minimal-ui.articleparse.com) unless the evaluator explicitly requires a verbatim literal for a test, and include both forms if doing so.
 
 ### Required wiring
 - Any cloudformation service that needs a DNS name must reference `!Ref DomainName`.

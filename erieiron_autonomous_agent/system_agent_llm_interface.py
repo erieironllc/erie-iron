@@ -124,7 +124,7 @@ def agent_chat(
         tag_entity=tag_entity,
         output_schema=output_schema,
         code_response=not text_output,
-        reasoning_effort=LlmReasoningEffort.HIGH,
+        reasoning_effort=LlmReasoningEffort.MEDIUM,
         verbosity=LlmVerbosity.MEDIUM
     )
     
@@ -140,7 +140,7 @@ def llm_chat(
         model: LlmModel,
         tag_entity,
         output_schema: Path = None,
-        reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.HIGH,
+        reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.LOW,
         verbosity: LlmVerbosity = LlmVerbosity.LOW,
         code_response=False
 ) -> LlmResponse:

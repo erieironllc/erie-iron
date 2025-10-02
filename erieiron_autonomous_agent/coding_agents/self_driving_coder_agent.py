@@ -421,14 +421,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     
     prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
     
-    config.log(f"""
----------------------
-codex prompt
-
-{prompt_text}
----------------------
-    """)
-
     prompt_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_prompt.txt"
     prompt_path.write_text(prompt_text, encoding="utf-8")
     
@@ -462,7 +454,6 @@ codex prompt
     ]
     
     config.log("Running Codex CLI", codex_cmd, f"Prompt saved to {prompt_path}")
-    print(" ".join(codex_cmd))
     
     codex_start_time = time.time()
     prior_file_checksum_map = get_file_checksum_map(config.sandbox_root_dir)
@@ -1722,7 +1713,7 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
             need_stack_update = is_stack_modified(config)
         else:
             need_stack_update = True
-        
+
         if need_stack_update or force_stack_update:
             lambda_datas = None
             try:
@@ -1829,21 +1820,44 @@ def execute_iteration(config: SelfDriverConfig, aws_env: AwsEnv, force_stack_upd
         exec_docker_prune()
 
 
-def is_stack_modified(config):
+def infrastructure_yaml_modified_this_iteration(
+        config: SelfDriverConfig,
+        infrastructure_code_file: Optional[CodeFile] = None
+) -> bool:
+    infrastructure_code_file = infrastructure_code_file or config.business.codefile_set.filter(
+        file_path="infrastructure.yaml"
+    ).first()
+    if not infrastructure_code_file:
+        return False
+
+    iteration = config.current_iteration
+    infrastructure_code_version = iteration.codeversion_set.filter(
+        code_file=infrastructure_code_file
+    ).order_by("created_at").last()
+
+    return bool(infrastructure_code_version and infrastructure_code_version.get_diff())
+
+
+def is_stack_modified(
+        config: SelfDriverConfig,
+        infrastructure_modified: Optional[bool] = None
+):
     infrastructure_code_file = config.business.codefile_set.filter(file_path="infrastructure.yaml").first()
     if not infrastructure_code_file:
         # no infrastructure
         return False
-    
-    iteration = config.current_iteration
-    infrastructure_code_version = iteration.codeversion_set.filter(
-        code_file=CodeFile.get(config.business, "infrastructure.yaml")
-    ).order_by("created_at").last()
-    
-    if infrastructure_code_version and infrastructure_code_version.get_diff():
+
+    if infrastructure_modified is None:
+        infrastructure_modified = infrastructure_yaml_modified_this_iteration(
+            config,
+            infrastructure_code_file
+        )
+
+    if infrastructure_modified:
         # infrastructure.yaml modified in this iteration, need to push
         return True
-    
+
+    iteration = config.current_iteration
     infrastructure_code_version = iteration.get_code_version(infrastructure_code_file)
     
     lambda_modified = False
@@ -2111,6 +2125,10 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         output_schema="iteration_selector.md.schema.json"
     ).json()
     
+    blocked_data = selection_data.get("blocked")
+    if blocked_data:
+        raise AgentBlocked(blocked_data)
+    
     iteration_id_to_modify = selection_data.get("iteration_id_to_modify")
     if iteration_id_to_modify != 'latest':
         count_prevous_attempts = SelfDrivingTaskIteration.objects.filter(start_iteration_id=iteration_id_to_modify).count()
@@ -2235,18 +2253,37 @@ def extract_cloudformation_params(cfn_file: Path):
     return required_params, param_metadata
 
 
+def validate_cloudformation_template(
+        config: SelfDriverConfig,
+        cf_client,
+        template_body: str
+):
+    config.log("Validating CloudFormation template before deployment")
+    try:
+        cf_client.validate_template(TemplateBody=template_body)
+    except cf_client.exceptions.ClientError as exc:
+        config.log(f"CloudFormation template validation failed: {exc}")
+        raise BadPlan(f"CloudFormation template validation failed: {exc}") from exc
+    except Exception as exc:
+        config.log(f"Unexpected error during CloudFormation template validation: {exc}")
+        raise BadPlan(
+            f"CloudFormation template validation encountered an unexpected error: {exc}"
+        ) from exc
+
+
 def push_cloudformation(
         config: SelfDriverConfig,
         stack_name: str,
         environment: AwsEnv,
         cfn_file: Path,
-        param_list: list
+        param_list: list,
+        template_body: Optional[str] = None
 ):
     start_time = time.time()
     cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
     try:
         config.log(f"pushing {stack_name} to {environment.get_aws_region()} with {cfn_file}")
-        template_body = cfn_file.read_text()
+        template_body = template_body or cfn_file.read_text()
         
         if get_stack(stack_name, cf_client):
             assert_cloudformation_stack_valid(stack_name, cf_client)
@@ -2429,6 +2466,14 @@ def build_previous_iteration_context_messages(config: SelfDriverConfig, title=No
         ).order_by("timestamp")
     )
     
+    previous_iteration_summaries = [
+        {
+            "iteration_id": i.id,
+            "iteration_timestamp": i.timestamp,
+            "summary": i.evaluation_json.get("summary")
+        } for i in all_iterations if i.evaluation_json
+    ]
+    
     previous_iterations = all_iterations[-previous_iteration_count:]
     
     if iteration_to_modify and iteration_to_modify not in previous_iterations:
@@ -2454,6 +2499,12 @@ def build_previous_iteration_context_messages(config: SelfDriverConfig, title=No
             previous_attempts,
             title=f"You have made {previous_attempts.count()} attempt(s) to make progress on iteration {iteration_to_modify.id}.  Here are the results of these previous failed attempts at making progress.  Learn from historic failures and don't repeat these mistakes"
         )
+    
+    messages += LlmMessage.user_from_data(
+        "Previous Iteration Summaries", 
+        previous_iteration_summaries, 
+        "previous_iteration_summary"
+    )
     
     return messages
 
@@ -4232,13 +4283,22 @@ def deploy_cloudformation_stacks(
             config,
             cloudformation_params
         )
+
+        template_body = cfn_file.read_text()
         
+        validate_cloudformation_template(
+            config,
+            cf_client,
+            template_body
+        )
+
         push_cloudformation(
             config,
             stack_name,
             aws_env,
             cfn_file,
-            cloudformation_params
+            cloudformation_params,
+            template_body=template_body
         )
         
         config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
@@ -4365,13 +4425,9 @@ def get_stack_parameters(
     if "DBPassword" in required_parameters:
         raise BadPlan("infrastructure.yaml has a parameter named 'DBPassword'. **NEVER** add a parameter to infrastructure.yaml named 'DBPassword'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the rds secret", config.current_iteration.planning_json)
     
-    role_name = credential_manager.get_aws_role_name(config, aws_env)
-    role_arn = aws_utils.ensure_iam_role_exists_and_get_arn(role_name)
-    
     known_params = {
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
         "ClientIpForRemoteAccess": common.get_ip_address(),
-        "TaskRoleArn": role_arn,
         "VpcStrategy": "Shared" if AwsEnv.PRODUCTION.eq(aws_env) else "Unique",
         "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
         "DomainName": self_driving_task.domain,
@@ -4412,6 +4468,17 @@ def get_stack_parameters(
     except aws_secrets_client.exceptions.ResourceNotFoundException:
         ...
     
+    # Block legacy TaskRoleArn usage and compute missing required params (ignoring those with defaults or marked optional)
+    if "TaskRoleArn" in required_parameters:
+        raise BadPlan(
+            json.dumps({
+                "description": "Remove the TaskRoleArn parameter from infrastructure.yaml.",
+                "remediation": "Create IAM roles inside the template as needed, prefixing each RoleName with the StackIdentifier parameter value and keeping names under 64 characters.",
+                "file": cfn_file.name
+            }, indent=4),
+            config.current_iteration.planning_json
+        )
+
     # Compute missing required params (ignoring those with defaults or marked optional)
     missing = set()
     for param in required_parameters:

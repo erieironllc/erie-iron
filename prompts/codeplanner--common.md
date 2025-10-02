@@ -61,7 +61,7 @@ When you recieve a chat request:
     - Imports and names introduced by this plan exist and are spelled consistently.
     - Env variables referenced are documented in the plan and read directly from `os.environ`.
     - Secrets are fetched only via the designated ARN env var and parsed per schema.
-    - IAM usage references the single provided `TaskRoleArn`; no new roles.
+    - IAM roles shall be stack-defined with names that start with `!Ref StackIdentifier`, and keep every role name at or below 64 characters.
     - Django settings keep `DATABASES = agent_tools.get_django_settings_databases_conf()` intact.
     - CloudFormation parameters do not reintroduce tombstoned names.
 - Do not split predictable sub-failures into separate iterations when they stem from the same cause and can be fixed
@@ -607,11 +607,11 @@ marked for removal, and never reintroduced once deprecated. This applies across 
       ]
     },
     {
-      "name": "DjangoEcsTaskRole",
-      "replace_with": "TaskRoleArn",
+      "name": "TaskRoleArn",
+      "replace_with": null,
       "migration_steps": [
-        "remove:DjangoEcsTaskRole",
-        "use_param:TaskRoleArn"
+        "remove:TaskRoleArn parameter",
+        "create_role:StackIdentifier-prefixed"
       ]
     }
   ]
@@ -757,17 +757,14 @@ Failing to heed prior lessons is treated as a regression and must be avoided.
 
 ### IAM Policy Planning Pattern
 
-- When TaskRoleArn needs new permissions, direct the writer to add an inline `AWS::IAM::Policy` such as:
-  `Add AWS::IAM::Policy 'LambdaVpcAccessPolicy' with Roles: [!Ref TaskRoleArn], Actions: EC2 ENI set (create/describe/delete/assign/unassign), Resource: '*' plus a comment noting ENI scoping limits; add SecretsManager GetSecretValue scoped to !GetAtt RDSInstance.MasterUserSecret.SecretArn; add CloudWatch Logs actions scoped to !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${DigestFinalizeLambda}:.`
-  Adjust names/resources to the specific function and remind the writer to include justification comments for each
-  permission.
+- When a stack-defined role needs new permissions, direct the writer to add or update an inline `AWS::IAM::Policy` targeting that role's logical ID. Example:
+  `Add AWS::IAM::Policy 'LambdaVpcAccessPolicy' with Roles: [!Ref DigestFinalizeLambdaRole], Actions: EC2 ENI set (create/describe/delete/assign/unassign), Resource: '*' plus a comment noting ENI scoping limits; add SecretsManager GetSecretValue scoped to !GetAtt RDSInstance.MasterUserSecret.SecretArn; add CloudWatch Logs actions scoped to !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${DigestFinalizeLambda}:.`
+  Ensure the associated `AWS::IAM::Role` exists in the template, its `RoleName` begins with `!Ref StackIdentifier`, and the name remains within the 64-character limit.
 
 ---
 
 ## Additional Forbidden Actions
 
-- **Never** propose CloudFormation resources of type `AWS::IAM::Role` or `AWS::IAM::InstanceProfile`. Inline
-  `AWS::IAM::Policy` is permitted only when it targets `!Ref TaskRoleArn`, is least privilege, and plan guidance
-  includes justification comments.
+- **Never** rely on out-of-stack IAM roles. Always plan to create roles within the template using `!Ref StackIdentifier`-prefixed names and least-privilege policies with justification comments.
 - **Never** create new files when an existing file already covers the same functional scope, as determined by the
   project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.

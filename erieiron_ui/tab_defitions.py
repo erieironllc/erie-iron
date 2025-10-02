@@ -222,6 +222,75 @@ TASK_TAB_DEFINITIONS = [
     },
 ]
 
+ITERATION_TAB_DEFINITIONS = [
+    {
+        "slug": "routing",
+        "label": "Iteration",
+        "template": "iteration/tabs/routing.html",
+        "availability_fn": views._iteration_tab_available_routing,
+        "context_fn": views._iteration_tab_context_routing,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "planning",
+        "label": "Code Planning",
+        "template": "iteration/tabs/planning.html",
+        "availability_fn": views._iteration_tab_available_planning,
+        "context_fn": views._iteration_tab_context_planning,
+    },
+    {
+        "slug": "code",
+        "label": "Code Writing",
+        "template": "iteration/tabs/code.html",
+        "availability_fn": views._iteration_tab_available_code,
+        "context_fn": views._iteration_tab_context_code,
+    },
+    {
+        "slug": "evaluation",
+        "label": "Iteration Evaluation",
+        "template": "iteration/tabs/evaluation.html",
+        "availability_fn": views._iteration_tab_available_evaluation,
+        "context_fn": views._iteration_tab_context_evaluation,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "codelog",
+        "label": "Logs - Coding",
+        "template": "iteration/tabs/codelog.html",
+        "availability_fn": views._iteration_tab_available_codelog,
+        "context_fn": views._iteration_tab_context_codelog,
+    },
+    {
+        "slug": "execlog",
+        "label": "Logs - Execution",
+        "template": "iteration/tabs/execlog.html",
+        "availability_fn": views._iteration_tab_available_execlog,
+        "context_fn": views._iteration_tab_context_execlog,
+    },
+    {
+        "slug": "processes",
+        "label": "Processes",
+        "template": "iteration/tabs/processes.html",
+        "availability_fn": views._iteration_tab_available_processes,
+        "context_fn": views._iteration_tab_context_processes,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "iteration/tabs/llmrequests.html",
+        "availability_fn": views._iteration_tab_available_llmrequests,
+        "context_fn": views._iteration_tab_context_llmrequests,
+    },
+    {
+        "slug": "tools",
+        "label": "Edit",
+        "template": "iteration/tabs/tools.html",
+        "availability_fn": views._iteration_tab_available_tools,
+        "context_fn": views._iteration_tab_context_tools,
+    },
+]
+
 BUSINESS_TAB_DEFINITIONS = [
     {
         "slug": "overview",
@@ -318,5 +387,20 @@ BUSINESS_TAB_DEFINITIONS = [
     },
 ]
 
-BUSINESS_TAB_MAP = {definition["slug"]: definition for definition in BUSINESS_TAB_DEFINITIONS if "slug" in definition}
-TASK_TAB_MAP = {definition["slug"]: definition for definition in TASK_TAB_DEFINITIONS if "slug" in definition}
+BUSINESS_TAB_MAP = {
+    definition["slug"]: definition
+    for definition in BUSINESS_TAB_DEFINITIONS
+    if "slug" in definition
+}
+
+TASK_TAB_MAP = {
+    definition["slug"]: definition
+    for definition in TASK_TAB_DEFINITIONS
+    if "slug" in definition
+}
+
+ITERATION_TAB_MAP = {
+    definition["slug"]: definition
+    for definition in ITERATION_TAB_DEFINITIONS
+    if "slug" in definition
+}

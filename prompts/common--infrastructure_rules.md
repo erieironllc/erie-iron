@@ -12,7 +12,19 @@
 - If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
-- When defining an `AWS::EC2::VPCGatewayAttachment` (InternetGatewayAttachment), always include `DependsOn: [DefaultPublicRoute]` so CloudFormation tears down routes before detaching the internet gateway.
+    - **All resources must set both `DeletionPolicy` and `UpdateReplacePolicy` to `!Ref DeletePolicy`.**
+    - **For any SSM parameter (`AWS::SSM::Parameter`) that references other resources (such as referencing Lambda ARNs, Role ARNs, Bucket names, etc.), add a `DependsOn` relationship to those referenced resources so SSM parameters are deleted after the resources they reference.**
+    - **For Lambda functions (`AWS::Lambda::Function`), add a `DependsOn` to ensure the function is deleted before any IAM roles it uses. This ensures IAM roles are not deleted while the Lambda function still exists.**
+    - **S3 buckets must always set `DeletionPolicy: !Ref DeletePolicy` and, if `DeletePolicy` is `Delete`, must be emptied automatically (using a lifecycle rule or a cleanup Lambda) so CloudFormation can delete the bucket without manual intervention.**
+    - **For IAM roles, ensure that no inline policies or external policy attachments prevent deletion. All policies must be removed (or detached) before the role can be deleted.**
+    - **CloudFormation stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
+- Per-task stacks default to a **Shared VPC** strategy; only propose a **Unique VPC** when the task explicitly requires owning the network resources.
+- All stacks accept a `VpcStrategy` parameter with allowed values `[Shared, Unique]`. Conditions must include `UseSharedVpc` and `UseUniqueVpc` so prompts, plans, and templates consistently branch on the selected strategy.
+- When authoring **Shared VPC** stacks (`UseSharedVpc`), treat the VPC as read-only: never create or delete InternetGateways, route tables, or default routes, and always consume the provided subnets and networking resources.
+- When authoring **Unique VPC** stacks (`UseUniqueVpc`), InternetGateway, VPCGatewayAttachment, route table, and default route resources are permitted, but they **must** be guarded with `Condition: UseUniqueVpc` and the gateway attachment must specify `DependsOn: [DefaultPublicRoute]` to guarantee safe teardown sequencing.
+- Route53 subdomain routing (not separate VPCs) supplies tenant isolation for Shared VPC deployments; do not expect network-level isolation when `VpcStrategy` is `Shared`.
+- Teardown guidance must reflect the strategy: Unique VPC workflows delete routes before detaching the IGW, while Shared VPC instructions must never mention IGW detachment or route deletion steps.
+- If CloudFormation reports `DELETE_FAILED` while detaching an internet gateway, determine the active strategy: Unique VPC stacks usually need corrected `DependsOn` ordering, whereas Shared VPC stacks should remove any IGW or route resources from the template.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
@@ -20,11 +32,18 @@
 ### SES
 - If `DomainName` is managed in Route53 in the same AWS account, you must create Route53 record sets in `infrastructure.yaml` to publish the SES verification TXT record, DKIM CNAMEs, and MX records. Do not rely on manual DNS steps.
 - If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
-- When deleting SES ReceiptRuleSets, you must explicitly set the active rule set to empty ("") first using a custom resource (e.g. Custom::ActivateSesRuleSet) so that CloudFormation can cleanly delete the rule set. Always add a DependsOn on the deactivation resource before deleting the ReceiptRuleSet.
+- When deleting SES ReceiptRuleSets, you must call `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` via a custom resource (e.g., `Custom::ActivateSesRuleSet`) before attempting deletion so CloudFormation can cleanly remove the rule set. Always add a `DependsOn` from the ReceiptRuleSet to the deactivation resource.
+- If a ReceiptRuleSet resource is observed in DELETE_FAILED with "Cannot delete active rule set", ensure the stack configuration includes a `Custom::ActivateSesRuleSet` resource that calls `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` before deletion, and add `DependsOn` from the ReceiptRuleSet to this deactivation resource.
+- Must: Clear SES active rule set before delete.
+- Forbidden: Deleting an SES rule set while it is still active.
 
 ### CloudFormation File Enforcement
 - All infrastructure definitions must go in `infrastructure.yaml` only.
-- Inline IAM policy attachments (e.g., `AWS::IAM::Policy` with `Roles: [!Ref TaskRoleArn]`) belong in `infrastructure.yaml`; runtime code must not create or modify IAM.
+- Inline IAM policy attachments (e.g., `AWS::IAM::Policy` targeting stack-defined roles) belong in `infrastructure.yaml`; runtime code must not create or modify IAM.
+- **When attaching IAM policies:**  
+    - Prefer `Roles: [!Ref <RoleLogicalId>]` when the role is defined in this template and assigns a concrete `RoleName`.  
+    - Use `RoleArns` only when you must reference an external ARN (avoid this path unless explicitly required).  
+    - **Mixing `Roles` and `RoleArns` is strictly forbidden** and will cause deployment failures. Always choose the property that matches the value you provide.
 - Creating or modifying any other CloudFormation YAML file is a violation.
 - If a plan attempts to edit a different file, correct the plan to use `infrastructure.yaml` — do **not** return `blocked`.
 
@@ -92,10 +111,11 @@ When planning or modifying AWS CloudFormation templates:
 1. **Single-stack integrity**  
    All resources for a given business/environment must remain in a single stack unless explicitly instructed otherwise.
 
-2. **Single-role assumption**  
-   The CloudFormation stack must use the same IAM role for all resources and actions.  
-   Do **not** create or reference multiple roles within the stack unless explicitly instructed otherwise.  
-   This aligns with Erie Iron’s architecture and simplifies role management.
+2. **Stack-managed roles**  
+   CloudFormation must create and manage the IAM roles it needs inside this template.  
+   - Each role sets `RoleName: !Sub "${StackIdentifier}-..."` (or equivalent) and respects the 64-character limit.  
+   - resources should reference roles with `!GetAtt <Role>.Arn`.  
+   - Inline policies must remain least privilege with justification comments.
 
 3. **No-replacement preference**  
    For slow-to-create resources (e.g., RDS databases, ALBs, large ECS services), prefer property changes that avoid `Replacement`.  
@@ -176,16 +196,13 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 ## Required Parameters
 - The following parameters are required in every `infrastructure.yaml` file. 
 - This section **must** be written **exactly** as follows with **no modifications**
+- IAM roles are created within the stack
 ```
   StackIdentifier:
     Type: String
     AllowedPattern: '^[a-z0-9-]{1,40}$'
     ConstraintDescription: 'Lowercase letters, numbers, and dashes only; max 40 chars.'
     Description: Combined project name and environment identifier (e.g., "project-env")
-  TaskRoleArn:
-    Type: String
-    Description: "Required: IAM Role ARN to be used by this stack for ECS tasks, Lambda, and other services. The stack will not create service-specific roles; provide a full role ARN (e.g., arn:aws:iam::123456789012:role/MyTaskRole)."
-    ConstraintDescription: "Must be a valid IAM Role ARN (not a role name) and assumable by your CI/CD principal; the role's trust policy should include lambda.amazonaws.com and/or ecs-tasks.amazonaws.com as applicable. Provide an ARN (not a short name)."
   ClientIpForRemoteAccess:
     Type: String
     Description: "Your current public IPv4 address in CIDR format (e.g., 203.0.113.25/32)"
@@ -223,7 +240,7 @@ Conditions:
 
 --- 
 ## Additional Forbidden Actions
-- **Never** add `AWS::IAM::Role`. Inline `AWS::IAM::Policy` resources are allowed only when `Roles: [!Ref TaskRoleArn]`, the statements are least privilege, and justification comments explain each permission.
+- **Never** create IAM roles whose `RoleName` omits the `!Ref StackIdentifier` prefix or exceeds 64 characters. Inline `AWS::IAM::Policy` resources are allowed only when they target stack-defined roles, use least-privilege statements, and include justification comments.
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
 - **Never** define a Lambda function with an environment variable name beginning with `AWS_`.  
     - These prefixes are reserved by AWS and will cause the CloudFormation deployment to fail.

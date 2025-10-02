@@ -35,14 +35,14 @@ Violating these constraints may result in invalid task execution or untrustworth
 - Tests execute in an isolated AWS account and CloudFormation stack. Assume production-like conditions.
 - Never use LocalStack, moto, botocore Stubber, or any AWS emulator for acceptance or smoke tests.
 - Do not set `endpoint_url` on boto3 clients to non-AWS hosts. Clients must call real AWS endpoints in the region from `AWS_DEFAULT_REGION`.
-- Use only the single provided IAM role via `TaskRoleArn` or the CI-assumed role. If permissions are insufficient, update the role defined by TaskRoleArn to grant the permissions; do not introduce new roles.
+- IAM permissions must be satisfied by roles defined in `infrastructure.yaml`. Create or update stack-managed roles whose `RoleName` begins with `!Ref StackIdentifier` and remains under 64 characters; update those roles when more access is required.
 - Prefer long-lived infrastructure defined in the stack. Create only ephemeral data-plane resources during tests when explicitly allowed by evaluator guidance.
 - Add idempotency, bounded retries with jitter, and short timeouts to accommodate eventual consistency without flakiness.
 
 - If you need an Environment variable but it's not in the environment, you have two choices:
     1.  Create a reasonable default value (if a reasonable default exists) 
     2.  Return "Blocked" to have a human set it up (if a reasonable default does not exist)
-- CloudFormation must accept a **single provided IAM role** via parameter **`TaskRoleArn`**; do **not** create additional roles.
+- The stack must create whatever IAM roles it needs, prefixing each role name with the StackIdentifier value and keeping the name length at or below 64 characters.
 - The `settings.py` file must **always** reside in the root of the Django application—directly alongside `manage.py`.
   - Do **not** place `settings.py` inside a subdirectory.
   - ❌ Incorrect: `"app/settings.py"`

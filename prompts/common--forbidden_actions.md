@@ -19,11 +19,11 @@
 - **never** construct secret names or paths in code, **never** include real or placeholder secret values in plans, and **never** log secret contents. Secrets must be fetched only via the ARN provided in the designated environment variable.
 
 ### IAM and Roles
-- **never** add CloudFormation resources of type `AWS::IAM::Role` or `AWS::IAM::InstanceProfile`; all role usage must reference the provided `TaskRoleArn`.
-- Inline policies are only allowed when scoped to `TaskRoleArn`. Any `AWS::IAM::Policy` that targets another role or introduces unbounded wildcards without justification is forbidden.
-- **never** introduce parameters intended to generate or select additional roles (e.g., `ExistingTaskRoleArn`, `ExecutionRoleArn`, `CreateTaskRole`). Erie Iron always passes a single role via `TaskRoleArn`.
-- **never** bypass the Change Set review for IAM changes; plans must call out and reject any Role Add/Replace in the change set.
-- **never** add test-only roles or assume roles other than the single provided `TaskRoleArn` or CI-assumed role.
+- **never** rely on out-of-stack roles.
+- **never** create IAM roles whose `RoleName` fails to start with `!Ref StackIdentifier` or exceeds 64 characters.
+- Inline policies must attach only to stack-defined roles, stay least privilege, and include justification comments; unbounded wildcards without explanation are forbidden.
+- **never** bypass the Change Set review for IAM changes; plans must call out and reject any Role Add/Replace in the change set when the blast radius is unclear.
+- **never** add test-only roles or assume roles outside the stack-managed set and the CI-assumed deployment role.
 
 ### Output and Code Paths
 - **never** emit anything other than a single, well-formed JSON object as output.

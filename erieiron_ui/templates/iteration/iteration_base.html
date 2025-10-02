@@ -1,0 +1,23 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load humanize %}
+{% load erieiron_common_tags %}
+
+{% block content %}
+    <div class="row">
+        <div class="col-sidebar">
+            {% include "_base_templates/_sidebar.html" with sidebar_title="Iteration" %}
+        </div>
+        <div class="col-main-content">
+            {% include tab_template %}
+        </div>
+    </div>
+    <script>
+        $(document).ready(function () {
+            if (!window.iteration_view) {
+                window.iteration_view = new IterationView();
+            } else {
+                window.iteration_view.initialize();
+            }
+        });
+    </script>
+{% endblock %}

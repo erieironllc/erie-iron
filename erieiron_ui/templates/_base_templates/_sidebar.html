@@ -11,6 +11,9 @@
                id="{{ tab.slug }}-tab"
                href="{{ tab.url }}">
                 {{ tab.label }}
+                {% if tab.badge %}
+                    <span class="badge bg-danger ms-1">{{ tab.badge }}</span>
+                {% endif %}
             </a>
         {% endif %}
     {% endfor %}

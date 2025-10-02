@@ -15,8 +15,10 @@ Do not over-engineer – use the simplest viable architecture.
 Do not define a new Dockerfile – all tasks must run in the existing container.  
 Do not create separate test-only tasks. If a task requires testing, set the boolean field `requires_test: true` and provide success criteria in `test_plan`.  
 Do not embed inline source code in `task_description`. Instead, reference file paths.
-Do not create HUMAN_WORK tasks for DNS, SES identity verification, DKIM/MX/TXT setup, or activating SES receipt rule sets. These must be automated via CloudFormation (Route53) or explicit API-backed resources.
-Do not rely on manual DNS or SES domain verification when the domain lives in Route53. Handle verification in-stack; if the domain is external, return `blocked` with `category: "infra_boundary"` instead of creating HUMAN_WORK tasks.
+Do not create HUMAN_WORK tasks for DNS, SES identity verification, or DKIM/MX/TXT record setup, nor for activating SES receipt rule sets.  
+- These must be automated through CloudFormation (Route53) or explicit API-backed resources.  
+- Only if a resource truly cannot be automated may a HUMAN_WORK task be created—but treat this as an exception after exhausting automation options.  
+Do not rely on manual DNS or SES domain verification when the domain is managed in Route53. Handle verification in-stack
 
 # Exemptions
 You do not need to create tasks for:  
@@ -243,3 +245,8 @@ by **task_implement_email_ingestion_lambda** (code only)
 - Prioritize simplicity, maintainability, and cost efficiency  
 - Surface operational risks early; suggest automation wherever viable  
 - Choose timeouts conservatively – long enough for normal completion, short enough to detect hangs.
+
+---
+
+# Output format 
+- The response fields `test_plan`, `risk_notes`, and `task_description` **must** be formated for human readability using markdown syntax.

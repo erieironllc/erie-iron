@@ -718,8 +718,20 @@ BaseContainerView = ErieView.extend({
         const btn = $(ev.target);
         this.hide_all_tooltips();
 
+        let target_el;
         const targetSelector = btn.data('target');
-        const content = $(targetSelector).text().trim();
+        if (targetSelector.startsWith(".")){
+            const copy_container = btn.closest(".copy-container");
+            if (copy_container.length){
+                target_el = $(targetSelector + ":visible", copy_container).first();
+            }else{
+                target_el = $(targetSelector + ":visible").first();
+            }
+        }else{
+            target_el = $(targetSelector);
+        }
+        const content = target_el.text().trim();
+            
 
         navigator.clipboard.writeText(content).then(function () {
             if (btn.hasClass("bi")) {

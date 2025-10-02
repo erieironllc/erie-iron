@@ -1163,6 +1163,158 @@ def _build_task_tabs(task, business, self_driving_task):
     return tabs
 
 
+def _iteration_tab_available_routing(iteration: SelfDrivingTaskIteration, **_):
+    return True
+
+
+def _iteration_tab_context_routing(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_planning(iteration: SelfDrivingTaskIteration, **_):
+    return bool(getattr(iteration, "planning_json", None))
+
+
+def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_code(iteration: SelfDrivingTaskIteration, **_):
+    return iteration.codeversion_set.exists()
+
+
+def _iteration_tab_context_code(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_evaluation(iteration: SelfDrivingTaskIteration, **_):
+    return bool(getattr(iteration, "evaluation_json", None))
+
+
+def _iteration_tab_context_evaluation(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_codelog(iteration: SelfDrivingTaskIteration, **_):
+    log_content = getattr(iteration, "log_content_coding", "") or ""
+    return len(log_content) > 200
+
+
+def _iteration_tab_context_codelog(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_execlog(iteration: SelfDrivingTaskIteration, **_):
+    return bool(getattr(iteration, "log_content_execution", None))
+
+
+def _iteration_tab_context_execlog(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_processes(iteration: SelfDrivingTaskIteration, running_processes=None, **_):
+    if running_processes is None:
+        return False
+    return bool(running_processes)
+
+
+def _iteration_tab_context_processes(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_llmrequests(iteration: SelfDrivingTaskIteration, llm_requests=None, **_):
+    if llm_requests is None:
+        return False
+    return bool(llm_requests)
+
+
+def _iteration_tab_context_llmrequests(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _iteration_tab_available_tools(iteration: SelfDrivingTaskIteration, **_):
+    return True
+
+
+def _iteration_tab_context_tools(iteration: SelfDrivingTaskIteration, **_):
+    return {}
+
+
+def _build_iteration_tabs(
+    iteration: SelfDrivingTaskIteration,
+    task: Task,
+    previous_iteration: SelfDrivingTaskIteration | None,
+    next_iteration: SelfDrivingTaskIteration | None,
+    running_processes,
+    running_processes_count: int,
+    llm_requests,
+):
+    from erieiron_ui import tab_defitions
+
+    tabs = []
+    for definition in tab_defitions.ITERATION_TAB_DEFINITIONS:
+        if definition.get("is_divider"):
+            tabs.append(definition)
+            continue
+
+        slug = definition["slug"]
+        available = definition["availability_fn"](
+            iteration,
+            task=task,
+            previous_iteration=previous_iteration,
+            next_iteration=next_iteration,
+            running_processes=running_processes,
+            running_processes_count=running_processes_count,
+            llm_requests=llm_requests,
+        )
+
+        if slug == "routing":
+            url = reverse('view_self_driver_iteration', args=[iteration.id])
+        else:
+            url = reverse('view_self_driver_iteration_tab', args=[slug, iteration.id])
+
+        tab_data = {**definition, "url": url, "available": available}
+
+        if slug == "routing":
+            tab_data["label"] = f"Iteration {iteration.version_number}"
+
+        if slug == "processes" and running_processes_count:
+            tab_data["badge"] = running_processes_count
+
+        tabs.append(tab_data)
+
+    nav_links = []
+    if previous_iteration:
+        nav_links.append({
+            "slug": "previous-iteration-link",
+            "label": "Previous Iteration",
+            "url": reverse('view_self_driver_iteration', args=[previous_iteration.id]),
+            "available": True,
+        })
+    if next_iteration:
+        nav_links.append({
+            "slug": "next-iteration-link",
+            "label": "Next Iteration",
+            "url": reverse('view_self_driver_iteration', args=[next_iteration.id]),
+            "available": True,
+        })
+    nav_links.append({
+        "slug": "latest-iteration-link",
+        "label": "Latest Iteration",
+        "url": reverse('view_self_driver_latest_iteration', args=[task.id]),
+        "available": True,
+    })
+
+    first_divider_index = next(
+        (idx for idx, tab in enumerate(tabs) if tab.get("is_divider")),
+        len(tabs)
+    )
+    if nav_links:
+        tabs[first_divider_index:first_divider_index] = nav_links
+
+    return tabs
+
+
 def view_task(request, task_id, tab='overview'):
     from erieiron_ui import tab_defitions
     
@@ -1228,62 +1380,108 @@ def view_self_driver_latest_iteration(request, task_id):
         )
 
 
-def view_self_driver_iteration(request, iteration_id):
+def view_self_driver_iteration(request, iteration_id, tab='routing'):
+    from erieiron_ui import tab_defitions
+
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
-    
+
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
     initiative = task.initiative
     business = initiative.business
-    
+
     total_price, total_tokens = iteration.get_llm_cost()
-    
-    # Get running processes for this specific iteration
-    running_processes = RunningProcess.objects.filter(
+
+    running_processes_qs = RunningProcess.objects.filter(
         task_execution__iteration=iteration
     ).order_by("-started_at")
-    
-    running_processes_count = RunningProcess.objects.filter(task_execution__iteration=iteration, is_running=True).count()
-    
+    running_processes = list(running_processes_qs)
+    running_processes_count = RunningProcess.objects.filter(
+        task_execution__iteration=iteration,
+        is_running=True
+    ).count()
+
     previous_evaluations = []
-    
+
     _, iteration_to_modify = iteration.get_relevant_iterations()
-    previous_iteration: SelfDrivingTaskIteration = iteration.get_previous_iteration()
-    next_iteration: SelfDrivingTaskIteration = iteration.get_next_iteration()
-    
+    previous_iteration: SelfDrivingTaskIteration | None = iteration.get_previous_iteration()
+    next_iteration: SelfDrivingTaskIteration | None = iteration.get_next_iteration()
+
     try:
-        last_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
-    except:
+        last_iteration: SelfDrivingTaskIteration | None = self_driving_task.get_most_recent_iteration()
+    except Exception:
         last_iteration = None
-    
+
+    llm_requests = list(iteration.llmrequest_set.order_by("-timestamp"))
+
+    tab_slug = (tab or 'routing').lower()
+    if tab_slug not in tab_defitions.ITERATION_TAB_MAP:
+        raise Http404
+
+    tabs = _build_iteration_tabs(
+        iteration=iteration,
+        task=task,
+        previous_iteration=previous_iteration,
+        next_iteration=next_iteration,
+        running_processes=running_processes,
+        running_processes_count=running_processes_count,
+        llm_requests=llm_requests,
+    )
+
+    tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
+    if not tab_entry or not tab_entry.get('available'):
+        raise Http404
+
+    tab_definition = tab_defitions.ITERATION_TAB_MAP[tab_slug]
+    tab_context = tab_definition["context_fn"](
+        iteration,
+        task=task,
+        previous_iteration=previous_iteration,
+        next_iteration=next_iteration,
+        running_processes=running_processes,
+        running_processes_count=running_processes_count,
+        llm_requests=llm_requests,
+    )
+
+    context = {
+        "iteration": iteration,
+        "previous_iteration": previous_iteration,
+        "iteration_to_modify": iteration_to_modify,
+        "next_iteration": next_iteration,
+        "last_iteration": last_iteration,
+        "previous_evaluations": previous_evaluations,
+        "running_processes_count": running_processes_count,
+        "task": task,
+        "initiative": initiative,
+        "business": business,
+        "llm_requests": llm_requests,
+        "total_price": total_price,
+        "total_tokens": total_tokens,
+        "running_processes": running_processes,
+        "tabs": tabs,
+        "active_tab": tab_slug,
+        "tab_template": tab_definition["template"],
+    }
+    context.update(tab_context)
+
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_business, args=[business.id]), business.name),
+        (reverse(view_initiative, args=[initiative.id]), initiative.title),
+        (reverse(view_task, args=[task.id]), task.get_name()),
+        (reverse('view_self_driver_iteration', args=[iteration.id]), f"Iteration {iteration.version_number}"),
+    ]
+    if tab_slug != 'routing':
+        breadcrumbs.append((
+            reverse('view_self_driver_iteration_tab', args=[tab_slug, iteration.id]),
+            tab_definition["label"]
+        ))
+
     return send_response(
         request,
-        "iteration.html",
-        {
-            "iteration": iteration,
-            "previous_iteration": previous_iteration,
-            "iteration_to_modify": iteration_to_modify,
-            "next_iteration": next_iteration,
-            "last_iteration": last_iteration,
-            "previous_evaluations": previous_evaluations,
-            "running_processes_count": running_processes_count,
-            
-            "task": task,
-            "initiative": initiative,
-            "business": business,
-            "llm_requests": iteration.llmrequest_set.order_by("-timestamp"),
-            
-            "total_price": total_price,
-            "total_tokens": total_tokens,
-            "running_processes": running_processes
-        },
-        breadcrumbs=[
-            (reverse(view_businesses), Business.get_erie_iron_business().name),
-            (reverse(view_business, args=[business.id]), business.name),
-            (reverse(view_initiative, args=[initiative.id]), initiative.title),
-            (reverse(view_task, args=[task.id]), task.get_name()),
-            (reverse(view_self_driver_iteration, args=[iteration.id]), f"Iteration {iteration.version_number}")
-        ]
+        "iteration/iteration_base.html",
+        context,
+        breadcrumbs=breadcrumbs
     )
 
 
@@ -1791,7 +1989,7 @@ def action_kill_process(request, process_id):
         # Determine redirect target based on whether process has an iteration or TaskExecution
         if running_process.task_execution.iteration:
             # Redirect back to the iteration page
-            redirect_url = reverse('view_self_driver_iteration', args=[running_process.task_execution.iteration_id]) + '#processes'
+            redirect_url = reverse('view_self_driver_iteration_tab', args=['processes', running_process.task_execution.iteration_id])
         elif running_process.task_execution.task:
             task_id = running_process.task_execution.task.id
             redirect_url = reverse('view_task_tab', args=['processes', task_id])
@@ -1951,7 +2149,10 @@ def view_llm_request(request, llm_request_id):
                     (f"{reverse(view_task, args=[task.id])}#iterations", task.get_name())
                 )
                 breadcrumbs.append(
-                    (f"{reverse(view_self_driver_iteration, args=[llm_request.task_iteration_id])}#", f"Iteration {llm_request.task_iteration.version_number}")
+                    (
+                        reverse('view_self_driver_iteration', args=[llm_request.task_iteration_id]),
+                        f"Iteration {llm_request.task_iteration.version_number}"
+                    )
                 )
     
     model_choices = []
