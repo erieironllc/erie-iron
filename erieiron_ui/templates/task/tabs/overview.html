@@ -12,20 +12,22 @@
 
 
     {% if task.completion_criteria %}
-        <h5 class="mt-4">Completion Criteria</h5>
-        <ol>
-            {% for cc in task.completion_criteria %}
-                <li>{{ cc }}</li>
-            {% endfor %}
-        </ol>
+        <div class="markdown-container">
+            <h5 class="mt-4">Completion Criteria</h5>
+            <ol>
+                {{ task.completion_criteria|json_to_div }}
+            </ol>
+        </div>
+        <hr>
     {% endif %}
 
-    <div>
+    <div class="markdown-container">
         <h5 class="mt-4">Test Plan</h5>
-        {{ task.test_plan|default:"—" }}
+        {{ task.test_plan|markdown }}
     </div>
+<hr>
 
-    <div>
+    <div class="markdown-container">
         <h5 class="mt-4">Description</h5>
         {{ task.description|markdown }}
     </div>

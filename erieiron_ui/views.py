@@ -24,8 +24,7 @@ from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, json_endpoint
-
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint
 
 LLM_SPEND_RANGE_DEFAULT = "15d"
 LLM_SPEND_RANGE_OPTIONS = [
@@ -93,14 +92,14 @@ def _businesses_tab_context_tools(_: Business) -> dict:
 def _resolve_llm_vendor(llm_model: str | None) -> str:
     if not llm_model:
         return "unknown"
-
+    
     normalized = (llm_model or "").strip().lower()
     enum_name = ""
     try:
         enum_name = LlmModel(llm_model).name.lower()
     except (ValueError, TypeError):
         enum_name = ""
-
+    
     candidates = [enum_name, normalized]
     for candidate in candidates:
         if not candidate:
@@ -113,7 +112,7 @@ def _resolve_llm_vendor(llm_model: str | None) -> str:
             return "anthropic"
         if candidate.startswith("deepseek"):
             return "deepseek"
-
+    
     if "gemini" in normalized:
         return "gemini"
     if "claude" in normalized or "anthropic" in normalized:
@@ -128,26 +127,26 @@ def _resolve_llm_vendor(llm_model: str | None) -> str:
 def _resolve_llm_title_group(title: str | None) -> str:
     val = (title or "Untitled").strip()
     lower_val = val.lower()
-
+    
     prefix_map = {
         "compare write initial test": "Compare Write initial test",
         "debug": "Debug",
         "write code": "Write code",
     }
-
+    
     plan_exact_set = {
         "plan aws provisioning code changes",
         "plan quick fix code changes",
         "plan code changes",
     }
-
+    
     if lower_val in plan_exact_set:
         return "Plan Changes"
-
+    
     for prefix, label in prefix_map.items():
         if lower_val.startswith(prefix):
             return label
-
+    
     return val or "Untitled"
 
 
@@ -160,26 +159,26 @@ def _businesses_tab_available_llm_spend(_: Business) -> bool:
 
 
 def _build_llm_spend_context(
-    business: Business | None = None,
-    request=None,
-    initiative: Initiative | None = None,
-    task: Task | None = None,
-    enable_range_selection: bool = True,
+        business: Business | None = None,
+        request=None,
+        initiative: Initiative | None = None,
+        task: Task | None = None,
+        enable_range_selection: bool = True,
 ) -> dict:
     selected_range = LLM_SPEND_RANGE_DEFAULT
     if enable_range_selection and request:
         selected_candidate = (request.GET.get("range") or "").lower()
         if any(option["slug"] == selected_candidate for option in LLM_SPEND_RANGE_OPTIONS):
             selected_range = selected_candidate
-
+    
     if not enable_range_selection:
         selected_range = "custom"
-
+    
     bucket_type = "day"
     now_dt = timezone.now()
     today = timezone.localdate()
     current_tz = timezone.get_current_timezone()
-
+    
     requests_qs = LlmRequest.objects.exclude(price__isnull=True)
     if business:
         requests_qs = requests_qs.filter(business=business)
@@ -187,40 +186,40 @@ def _build_llm_spend_context(
         requests_qs = requests_qs.filter(initiative=initiative)
     if task:
         requests_qs = requests_qs.filter(task_iteration__self_driving_task__task=task)
-
+    
     bucket_keys: list = []
-
+    
     if not enable_range_selection:
         bucket_type = "hour"
         first_ts = requests_qs.order_by("timestamp").values_list("timestamp", flat=True).first()
         last_ts = requests_qs.order_by("-timestamp").values_list("timestamp", flat=True).first()
-
+        
         if first_ts and last_ts:
             start_bucket = timezone.localtime(first_ts, current_tz).replace(minute=0, second=0, microsecond=0)
             end_bucket = timezone.localtime(last_ts, current_tz).replace(minute=0, second=0, microsecond=0)
         else:
             start_bucket = timezone.localtime(now_dt, current_tz).replace(minute=0, second=0, microsecond=0)
             end_bucket = start_bucket
-
+        
         if start_bucket > end_bucket:
             start_bucket, end_bucket = end_bucket, start_bucket
-
+        
         requests_qs = requests_qs.filter(
             timestamp__gte=start_bucket,
             timestamp__lt=end_bucket + timedelta(hours=1)
         )
-
+        
         current = start_bucket
         while current <= end_bucket:
             bucket_keys.append(current)
             current += timedelta(hours=1)
-
+    
     elif selected_range == "24h":
         bucket_type = "hour"
         end_bucket = timezone.localtime(now_dt, current_tz).replace(minute=0, second=0, microsecond=0)
         start_bucket = end_bucket - timedelta(hours=23)
         requests_qs = requests_qs.filter(timestamp__gte=start_bucket)
-
+        
         current = start_bucket
         while current <= end_bucket:
             bucket_keys.append(current)
@@ -230,7 +229,7 @@ def _build_llm_spend_context(
         window_end_date = today
         window_start_date = window_end_date - timedelta(days=29)
         requests_qs = requests_qs.filter(timestamp__date__gte=window_start_date)
-
+        
         current = window_start_date
         while current <= window_end_date:
             bucket_keys.append(current)
@@ -242,10 +241,10 @@ def _build_llm_spend_context(
             first_date = timezone.localtime(first_timestamp, current_tz).date()
         else:
             first_date = today
-
+        
         start_week = _start_of_week(first_date)
         end_week = _start_of_week(today)
-
+        
         current = start_week
         while current <= end_week:
             bucket_keys.append(current)
@@ -255,12 +254,12 @@ def _build_llm_spend_context(
         window_end_date = today
         window_start_date = window_end_date - timedelta(days=14)
         requests_qs = requests_qs.filter(timestamp__date__gte=window_start_date)
-
+        
         current = window_start_date
         while current <= window_end_date:
             bucket_keys.append(current)
             current += timedelta(days=1)
-
+    
     if not bucket_keys:
         if bucket_type == "hour":
             bucket_keys = [timezone.localtime(now_dt, current_tz).replace(minute=0, second=0, microsecond=0)]
@@ -268,7 +267,7 @@ def _build_llm_spend_context(
             bucket_keys = [_start_of_week(today)]
         else:
             bucket_keys = [today]
-
+    
     totals_by_bucket: dict = defaultdict(float)
     vendor_daily: dict = defaultdict(lambda: defaultdict(float))
     business_daily: dict = defaultdict(lambda: defaultdict(float))
@@ -276,7 +275,7 @@ def _build_llm_spend_context(
     initiative_daily: dict = defaultdict(lambda: defaultdict(float))
     task_daily: dict = defaultdict(lambda: defaultdict(float))
     iteration_daily: dict = defaultdict(lambda: defaultdict(float))
-
+    
     request_fields = [
         "timestamp",
         "price",
@@ -291,12 +290,12 @@ def _build_llm_spend_context(
         "task_iteration__version_number",
         "title",
     ]
-
+    
     for record in requests_qs.values(*request_fields):
         timestamp = record.get("timestamp")
         if not timestamp:
             continue
-
+        
         local_ts = timezone.localtime(timestamp, current_tz)
         if bucket_type == "hour":
             bucket = local_ts.replace(minute=0, second=0, microsecond=0)
@@ -304,45 +303,45 @@ def _build_llm_spend_context(
             bucket = _start_of_week(local_ts.date())
         else:
             bucket = local_ts.date()
-
+        
         price = float(record.get("price") or 0.0)
-
+        
         totals_by_bucket[bucket] += price
-
+        
         vendor = _resolve_llm_vendor(record.get("llm_model"))
         vendor_daily[vendor][bucket] += price
-
+        
         business_name = record.get("business__name") or "Unassigned"
         business_id = record.get("business__id")
         business_key = (business_id, business_name)
         business_daily[business_key][bucket] += price
-
+        
         initiative_id = record.get("initiative__id")
         initiative_title = record.get("initiative__title") or "Unassigned"
         initiative_key = (initiative_id, initiative_title)
         initiative_daily[initiative_key][bucket] += price
-
+        
         task_id = record.get("task_iteration__self_driving_task__task__id")
         task_label = record.get("task_iteration__self_driving_task__task__description") or "Task"
         if task_id:
             task_key = (task_id, task_label)
             task_daily[task_key][bucket] += price
-
+        
         iteration_id = record.get("task_iteration__id")
         iteration_version = record.get("task_iteration__version_number")
         if iteration_id:
             iteration_label = f"Iteration {iteration_version}" if iteration_version is not None else f"Iteration {iteration_id}"
             iteration_key = (iteration_id, iteration_label)
             iteration_daily[iteration_key][bucket] += price
-
+        
         title_value = _resolve_llm_title_group(record.get("title"))
         title_daily[title_value][bucket] += price
-
+    
     def _bucket_iso(bucket_value):
         if isinstance(bucket_value, datetime):
             return bucket_value.isoformat()
         return bucket_value.isoformat()
-
+    
     total_series = [
         {
             "date": _bucket_iso(bucket),
@@ -350,7 +349,7 @@ def _build_llm_spend_context(
         }
         for bucket in bucket_keys
     ]
-
+    
     vendor_series: list[dict] = []
     for vendor, bucket_map in sorted(vendor_daily.items()):
         vendor_total = 0.0
@@ -362,14 +361,14 @@ def _build_llm_spend_context(
                 "date": _bucket_iso(bucket),
                 "total": amount,
             })
-
+        
         if vendor_total > 0:
             vendor_series.append({
                 "vendor": vendor,
                 "points": points,
                 "total": round(vendor_total, 4),
             })
-
+    
     business_series: list[dict] = []
     for business_key, bucket_map in sorted(business_daily.items(), key=lambda item: (item[0][1] or "").lower()):
         business_id, business_name = business_key
@@ -382,7 +381,7 @@ def _build_llm_spend_context(
                 "date": _bucket_iso(bucket),
                 "total": amount,
             })
-
+        
         if business_total > 0:
             business_series.append({
                 "business": business_name,
@@ -390,7 +389,7 @@ def _build_llm_spend_context(
                 "points": points,
                 "total": round(business_total, 4),
             })
-
+    
     title_series: list[dict] = []
     for title_name, bucket_map in title_daily.items():
         title_total = 0.0
@@ -402,16 +401,16 @@ def _build_llm_spend_context(
                 "date": _bucket_iso(bucket),
                 "total": amount,
             })
-
+        
         if title_total > 0:
             title_series.append({
                 "title": title_name,
                 "points": points,
                 "total": round(title_total, 4),
             })
-
+    
     title_series.sort(key=lambda entry: entry["total"], reverse=True)
-
+    
     initiative_series: list[dict] = []
     for initiative_key, bucket_map in sorted(initiative_daily.items(), key=lambda item: (item[0][1] or "").lower()):
         initiative_id, initiative_title = initiative_key
@@ -424,7 +423,7 @@ def _build_llm_spend_context(
                 "date": _bucket_iso(bucket),
                 "total": amount,
             })
-
+        
         if initiative_total > 0:
             initiative_series.append({
                 "initiative": initiative_title,
@@ -432,9 +431,9 @@ def _build_llm_spend_context(
                 "points": points,
                 "total": round(initiative_total, 4),
             })
-
+    
     initiative_series.sort(key=lambda entry: entry["total"], reverse=True)
-
+    
     task_series: list[dict] = []
     for task_key, bucket_map in sorted(task_daily.items(), key=lambda item: (item[0][1] or "").lower()):
         task_id, task_label = task_key
@@ -447,7 +446,7 @@ def _build_llm_spend_context(
                 "date": _bucket_iso(bucket),
                 "total": amount,
             })
-
+        
         if task_total > 0:
             task_series.append({
                 "task": task_label,
@@ -455,9 +454,9 @@ def _build_llm_spend_context(
                 "points": points,
                 "total": round(task_total, 4),
             })
-
+    
     task_series.sort(key=lambda entry: entry["total"], reverse=True)
-
+    
     iteration_series: list[dict] = []
     for iteration_key, bucket_map in iteration_daily.items():
         iteration_id, iteration_label = iteration_key
@@ -470,7 +469,7 @@ def _build_llm_spend_context(
                 "date": _bucket_iso(bucket),
                 "total": amount,
             })
-
+        
         if iteration_total > 0:
             iteration_series.append({
                 "iteration": iteration_label,
@@ -478,16 +477,16 @@ def _build_llm_spend_context(
                 "points": points,
                 "total": round(iteration_total, 4),
             })
-
+    
     iteration_series.sort(key=lambda entry: entry["total"], reverse=True)
-
+    
     overall_total = round(sum(entry["total"] for entry in total_series), 4)
     has_data = any(series_point["total"] > 0 for series_point in total_series)
-
+    
     show_initiative_series = (initiative is None and task is None)
     show_task_series = (initiative is not None and task is None)
     show_iteration_series = task is not None
-
+    
     return {
         "llm_spend_total_series": total_series,
         "llm_spend_vendor_series": vendor_series,
@@ -525,22 +524,22 @@ def _build_businesses_tabs(erieiron_business: Business) -> list[dict]:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
-
+        
         slug = definition["slug"]
         available = definition["availability_fn"](erieiron_business)
         if slug == "portfolio":
             url = reverse('view_businesses')
         else:
             url = reverse('view_businesses_tab', args=[slug])
-
+        
         tab_entry = {
             **definition,
             "url": url,
             "available": available,
         }
-
+        
         tabs.append(tab_entry)
-
+    
     return tabs
 
 
@@ -551,14 +550,14 @@ def view_businesses(request, tab: str = 'portfolio'):
     
     if tab_slug not in tab_defitions.BUSINESSES_TAB_MAP:
         raise Http404
-
+    
     tabs = _build_businesses_tabs(erieiron_business)
     tab_definition = tab_defitions.BUSINESSES_TAB_MAP[tab_slug]
-
+    
     active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
     if not active_tab_entry or not active_tab_entry.get('available'):
         raise Http404
-
+    
     context = {
         "erieiron_business": erieiron_business,
         "tabs": tabs,
@@ -570,13 +569,13 @@ def view_businesses(request, tab: str = 'portfolio'):
         context.update(_businesses_tab_context_llm_spend(erieiron_business, request=request))
     else:
         context.update(tab_definition["context_fn"](erieiron_business))
-
+    
     breadcrumbs = [
         (reverse(view_businesses), erieiron_business.name)
     ]
     if tab_slug != 'portfolio':
         breadcrumbs.append((reverse('view_businesses_tab', args=[tab_slug]), tab_definition["label"]))
-
+    
     return send_response(
         request,
         "businesses/businesses_base.html",
@@ -642,12 +641,14 @@ def _tab_context_architecture(business: Business) -> dict:
 
 
 def _tab_available_product_initiatives(business: Business) -> bool:
-    return business.initiative_set.exists()
+    from erieiron_autonomous_agent.business_level_agents.eng_lead import INITIATIVE_TITLE_BOOTSTRAP_ENVS
+    return business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).exists()
 
 
 def _tab_context_product_initiatives(business: Business) -> dict:
+    from erieiron_autonomous_agent.business_level_agents.eng_lead import INITIATIVE_TITLE_BOOTSTRAP_ENVS
     return {
-        "initiatives": business.initiative_set.all().order_by("created_timestamp")
+        "initiatives": business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).order_by("created_timestamp")
     }
 
 
@@ -725,9 +726,9 @@ def _build_business_tabs(business: Business) -> list[dict]:
             
             if slug == "overview":
                 tab_data['label'] = business.name.title()
-                
+            
             tabs.append(tab_data)
-
+    
     return tabs
 
 
@@ -807,7 +808,7 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
     tasks = list(initiative.tasks.order_by("created_timestamp"))
     if not tasks:
         return {"tasks": tasks}
-
+    
     task_ids = [task.id for task in tasks]
     self_driving_tasks = list(
         SelfDrivingTask.objects.filter(task_id__in=task_ids).order_by("created_at")
@@ -817,39 +818,39 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
         for sdt in self_driving_tasks
         if sdt.task_id
     }
-
+    
     task_iterations = defaultdict(list)
     for iteration in SelfDrivingTaskIteration.objects.filter(
-        self_driving_task__task_id__in=task_ids
+            self_driving_task__task_id__in=task_ids
     ).order_by("timestamp"):
         task_id = sdt_id_to_task_id.get(iteration.self_driving_task_id)
         if task_id:
             task_iterations[task_id].append(iteration)
-
+    
     task_executions = defaultdict(list)
     for execution in TaskExecution.objects.filter(task_id__in=task_ids).order_by("executed_time"):
         task_executions[execution.task_id].append(execution)
-
+    
     for task in tasks:
         iterations = task_iterations.get(task.id, [])
         executions = task_executions.get(task.id, [])
-
+        
         first_iteration = common.first(iterations)
         last_execution = common.last(executions)
-
+        
         last_execution_time = last_execution.executed_time if last_execution else None
         if not last_execution_time:
             last_iteration = common.last(iterations)
             last_execution_time = last_iteration.timestamp if last_iteration else None
-
+        
         task.first_iteration_time = first_iteration.timestamp if first_iteration else None
         task.last_execution_time = last_execution_time
-
+    
     return {"tasks": tasks}
 
 
 def _initiative_tab_available_processes(initiative: Initiative) -> bool:
-    return RunningProcess.objects.filter(task_execution__task__initiative=initiative).exists()
+    return False  # RunningProcess.objects.filter(task_execution__task__initiative=initiative).exists()
 
 
 def _initiative_tab_context_processes(initiative: Initiative) -> dict:
@@ -897,25 +898,25 @@ def _build_initiative_tabs(initiative: Initiative) -> list[dict]:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
-
+        
         slug = definition["slug"]
         available = definition["availability_fn"](initiative)
         if slug == "overview":
             url = reverse('view_initiative', args=[initiative.id])
         else:
             url = reverse('view_initiative_tab', args=[slug, initiative.id])
-
+        
         tab_entry = {
             **definition,
             "url": url,
             "available": available,
         }
-
+        
         if slug == "overview":
             tab_entry["label"] = initiative.title
-
+        
         tabs.append(tab_entry)
-
+    
     return tabs
 
 
@@ -924,18 +925,18 @@ def view_initiative(request, initiative_id, tab='overview'):
     
     initiative = get_object_or_404(Initiative, pk=initiative_id)
     business = initiative.business
-
+    
     tab_slug = (tab or 'overview').lower()
     if tab_slug not in tab_defitions.INITIATIVE_TAB_MAP:
         raise Http404
-
+    
     tabs = _build_initiative_tabs(initiative)
     tab_definition = tab_defitions.INITIATIVE_TAB_MAP[tab_slug]
-
+    
     active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
     if not active_tab_entry or not active_tab_entry.get('available'):
         raise Http404
-
+    
     context = {
         "initiative": initiative,
         "business": business,
@@ -947,7 +948,7 @@ def view_initiative(request, initiative_id, tab='overview'):
         context.update(_initiative_tab_context_llm_spend(initiative, request=request))
     else:
         context.update(tab_definition["context_fn"](initiative))
-
+    
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
         (reverse('view_business', args=[business.id]), business.name),
@@ -955,7 +956,7 @@ def view_initiative(request, initiative_id, tab='overview'):
     ]
     if tab_slug != 'overview':
         breadcrumbs.append((reverse('view_initiative_tab', args=[tab_slug, initiative.id]), tab_definition["label"]))
-
+    
     return send_response(
         request,
         "initiative/initiative_base.html",
@@ -1036,7 +1037,7 @@ def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
 
 
 def _task_tab_available_executions(task, business, self_driving_task) -> bool:
-    return task.taskexecution_set.exists()
+    return False #task.taskexecution_set.exists()
 
 
 def _task_tab_context_executions(task, business, self_driving_task) -> dict:
@@ -1149,7 +1150,7 @@ def _build_task_tabs(task, business, self_driving_task):
                 url = reverse('view_task', args=[task.id])
             else:
                 url = reverse('view_task_tab', args=[slug, task.id])
-                
+            
             tab_data = {
                 **definition,
                 "url": url,
@@ -1213,9 +1214,10 @@ def _iteration_tab_context_execlog(iteration: SelfDrivingTaskIteration, **_):
 
 
 def _iteration_tab_available_processes(iteration: SelfDrivingTaskIteration, running_processes=None, **_):
-    if running_processes is None:
-        return False
-    return bool(running_processes)
+    # if running_processes is None:
+    #     return False
+    # return bool(running_processes)
+    return False
 
 
 def _iteration_tab_context_processes(iteration: SelfDrivingTaskIteration, **_):
@@ -1241,22 +1243,22 @@ def _iteration_tab_context_tools(iteration: SelfDrivingTaskIteration, **_):
 
 
 def _build_iteration_tabs(
-    iteration: SelfDrivingTaskIteration,
-    task: Task,
-    previous_iteration: SelfDrivingTaskIteration | None,
-    next_iteration: SelfDrivingTaskIteration | None,
-    running_processes,
-    running_processes_count: int,
-    llm_requests,
+        iteration: SelfDrivingTaskIteration,
+        task: Task,
+        previous_iteration: SelfDrivingTaskIteration | None,
+        next_iteration: SelfDrivingTaskIteration | None,
+        running_processes,
+        running_processes_count: int,
+        llm_requests,
 ):
     from erieiron_ui import tab_defitions
-
+    
     tabs = []
     for definition in tab_defitions.ITERATION_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
-
+        
         slug = definition["slug"]
         available = definition["availability_fn"](
             iteration,
@@ -1267,22 +1269,22 @@ def _build_iteration_tabs(
             running_processes_count=running_processes_count,
             llm_requests=llm_requests,
         )
-
+        
         if slug == "routing":
             url = reverse('view_self_driver_iteration', args=[iteration.id])
         else:
             url = reverse('view_self_driver_iteration_tab', args=[slug, iteration.id])
-
+        
         tab_data = {**definition, "url": url, "available": available}
-
+        
         if slug == "routing":
             tab_data["label"] = f"Iteration {iteration.version_number}"
-
+        
         if slug == "processes" and running_processes_count:
             tab_data["badge"] = running_processes_count
-
+        
         tabs.append(tab_data)
-
+    
     nav_links = []
     if previous_iteration:
         nav_links.append({
@@ -1304,14 +1306,14 @@ def _build_iteration_tabs(
         "url": reverse('view_self_driver_latest_iteration', args=[task.id]),
         "available": True,
     })
-
+    
     first_divider_index = next(
         (idx for idx, tab in enumerate(tabs) if tab.get("is_divider")),
         len(tabs)
     )
     if nav_links:
         tabs[first_divider_index:first_divider_index] = nav_links
-
+    
     return tabs
 
 
@@ -1382,16 +1384,16 @@ def view_self_driver_latest_iteration(request, task_id):
 
 def view_self_driver_iteration(request, iteration_id, tab='routing'):
     from erieiron_ui import tab_defitions
-
+    
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
-
+    
     self_driving_task = iteration.self_driving_task
     task = self_driving_task.task
     initiative = task.initiative
     business = initiative.business
-
+    
     total_price, total_tokens = iteration.get_llm_cost()
-
+    
     running_processes_qs = RunningProcess.objects.filter(
         task_execution__iteration=iteration
     ).order_by("-started_at")
@@ -1400,24 +1402,24 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         task_execution__iteration=iteration,
         is_running=True
     ).count()
-
+    
     previous_evaluations = []
-
+    
     _, iteration_to_modify = iteration.get_relevant_iterations()
     previous_iteration: SelfDrivingTaskIteration | None = iteration.get_previous_iteration()
     next_iteration: SelfDrivingTaskIteration | None = iteration.get_next_iteration()
-
+    
     try:
         last_iteration: SelfDrivingTaskIteration | None = self_driving_task.get_most_recent_iteration()
     except Exception:
         last_iteration = None
-
+    
     llm_requests = list(iteration.llmrequest_set.order_by("-timestamp"))
-
+    
     tab_slug = (tab or 'routing').lower()
     if tab_slug not in tab_defitions.ITERATION_TAB_MAP:
         raise Http404
-
+    
     tabs = _build_iteration_tabs(
         iteration=iteration,
         task=task,
@@ -1427,11 +1429,11 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         running_processes_count=running_processes_count,
         llm_requests=llm_requests,
     )
-
+    
     tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
     if not tab_entry or not tab_entry.get('available'):
         raise Http404
-
+    
     tab_definition = tab_defitions.ITERATION_TAB_MAP[tab_slug]
     tab_context = tab_definition["context_fn"](
         iteration,
@@ -1442,7 +1444,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         running_processes_count=running_processes_count,
         llm_requests=llm_requests,
     )
-
+    
     context = {
         "iteration": iteration,
         "previous_iteration": previous_iteration,
@@ -1463,7 +1465,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         "tab_template": tab_definition["template"],
     }
     context.update(tab_context)
-
+    
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
         (reverse(view_business, args=[business.id]), business.name),
@@ -1476,7 +1478,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
             reverse('view_self_driver_iteration_tab', args=[tab_slug, iteration.id]),
             tab_definition["label"]
         ))
-
+    
     return send_response(
         request,
         "iteration/iteration_base.html",
@@ -1590,7 +1592,7 @@ def action_add_business(request):
     if not business_name:
         messages.error(request, 'Business name is required.')
         return redirect(reverse('view_businesses_tab', args=['tools']))
-
+    
     if not business_description:
         messages.error(request, 'Business description is required.')
         return redirect(reverse('view_businesses_tab', args=['tools']))
@@ -1792,7 +1794,7 @@ def action_find_business(request):
         }
     )
     
-    return redirect(reverse('view_businesses_tab', args=['tools']))
+    return redirect(reverse('view_businesses_tab', args=['portfolio']))
 
 
 def action_update_task_guidance(request, task_id):
@@ -1916,6 +1918,9 @@ def action_update_business(request, business_id):
         github_repo_url = rget(request, 'github_repo_url', '').strip()
         business_plan = rget(request, 'business_plan', '').strip()
         architecture = rget(request, 'architecture', '').strip()
+        web_container_cpu = max(1, rget_int(request, 'web_container_cpu', business.web_container_cpu or 512))
+        web_container_memory = max(1, rget_int(request, 'web_container_memory', business.web_container_memory or 1024))
+        web_desired_count = max(1, rget_int(request, 'web_desired_count', business.web_desired_count or 1))
         allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
         needs_domain = request.POST.get('needs_domain') == 'on'
         
@@ -1934,6 +1939,9 @@ def action_update_business(request, business_id):
             'github_repo_url': github_repo_url or None,
             'business_plan': business_plan or None,
             'architecture': architecture or None,
+            'web_container_cpu': web_container_cpu,
+            'web_container_memory': web_container_memory,
+            'web_desired_count': web_desired_count,
             'allow_autonomous_shutdown': allow_autonomous_shutdown,
             'needs_domain': needs_domain
         }

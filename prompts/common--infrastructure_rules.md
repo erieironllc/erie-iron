@@ -211,6 +211,31 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
   DeletePolicy:
     Type: String
     Description: "Required: Specifies the deletion and replacement policy for resources. For development or non-production, this value will be 'Delete', for production this value will be 'Retain'"
+  DomainName:
+    Type: String
+    Description: "Required: The task-specific subdomain to use for DNS and SES configuration."
+  DomainHostedZoneId:
+    Type: String
+    Description: "Required: The Route53 hosted zone ID in which the DomainName record should be created."
+  AlbCertificateArn:
+    Type: String
+    Description: "Required: ACM certificate ARN that covers the specified DomainName."
+  WebContainerImage:
+    Type: String
+    Description: "Required: Full container image URI (for example, an ECR image) that serves the Django application."
+  WebContainerCpu:
+    Type: Number
+    Default: 512
+    Description: "Fargate task CPU units for the web service."
+  WebContainerMemory:
+    Type: Number
+    Default: 1024
+    Description: "task memory (MiB) for the web service."
+  WebDesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    Description: "task count for the service."
   VpcStrategy:
     Type: String
     AllowedValues: ["Shared", "Unique"]
@@ -225,6 +250,11 @@ Conditions:
   UseExistingRdsSg: !Not [!Equals [!Ref ExistingRDSSecurityGroupId, ""]]
   CreateVpcEndpointsInNewVPC: !And [!Condition CreateNewVPC, !Equals [!Ref EnableVpcEndpoints, "true"]]
 ```
+
+- `DomainName` and `DomainHostedZoneId` drive Route53 records (root alias, SES verification, MX, DKIM) and must be referenced by any DNS resources you add to the template.
+- `AlbCertificateArn` attaches the validated ACM certificate to the ALB listener so HTTPS works for the chosen domain.
+- `WebContainerImage` is the fully qualified image URI the ECS service should deploy.
+- `WebContainerCpu`, `WebContainerMemory`, and `WebDesiredCount` configure the ECS Fargate task definition and service capacity; wire them directly into the TaskDefinition and Service resources instead of hardcoding values.
 
 ### DeletePolicy usage
 

@@ -1,6 +1,7 @@
+{% load erieiron_common_tags %}
 <div class="list-group" role="tablist">
     <h3 style="white-space: nowrap;">{{ sidebar_title }}</h3>
-    {% for tab in tabs %}
+    {% for tab in tabs|dedupe_divers %}
         {% if tab.is_divider %}
             <div class="list-group-item disabled text-center">
                 <hr class="my-2">

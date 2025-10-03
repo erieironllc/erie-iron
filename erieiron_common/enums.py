@@ -249,6 +249,7 @@ class PubSubMessageType(ErieEnum):
     HUMAN_WORK_REQUESTED = auto()
     ENGINEERING_PLANNING_REQUESTED = auto()
     PRODUCT_PLANNING_REQUESTED = auto()
+    INITIATIVE_DEPLOY_REQUESTED = auto()
     INITIATIVE_PLANNING_REQUESTED = auto()
     ITERATION_PLANNING_REQUESTED = auto()
     ITERATION_WORK_REQUESTED = auto()
@@ -437,6 +438,7 @@ class TaskExecutionSchedule(ErieEnum):
 
 class TaskType(ErieEnum):
     BOOTSRAP_CLONE_REPO = auto()
+    PRODUCTION_DEPLOYMENT = auto()
     INITIATIVE_VERIFICATION = auto()
     CODING_APPLICATION = auto()
     CODING_ML = auto()

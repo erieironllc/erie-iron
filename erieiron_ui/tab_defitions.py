@@ -13,13 +13,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "availability_fn": views._initiative_tab_available_overview,
         "context_fn": views._initiative_tab_context_overview,
     },
-    {
-        "slug": "tasks",
-        "label": "Tasks",
-        "template": "initiative/tabs/tasks.html",
-        "availability_fn": views._initiative_tab_available_tasks,
-        "context_fn": views._initiative_tab_context_tasks,
-    },
     TAB_DIVIDER,
     {
         "slug": "requirements",
@@ -34,6 +27,13 @@ INITIATIVE_TAB_DEFINITIONS = [
         "template": "initiative/tabs/architecture.html",
         "availability_fn": views._initiative_tab_available_architecture,
         "context_fn": views._initiative_tab_context_architecture,
+    },
+    {
+        "slug": "tasks",
+        "label": "Tasks",
+        "template": "initiative/tabs/tasks.html",
+        "availability_fn": views._initiative_tab_available_tasks,
+        "context_fn": views._initiative_tab_context_tasks,
     },
     {
         "slug": "processes",
@@ -134,6 +134,21 @@ TASK_TAB_DEFINITIONS = [
         "context_fn": views._task_tab_context_overview,
     },
     {
+        "slug": "testcode",
+        "label": "Test Code",
+        "template": "task/tabs/testcode.html",
+        "availability_fn": views._task_tab_available_testcode,
+        "context_fn": views._task_tab_context_testcode,
+    },
+    TAB_DIVIDER,
+    {
+        "slug": "guidance",
+        "label": "Guidance",
+        "template": "task/tabs/guidance.html",
+        "availability_fn": views._task_tab_available_guidance,
+        "context_fn": views._task_tab_context_guidance,
+    },
+    {
         "slug": "blocked-by",
         "label": "Blocked By",
         "template": "task/tabs/blocked_by.html",
@@ -170,20 +185,6 @@ TASK_TAB_DEFINITIONS = [
         "context_fn": views._task_tab_context_executions,
     },
     TAB_DIVIDER,
-    {
-        "slug": "guidance",
-        "label": "Guidance",
-        "template": "task/tabs/guidance.html",
-        "availability_fn": views._task_tab_available_guidance,
-        "context_fn": views._task_tab_context_guidance,
-    },
-    {
-        "slug": "testcode",
-        "label": "Test Code",
-        "template": "task/tabs/testcode.html",
-        "availability_fn": views._task_tab_available_testcode,
-        "context_fn": views._task_tab_context_testcode,
-    },
     {
         "slug": "resolve",
         "label": "Resolve",
@@ -300,20 +301,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_overview,
     },
     {
-        "slug": "product-initiatives",
-        "label": "Product Initiatives",
-        "template": "business/tabs/product_initiatives.html",
-        "availability_fn": views._tab_available_product_initiatives,
-        "context_fn": views._tab_context_product_initiatives,
-    },
-    TAB_DIVIDER,
-    {
         "slug": "business-plan",
         "label": "Business Plan",
         "template": "business/tabs/business_plan.html",
         "availability_fn": views._tab_available_business_plan,
         "context_fn": views._tab_context_business_plan,
     },
+    TAB_DIVIDER,
     {
         "slug": "business-analysis",
         "label": "Business Analysis",
@@ -342,6 +336,7 @@ BUSINESS_TAB_DEFINITIONS = [
         "availability_fn": views._tab_available_board_guidance,
         "context_fn": views._tab_context_board_guidance,
     },
+    TAB_DIVIDER,
     {
         "slug": "ceo-guidance",
         "label": "CEO Guidance",
@@ -355,6 +350,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "template": "business/tabs/architecture.html",
         "availability_fn": views._tab_available_architecture,
         "context_fn": views._tab_context_architecture,
+    },
+    {
+        "slug": "product-initiatives",
+        "label": "Product Initiatives",
+        "template": "business/tabs/product_initiatives.html",
+        "availability_fn": views._tab_available_product_initiatives,
+        "context_fn": views._tab_context_product_initiatives,
     },
     TAB_DIVIDER,
     # {

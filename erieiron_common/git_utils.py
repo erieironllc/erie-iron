@@ -47,13 +47,21 @@ class GitWrapper:
                 text=True
             )
         except subprocess.CalledProcessError as e:
-            logging.error(f"stdout:\n{e.stdout.strip()}")
-            logging.error(f"stderr:\n{e.stderr.strip()}")
-            raise Exception(
-                f"Command failed: {common.safe_join(cmd)}\n"
-                f"stdout:\n{e.stdout.strip()}\n"
-                f"stderr:\n{e.stderr.strip()}"
-            )
+            std_out = e.stdout.strip()
+            std_err = e.stderr.strip()
+            
+            if "nothing to commit" not in std_out:
+                logging.error(f"stdout:\n{std_out}")
+                logging.error(f"stderr:\n{std_err}")
+                
+                raise Exception(
+                    f"Command failed: {common.safe_join(cmd)}\n"
+                    f"stdout:\n{std_out}\n"
+                    f"stderr:\n{std_err}"
+                )
+            else:
+                logging.info(std_out)
+                logging.info(std_err)
         else:
             logging.info(result.stdout)
             logging.info(result.stderr)

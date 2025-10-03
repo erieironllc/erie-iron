@@ -16,7 +16,7 @@
                     <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
                 </div>
                 <div class="me-2">
-                    <a href="{% url "view_task" task.id %}">{{ task.id }}</a>
+                    <a href="{% url "view_task" task.id %}">{{ task.get_name }}</a>
                 </div>
                 <div class="me-2">
                     {% if task.first_iteration_time %}

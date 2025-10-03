@@ -86,7 +86,7 @@
                                 </small>
                             {% else %}
                                 <small class="me-3">
-                                    In Progress
+                                    In Progress ({{ llm_request.input_messages|token_count }} input tokens)
                                 </small>
                             {% endif %}
                             <small class="me-3">

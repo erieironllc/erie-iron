@@ -11,7 +11,7 @@ from django.db import transaction
 
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative
 from erieiron_common import common, ErieIronJSONEncoder
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.18"
@@ -77,6 +77,16 @@ class SelfDriverConfig:
         self.log_f = None
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
+        
+        if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
+            self.aws_env = AwsEnv.PRODUCTION
+        else:
+            self.aws_env = AwsEnv.DEV
+        
+        domain_name, hosted_zone_id, certificate_arn = self.task.get_domain_and_cert(self.aws_env)
+        self.domain_name = domain_name
+        self.hosted_zone_id = hosted_zone_id
+        self.certificate_arn = certificate_arn
         
         self.current_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
         if self.current_iteration:

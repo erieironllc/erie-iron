@@ -2,9 +2,9 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div class="d-flex">
-        <button type="button" class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#addInitiativeModal">
-            Add Initiative
-        </button>
+{#        <button type="button" class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#addInitiativeModal">#}
+{#            Add Initiative#}
+{#        </button>#}
         <button type="button" class="btn btn-primary me-2" data-bs-toggle="modal" data-bs-target="#addBusinessModal">
             Add Your Business Idea
         </button>
@@ -13,24 +13,6 @@
         </a>
     </div>
 </div>
-
-{% if all_running_processes %}
-    <div class="card">
-        <div class="card-header">
-            Running Processes
-        </div>
-        <ul class="list-group list-group-flush">
-            {% for process in all_running_processes %}
-                <li class="list-group-item d-flex justify-content-between align-items-center">
-                    <span>{{ process }}</span>
-                    <small class="text-muted">Started {{ process.started_at }}</small>
-                </li>
-            {% endfor %}
-        </ul>
-    </div>
-{% else %}
-    <p class="text-muted">No automation processes currently running.</p>
-{% endif %}
 
 <!-- Add Business Modal -->
 <div class="modal fade" id="addBusinessModal" tabindex="-1" aria-labelledby="addBusinessModalLabel" aria-hidden="true">

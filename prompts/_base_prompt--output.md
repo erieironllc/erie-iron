@@ -1,4 +1,4 @@
-## 📌 Output Rules
+## Output Rules
 - Only return a single **valid JSON object**. with all fields
 - Use ISO-8601 for date or time fields
 - Do not include any narrative explanation or markdown.  

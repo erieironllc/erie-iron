@@ -14,7 +14,7 @@
             <ol class="breadcrumb pt-3">
                 {% for bc in breadcrumbs %}
                     <li class="breadcrumb-item">
-                        <a href="{{ bc.url }}">{{ bc.label }}</a>
+                        <a href="{{ bc.url }}">{{ bc.label|title }}</a>
                     </li>
                 {% endfor %}
             </ol>

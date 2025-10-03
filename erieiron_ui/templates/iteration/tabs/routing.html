@@ -23,15 +23,15 @@
     {% else %}
         <p>
             Starting with the previous iteration's code
-            (<a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">
-                version {{ iteration_to_modify.version_number }}
-            </a>)
+            (<a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}"
+        >version {{ iteration_to_modify.version_number }}</a>)
         </p>
     {% endif %}
 
-    <a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">
-        Version {{ iteration_to_modify.version_number }}
-    </a>'s status
+    <hr>
+    <div style="font-weight: bold; white-space: nowrap">
+    <a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">Version {{ iteration_to_modify.version_number }}</a>'s status:
+    </div>
     <p>{{ iteration_to_modify.evaluation_json.summary }}</p>
 {% endif %}
 

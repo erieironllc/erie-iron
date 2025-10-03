@@ -1,142 +1,200 @@
 <div class="tab-pane-content">
-    <form action="{% url 'action_update_business' business.id %}" method="post">
-        {% csrf_token %}
-        <div class="row">
+    <div class="tab-pane-content">
+        <div class="row mb-3">
             <div class="col-md-6">
                 <div class="mb-3">
-                    <label for="name" class="form-label">Business Name</label>
-                    <input type="text" name="name" id="name" class="form-control"
-                           value="{{ business.name }}">
-                </div>
-
-                <div class="mb-3">
-                    <label for="summary" class="form-label">Summary</label>
-                    <textarea name="summary" id="summary" class="form-control"
-                              rows="3">{{ business.summary|default:"" }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="raw_idea" class="form-label">Raw Idea</label>
-                    <textarea name="raw_idea" id="raw_idea" class="form-control"
-                              rows="3">{{ business.raw_idea|default:"" }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="value_prop" class="form-label">Value Proposition</label>
-                    <textarea name="value_prop" id="value_prop" class="form-control"
-                              rows="3">{{ business.value_prop|default:"" }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="revenue_model" class="form-label">Revenue Model</label>
-                    <textarea name="revenue_model" id="revenue_model" class="form-control"
-                              rows="3">{{ business.revenue_model|default:"" }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="audience" class="form-label">Audience</label>
-                    <textarea name="audience" id="audience" class="form-control"
-                              rows="3">{{ business.audience|default:"" }}</textarea>
+                    <label class="form-label">Web Presence</label>
+                    {% if business.domain %}
+                        <div>
+                            <a target="_blank" href="https://{{ business.domain }}">{{ business.domain }}</a>
+                        </div>
+                    {% else %}
+                        <em class="text-muted">No business url</em>
+                    {% endif %}
                 </div>
             </div>
-
             <div class="col-md-6">
                 <div class="mb-3">
-                    <label for="status" class="form-label">Status</label>
-                    <select name="status" id="status" class="form-select">
-                        {% for value, label in business_status_choices %}
-                            <option value="{{ value }}"
-                                    {% if business.status == value %}selected{% endif %}>{{ label }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="mb-3">
-                    <label for="source" class="form-label">Source</label>
-                    <select name="source" id="source" class="form-select">
-                        {% for value, label in business_source_choices %}
-                            <option value="{{ value }}"
-                                    {% if business.source == value %}selected{% endif %}>{{ label }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="mb-3">
-                    <label for="autonomy_level" class="form-label">Autonomy Level</label>
-                    <select name="autonomy_level" id="autonomy_level" class="form-select">
-                        <option value="">-- Select Autonomy Level --</option>
-                        {% for value, label in autonomy_level_choices %}
-                            <option value="{{ value }}"
-                                    {% if business.autonomy_level == value %}selected{% endif %}>{{ label }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="mb-3">
-                    <label for="service_token" class="form-label">Service Token</label>
-                    <input type="text" name="service_token" id="service_token" class="form-control"
-                           value="{{ business.service_token|default:"" }}">
-                </div>
-
-                <div class="mb-3">
-                    <label for="bank_account_id" class="form-label">Bank Account ID</label>
-                    <input type="text" name="bank_account_id" id="bank_account_id" class="form-control"
-                           value="{{ business.bank_account_id|default:"" }}">
-                </div>
-
-                <div class="mb-3">
-                    <label for="github_repo_url" class="form-label">GitHub Repository URL</label>
-                    <input type="url" name="github_repo_url" id="github_repo_url" class="form-control"
-                           value="{{ business.github_repo_url|default:"" }}"
-                           placeholder="https://github.com/username/repo">
-                </div>
-
-                <div class="mb-3">
-                    <label for="domain" class="form-label">Domain</label>
-                    <input type="url" name="domain" id="domain" class="form-control"
-                           value="{{ business.domain|default:"" }}"
-                           readonly disabled />
-                </div>
-
-                <div class="mb-3 form-check">
-                    <input type="checkbox" name="needs_domain" id="needs_domain"
-                           class="form-check-input"
-                           {% if business.needs_domain %}checked{% endif %}>
-                    <label for="needs_domain" class="form-check-label">Needs Domain</label>
-                </div>
-
-                <div class="mb-3 form-check">
-                    <input type="checkbox" name="allow_autonomous_shutdown" id="allow_autonomous_shutdown"
-                           class="form-check-input"
-                           {% if business.allow_autonomous_shutdown %}checked{% endif %}>
-                    <label for="allow_autonomous_shutdown" class="form-check-label">Allow Autonomous Shutdown</label>
+                    <label class="form-label">Repo</label>
+                    {% if business.github_repo_url %}
+                        <div>
+                            <a target="_blank" href="{{ business.github_repo_url }}">{{ business.github_repo_url }}</a>
+                        </div>
+                    {% else %}
+                        <em class="text-muted">No repo</em>
+                    {% endif %}
                 </div>
             </div>
         </div>
 
-        <div class="mb-3">
-            <label for="business_plan" class="form-label">Business Plan</label>
-            <textarea name="business_plan" id="business_plan" class="form-control"
-                      rows="5">{{ business.business_plan|default:"" }}</textarea>
-        </div>
+        <hr>
 
-        <div class="mb-3">
-            <label for="architecture" class="form-label">Architecture</label>
-            <textarea name="architecture" id="architecture" class="form-control" rows="10"
-                      placeholder="Describe the system architecture, components, and technology stack...">{{ business.architecture|default:"" }}</textarea>
-        </div>
-
-        <button type="submit" class="btn btn-primary">Save Changes</button>
-        <a href="{% url 'view_business' business.id %}" class="btn btn-secondary ms-2">Cancel</a>
-    </form>
-
-    <div class="mt-4">
-        <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
+        <form action="{% url 'action_update_business' business.id %}" method="post">
             {% csrf_token %}
-            <button type="submit" class="btn btn-warning"
-                    onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
-                Bootstrap
-            </button>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Business Name</label>
+                        <input type="text" name="name" id="name" class="form-control"
+                               value="{{ business.name }}">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="summary" class="form-label">Summary</label>
+                        <textarea name="summary" id="summary" class="form-control"
+                                  rows="3">{{ business.summary|default:"" }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="raw_idea" class="form-label">Raw Idea</label>
+                        <textarea name="raw_idea" id="raw_idea" class="form-control"
+                                  rows="3">{{ business.raw_idea|default:"" }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="value_prop" class="form-label">Value Proposition</label>
+                        <textarea name="value_prop" id="value_prop" class="form-control"
+                                  rows="3">{{ business.value_prop|default:"" }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="revenue_model" class="form-label">Revenue Model</label>
+                        <textarea name="revenue_model" id="revenue_model" class="form-control"
+                                  rows="3">{{ business.revenue_model|default:"" }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="audience" class="form-label">Audience</label>
+                        <textarea name="audience" id="audience" class="form-control"
+                                  rows="3">{{ business.audience|default:"" }}</textarea>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="status" class="form-label">Status</label>
+                        <select name="status" id="status" class="form-select">
+                            {% for value, label in business_status_choices %}
+                                <option value="{{ value }}"
+                                        {% if business.status == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="source" class="form-label">Source</label>
+                        <select name="source" id="source" class="form-select">
+                            {% for value, label in business_source_choices %}
+                                <option value="{{ value }}"
+                                        {% if business.source == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="autonomy_level" class="form-label">Autonomy Level</label>
+                        <select name="autonomy_level" id="autonomy_level" class="form-select">
+                            <option value="">-- Select Autonomy Level --</option>
+                            {% for value, label in autonomy_level_choices %}
+                                <option value="{{ value }}"
+                                        {% if business.autonomy_level == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="service_token" class="form-label">Service Token</label>
+                        <input type="text" name="service_token" id="service_token" class="form-control"
+                               value="{{ business.service_token|default:"" }}">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="bank_account_id" class="form-label">Bank Account ID</label>
+                        <input type="text" name="bank_account_id" id="bank_account_id" class="form-control"
+                               value="{{ business.bank_account_id|default:"" }}">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="github_repo_url" class="form-label">GitHub Repository URL</label>
+                        <input type="url" name="github_repo_url" id="github_repo_url" class="form-control"
+                               value="{{ business.github_repo_url|default:"" }}"
+                               placeholder="https://github.com/username/repo">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="domain" class="form-label">Domain</label>
+                        <input type="url" name="domain" id="domain" class="form-control"
+                               value="{{ business.domain|default:"" }}"
+                               readonly disabled/>
+                    </div>
+
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" name="needs_domain" id="needs_domain"
+                               class="form-check-input"
+                               {% if business.needs_domain %}checked{% endif %}>
+                        <label for="needs_domain" class="form-check-label">Needs Domain</label>
+                    </div>
+
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" name="allow_autonomous_shutdown" id="allow_autonomous_shutdown"
+                               class="form-check-input"
+                               {% if business.allow_autonomous_shutdown %}checked{% endif %}>
+                        <label for="allow_autonomous_shutdown" class="form-check-label">Allow Autonomous
+                            Shutdown</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label for="web_container_cpu" class="form-label">Web Container CPU (units)</label>
+                        <input type="number" min="1" step="1" name="web_container_cpu" id="web_container_cpu"
+                               class="form-control"
+                               value="{{ business.web_container_cpu|default:512 }}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label for="web_container_memory" class="form-label">Web Container Memory (MiB)</label>
+                        <input type="number" min="1" step="1" name="web_container_memory" id="web_container_memory"
+                               class="form-control"
+                               value="{{ business.web_container_memory|default:1024 }}">
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="mb-3">
+                        <label for="web_desired_count" class="form-label">Web Desired Count</label>
+                        <input type="number" min="1" step="1" name="web_desired_count" id="web_desired_count"
+                               class="form-control"
+                               value="{{ business.web_desired_count|default:1 }}">
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="business_plan" class="form-label">Business Plan</label>
+                <textarea name="business_plan" id="business_plan" class="form-control"
+                          rows="5">{{ business.business_plan|default:"" }}</textarea>
+            </div>
+
+            <div class="mb-3">
+                <label for="architecture" class="form-label">Architecture</label>
+                <textarea name="architecture" id="architecture" class="form-control" rows="10"
+                          placeholder="Describe the system architecture, components, and technology stack...">{{ business.architecture|default:"" }}</textarea>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <a href="{% url 'view_business' business.id %}" class="btn btn-secondary ms-2">Cancel</a>
         </form>
+
+        <div class="mt-4">
+            <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-warning"
+                        onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
+                    Bootstrap
+                </button>
+            </form>
+        </div>
     </div>
-</div>

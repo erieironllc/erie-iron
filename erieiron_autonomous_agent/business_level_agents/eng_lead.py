@@ -5,12 +5,11 @@ import uuid
 
 from django.db import transaction
 
-from erieiron_autonomous_agent.business_level_agents import domain_manager
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Initiative, Task, ProductRequirement, Business, SelfDrivingTask
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat, llm_chat, get_sys_prompt
-from erieiron_common import common
+from erieiron_common import common, domain_manager
 from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType, LlmModel, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -125,6 +124,7 @@ def define_tasks_for_initiative(initiative_id):
         ],
         chat_data,
         output_schema="eng_lead.md.schema.json",
+        reasoning_effort=LlmReasoningEffort.MEDIUM,
         replacements=[
             ("<iam_role_name>", business.get_iam_role_name())
         ]
@@ -149,6 +149,24 @@ def define_tasks_for_initiative(initiative_id):
         Task.objects.filter(id=verification_task.id).update(
             status=TaskStatus.BLOCKED
         )
+    
+    production_deploy_task, created = Task.objects.update_or_create(
+        id=f"{initiative.id}--production_deployment",
+        defaults={
+            "initiative": initiative,
+            "status": TaskStatus.NOT_STARTED,
+            "description": f"Deploy {initiative.title} to production",
+            "completion_criteria": "Initiative is deployed to the production environment",
+            "execution_schedule": TaskExecutionSchedule.NOT_APPLICABLE,
+            "task_type": TaskType.PRODUCTION_DEPLOYMENT
+        }
+    )
+    
+    new_task_ids.append(verification_task.pk)
+    production_deploy_task.depends_on.set(Task.objects.filter(id__in=new_task_ids))
+    Task.objects.filter(id=production_deploy_task.id).update(
+        status=TaskStatus.BLOCKED
+    )
     
     return new_task_ids
 

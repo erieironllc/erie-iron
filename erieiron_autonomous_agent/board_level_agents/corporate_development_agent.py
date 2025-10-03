@@ -5,6 +5,7 @@ from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
 from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
@@ -25,14 +26,17 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
 
     """
     
-    messages = []
-    
-    for b in Business.objects.exclude(id=erieiron_business.id).exclude(summary__isnull=True):
-        messages.append(f"""
-            ## Existing Erie Iron Business
-            {b.name}
-            {b.summary}
-        """)
+    messages = LlmMessage.user_from_data(
+        "Existing Erie Iron Businesses",
+        [
+            {
+                "name": b.name,
+                "summary": b.summary
+            }
+            for b in Business.objects.exclude(id=erieiron_business.id).exclude(summary__isnull=True)
+        ],
+        "existing_business"
+    )
     
     messages.append(
         f"""
@@ -53,6 +57,10 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
         "Business Finder",
         "corporate_development--business_finder.md",
         messages
+    )
+    
+    Business.objects.filter(id=placehold_business_id).update(
+        name=business_idea.get("name")
     )
     
     return {

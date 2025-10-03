@@ -10,7 +10,7 @@ import urllib
 import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional
 from urllib.parse import quote_plus
 from urllib.parse import unquote_plus
 

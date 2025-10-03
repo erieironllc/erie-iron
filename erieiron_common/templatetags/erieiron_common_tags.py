@@ -18,15 +18,39 @@ from erieiron_autonomous_agent.models import LlmRequest
 from erieiron_common import common, date_utils, settings_common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.enums import LlmModel
+from erieiron_common.llm_apis.llm_constants import get_token_count
 
 register = template.Library()
 
 
+@register.filter(name='dedupe_divers')
+def dedupe_divers(tabs):
+    deduped_tabs = []
+    prev_tab_is_divider = False
+    for tab in common.ensure_list(tabs):
+        if tab.get("is_divider"):
+            if prev_tab_is_divider:
+                prev_tab_is_divider = False
+            else:
+                prev_tab_is_divider = True
+                deduped_tabs.append(tab)
+        elif tab.get("available"):
+            prev_tab_is_divider = False
+            deduped_tabs.append(tab)
+
+    return deduped_tabs
+
+
 @register.filter(name='json_to_div')
-def json_to_div(json_content, filter_def=None):
+def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
     if not json_content:
         return ""
-
+    
+    if common.is_list_like(json_content):
+        return mark_safe("\n".join([
+            json_to_div(j, use_default_wrapper=False) for j in json_content
+        ]))
+    
     only_fields = []
     exclude_fields = []
     for filter_def_item in common.safe_split(filter_def, ","):
@@ -40,14 +64,19 @@ def json_to_div(json_content, filter_def=None):
             try:
                 json_content = json.loads(json_content)
             except:
-                return mark_safe(f"""
-            <div class="json_to_div--container">
-                <pre>{json_content}</pre>
-            </div>
-            """)
-    
+                if use_default_wrapper:
+                    return mark_safe(f"""
+                <div class="json_to_div--container">
+                    <pre>{json_content}</pre>
+                </div>
+                """)
+                else:
+                    return mark_safe(f"""
+                        <li>{json_content}</li>
+                    """)
+        
         parts = []
-        for k,v in json_content.items():
+        for k, v in json_content.items():
             if only_fields and k not in only_fields:
                 continue
             
@@ -62,43 +91,63 @@ def json_to_div(json_content, filter_def=None):
                     pres.append(f"<pre>{v1}</pre>")
                 
                 pres = "<br>".join(pres)
-                parts.append(f"""
-                <div class="json_to_div--container">
-                    <label>{k}</label>
-                    {pres}
-                </div>
-                """)
+                if use_default_wrapper:
+                    parts.append(f"""
+                    <div class="json_to_div--container">
+                        <label>{k}</label>
+                        {pres}
+                    </div>
+                    """)
+                else:
+                    parts.append(f"""
+                    <li>
+                        <label>{k}</label>
+                        {pres}
+                    </li>
+                    """)
             else:
                 if isinstance(v, dict):
                     v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
                 
-                parts.append(f"""
-                <div class="json_to_div--container">
+                if use_default_wrapper:
+                    parts.append(f"""
+                    <div class="json_to_div--container">
+                        <label>{k}</label>
+                        <pre>{v}</pre>
+                    </div>
+                    """)
+                else:
+                    parts.append(f"""
+                <li>
                     <label>{k}</label>
                     <pre>{v}</pre>
-                </div>
+                </li>
                 """)
-                ...
         
         return mark_safe("".join(parts))
     except Exception as e:
         raise e
 
 
+@register.filter(name='token_count')
+def token_count(v):
+    return get_token_count(LlmModel.OPENAI_GPT_5, json.dumps(v))
+
+
 @register.filter(name='json_dumps')
 def json_dumps(value, indent=2):
     if value is None:
         return ""
-
+    
     try:
         if isinstance(value, str):
             try:
                 value = json.loads(value)
             except json.JSONDecodeError:
                 return mark_safe(value)
-
+        
         dump_kwargs = {"cls": ErieIronJSONEncoder}
-
+        
         try:
             if indent is not None:
                 indent_int = int(indent)
@@ -106,7 +155,7 @@ def json_dumps(value, indent=2):
                     dump_kwargs["indent"] = indent_int
         except (TypeError, ValueError):
             pass
-
+        
         return mark_safe(json.dumps(value, **dump_kwargs))
     except Exception:
         return mark_safe(str(value))
@@ -131,15 +180,14 @@ def markdown_format(text):
 
 
 @register.filter(name='llm_msg_cost')
-def llm_msg_cost(content: str, llm_model:str):
+def llm_msg_cost(content: str, llm_model: str):
     llm_model = LlmModel(llm_model)
     
     return llm_model.get_input_price(content)
 
 
-
 @register.filter(name='llm_cost')
-def llm_cost(llm_requests:list[LlmRequest]):
+def llm_cost(llm_requests: list[LlmRequest]):
     if not len(llm_requests):
         return 0
     

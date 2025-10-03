@@ -8,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Tuple, Optional
 
+from botocore.exceptions import ClientError
 from django.db import models, transaction
 from django.db.models import Sum, Q
 from django.db.models.signals import pre_delete, post_save
@@ -50,6 +51,9 @@ class Business(BaseErieIronModel):
     personalization_options = models.JSONField(default=list)
     allow_autonomous_shutdown = models.BooleanField(default=True)
     needs_domain = models.BooleanField(default=False)
+    web_container_cpu = models.PositiveIntegerField(default=512)
+    web_container_memory = models.PositiveIntegerField(default=1024)
+    web_desired_count = models.PositiveIntegerField(default=1)
     autonomy_level = models.TextField(null=True, choices=Level.choices())
     domain = models.TextField(null=True)
     github_repo_url = models.TextField(null=True)
@@ -644,8 +648,62 @@ class Task(BaseErieIronModel):
             for task in self.depends_on.all()
         }
     
+    def get_sub_domain(self) -> str:
+        from erieiron_common.aws_utils import sanitize_aws_name
+        return sanitize_aws_name([str(self.id)], max_length=63).lower()
+    
+    def get_domain_and_cert(self, aws_env: AwsEnv) -> tuple[str, str, str]:
+        from erieiron_common import aws_utils, domain_manager
+        
+        business = self.initiative.business
+        sub_domain = self.get_sub_domain()
+        
+        task_domain = None
+        erie_iron_subdomain = f"{sub_domain}.erieironllc.com"
+        
+        if AwsEnv.PRODUCTION.eq(aws_env):
+            task_domain = business.domain or erie_iron_subdomain
+        elif business.domain:
+            task_domain = f"{sub_domain}.{business.domain}"
+        else:
+            task_domain = erie_iron_subdomain
+        
+        route53_client = aws_utils.client("route53")
+        hosted_zone_id = None
+        certificate_arn = None
+        aws_region = aws_env.get_aws_region()
+        
+        for domain_name in [task_domain, erie_iron_subdomain]:
+            hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_name)
+            if not hosted_zone_id:
+                logging.info(f"Unable to locate a Route53 hosted zone for domain '{domain_name}'.  switching to fallback {erie_iron_subdomain}")
+                continue
+            
+            certificate_arn = domain_manager.find_certificate_arn(domain_name, aws_region)
+            if not certificate_arn:
+                logging.info(f"Unable to locate a Route53 hosted zone for domain '{domain_name}'.  switching to fallback {erie_iron_subdomain}")
+                continue
+            try:
+                domain_manager.ensure_subdomain_record(domain_name, hosted_zone_id)
+            except Exception:
+                logging.exception("Failed to ensure Route53 record for %s", domain_name)
+                raise
+            break
+        
+        return domain_name, hosted_zone_id, certificate_arn
+    
     def get_name(self):
-        return str(self.id)[len("task_"):].replace("_", " ").capitalize()
+        root_str = str(self.id)
+        
+        if "task_" in root_str:
+            root_str = root_str[len("task_"):]
+        
+        root_str = root_str.split("--")[-1]
+        
+        return (root_str
+                .replace("_", " ")
+                .replace("-", " ")
+                .capitalize())
 
 
 # Design system and handoff models
@@ -937,7 +995,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         
         if "test_errors" in self.evaluation_json:
             d["test_errors"] = self.evaluation_json.get("test_errors")
-            
+        
         return LlmMessage.user_from_data(label, d)
     
     def get_error(self) -> tuple[str, str]:

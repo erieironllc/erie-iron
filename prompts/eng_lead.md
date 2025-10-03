@@ -75,6 +75,11 @@ Each task **must** include the following fields
 # Task Definition Guidance 
 
 ## High Level
+    - Always create a first task in each initiative that ensures the initiative is externally verifiable via HTTP.  
+        - The task must expose the initiative description at: `https://{{DomainName}}/_initiative/{{initiative_id}}`.  
+        - The endpoint must return the plain string description of the initiative.  
+        - Include both code (route handler) and the minimal infrastructure edits required in this first task.  
+        - The test_plan for this task must assert that an HTTP GET request to the above URL returns status 200 and the initiative description string.  
     - Aim for full autonomy – before assigning work to a human, explore every reasonable way to automate it. Manual DNS/SES steps are not permitted. Prefer Route53 automation; otherwise, return blocked with a precise infra boundary reason.
     - Split mixed work – if only part of a task needs human help, break it into smaller tasks so the autonomous portion can run independently.
     - Enforce atomicity – every task must be self‑contained, dependency‑clean, and include a concrete test_plan.

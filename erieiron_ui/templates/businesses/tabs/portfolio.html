@@ -12,7 +12,7 @@
     <tbody>
     {% for business in businesses %}
         <tr>
-            <td nowrap=true><a href="{% url "view_business" business.id %}">{{ business.name }}</a></td>
+            <td nowrap=true><a href="{% url "view_business" business.id %}">{{ business.name|title }}</a></td>
             <td>{{ business.summary|default_if_none:"" }}</td>
             <td>{{ business.source|label }}</td>
             <td>{{ business.status|label }}</td>

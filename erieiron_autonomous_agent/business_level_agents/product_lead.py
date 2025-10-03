@@ -56,7 +56,8 @@ def build_chat_data(business):
     ))
     
     directives = list(BusinessCeoDirective.objects.filter(
-        business=business, target_agent="ProductAgent"
+        business=business, 
+        target_agent="ProductAgent"
     ).values(
         "directive_summary", "goal_alignment", "kpi_targets"
     ))

@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import F, Value
+from django.db.models import F, Value, Q
 from django.db.models.functions import Coalesce
 
 from erieiron_autonomous_agent.enums import TaskStatus
@@ -54,6 +54,13 @@ def on_task_complete(task_id):
         status=TaskStatus.COMPLETE
     )
     task.update_dependent_tasks()
+    
+    initiative = task.initiative
+    if initiative and initiative.all_tasks_complete():
+        PubSubManager.publish_id(
+            PubSubMessageType.INITIATIVE_DEPLOY_REQUESTED, 
+            initiative.id
+        )
 
 
 def on_task_spend(payload):

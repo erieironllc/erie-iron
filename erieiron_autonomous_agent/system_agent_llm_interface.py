@@ -56,7 +56,8 @@ def business_level_chat(
         output_schema: str = None,
         replacements: list[tuple[str, str]] = None,
         model: LlmModel = None,
-        debug=False
+        debug=False,
+        reasoning_effort=LlmReasoningEffort.MEDIUM
 ):
     if output_schema:
         output_schema = BUSINESS_LEVEL_BASE_PATH / output_schema
@@ -84,7 +85,8 @@ def business_level_chat(
         output_schema=output_schema,
         text_output=text_output,
         model=model,
-        debug=debug
+        debug=debug,
+        reasoning_effort=reasoning_effort
     )
 
 
@@ -96,7 +98,8 @@ def agent_chat(
         output_schema: Path = None,
         text_output=False,
         model: LlmModel = None,
-        debug=False
+        debug=False,
+        reasoning_effort=LlmReasoningEffort.MEDIUM
 ):
     system_prompts = common.ensure_list(system_prompts)
     system_prompts.append(BASE_PROMPTS_PATH / "_base_prompt--output.md")
@@ -124,7 +127,7 @@ def agent_chat(
         tag_entity=tag_entity,
         output_schema=output_schema,
         code_response=not text_output,
-        reasoning_effort=LlmReasoningEffort.MEDIUM,
+        reasoning_effort=reasoning_effort,
         verbosity=LlmVerbosity.MEDIUM
     )
     
@@ -170,8 +173,8 @@ def llm_chat(
     llm_request_url = ""
     for i in range(2):
         llm_messages = LlmMessage.parse_prompt(
-            model, 
-            messages, 
+            model,
+            messages,
             code_response=code_response
         )
         
