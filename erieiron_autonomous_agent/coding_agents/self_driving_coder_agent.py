@@ -71,7 +71,7 @@ def execute(task_id: str, reset=False):
     # )
     # return
     
-    for i in range(100):
+    for i in range(10):
         config = SelfDriverConfig(self_driving_task)
         
         try:
@@ -2005,7 +2005,8 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
         ], replacements=[
             ("<env_vars>", get_env_var_names(config)),
             ("<goal_achieved_critera>", goal_achieved_critera)
-        ])
+        ]),
+        get_goal_msg(config, "Task Goal")
     ])
     
     aws_env = config.aws_env
@@ -2079,6 +2080,18 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
     if common.parse_bool(eval_data.get("goal_achieved")):
         raise GoalAchieved(eval_data)
     
+    previous_iteration_summaries = [
+        {
+            "iteration_id": prev_iter.id,
+            "iteration_is_current_iteration": prev_iter == iteration,
+            "iteration_timestamp": prev_iter.timestamp,
+            "iteration_summary": prev_iter.evaluation_json.get("summary"),
+        }
+        for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
+            evaluation_json__isnull=False
+        ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
+    ]
+
     previous_iteration_evals = []
     if config.iteration_to_modify and config.iteration_to_modify != config.previous_iteration:
         previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
@@ -2095,7 +2108,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
             "iteration_id": prev_iter.id,
             "iteration_is_current_iteration": prev_iter == iteration,
             "iteration_timestamp": prev_iter.timestamp,
-            "iteration_evaluation": prev_iter.evaluation_json,
+            "iteration_full_evaluation": prev_iter.evaluation_json,
         })
     
     selection_data = llm_chat(
@@ -2110,9 +2123,16 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
             ], replacements=[
                 ("<env_vars>", get_env_var_names(config)),
             ]),
+            get_goal_msg(config, "Task Goal"),
             LlmMessage.user_from_data(
-                f"**Iteration Evaluations**",
-                previous_iteration_evals
+                f"**All Previous Iteration Summaries**",
+                previous_iteration_summaries,
+                "iteration_summary"
+            ),
+            LlmMessage.user_from_data(
+                f"**Recent Iteration Full Evaluations**",
+                previous_iteration_evals,
+                "iteration_full_evaluation"
             )
         ],
         LlmModel.OPENAI_GPT_5_MINI,
@@ -3539,7 +3559,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
         - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
 
         **YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM** """
-        if iteration_to_modify.has_error() else get_goal_msg(config)
+        if iteration_to_modify.has_error() else get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
     ]
     
     planning_data = llm_chat(
@@ -4003,25 +4023,18 @@ def get_docs_msg(config) -> list[LlmMessage]:
     )
 
 
-def get_goal_msg(config):
+def get_goal_msg(config, description):
     task = config.self_driving_task.task
-    return LlmMessage.user(f'''
-Please plan code changes that work towards achieving this GOAL:
-
-# Goal
-{task.description}
-
-# Test Plan
-{task.test_plan or 'none'}
-
-# Risk Notes
-{task.risk_notes or 'none'}
-
-# PRIMARY OBJECTIVE
-**ACHIEVING THIS GOAL IS YOUR PRIMARY OBJECTIVE**
-''')
-
-
+    return LlmMessage.user_from_data(
+        description, 
+        {
+            "GOAL": task.description,
+            "PRIMARY_OBJECTIVE": "achieving this goal is the primary objective of this code iteration",
+            "test_plan": task.test_plan,
+            "risk_notes": task.risk_notes
+        }
+    )
+    
 def get_cloudformation_file(config: SelfDriverConfig) -> Path:
     return common.assert_exists(config.sandbox_root_dir / "infrastructure.yaml")
 
@@ -4380,6 +4393,23 @@ def deploy_cloudformation_stacks(
         
         except Exception as ct_ex:
             config.log(f"Failed to fetch CloudTrail events: {ct_ex}\n")
+        
+        try:
+            end_time = time.time()
+            start_epoch = max(0, int(start_time) - 60)
+            end_epoch = int(end_time) + 60
+            config.log("\nCloudWatch logs for stack resources since deployment start:\n")
+            stack_logs = extract_cloudwatch_stack_logs_for_window(
+                config=config,
+                start_time=start_epoch,
+                end_time=end_epoch
+            )
+            if stack_logs:
+                config.log(stack_logs + "\n")
+            else:
+                config.log("No CloudWatch log entries found for stack resources in this window.\n")
+        except Exception as stack_log_ex:
+            config.log(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}\n")
         
         raise cfe
 
@@ -4788,8 +4818,16 @@ def extract_cloudwatch_stack_logs_for_window(
         config.log(f"Could not resolve stack name: {e}")
         return ""
     
+    from datetime import datetime, timezone
+    try:
+        window_start_dt = datetime.fromtimestamp(int(start_time), tz=timezone.utc)
+    except Exception:
+        window_start_dt = None
+    
     # Collect candidate log group names from stack resources
     log_group_names = []
+    ecs_task_definition_arns = set()
+    ecs_service_identifiers = []
     try:
         paginator = cf.get_paginator("list_stack_resources")
         for page in paginator.paginate(StackName=stack_name):
@@ -4808,8 +4846,99 @@ def extract_cloudwatch_stack_logs_for_window(
                 # Lambda functions -> /aws/lambda/<function name>
                 elif rtype == "AWS::Lambda::Function" and phys:
                     log_group_names.append(f"/aws/lambda/{phys}")
+                elif rtype == "AWS::ECS::TaskDefinition" and phys:
+                    ecs_task_definition_arns.add(phys)
+                elif rtype == "AWS::ECS::Service" and phys:
+                    ecs_service_identifiers.append(phys)
     except Exception as e:
         config.log(f"Failed to enumerate stack resources for {stack_name}: {e}")
+    
+    service_event_records = []
+    ecs_log_groups = set()
+    ecs_client = None
+    if ecs_task_definition_arns or ecs_service_identifiers:
+        try:
+            ecs_client = aws_utils.client("ecs")
+        except Exception as e:
+            config.log(f"Failed to create ECS client: {e}")
+    
+    def _build_ecs_describe_kwargs(identifier: str) -> dict:
+        if not identifier:
+            return {"services": []}
+        if identifier.startswith("arn:"):
+            kwargs = {"services": [identifier]}
+            try:
+                after = identifier.split("service/", 1)[1]
+                cluster_part = after.split("/", 1)[0]
+                if cluster_part:
+                    kwargs["cluster"] = cluster_part
+            except Exception:
+                pass
+            return kwargs
+        if "/" in identifier:
+            parts = identifier.split("/")
+            cluster_part = "/".join(parts[:-1])
+            service_part = parts[-1]
+            kwargs = {"services": [service_part]}
+            if cluster_part:
+                kwargs["cluster"] = cluster_part
+            return kwargs
+        return {"services": [identifier]}
+    
+    if ecs_client:
+        for service_identifier in ecs_service_identifiers:
+            kwargs = _build_ecs_describe_kwargs(service_identifier)
+            if not kwargs.get("services"):
+                continue
+            try:
+                resp = ecs_client.describe_services(**kwargs)
+            except Exception as e:
+                config.log(f"Failed to describe ECS service {service_identifier}: {e}")
+                continue
+            for failure in resp.get("failures", []):
+                failure_arn = failure.get("arn") or service_identifier
+                failure_reason = failure.get("reason") or "Unknown"
+                failure_detail = failure.get("detail")
+                msg = f"DescribeServices failure ({failure_reason}) for {failure_arn}"
+                if failure_detail:
+                    msg += f": {failure_detail}"
+                service_event_records.append((None, failure_arn, msg))
+            for service in resp.get("services", []):
+                td_arn = service.get("taskDefinition")
+                if td_arn:
+                    ecs_task_definition_arns.add(td_arn)
+                service_name = service.get("serviceName") or service.get("serviceArn") or service_identifier
+                for event in service.get("events", []) or []:
+                    created_at = event.get("createdAt")
+                    event_dt = None
+                    if isinstance(created_at, datetime):
+                        event_dt = created_at
+                        if event_dt.tzinfo is None:
+                            event_dt = event_dt.replace(tzinfo=timezone.utc)
+                    if window_start_dt and event_dt and event_dt < window_start_dt:
+                        continue
+                    message = event.get("message")
+                    if not message:
+                        continue
+                    service_event_records.append((event_dt, service_name, message))
+        for task_def_arn in list(ecs_task_definition_arns):
+            try:
+                td_resp = ecs_client.describe_task_definition(taskDefinition=task_def_arn)
+                task_def = td_resp.get("taskDefinition", {})
+            except Exception as e:
+                config.log(f"Failed to describe ECS task definition {task_def_arn}: {e}")
+                continue
+            for container in task_def.get("containerDefinitions", []):
+                log_config = container.get("logConfiguration") or {}
+                if log_config.get("logDriver") != "awslogs":
+                    continue
+                options = log_config.get("options") or {}
+                log_group_name = options.get("awslogs-group")
+                if log_group_name:
+                    ecs_log_groups.add(log_group_name)
+    
+    if ecs_log_groups:
+        log_group_names.extend(sorted(ecs_log_groups))
     
     # Fallback: include lambda groups whose names contain the stack name
     if len(log_group_names) == 0:
@@ -4844,7 +4973,7 @@ def extract_cloudwatch_stack_logs_for_window(
         "| limit 2000"
     )
     
-    combined = []
+    log_results = []
     batch_size = 10
     for i in range(0, len(log_group_names), batch_size):
         batch = log_group_names[i:i + batch_size]
@@ -4872,13 +5001,32 @@ def extract_cloudwatch_stack_logs_for_window(
                     ts = fields.get("@timestamp", "")
                     lg = fields.get("@log", "")
                     msg = fields.get("@message", "")
-                    combined.append(f"{ts}  {lg}\n{msg}")
+                    log_results.append(f"{ts}  {lg}\n{msg}")
                 break
         
         if status != "Complete":
             config.log(f"Logs Insights window query did not complete (status={status}) for batch {batch}")
     
-    return "\n\n".join(combined)
+    output_sections = []
+    if service_event_records:
+        default_dt = datetime.min.replace(tzinfo=timezone.utc)
+        service_event_records.sort(key=lambda item: item[0] or default_dt)
+        max_events = 50
+        trimmed_records = service_event_records[-max_events:]
+        formatted_events = []
+        for dt_val, svc_name, message in trimmed_records:
+            timestamp_str = dt_val.isoformat() if isinstance(dt_val, datetime) else "unknown"
+            formatted_events.append(f"{timestamp_str} | ECS Service {svc_name}: {message}")
+        if formatted_events:
+            output_sections.append("=== ECS Service Events ===\n" + "\n".join(formatted_events))
+    if log_results:
+        output_sections.append("=== CloudWatch Logs ===\n" + "\n\n".join(log_results))
+    if not output_sections and ecs_log_groups:
+        output_sections.append(
+            "Discovered ECS log groups but no log events were returned in the selected window: "
+            + ", ".join(sorted(ecs_log_groups))
+        )
+    return "\n\n".join(output_sections)
 
 
 def run_existing_tests(config, self_driving_task):

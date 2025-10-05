@@ -9,6 +9,10 @@
   - IAM roles must follow the **principle of least privilege**—grant only the permissions required to perform the specific task.
 - All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `infrastructure.yaml`.
 - All infrastructure must be defined in `infrastructure.yaml` to ensure coherent, atomic stack deployment and teardown.
+ - ECS/Fargate task definitions must always:
+    - Set `RuntimePlatform` with `CpuArchitecture: X86_64` and `OperatingSystemFamily: LINUX` so the deployed containers run on compatible hosts.
+    - Configure `DeploymentConfiguration.DeploymentCircuitBreaker` with `Enable: true` and `Rollback: true` so that tasks fail fast and the stack update fails immediately if a task cannot start.
+    - Configure a `CreationPolicy` with a `ResourceSignal` timeout (e.g., `PT10M`) on ECS services so that CloudFormation stack updates fail fast if the service cannot stabilize, instead of hanging indefinitely.
 - If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
 - All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
@@ -23,6 +27,7 @@
 - When authoring **Shared VPC** stacks (`UseSharedVpc`), treat the VPC as read-only: never create or delete InternetGateways, route tables, or default routes, and always consume the provided subnets and networking resources.
 - When authoring **Unique VPC** stacks (`UseUniqueVpc`), InternetGateway, VPCGatewayAttachment, route table, and default route resources are permitted, but they **must** be guarded with `Condition: UseUniqueVpc` and the gateway attachment must specify `DependsOn: [DefaultPublicRoute]` to guarantee safe teardown sequencing.
 - Route53 subdomain routing (not separate VPCs) supplies tenant isolation for Shared VPC deployments; do not expect network-level isolation when `VpcStrategy` is `Shared`.
+    - **Subdomain or alias creation must _never_ occur within CloudFormation stacks. All domain and subdomain management happens externally.**
 - Teardown guidance must reflect the strategy: Unique VPC workflows delete routes before detaching the IGW, while Shared VPC instructions must never mention IGW detachment or route deletion steps.
 - If CloudFormation reports `DELETE_FAILED` while detaching an internet gateway, determine the active strategy: Unique VPC stacks usually need corrected `DependsOn` ordering, whereas Shared VPC stacks should remove any IGW or route resources from the template.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
@@ -30,7 +35,7 @@
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
 
 ### SES
-- If `DomainName` is managed in Route53 in the same AWS account, you must create Route53 record sets in `infrastructure.yaml` to publish the SES verification TXT record, DKIM CNAMEs, and MX records. Do not rely on manual DNS steps.
+- If `DomainName` is managed in Route53 in the same AWS account, you must create Route53 record sets in `infrastructure.yaml` to publish SES verification TXT record, DKIM CNAMEs, and MX records, but **only for the root domain specified by `DomainName`**. Subdomain or alias records must **never** be created automatically or within the stack. Do not rely on manual DNS steps.
 - If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
 - When deleting SES ReceiptRuleSets, you must call `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` via a custom resource (e.g., `Custom::ActivateSesRuleSet`) before attempting deletion so CloudFormation can cleanly remove the rule set. Always add a `DependsOn` from the ReceiptRuleSet to the deactivation resource.
 - If a ReceiptRuleSet resource is observed in DELETE_FAILED with "Cannot delete active rule set", ensure the stack configuration includes a `Custom::ActivateSesRuleSet` resource that calls `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` before deletion, and add `DependsOn` from the ReceiptRuleSet to this deactivation resource.
@@ -280,3 +285,4 @@ Conditions:
 - **Never** hardcode resource names (like S3 bucket names, SQS queue names, etc. - this applies to **any and all** named aws service or resources - the only exception is RDS DBName, which is always `appdb`)  
     - all resource names **must** be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
     - if you discover hardcoded resource names in the infrastructure.yaml, you **must** fix them by namespacing them with `!Sub "${StackIdentifier}-<resource_name>"`
+- **Never create Route53 subdomain or alias records (e.g., `${StackIdentifier}.${DomainName}`) in infrastructure templates. Subdomain management occurs outside the stack.**
