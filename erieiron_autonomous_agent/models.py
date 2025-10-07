@@ -8,7 +8,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Tuple, Optional
 
-from botocore.exceptions import ClientError
 from django.db import models, transaction
 from django.db.models import Sum, Q
 from django.db.models.signals import pre_delete, post_save
@@ -658,39 +657,97 @@ class Task(BaseErieIronModel):
         business = self.initiative.business
         sub_domain = self.get_sub_domain()
         
-        task_domain = None
         erie_iron_subdomain = f"{sub_domain}.erieironllc.com"
         
+        preferred_domain = self.get_preferred_domain()
+        
+        computed_domain = None
         if AwsEnv.PRODUCTION.eq(aws_env):
-            task_domain = business.domain or erie_iron_subdomain
+            computed_domain = (business.domain or erie_iron_subdomain)
         elif business.domain:
-            task_domain = f"{sub_domain}.{business.domain}"
+            computed_domain = f"{sub_domain}.{business.domain}"
         else:
-            task_domain = erie_iron_subdomain
+            computed_domain = erie_iron_subdomain
+        if computed_domain:
+            computed_domain = computed_domain.rstrip('.').lower()
+        
+        candidate_domains = []
+        for domain_candidate in [preferred_domain, computed_domain, erie_iron_subdomain.rstrip('.')]:
+            if domain_candidate and domain_candidate not in candidate_domains:
+                candidate_domains.append(domain_candidate)
+        if not candidate_domains:
+            candidate_domains.append(erie_iron_subdomain.rstrip('.'))
         
         route53_client = aws_utils.client("route53")
-        hosted_zone_id = None
-        certificate_arn = None
         aws_region = aws_env.get_aws_region()
         
-        for domain_name in [task_domain, erie_iron_subdomain]:
-            hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_name)
-            if not hosted_zone_id:
-                logging.info(f"Unable to locate a Route53 hosted zone for domain '{domain_name}'.  switching to fallback {erie_iron_subdomain}")
-                continue
-            
-            certificate_arn = domain_manager.find_certificate_arn(domain_name, aws_region)
-            if not certificate_arn:
-                logging.info(f"Unable to locate a Route53 hosted zone for domain '{domain_name}'.  switching to fallback {erie_iron_subdomain}")
-                continue
-            try:
-                domain_manager.ensure_subdomain_record(domain_name, hosted_zone_id)
-            except Exception:
-                logging.exception("Failed to ensure Route53 record for %s", domain_name)
-                raise
-            break
+        selected_domain = None
+        selected_hosted_zone_id = None
+        selected_certificate_arn = None
         
-        return domain_name, hosted_zone_id, certificate_arn
+        attempted_domain_management = False
+        
+        for domain_name in candidate_domains:
+            for attempt in range(2):
+                hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_name)
+                certificate_arn = domain_manager.find_certificate_arn(domain_name, aws_region)
+                
+                if hosted_zone_id and certificate_arn:
+                    selected_domain = domain_name.rstrip('.')
+                    selected_hosted_zone_id = hosted_zone_id
+                    selected_certificate_arn = certificate_arn
+                    break
+                
+                is_business_domain_candidate = business.domain and domain_name.endswith(business.domain.lower())
+                should_attempt_management = (
+                        attempt == 0
+                        and is_business_domain_candidate
+                        and business.needs_domain
+                        and not attempted_domain_management
+                )
+                
+                if should_attempt_management:
+                    attempted_domain_management = True
+                    try:
+                        domain_manager.manage_domain(business)
+                    except Exception:
+                        logging.exception("Failed to manage root domain for %s", business.service_token)
+                    continue
+                
+                if not hosted_zone_id:
+                    logging.info(
+                        "Unable to locate a Route53 hosted zone for domain '%s'. switching to fallback %s",
+                        domain_name,
+                        erie_iron_subdomain
+                    )
+                elif not certificate_arn:
+                    logging.info(
+                        "Unable to locate an ACM certificate for domain '%s'. switching to fallback %s",
+                        domain_name,
+                        erie_iron_subdomain
+                    )
+                break
+            
+            if selected_domain:
+                break
+        
+        if not selected_domain:
+            selected_domain = candidate_domains[-1]
+        
+        if selected_domain and self.get_preferred_domain() != selected_domain:
+            self.selfdrivingtask.domain = selected_domain
+            self.selfdrivingtask.save(update_fields=["domain"])
+        
+        return selected_domain, selected_hosted_zone_id, selected_certificate_arn
+    
+    def get_preferred_domain(self):
+        if self.selfdrivingtask:
+            preferred_domain = (self.selfdrivingtask.domain or "").rstrip('.') or None
+        else:
+            preferred_domain = None
+        if preferred_domain:
+            preferred_domain = preferred_domain.lower()
+        return preferred_domain
     
     def get_name(self):
         root_str = str(self.id)

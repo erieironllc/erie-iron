@@ -89,6 +89,15 @@ When provisioning RDS the following rules **must** be followed
 - Templates must output only `!GetAtt RDSInstance.MasterUserSecret.SecretArn`; do **not** create an output for the secret name (e.g., `RdsMasterSecretName`).
 - No Lambda functions or custom resources are needed for secret updates.
 
+### Database Environment Variables
+- Any ECS/Fargate service that connects to the database **must** define these container environment variables alongside
+  `RDS_SECRET_ARN`:
+    - `ERIEIRON_DB_NAME`: set to the database name (typically `appdb` or the chosen DB parameter).
+    - `ERIEIRON_DB_HOST`: `!GetAtt RDSInstance.Endpoint.Address`.
+    - `ERIEIRON_DB_PORT`: `!GetAtt RDSInstance.Endpoint.Port`.
+- Do not hardcode host/port literals; always resolve them from the RDS instance attributes so failovers and replacements
+  propagate automatically.
+
 
 ---
 

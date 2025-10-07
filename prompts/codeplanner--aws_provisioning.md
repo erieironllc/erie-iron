@@ -62,6 +62,11 @@ All planning logic and file instructions must explicitly support resolving the d
         - What went wrong (based on the evaluator’s diagnostics or execution logs)
         - Why it happened (the probable root cause)
         - What must be changed to fix it
+    - After diagnosing the root cause, simulate the next CloudFormation Change Set:
+        - List the logical IDs you expect to enter `UPDATE`, `REPLACE`, or `DELETE` and explain why each change is safe or what mitigation (e.g., `CreationPolicy`, warm standby) keeps the stack healthy.
+        - Predict the first CloudFormation event that would fail if the plan misses something, and include that prediction in your output so the executor knows what to watch for.
+        - Cross-check AWS documentation for every property you touch—note whether the update behavior is `No interruption`, `Some interruption`, or `Replacement`, and avoid replacements unless unavoidable.
+        - If the change adds IAM resources, call out the required `Capabilities` so deployment tooling can set them before running the Change Set.
     - Use this reasoning step to anticipate not only the immediate fix, but also any related issues likely to surface in the next execution cycle. Your goal is to reduce iteration count by proactively addressing clusters of related errors and by forecasting likely consequences of the proposed plan. If implementing Step A is likely to require Step B (e.g., updated imports, schema alignment, config updates, IAM permissions), propose both now.
         - If an initial design document exists, examine its logic before proposing file edits. Do not blindly follow its plan—evaluate whether its suggestions still align with the current error and system state.
         - If following the design would cause regressions, circular logic, or incomplete fixes, deviate from it and explain why in the planning output.
@@ -96,6 +101,10 @@ All planning logic and file instructions must explicitly support resolving the d
         • Is this field used in a schema, serializer, or downstream consumer?
 - Plan the entire arc of the change, not just the local fix.
 - Any RDS adjustments must include tightening security groups so ingress is limited to the application VPC CIDR and the `ClientIpForRemoteAccess` parameter, preserving developer access while preventing broader exposure.
+- Plans that add or update **any** service (including ECS/Fargate services) connecting to the database **must** instruct the code writer to inject
+  `ERIEIRON_DB_NAME`, `ERIEIRON_DB_HOST`, and `ERIEIRON_DB_PORT` environment variables alongside `RDS_SECRET_ARN`, using
+  values derived from `!GetAtt RDSInstance.Endpoint` attributes (host and port) and the configured DB name (`appdb` unless
+  overridden).
 
 If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, serialization, logging, permissions), plan all necessary edits in this iteration.
 

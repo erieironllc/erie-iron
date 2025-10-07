@@ -39,9 +39,10 @@ urlpatterns = [
     path("llm/ask/<uuid:llm_request_id>", views.action_llm_debug_ask, name="action_llm_debug_ask"),
     path("llm/compare/<uuid:llm_request_id>", views.action_llm_debug_compare, name="action_llm_debug_compare"),
     
-    path("iteration/<slug:tab>/<str:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration_tab"),
-    path("iteration/<str:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
     path("iteration/delete/<uuid:iteration_id>", views.action_delete_iteration, name="action_delete_iteration"),
-    
+    path("iteration/rollback/<uuid:iteration_id>", views.action_rollback_iteration, name="action_rollback_iteration"),
+    path("iteration/<slug:tab>/<str:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration_tab"),
+    path("iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
+
     path("lesson/toggle/<uuid:lesson_id>", views.action_toggle_lesson_validity, name="action_toggle_lesson_validity"),
 ]

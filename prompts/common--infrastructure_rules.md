@@ -106,6 +106,15 @@ The RDS cloudformation configuration should always look like this:
 - No `Parameters.RdsSecretArn`, no `SecretTargetAttachment`, and no Lambda custom resource are required for this pattern.
 - RDSSecurityGroup ingress rules must include **exactly** two sources: the VPC’s internal CIDR block and `ClientIpForRemoteAccess`. Remove any broader public CIDR ranges or legacy rules that would expose the database beyond those endpoints.
 
+### RDS Application Environment Wiring
+- Every ECS/Fargate task definition or container that connects to this database must define the following environment
+  variables alongside `RDS_SECRET_ARN` in `ContainerDefinitions[].Environment`:
+    - `ERIEIRON_DB_NAME`: usually wired to the literal `appdb` value (or the stack’s DBName parameter).
+    - `ERIEIRON_DB_HOST`: `!GetAtt RDSInstance.Endpoint.Address`.
+    - `ERIEIRON_DB_PORT`: `!GetAtt RDSInstance.Endpoint.Port` (do not hardcode 5432).
+- These variables ensure Django’s settings can construct the connection parameters via `os.getenv`. Plans and templates
+  must fail review if any database-connected service omits them.
+
 ### RDS Secret Attachment Requirements
 - Separate DB instance creation from AWS::SecretsManager::SecretTargetAttachment where possible.
 - Detect existing attachment and no-op rather than re-attach.

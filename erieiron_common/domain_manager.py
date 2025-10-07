@@ -27,7 +27,6 @@ def manage_domain(business: Business):
     
     hosted_zone_id = create_hosted_zone(business.domain)
     ensure_wildcard_certificate(business.domain, hosted_zone_id)
-    
     update_dns(business.domain, hosted_zone_id)
 
 
@@ -135,40 +134,6 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
     )
 
 
-def update_dns(chosen_domain, hosted_zone_id):
-    route53 = aws_utils.client("route53")
-    
-    def upsert_record(record):
-        route53.change_resource_record_sets(
-            HostedZoneId=hosted_zone_id,
-            ChangeBatch={
-                "Changes": [record]
-            }
-        )
-    
-    # A record placeholder
-    upsert_record({
-        "Action": "UPSERT",
-        "ResourceRecordSet": {
-            "Name": chosen_domain,
-            "Type": "A",
-            "TTL": 300,
-            "ResourceRecords": [{"Value": "127.0.0.1"}]
-        }
-    })
-    
-    # MX record for SES inbound
-    upsert_record({
-        "Action": "UPSERT",
-        "ResourceRecordSet": {
-            "Name": chosen_domain,
-            "Type": "MX",
-            "TTL": 300,
-            "ResourceRecords": [{"Value": f"10 inbound-smtp.{aws_utils.get_aws_region()}.amazonaws.com"}]
-        }
-    })
-
-
 def create_hosted_zone(chosen_domain):
     route53 = aws_utils.client("route53")
     try:
@@ -186,6 +151,47 @@ def create_hosted_zone(chosen_domain):
             raise e
     
     return hosted_zone_id
+
+
+def update_dns(chosen_domain, hosted_zone_id):
+    if not chosen_domain or not hosted_zone_id:
+        return
+
+    route53 = aws_utils.client("route53")
+
+    def upsert_record(record):
+        try:
+            route53.change_resource_record_sets(
+                HostedZoneId=hosted_zone_id,
+                ChangeBatch={"Changes": [record]}
+            )
+        except ClientError as exc:
+            logging.warning("Unable to upsert Route53 record for %s: %s", chosen_domain, exc)
+
+    apex = chosen_domain.rstrip('.')
+    if not apex:
+        return
+
+    apex_name = f"{apex}."
+    upsert_record({
+        "Action": "UPSERT",
+        "ResourceRecordSet": {
+            "Name": apex_name,
+            "Type": "A",
+            "TTL": 300,
+            "ResourceRecords": [{"Value": "127.0.0.1"}]
+        }
+    })
+
+    upsert_record({
+        "Action": "UPSERT",
+        "ResourceRecordSet": {
+            "Name": apex_name,
+            "Type": "MX",
+            "TTL": 300,
+            "ResourceRecords": [{"Value": f"10 inbound-smtp.{aws_utils.get_aws_region()}.amazonaws.com"}]
+        }
+    })
 
 
 def domain_available(domain: str) -> bool:

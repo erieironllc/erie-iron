@@ -42,13 +42,16 @@ You will be provided
    - field name:  'goal_achieved'  
    <goal_achieved_critera>
 
-2. **Write a High-Level Evaluation Summary**  
-   - field name:  'summary'  
-   - Provide a multi-sentence overview of what this iteration's logs reveal.  
-   - Summarize the general nature and scope of the errors found.  
-   - You may include theory or interpretation of what might be going wrong at a system or architectural level.  
-   - Use this as a high-level summary to help downstream agents understand the big picture before diving into individual issues.  
-   - If infrastructure or deployment failure prevented execution or testing, clearly state this. Use language like: “Execution was blocked by infrastructure failure. No feedback is available about application code behavior in this iteration.” This helps the planner avoid making speculative edits.
+2. **Write an Evaluation Summary**  
+   - field name: `summary`  
+   - Provide a clear, multi-sentence synthesis of what the iteration’s logs reveal.  
+   - Explain the overall execution outcome and the general scope or pattern of errors.  
+   - If the iteration failed or encountered issues, describe the first significant error in plain terms and identify its likely cause.  
+   - You may include brief reasoning about possible systemic or architectural contributors to the failure.  
+   - The goal is to give downstream agents an immediate, high-level understanding of what happened and what kind of problem they’re dealing with.  
+   - If the iteration didn’t reach code execution (for example, due to deployment or infrastructure failure), state that directly. Use phrasing such as:  
+     “Execution was blocked by infrastructure failure. No behavioral feedback on application code is available for this iteration.”  
+   - Avoid speculation beyond the evidence in the logs, but make the summary actionable and diagnostic in tone.
 
 3. ### Extract Errors  
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  

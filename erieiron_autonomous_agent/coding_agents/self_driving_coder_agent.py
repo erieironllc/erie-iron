@@ -1076,12 +1076,26 @@ def create_task_subdomain(self_driving_task: SelfDrivingTask):
     if not task_label:
         raise AgentBlocked("unable to derive a valid subdomain label from task_id")
     
-    if self_driving_task.domain:
-        sub_domain = self_driving_task.domain
+    normalized_business = business_domain.rstrip('.').lower()
+    stored_domain = (self_driving_task.domain or "").strip()
+
+    if stored_domain:
+        normalized_stored = stored_domain.rstrip('.').lower()
+        if normalized_stored.endswith(normalized_business):
+            sub_domain = stored_domain.rstrip('.')
+        else:
+            logging.info(
+                "Replacing stale subdomain %s with one matching %s",
+                stored_domain,
+                business_domain
+            )
+            sub_domain = f"{task_label}.{business_domain}".rstrip('.')
+            self_driving_task.domain = sub_domain
+            self_driving_task.save(update_fields=["domain"])   # persist corrected domain
     else:
         sub_domain = f"{task_label}.{business_domain}".rstrip('.')
         self_driving_task.domain = sub_domain
-        self_driving_task.save()
+        self_driving_task.save(update_fields=["domain"])
     
     try:
         domain_manager.execute_subdomain_action(
@@ -4626,6 +4640,7 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
 
 
 def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):
+    base_img = ""
     try:
         with open(dockerfile) as f:
             pattern = r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
@@ -4635,7 +4650,7 @@ def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):
                 ecr_login(config, base_img)
     except Exception as e:
         config.log(e)
-        raise e
+        raise AgentBlocked({"desc": f"Unable to authenticate with ecr for {base_img}", "error": str(e)})
 
 
 def ecr_login(config: SelfDriverConfig, ecr_repo_uri):

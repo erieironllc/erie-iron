@@ -53,7 +53,8 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
     
     only_fields = []
     exclude_fields = []
-    for filter_def_item in common.safe_split(filter_def, ","):
+    filter_def_items = common.safe_split(filter_def, ",")
+    for filter_def_item in filter_def_items:
         if filter_def_item.startswith("-"):
             exclude_fields.append(filter_def_item[1:])
         else:
@@ -76,13 +77,17 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
                     """)
         
         parts = []
-        for k, v in json_content.items():
+        keys = filter_def_items or json_content.keys()
+        for k in keys:
             if only_fields and k not in only_fields:
                 continue
             
             if k in exclude_fields:
                 continue
             
+            display_label = k.replace("_", " ").title()
+            
+            v = json_content.get(k)
             if common.is_list_like(v):
                 pres = []
                 for v1 in v:
@@ -94,14 +99,14 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
                 if use_default_wrapper:
                     parts.append(f"""
                     <div class="json_to_div--container">
-                        <label>{k}</label>
+                        <label>{display_label}</label>
                         {pres}
                     </div>
                     """)
                 else:
                     parts.append(f"""
                     <li>
-                        <label>{k}</label>
+                        <label>{display_label}</label>
                         {pres}
                     </li>
                     """)
@@ -112,14 +117,14 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
                 if use_default_wrapper:
                     parts.append(f"""
                     <div class="json_to_div--container">
-                        <label>{k}</label>
+                        <label>{display_label}</label>
                         <pre>{v}</pre>
                     </div>
                     """)
                 else:
                     parts.append(f"""
                 <li>
-                    <label>{k}</label>
+                    <label>{display_label}</label>
                     <pre>{v}</pre>
                 </li>
                 """)
