@@ -976,7 +976,7 @@ class SelfDrivingTask(BaseErieIronModel):
             self.get_cloudformation_stack_name(environment),
             max_length=40
         )
-    
+
     def get_cloudformation_stack_name(self, environment: AwsEnv):
         if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name:
             return self.cloudformation_stack_name
@@ -1004,9 +1004,96 @@ class SelfDrivingTask(BaseErieIronModel):
             self.refresh_from_db(fields=["cloudformation_stack_name"])
         
         return cloudformation_stack_name
-    
+
     def get_sandbox(self) -> Path:
         return Path(self.sandbox_path)
+
+    def rotate_cloudformation_stack_name(
+            self,
+            environment: AwsEnv,
+            *,
+            status: str | None = None,
+            reason: str | None = None
+    ) -> str:
+        """Allocate a fresh CloudFormation stack name and tombstone the old one."""
+        if not AwsEnv.PRODUCTION.DEV.eq(environment):
+            raise ValueError("Stack name rotation is only supported for DEV environment")
+
+        current_name = self.cloudformation_stack_name
+        if current_name:
+            AgentTombstone.objects.update_or_create(
+                business=self.business,
+                name=current_name,
+                defaults={
+                    "data_json": {
+                        "entity": "cloudformation_stack",
+                        "environment": environment.value,
+                        "name": current_name,
+                        "task_id": self.id,
+                        "initiative_id": self.task.initiative_id if self.task else None,
+                        "reason": reason or f"Stack rotated after entering {status}" if status else "Stack rotated",
+                        "status": status,
+                        "timestamp": common.get_now().isoformat(),
+                    }
+                }
+            )
+
+        exclude = {current_name} if current_name else set()
+        new_name = self._generate_unique_cloudformation_stack_name(environment, exclude=exclude)
+
+        with transaction.atomic():
+            SelfDrivingTask.objects.filter(id=self.id).update(
+                cloudformation_stack_name=new_name
+            )
+        self.refresh_from_db(fields=["cloudformation_stack_name"])
+
+        logging.info(
+            "Rotated CloudFormation stack name for task %s: %s -> %s", self.id, current_name, new_name
+        )
+        return new_name
+
+    def _generate_unique_cloudformation_stack_name(
+            self,
+            environment: AwsEnv,
+            *,
+            exclude: set[str] | None = None
+    ) -> str:
+        from erieiron_common.aws_utils import sanitize_aws_name
+        exclude = set(filter(None, exclude or set()))
+        base_components = self._base_cloudformation_stack_components(environment)
+        tombstoned_names = set(
+            AgentTombstone.objects.filter(
+                business=self.business,
+                data_json__entity="cloudformation_stack",
+                data_json__environment=environment.value
+            ).values_list("name", flat=True)
+        )
+        exclude.update(filter(None, tombstoned_names))
+
+        # Always avoid the current persisted name
+        if self.cloudformation_stack_name:
+            exclude.add(self.cloudformation_stack_name)
+
+        for attempt in range(20):
+            suffix = common.random_string(6)
+            candidate = sanitize_aws_name([*base_components, suffix], max_length=128)
+            if candidate not in exclude:
+                return candidate
+        
+        # Fallback: include a timestamp to guarantee uniqueness
+        suffix = f"fallback-{int(common.get_now().timestamp())}"
+        return sanitize_aws_name([*base_components, suffix], max_length=128)
+
+    def _base_cloudformation_stack_components(self, environment: AwsEnv) -> list[str]:
+        parts = [self.business.service_token, environment.value]
+        if AwsEnv.PRODUCTION.DEV.eq(environment):
+            initiative_id = getattr(self.task, "initiative_id", None)
+            task_id = getattr(self, "task_id", None)
+            if initiative_id is not None:
+                parts.append(str(initiative_id))
+            if task_id:
+                parts.append(str(task_id))
+        return parts
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
@@ -1025,6 +1112,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content_init = models.TextField(null=True)
     planning_json = models.JSONField(null=True)
     evaluation_json = models.JSONField(null=True)
+    codex_command = models.TextField(null=True)
     slowest_cloudformation_resources = models.JSONField(null=True)
     routing_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)

@@ -5,7 +5,7 @@
     {% if iteration.evaluation_json.error %}
         <hr>
         <h5>Error</h5>
-        {{ iteration.evaluation_json.error|json_to_div }}
+        {% include "_error_stack.html" with error=iteration.evaluation_json.error %}
     {% endif %}
 
     {% if iteration.evaluation_json.test_errors %}

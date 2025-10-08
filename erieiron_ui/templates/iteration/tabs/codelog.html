@@ -1,11 +1,4 @@
-{% if iteration.log_content_coding %}
-    <div class="mt-0 mb-5">
-        <div class="pre ">{{ iteration.log_content_coding|default_if_none:"" }}</div>
-    </div>
-{% endif %}
-{% if iteration.log_content_execution %}
-    <div class="mt-0 ">
-    <div>
-        <div class="pre ">{{ iteration.log_content_execution|default_if_none:"" }}</div>
-    </div>
-{% endif %}
+<div class="d-flex justify-content-end">
+    {% include "_copy_clipboard_btn.html" with target_el="#div_logs" %}
+</div>
+<div class="pre " id="div_logs">{{ iteration.log_content_coding|default_if_none:"" }}{{ iteration.log_content_execution|default_if_none:"" }}</div>

@@ -26,15 +26,15 @@ from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, CloudFormationStackDeleting, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative, LlmRequest
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -118,7 +118,7 @@ def execute(task_id: str, reset=False):
                 config.log(e)
             finally:
                 evaluate_iteration(
-                    config, 
+                    config,
                     execution_exception
                 )
         except NeedPlan as npe:
@@ -381,6 +381,11 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         """)
     ]
     
+    prompt_parts.append(textwrap.dedent(f"""
+    ### Lessons Learned - do not repeat these errors 
+    {json.dumps(get_lessons(config, TASK_DESC_CODE_WRITING), indent=4)}
+    """))
+    
     if guidance_text:
         prompt_parts.append(textwrap.dedent(f"""
         ## Additional Guidance
@@ -439,6 +444,7 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     }
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            codex_command=prompt_text,
             planning_json=augmented_plan
         )
     config.current_iteration.refresh_from_db(fields=["planning_json"])
@@ -501,8 +507,34 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
             last_message_path,
             config
         )
+        
+        total_cost_usd = 0
+        total_tokens = 0
         if usage_metrics:
             codex_metadata.update(usage_metrics)
+        
+        LlmRequest.objects.create(
+            title="Codex",
+            reasoning_effort=LlmReasoningEffort.MEDIUM,
+            verbosity=LlmVerbosity.LOW,
+            business=business,
+            initiative=initiative,
+            task_iteration=config.current_iteration,
+            llm_model=LlmModel.OPENAI_GPT_5,
+            token_count=total_tokens,
+            price=total_cost_usd,
+            input_messages=[
+                {
+                    "role": LlmMessageType.SYSTEM,
+                    "content": prompt_with_feedback
+                },
+                {
+                    "role": LlmMessageType.USER,
+                    "content": json.dumps(planning_data, indent=4)
+                }
+            ]
+        )
+        
         codex_metadata.update({
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
@@ -555,12 +587,23 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         
         normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
         
-        validation_error = validate_all_changed_files(config, normalized_changed, planning_data)
+        validation_error = validate_all_changed_files(
+            config,
+            normalized_changed,
+            planning_data
+        )
+        
         if validation_error is None:
             break
         
         if attempt >= max_validation_attempts:
             raise validation_error
+        
+        extract_lessons(
+            config,
+            TASK_DESC_CODE_WRITING,
+            validation_error
+        )
         
         feedback_sections.append(
             textwrap.dedent(
@@ -670,7 +713,7 @@ def validate_all_changed_files(config, normalized_changed, planning_data):
             validation_errors.append(BadPlan(f"Unexpected validation error for `{file_path}`: {exc}"))
     
     # Return the first validation error, or None if all files are valid
-    return validation_errors[0] if validation_errors else None
+    return common.safe_join(validation_errors, "\n") if validation_errors else None
 
 
 def _persist_codex_code_versions(
@@ -1655,7 +1698,6 @@ def run_docker_command(
     config.log("=" * 50 + "\n")
     
     # Capture docker run start time
-    start_epoch = int(time.time())
     process = subprocess.Popen(
         cmd,
         stdout=config.log_f,
@@ -1670,20 +1712,12 @@ def run_docker_command(
     while process.poll() is None:
         time.sleep(2)
     
-    end_epoch = int(time.time())
     return_code = process.returncode
-    config.log(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
     
-    if return_code != 0:
-        enriched_logs = enrich_local_logs_with_cloudwatch_logs(
-            config.get_log_content(),
-            config,
-            start_epoch,
-            end_epoch
-        )
-        
-        extracted_exception = extract_exception(config, enriched_logs)
-        raise ExecutionException(extracted_exception)
+    if return_code == 0:
+        config.log(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
+    else:
+        raise ExecutionException(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
 
 
 def enrich_local_logs_with_cloudwatch_logs(
@@ -1835,20 +1869,24 @@ def extract_cloudwatch_lambda_logs(
 
 
 def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
+    start_epoch = int(time.time())
     try:
         docker_env = build_env(config)
         
+        start_epoch = int(time.time())
         docker_image_tag = build_iteration(
             config,
             docker_env
         )
         
+        start_epoch = int(time.time())
         deploy_iteration(
             config,
             docker_env,
             docker_image_tag
         )
         
+        start_epoch = int(time.time())
         execute_iteration(
             config,
             docker_env,
@@ -1856,14 +1894,27 @@ def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
         )
         
         config.log("Docker execution finished")
+    
+    except Exception as e:
+        enriched_logs = enrich_local_logs_with_cloudwatch_logs(
+            config.get_log_content(),
+            config,
+            start_epoch,
+            int(time.time())
+        )
+        extracted_exception = extract_exception(config, enriched_logs)
+        
+        config.log(enriched_logs)
+        config.log(extracted_exception)
+    
     finally:
         config.business.snapshot_code(config.current_iteration, include_erie_common=False)
         exec_docker_prune()
 
 
 def execute_iteration(
-        config: SelfDriverConfig, 
-        docker_env: dict, 
+        config: SelfDriverConfig,
+        docker_env: dict,
         docker_image_tag: str
 ):
     config.set_phase(SdaPhase.EXECUTION)
@@ -1925,7 +1976,7 @@ def deploy_iteration(
     except BadPlan as bpe:
         raise bpe
     except Exception as e:
-        logging.exception(e)
+        config.log(e)
         raise BadPlan(f"task {task.id} is failing to push lambdas to s3. {e}")
     
     try:
@@ -1941,7 +1992,7 @@ def deploy_iteration(
     try:
         empty_stack_buckets(config)
     except Exception as e:
-        logging.exception(e)
+        config.log(e)
         raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
     
     deploy_cloudformation_stacks(
@@ -2158,7 +2209,7 @@ def assert_tests_green(config: SelfDriverConfig):
 
 
 def evaluate_iteration(
-        config: SelfDriverConfig, 
+        config: SelfDriverConfig,
         exception: Exception
 ):
     config.set_phase(SdaPhase.EVALUATE)
@@ -2376,7 +2427,7 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
     for i in range(5):
         matching_stack = get_stack(stack_name, cf_client)
         if not matching_stack:
-            return
+            return config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
         
         try:
             status = matching_stack["StackStatus"]
@@ -2393,13 +2444,21 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
                     config.log(f"Failed to describe stack resources: {e}\n")
                 cf_client.delete_stack(StackName=stack_name)
             
-            cloudformation_wait(config, cf_client, stack_name)
+            try:
+                cloudformation_wait(config, cf_client, stack_name)
+            except CloudFormationStackDeleting as deleting_exc:
+                config.log(
+                    f"Stack {deleting_exc.stack_name} is deleting; switching to {deleting_exc.new_stack_name} during preparation."
+                )
+                return deleting_exc.new_stack_name
         except cf_client.exceptions.ClientError as e:
             if "does not exist" in str(e):
                 ...
             else:
                 config.log(traceback.format_exc())
                 raise
+    
+    return config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
 
 
 def cloudformation_wait(
@@ -2411,6 +2470,8 @@ def cloudformation_wait(
         throw_on_fail=False
 ):
     start_time = time.time()
+    first_status = None
+    previous_status = None
     
     while True:
         time.sleep(poll_interval)
@@ -2420,10 +2481,44 @@ def cloudformation_wait(
             return
         
         status = stack['StackStatus']
+        if first_status is None:
+            first_status = status
+            config.log(f"Stack {stack_name} first_status is {first_status}")
+        
+        if (
+                throw_on_fail
+                and previous_status is not None
+                and "ROLLBACK" not in previous_status
+                and status.endswith("_IN_PROGRESS")
+                and "ROLLBACK" in status
+        ):
+            config.log(
+                f"Stack {stack_name} transitioned from {previous_status} to {status}; exiting wait early for agent handling."
+            )
+            raise CloudFormationException(
+                f"Stack {stack_name} entered rollback ({status}) after {previous_status}."
+            )
+        
+        if status.startswith("DELETE") and status.endswith("_IN_PROGRESS"):
+            new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
+                config.aws_env,
+                status=status,
+                reason="Stack observed deleting during wait"
+            )
+            config.log(
+                f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
+            )
+            raise CloudFormationStackDeleting(
+                stack_name=stack_name,
+                status=status,
+                new_stack_name=new_stack_name
+            )
         if throw_on_fail:
             if status.startswith("ROLLBACK_"):
-                break
+                if not (first_status and "ROLLBACK" in first_status):
+                    break
         
+        previous_status = status
         if not status.endswith("_IN_PROGRESS"):
             break
         
@@ -4672,15 +4767,21 @@ def deploy_cloudformation_stacks(
     
     cfn_file = get_cloudformation_file(config)
     stack_name = self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    initial_stack_name = stack_name
     config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
     
     start_time = time.time()
     try:
-        prepare_stack_for_update(
+        stack_name = prepare_stack_for_update(
             config,
             stack_name,
             cf_client
         )
+        
+        if stack_name != initial_stack_name:
+            config.log(
+                f"Rotated CloudFormation stack name from {initial_stack_name} to {stack_name} before deployment."
+            )
         
         try:
             if get_stack(stack_name, cf_client):
@@ -4702,20 +4803,30 @@ def deploy_cloudformation_stacks(
                         f"Attempting to delete wedged CloudFormation stack {stack_name} "
                         f"(attempt {attempt}/{max_delete_attempts})"
                     )
-                    cf_client.delete_stack(StackName=stack_name)
-                    cloudformation_wait(
-                        config, 
-                        cf_client, 
-                        stack_name
-                    )
-                    
-                    if not get_stack(stack_name, cf_client):
+                    delete_target = stack_name
+                    cf_client.delete_stack(StackName=delete_target)
+                    try:
+                        cloudformation_wait(
+                            config,
+                            cf_client,
+                            delete_target
+                        )
+                    except CloudFormationStackDeleting as deleting_exc:
                         stack_cleanup_successful = True
-                        config.log(f"Successfully deleted CloudFormation stack {stack_name} after validation failure.")
+                        stack_name = deleting_exc.new_stack_name
+                        config.log(
+                            f"CloudFormation stack {delete_target} is deleting; will proceed with new stack name {stack_name}."
+                        )
+                        break
+                    
+                    if not get_stack(delete_target, cf_client):
+                        stack_cleanup_successful = True
+                        config.log(f"Successfully deleted CloudFormation stack {delete_target} after validation failure.")
+                        stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
                         break
                     
                     last_delete_error = CloudFormationException(
-                        f"Stack {stack_name} still exists after delete attempt {attempt}."
+                        f"Stack {delete_target} still exists after delete attempt {attempt}."
                     )
                     config.log(str(last_delete_error))
                 
@@ -5164,8 +5275,8 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
 
 
 def delete_cloudformation_stack(
-        config, 
-        aws_env: AwsEnv, 
+        config,
+        aws_env: AwsEnv,
         block_while_waiting=True
 ):
     if not AwsEnv.DEV.eq(aws_env):
@@ -5188,8 +5299,14 @@ def delete_cloudformation_stack(
     
     # Wait until the stack is deleted or reaches a terminal state
     if block_while_waiting:
-        cloudformation_wait(config, cf_client, stack_name)
-        config.log(f"Delete request finished for stack {stack_name}")
+        try:
+            cloudformation_wait(config, cf_client, stack_name)
+        except CloudFormationStackDeleting as deleting_exc:
+            config.log(
+                f"Stack {deleting_exc.stack_name} is deleting; moving forward with new stack name {deleting_exc.new_stack_name}."
+            )
+        else:
+            config.log(f"Delete request finished for stack {stack_name}")
 
 
 def empty_stack_buckets(config: SelfDriverConfig):

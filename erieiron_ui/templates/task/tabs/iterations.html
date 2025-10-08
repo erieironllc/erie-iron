@@ -18,14 +18,24 @@
                     <small class="text-muted">
                         <label>${{ iteration.price|floatformat:2 }} (${{ iteration.total_price|floatformat:2 }})</label>
                     </small>
-                    <form method="post" action="{% url 'action_delete_iteration' iteration.id %}"
-                          class="d-inline ms-2">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-danger btn-sm"
-                                onclick="return confirm('Are you sure you want to delete this iteration? This action cannot be undone.')">
-                            Delete
-                        </button>
-                    </form>
+                    <div class="d-flex justify-content-end">
+                        <form method="post" action="{% url 'action_rollback_iteration' iteration.id %}"
+                              class="d-inline ms-2">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-warning btn-sm"
+                                    onclick="return confirm('Are you sure you want to rollback to this iteration? This will delete newer iterations and restore the codebase to this point.')">
+                                Rollback
+                            </button>
+                        </form>
+                        <form method="post" action="{% url 'action_delete_iteration' iteration.id %}"
+                              class="d-inline ms-2">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-danger btn-sm"
+                                    onclick="return confirm('Are you sure you want to delete this iteration? This action cannot be undone.')">
+                                Delete
+                            </button>
+                        </form>
+                    </div>
                 </div>
                 <div class="card-body">
                     <dl class="row">

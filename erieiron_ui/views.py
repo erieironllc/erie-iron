@@ -1037,7 +1037,7 @@ def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
 
 
 def _task_tab_available_executions(task, business, self_driving_task) -> bool:
-    return False #task.taskexecution_set.exists()
+    return False  # task.taskexecution_set.exists()
 
 
 def _task_tab_context_executions(task, business, self_driving_task) -> dict:
@@ -1173,11 +1173,21 @@ def _iteration_tab_context_routing(iteration: SelfDrivingTaskIteration, **_):
 
 
 def _iteration_tab_available_planning(iteration: SelfDrivingTaskIteration, **_):
-    return True # bool(getattr(iteration, "planning_json", None))
+    return True  # bool(getattr(iteration, "planning_json", None))
 
 
 def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
     return {}
+
+
+def _iteration_tab_available_codex(iteration: SelfDrivingTaskIteration, **_):
+    return common.is_not_empty(iteration.codex_command)
+
+
+def _iteration_tab_context_codex(iteration: SelfDrivingTaskIteration, **_):
+    return {
+        "codex_command": iteration.codex_command
+    }
 
 
 def _iteration_tab_available_code(iteration: SelfDrivingTaskIteration, **_):
@@ -2045,18 +2055,18 @@ def action_delete_iteration(request, iteration_id):
 def action_rollback_iteration(request, iteration_id):
     if request.method != 'POST':
         raise Exception()
-
+    
     try:
         iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
         task = iteration.self_driving_task
-
+        
         newer_iterations_qs = task.selfdrivingtaskiteration_set.filter(timestamp__gt=iteration.timestamp)
         newer_iterations_count = newer_iterations_qs.count()
         if newer_iterations_count:
             newer_iterations_qs.delete()
-
+        
         iteration.write_to_disk()
-
+        
         iteration_display = iteration.version_number if iteration.version_number is not None else iteration.id
         if newer_iterations_count:
             plural_suffix = '' if newer_iterations_count == 1 else 's'
@@ -2066,7 +2076,7 @@ def action_rollback_iteration(request, iteration_id):
             )
         else:
             messages.success(request, f'Rolled back to iteration {iteration_display}. No newer iterations were removed.')
-
+        
         return redirect(reverse('view_self_driver_iteration', args=[iteration.id]))
     except SelfDrivingTaskIteration.DoesNotExist:
         messages.error(request, 'Iteration not found.')

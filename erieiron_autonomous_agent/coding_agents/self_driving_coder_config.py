@@ -275,6 +275,18 @@ class CloudFormationException(Exception):
         super().__init__(extracted_exception)
 
 
+class CloudFormationStackDeleting(Exception):
+    """Signal raised when a stack enters a delete workflow."""
+
+    def __init__(self, stack_name: str, status: str, new_stack_name: str):
+        self.stack_name = stack_name
+        self.status = status
+        self.new_stack_name = new_stack_name
+        super().__init__(
+            f"CloudFormation stack {stack_name} entered {status}; will pivot to {new_stack_name}"
+        )
+
+
 class ExecutionException(Exception):
     def __init__(self, extracted_exception: str):
         super().__init__(extracted_exception)

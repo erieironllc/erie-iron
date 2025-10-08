@@ -240,6 +240,13 @@ ITERATION_TAB_DEFINITIONS = [
         "context_fn": views._iteration_tab_context_planning,
     },
     {
+        "slug": "codex",
+        "label": "Codex Command",
+        "template": "iteration/tabs/codex.html",
+        "availability_fn": views._iteration_tab_available_codex,
+        "context_fn": views._iteration_tab_context_codex,
+    },
+    {
         "slug": "code",
         "label": "Code Writing",
         "template": "iteration/tabs/code.html",

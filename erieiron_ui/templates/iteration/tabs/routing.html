@@ -28,7 +28,7 @@
         {% if previous_iteration and iteration_to_modify.id|not_eq:previous_iteration.id %}
             <p>
                 Iteration {{ iteration.version_number }} started by <b>rolling back to
-                <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}">
+                <a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">
                     Iteration {{ iteration_to_modify.version_number }}'s code
                 </a>
             </b>.
@@ -39,7 +39,7 @@
         {% else %}
             <p>
                 Iteration {{ iteration.version_number }} started with the previous iteration's code
-                (<a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}"
+                (<a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}"
             >Iteration {{ iteration_to_modify.version_number }}</a>)
             </p>
         {% endif %}
