@@ -15,6 +15,7 @@ The system passes the task-specific subdomain
 
 ### Required wiring
 - Any cloudformation service that needs a DNS name must reference `!Ref DomainName`.
+- When you publish DNS for the application, create `AWS::Route53::RecordSet` alias records (`Type: A` and optionally `AAAA`) that point to the ALB via `AliasTarget`. Do **not** create a `CNAME` for `!Ref DomainName`; alias records are required even when the value is a subdomain.
 - Any Python code (including automated tests) that needs a DNS name must retrieve it from os.getenv("DOMAIN_NAME").
 
 ### Prohibited
@@ -23,6 +24,7 @@ The system passes the task-specific subdomain
 - **never** hardcode the domain name, not even in automated tests.  
     - The domain name is sandboxed per task, and so if the domain name is hardcoded the test will fail when run in other cloudformation stacks
     - If you see that python code or an automated test has hardcoded the domain name, you **must** modify it to use the dynamic value from the environment
+- **never** create new Route53 hosted zones for task-specific subdomains. Reuse either the business's existing hosted zone (when the wildcard certificate is available) or the Erie Iron fallback zone `erieironllc.com`.
 
 ### Assumptions
 - Domain is hosted in Route53 in the same AWS account, and DNS records must be created by CloudFormation.

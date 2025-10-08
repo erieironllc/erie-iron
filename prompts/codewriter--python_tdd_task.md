@@ -22,6 +22,10 @@ This test is being generated at the start of the implementation.  No implementat
 - Do not include placeholder code such as 'TODO: add S3 integration later.'
 - All S3 code must be deployable and production-ready.
 
+## CloudFormation Output Naming Rules
+- When tests need to inspect CloudFormation outputs, limit assertions to logical IDs that CloudFormation can actually emit (alphanumeric / camel-case, e.g., `EmailIngestBucketName`).
+- Do **not** assert the presence of snake_case outputs such as `ingest_bucket_name`, `digest_jobs_queue_url`, or any other name containing underscores—those violate CloudFormation rules and will never exist.
+
 ---
 
 ## Inputs

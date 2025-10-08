@@ -27,7 +27,7 @@
 - When authoring **Shared VPC** stacks (`UseSharedVpc`), treat the VPC as read-only: never create or delete InternetGateways, route tables, or default routes, and always consume the provided subnets and networking resources.
 - When authoring **Unique VPC** stacks (`UseUniqueVpc`), InternetGateway, VPCGatewayAttachment, route table, and default route resources are permitted, but they **must** be guarded with `Condition: UseUniqueVpc` and the gateway attachment must specify `DependsOn: [DefaultPublicRoute]` to guarantee safe teardown sequencing.
 - Route53 subdomain routing (not separate VPCs) supplies tenant isolation for Shared VPC deployments; do not expect network-level isolation when `VpcStrategy` is `Shared`.
-    - **Subdomain or alias creation must _never_ occur within CloudFormation stacks. All domain and subdomain management happens externally.**
+    - **Only manage DNS for the provided `DomainName` value inside the stack. Do not invent additional subdomains such as `${StackIdentifier}.${DomainName}`—application aliases must target the ALB, and other subdomain hierarchy remains external.**
 - Teardown guidance must reflect the strategy: Unique VPC workflows delete routes before detaching the IGW, while Shared VPC instructions must never mention IGW detachment or route deletion steps.
 - If CloudFormation reports `DELETE_FAILED` while detaching an internet gateway, determine the active strategy: Unique VPC stacks usually need corrected `DependsOn` ordering, whereas Shared VPC stacks should remove any IGW or route resources from the template.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
@@ -35,7 +35,7 @@
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
 
 ### SES
-- If `DomainName` is managed in Route53 in the same AWS account, you must create Route53 record sets in `infrastructure.yaml` to publish SES verification TXT record, DKIM CNAMEs, and MX records, but **only for the root domain specified by `DomainName`**. Subdomain or alias records must **never** be created automatically or within the stack. Do not rely on manual DNS steps.
+- If `DomainName` is managed in Route53 in the same AWS account, publish the SES verification TXT, DKIM CNAME, MX, and application-facing records from `infrastructure.yaml`. All DNS automation for the value provided in `DomainName` must live in the stack—no manual zone edits.
 - If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
 - When deleting SES ReceiptRuleSets, you must call `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` via a custom resource (e.g., `Custom::ActivateSesRuleSet`) before attempting deletion so CloudFormation can cleanly remove the rule set. Always add a `DependsOn` from the ReceiptRuleSet to the deactivation resource.
 - If a ReceiptRuleSet resource is observed in DELETE_FAILED with "Cannot delete active rule set", ensure the stack configuration includes a `Custom::ActivateSesRuleSet` resource that calls `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` before deletion, and add `DependsOn` from the ReceiptRuleSet to this deactivation resource.
@@ -269,6 +269,13 @@ Conditions:
 - `AlbCertificateArn` attaches the validated ACM certificate to the ALB listener so HTTPS works for the chosen domain.
 - `WebContainerImage` is the fully qualified image URI the ECS service should deploy.
 - `WebContainerCpu`, `WebContainerMemory`, and `WebDesiredCount` configure the ECS Fargate task definition and service capacity; wire them directly into the TaskDefinition and Service resources instead of hardcoding values.
+
+### Route53 Root Alias Guardrail
+- Treat `DomainName` as the publicly routed hostname (often a subdomain). When directing traffic to an Application Load Balancer, create `AWS::Route53::RecordSet` resources with `Type: A` **and** `Type: AAAA` that use `AliasTarget` pointing to the ALB’s `DNSName` and `CanonicalHostedZoneID` attributes.
+- Reuse the existing hosted zone associated with the business domain (or the Erie Iron fallback zone) for these records; do **not** create new hosted zones for task-specific subdomains.
+- **Never** emit a `Type: CNAME` record whose `Name` resolves to `!Ref DomainName`, even if the value contains dots. Apex-style aliases keep TLS and health checks stable and avoid resolver rejection of CNAME-at-apex records.
+- Do not populate `ResourceRecords` for these Route53 alias records—the alias target must supply the ALB hostname. Continue using CNAMEs only for tokenized sub-records such as SES DKIM entries (`${Token}._domainkey.${DomainName}`).
+- Ensure the alias Route53 resources are conditionally created when a hosted zone ID is supplied (for example, gated by a `HasHostedZone` condition) so stacks behave correctly when DNS automation is disabled.
 
 ### DeletePolicy usage
 

@@ -249,17 +249,14 @@ def find_domain(business: Business):
 
 def execute_subdomain_action(business_domain: str, sub_domain: str, action: str, comment: str):
     r53 = aws_utils.client("route53")
-    
-    # find the hosted zone that exactly matches the business domain
+
     hz_resp = r53.list_hosted_zones_by_name(DNSName=business_domain.rstrip('.') + ".", MaxItems="1")
     hosted_zones = hz_resp.get("HostedZones", [])
     if not hosted_zones or hosted_zones[0].get("Name", "").rstrip('.') != business_domain.rstrip('.'):
         raise Exception(f"Hosted zone for {business_domain} not found; cannot delete subdomain {sub_domain}")
-    
+
     hosted_zone_id = hosted_zones[0]["Id"]
-    # normalize the target to have a trailing dot for cname
     cname_target = business_domain.rstrip('.') + "."
-    # delete the cname record for subdomain_to_delete
     r53.change_resource_record_sets(
         HostedZoneId=hosted_zone_id,
         ChangeBatch={
@@ -275,6 +272,118 @@ def execute_subdomain_action(business_domain: str, sub_domain: str, action: str,
                     }
                 }
             ]
+        }
+    )
+
+
+def _delete_record_if_exists(route53_client, hosted_zone_id: str, record_name: str, record_type: str, comment: str) -> None:
+    try:
+        response = route53_client.list_resource_record_sets(
+            HostedZoneId=hosted_zone_id,
+            StartRecordName=record_name,
+            StartRecordType=record_type,
+            MaxItems="1"
+        )
+    except ClientError as exc:
+        logging.warning(
+            "Unable to list %s records for %s in %s: %s",
+            record_type,
+            record_name,
+            hosted_zone_id,
+            exc
+        )
+        return
+
+    records = response.get("ResourceRecordSets", []) or []
+    if not records:
+        return
+
+    candidate = records[0]
+    if candidate.get("Type") != record_type:
+        return
+    if candidate.get("Name", "").rstrip('.').lower() != record_name.rstrip('.').lower():
+        return
+
+    try:
+        route53_client.change_resource_record_sets(
+            HostedZoneId=hosted_zone_id,
+            ChangeBatch={
+                "Comment": comment,
+                "Changes": [
+                    {
+                        "Action": "DELETE",
+                        "ResourceRecordSet": candidate
+                    }
+                ]
+            }
+        )
+        logging.info("Deleted legacy %s record for %s in hosted zone %s", record_type, record_name, hosted_zone_id)
+    except ClientError as exc:
+        logging.warning(
+            "Failed to delete %s record for %s in %s: %s",
+            record_type,
+            record_name,
+            hosted_zone_id,
+            exc
+        )
+
+
+def upsert_subdomain_alias(
+        hosted_zone_id: str,
+        record_name: str,
+        target_dns_name: str,
+        target_hosted_zone_id: str,
+        *,
+        comment: Optional[str] = None,
+        dual_stack: bool = True
+) -> None:
+    """Ensure Route53 alias records point the task domain at the ALB."""
+    normalized_zone_id = _normalize_hosted_zone_id(hosted_zone_id)
+    if not normalized_zone_id:
+        raise ValueError("hosted_zone_id is required to create alias records")
+
+    fqdn = _ensure_fqdn(record_name)
+    alias_dns = _ensure_fqdn(target_dns_name)
+
+    route53_client = aws_utils.client("route53")
+
+    cleanup_comment = comment or f"Cleanup prior records for {fqdn}"
+    _delete_record_if_exists(route53_client, normalized_zone_id, fqdn, "CNAME", cleanup_comment)
+
+    changes = [
+        {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+                "Name": fqdn,
+                "Type": "A",
+                "AliasTarget": {
+                    "DNSName": alias_dns,
+                    "HostedZoneId": target_hosted_zone_id,
+                    "EvaluateTargetHealth": False
+                }
+            }
+        }
+    ]
+
+    if dual_stack:
+        changes.append({
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+                "Name": fqdn,
+                "Type": "AAAA",
+                "AliasTarget": {
+                    "DNSName": alias_dns,
+                    "HostedZoneId": target_hosted_zone_id,
+                    "EvaluateTargetHealth": False
+                }
+            }
+        })
+
+    route53_client.change_resource_record_sets(
+        HostedZoneId=normalized_zone_id,
+        ChangeBatch={
+            "Comment": comment or f"Auto-configured by Erie Iron for {fqdn}",
+            "Changes": changes
         }
     )
 

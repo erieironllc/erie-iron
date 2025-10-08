@@ -14,7 +14,14 @@ from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 
-from erieiron_autonomous_agent.models import LlmRequest
+from erieiron_autonomous_agent.models import (
+    LlmRequest,
+    Business,
+    Initiative,
+    Task,
+    SelfDrivingTask,
+    SelfDrivingTaskIteration,
+)
 from erieiron_common import common, date_utils, settings_common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.enums import LlmModel
@@ -41,6 +48,87 @@ def dedupe_divers(tabs):
     return deduped_tabs
 
 
+@register.simple_tag(takes_context=True)
+def top_nav_dropdowns(context):
+    breadcrumbs = context.get("breadcrumbs") or []
+    if not breadcrumbs:
+        return []
+
+    try:
+        from erieiron_ui import views as ui_views
+    except Exception:
+        return []
+
+    tab_cache = {}
+
+    def cached(key, builder):
+        if key not in tab_cache:
+            try:
+                tab_cache[key] = builder() or []
+            except Exception:
+                tab_cache[key] = []
+        return tab_cache[key]
+
+    try:
+        erie_business = Business.get_erie_iron_business()
+    except Exception:
+        erie_business = None
+
+    business_obj: Business | None = context.get("business")
+    initiative_obj: Initiative | None = context.get("initiative")
+    task_obj: Task | None = context.get("task")
+    iteration_obj: SelfDrivingTaskIteration | None = context.get("iteration")
+
+    self_driving_task: SelfDrivingTask | None = context.get("self_driving_task")
+    if not self_driving_task and task_obj is not None:
+        self_driving_task = getattr(task_obj, "selfdrivingtask", None)
+    if not self_driving_task and iteration_obj is not None:
+        self_driving_task = getattr(iteration_obj, "self_driving_task", None)
+
+    active_tabs = context.get("tabs") or []
+    active_slug = context.get("active_tab")
+
+    iteration_label = None
+    if iteration_obj and getattr(iteration_obj, "version_number", None) is not None:
+        iteration_label = f"Iteration {iteration_obj.version_number}"
+
+    entries = []
+    for crumb in breadcrumbs:
+        label = common.default_str(common.get(crumb, "label"))
+        url = common.default_str(common.get(crumb, "url"))
+
+        tabs = []
+        active = None
+
+        if erie_business and label == erie_business.name:
+            tabs = cached(("businesses", erie_business.id), lambda: ui_views._build_businesses_tabs(erie_business))
+        elif business_obj and label == business_obj.name:
+            tabs = cached(("business", business_obj.id), lambda: ui_views._build_business_tabs(business_obj))
+        elif initiative_obj and label == getattr(initiative_obj, "title", ""):
+            tabs = cached(("initiative", initiative_obj.id), lambda: ui_views._build_initiative_tabs(initiative_obj))
+        elif task_obj and label == task_obj.get_name():
+            related_business = business_obj or getattr(task_obj.initiative, "business", None)
+            tabs = cached(("task", task_obj.id), lambda: ui_views._build_task_tabs(task_obj, related_business, self_driving_task))
+        elif iteration_label and label == iteration_label:
+            tabs = active_tabs
+            active = active_slug
+        else:
+            if active_tabs:
+                matching_tab = next((t for t in active_tabs if common.default_str(t.get("label")) == label), None)
+                if matching_tab:
+                    tabs = active_tabs
+                    active = active_slug
+
+        entries.append({
+            "label": label,
+            "url": url,
+            "tabs": tabs,
+            "active": active,
+        })
+
+    return entries
+
+
 @register.filter(name='json_to_div')
 def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
     if not json_content:
@@ -53,12 +141,14 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
     
     only_fields = []
     exclude_fields = []
+    keys = []
     filter_def_items = common.safe_split(filter_def, ",")
     for filter_def_item in filter_def_items:
         if filter_def_item.startswith("-"):
             exclude_fields.append(filter_def_item[1:])
         else:
             only_fields.append(filter_def_item)
+            keys.append(filter_def_item)
     
     try:
         if not isinstance(json_content, dict):
@@ -67,9 +157,7 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
             except:
                 if use_default_wrapper:
                     return mark_safe(f"""
-                <div class="json_to_div--container">
-                    <pre>{json_content}</pre>
-                </div>
+                <div class="json_to_div--container pre">{json_content}</div>
                 """)
                 else:
                     return mark_safe(f"""
@@ -77,7 +165,7 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
                     """)
         
         parts = []
-        keys = filter_def_items or json_content.keys()
+        keys = keys or json_content.keys()
         for k in keys:
             if only_fields and k not in only_fields:
                 continue
@@ -93,7 +181,7 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
                 for v1 in v:
                     if isinstance(v1, dict):
                         v1 = json.dumps(v1, indent=4, cls=ErieIronJSONEncoder)
-                    pres.append(f"<pre>{v1}</pre>")
+                    pres.append(f"<div class='pre'>{v1}</div>")
                 
                 pres = "<br>".join(pres)
                 if use_default_wrapper:
@@ -118,14 +206,14 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
                     parts.append(f"""
                     <div class="json_to_div--container">
                         <label>{display_label}</label>
-                        <pre>{v}</pre>
+                        <div class='pre'>{v}</div>
                     </div>
                     """)
                 else:
                     parts.append(f"""
                 <li>
                     <label>{display_label}</label>
-                    <pre>{v}</pre>
+                    <div class='pre'>{v}</div>
                 </li>
                 """)
         

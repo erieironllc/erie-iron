@@ -98,7 +98,7 @@ Each task should run isolated tests to ensure correctness before merging.
 ## ☑️ Task 7: Reporting & Feedback Integration
 
 **Context**  
-Each Coding task should emit structured results for JJ’s 7am email and for debugging.
+Each Coding task should emit structured results for the 7am email and for debugging.
 
 **Implementation Ideas**  
 - Record:
@@ -120,7 +120,7 @@ Sometimes a PR cannot be merged automatically, but we shouldn't lose the work.
 - If merge fails:
   - Tag task as `BLOCKED_MERGE_CONFLICT`
   - Log the full diff and conflict error
-  - Send a human-readable note to JJ
+  - Send a human-readable note to Erie Iron Leadership
 - Allow rebase-and-retry option as fallback
 
 ---

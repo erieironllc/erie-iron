@@ -9,7 +9,7 @@ def do_work(task_id):
 
     aws_utils.get_aws_interface().send_email(
         subject=f"[ErieIron] Human action required for Task {task.id}",
-        recipient="jj@jjschultz.com",
+        recipient="erieironllc@gmail.com",
         body=f"""
 A task requires your input
 {settings_common.BASE_URL}/task/{task.id}

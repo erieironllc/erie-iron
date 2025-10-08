@@ -1,8 +1,11 @@
 {% load erieiron_common_tags %}
 {% load static %}
 
+{% top_nav_dropdowns as breadcrumb_dropdowns %}
+
 <nav id="top_nav" class="navbar navbar-expand-sm d-flex justify-content-between"
-     {% if breadcrumbs %}style="margin-top: -0.70rem"{% endif %}>
+     {% if breadcrumbs %}style="margin-top: -0.70rem"{% endif %}
+>
     <div id="top_nav_leftpart" class="d-flex justify-content-start align-items-center">
         <div class="logo top_nav--item pe-0">
             <a class="navbar-brand" href="{% url "view_home" %}">
@@ -11,13 +14,56 @@
         </div>
 
         <nav aria-label="breadcrumb" class="">
-            <ol class="breadcrumb pt-3">
-                {% for bc in breadcrumbs %}
-                    <li class="breadcrumb-item">
-                        <a href="{{ bc.url }}">{{ bc.label|title }}</a>
-                    </li>
+            <ol class="breadcrumb pt-3 align-items-center gap-2">
+                {% for item in breadcrumb_dropdowns %}
+                    {% with toggle_id="breadcrumbDropdown"|add:forloop.counter %}
+                        {% with crumb_label=item.label|title %}
+                            {% if item.tabs %}
+                            <li class="breadcrumb-item dropdown">
+                                <a class="dropdown-toggle text-decoration-none"
+                                   href="#"
+                                   id="{{ toggle_id }}"
+                                   role="button"
+                                   data-bs-toggle="dropdown"
+                                   aria-expanded="false"
+                                   title="{{ crumb_label }}">
+                                    <span class="breadcrumb-label">{{ crumb_label }}</span>
+                                </a>
+                                <ul class="dropdown-menu dropdown-menu-dark"
+                                    aria-labelledby="{{ toggle_id }}">
+                                    {% for tab in item.tabs|dedupe_divers %}
+                                        {% if tab.is_divider %}
+                                            <li><hr class="dropdown-divider"></li>
+                                        {% elif tab.available %}
+                                            <li>
+                                                <a class="dropdown-item{% if item.active and tab.slug == item.active %} active{% endif %}"
+                                                   href="{{ tab.url }}">
+                                                    {{ tab.label }}
+                                                    {% if tab.badge %}
+                                                        <span class="badge bg-danger ms-1">{{ tab.badge }}</span>
+                                                    {% endif %}
+                                                </a>
+                                            </li>
+                                        {% endif %}
+                                    {% endfor %}
+                                </ul>
+                            </li>
+                            {% else %}
+                            <li class="breadcrumb-item">
+                                <a href="{{ item.url }}" title="{{ crumb_label }}">
+                                    <span class="breadcrumb-label">{{ crumb_label }}</span>
+                                </a>
+                            </li>
+                            {% endif %}
+                        {% endwith %}
+                    {% endwith %}
                 {% endfor %}
             </ol>
         </nav>
+    </div>
+
+    <div id="top_nav_rightpart" class="d-flex align-items-center gap-3">
+        <div id="top_nav--page_menus" class="d-flex align-items-center"></div>
+        <div id="top_nav--buttons" class="d-flex align-items-center"></div>
     </div>
 </nav>

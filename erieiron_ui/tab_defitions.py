@@ -164,18 +164,18 @@ TASK_TAB_DEFINITIONS = [
     },
     TAB_DIVIDER,
     {
-        "slug": "latest_iteration",
-        "label": "Latest Iteration",
-        "template": "task/tabs/iterations.html",
-        "availability_fn": views._task_tab_available_iterations,
-        "context_fn": views._task_tab_context_latest_iteration,
-    },
-    {
         "slug": "iterations",
         "label": "Code Iterations",
         "template": "task/tabs/iterations.html",
         "availability_fn": views._task_tab_available_iterations,
         "context_fn": views._task_tab_context_iterations,
+    },
+    {
+        "slug": "latest_iteration",
+        "label": "Latest Iteration",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": views._task_tab_available_iterations,
+        "context_fn": views._task_tab_context_latest_iteration,
     },
     {
         "slug": "executions",

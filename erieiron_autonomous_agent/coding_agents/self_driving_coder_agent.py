@@ -37,17 +37,9 @@ from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
-from erieiron_common.message_queue.pubsub_manager import PubSubManager, pubsub_workflow
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-
-@pubsub_workflow
-def initialize_workflow(pubsub_manager: PubSubManager):
-    pubsub_manager.on(
-        PubSubMessageType.RESET_TASK_TEST,
-        on_reset_task_test
-    )
 
 
 def execute(task_id: str, reset=False):
@@ -71,7 +63,7 @@ def execute(task_id: str, reset=False):
     # )
     # return
     
-    for i in range(10):
+    for i in range(100):
         config = SelfDriverConfig(self_driving_task)
         
         try:
@@ -223,7 +215,7 @@ def handle_goal_achieved(config):
     if TaskType.CODING_ML.eq(config.task_type):
         from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
         package_ml_artifacts(config)
-
+    
     try:
         config.git.add_commit_push(
             f"task {config.task.id}: {config.task.description}"
@@ -233,7 +225,7 @@ def handle_goal_achieved(config):
         
         if not TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
             domain_manager.delete_subdomain(config.domain_name)
-            
+        
         delete_cloudformation_stack(
             config,
             AwsEnv.DEV,
@@ -410,6 +402,16 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         prompt_parts.append(textwrap.dedent(f"""
         
         {Path(path).read_text()}
+        """))
+    
+    guardrail_marker = "Route53 Root Alias Guardrail"
+    if not any(guardrail_marker in part for part in prompt_parts):
+        prompt_parts.append(textwrap.dedent("""
+
+        ### Route53 Root Alias Guardrail
+        - Domain DNS must be published with Route53 `AWS::Route53::RecordSet` alias records. Create `Type: A` (and `AAAA` when IPv6 is required) entries that target the Application Load Balancer via `AliasTarget.DNSName` and `AliasTarget.HostedZoneId`.
+        - Do **not** create a `CNAME` for `!Ref DomainName`, even when it contains subdomains; apex-style aliases keep Route53 compliant with DNS standards.
+        - Continue using CNAMEs only for tokenized SES sub-records such as DKIM keys.
         """))
     
     prompt_parts.append(textwrap.dedent(f"""
@@ -1067,47 +1069,97 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
 def create_task_subdomain(self_driving_task: SelfDrivingTask):
     if TaskType.PRODUCTION_DEPLOYMENT.eq(self_driving_task.task.task_type):
         return
-    
-    business_domain = self_driving_task.business.domain
-    if not business_domain:
-        raise AgentBlocked(f"no domain for business {self_driving_task.business.service_token}")
-    
-    task_label = sanitize_aws_name([str(self_driving_task.task_id)], max_length=63).lower()
-    if not task_label:
-        raise AgentBlocked("unable to derive a valid subdomain label from task_id")
-    
-    normalized_business = business_domain.rstrip('.').lower()
-    stored_domain = (self_driving_task.domain or "").strip()
 
-    if stored_domain:
-        normalized_stored = stored_domain.rstrip('.').lower()
-        if normalized_stored.endswith(normalized_business):
-            sub_domain = stored_domain.rstrip('.')
-        else:
-            logging.info(
-                "Replacing stale subdomain %s with one matching %s",
-                stored_domain,
-                business_domain
-            )
-            sub_domain = f"{task_label}.{business_domain}".rstrip('.')
-            self_driving_task.domain = sub_domain
-            self_driving_task.save(update_fields=["domain"])   # persist corrected domain
-    else:
-        sub_domain = f"{task_label}.{business_domain}".rstrip('.')
-        self_driving_task.domain = sub_domain
-        self_driving_task.save(update_fields=["domain"])
-    
+    previous_domain = (self_driving_task.domain or "").rstrip('.').lower()
+
     try:
-        domain_manager.execute_subdomain_action(
-            business_domain,
-            sub_domain,
-            "UPSERT",
-            f"Auto-created by Erie Iron for task {self_driving_task.task_id}"
-        )
-    except Exception as e:
-        logging.exception(e)
-        raise AgentBlocked(f"failed to create Route53 record for {sub_domain}: {e}")
+        desired_domain, _, _ = self_driving_task.task.get_domain_and_cert(AwsEnv.DEV)
+    except Exception as exc:
+        logging.exception("Failed to determine task domain for %s: %s", self_driving_task.task_id, exc)
+        raise AgentBlocked(f"unable to determine a valid domain for task {self_driving_task.task_id}")
 
+    normalized_desired = (desired_domain or "").rstrip('.').lower()
+    if not normalized_desired:
+        raise AgentBlocked(f"unable to compute a domain for task {self_driving_task.task_id}")
+
+    if previous_domain and previous_domain != normalized_desired:
+        domain_manager.delete_subdomain(previous_domain)
+
+    if self_driving_task.domain != normalized_desired:
+        self_driving_task.domain = normalized_desired
+        self_driving_task.save(update_fields=["domain"])
+
+
+def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
+    domain_name = (config.domain_name or "").rstrip('.')
+    hosted_zone_id = config.hosted_zone_id
+
+    if not domain_name or not hosted_zone_id:
+        config.log(f"Skipping DNS alias update; missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
+        return
+
+    stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    region = config.aws_env.get_aws_region()
+    cf_client = boto3.client("cloudformation", region_name=region)
+
+    load_balancer_arn = None
+    try:
+        paginator = cf_client.get_paginator("list_stack_resources")
+        for page in paginator.paginate(StackName=stack_name):
+            for resource in page.get("StackResourceSummaries", []) or []:
+                if resource.get("ResourceType") != "AWS::ElasticLoadBalancingV2::LoadBalancer":
+                    continue
+                status = resource.get("ResourceStatus", "")
+                if status and status.endswith("DELETE_COMPLETE"):
+                    continue
+                load_balancer_arn = resource.get("PhysicalResourceId")
+                if load_balancer_arn:
+                    break
+            if load_balancer_arn:
+                break
+    except Exception as exc:
+        logging.warning("Failed to enumerate load balancers for stack %s: %s", stack_name, exc)
+        return
+
+    if not load_balancer_arn:
+        config.log(f"No Application Load Balancer found in stack {stack_name}; skipping DNS alias update")
+        return
+
+    elbv2_client = boto3.client("elbv2", region_name=region)
+    try:
+        lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
+        load_balancers = lb_resp.get("LoadBalancers", []) or []
+    except Exception as exc:
+        logging.exception("Failed to describe load balancer %s", load_balancer_arn)
+        raise AgentBlocked(f"unable to describe load balancer {load_balancer_arn}: {exc}")
+
+    if not load_balancers:
+        raise AgentBlocked(f"load balancer {load_balancer_arn} not found after description call")
+
+    load_balancer = load_balancers[0]
+    dns_name = load_balancer.get("DNSName")
+    canonical_zone_id = load_balancer.get("CanonicalHostedZoneId")
+    ip_address_type = (load_balancer.get("IpAddressType") or "").lower()
+
+    if not dns_name or not canonical_zone_id:
+        raise AgentBlocked(f"load balancer {load_balancer_arn} is missing DNS attributes needed for alias creation")
+
+    dual_stack = ip_address_type == "dualstack"
+
+    try:
+        domain_manager.upsert_subdomain_alias(
+            hosted_zone_id=hosted_zone_id,
+            record_name=domain_name,
+            target_dns_name=dns_name,
+            target_hosted_zone_id=canonical_zone_id,
+            comment=f"Auto-configured by Erie Iron for task {config.self_driving_task.task_id}",
+            dual_stack=dual_stack
+        )
+    except Exception as exc:
+        logging.exception("Failed to upsert Route53 alias for %s", domain_name)
+        raise AgentBlocked(f"failed to configure Route53 alias for {domain_name}: {exc}")
+
+    config.log(f"Ensured Route53 alias for {domain_name} targets {dns_name}")
 
 
 def build_docker_image(
@@ -1238,7 +1290,7 @@ def get_env_var_names(config: SelfDriverConfig) -> str:
 def build_env(config: SelfDriverConfig) -> dict:
     aws_env = config.aws_env
     aws_region = aws_env.get_aws_region()
-
+    
     aws_credentials = botocore.session.Session(
         profile=os.environ.get("AWS_PROFILE")
     ).get_credentials().get_frozen_credentials()
@@ -1746,6 +1798,8 @@ def execute_iteration(config: SelfDriverConfig, force_stack_update=False) -> str
                 lambda_datas
             )
         
+        ensure_alb_alias_record(config)
+
         if CredentialService.RDS.value in config.business.required_credentials:
             # special handling for RDS
             update_rds_env_vars(
@@ -2105,7 +2159,7 @@ def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception)
             evaluation_json__isnull=False
         ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
     ]
-
+    
     previous_iteration_evals = []
     if config.iteration_to_modify and config.iteration_to_modify != config.previous_iteration:
         previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
@@ -2282,11 +2336,212 @@ def extract_cloudformation_params(cfn_file: Path):
     return required_params, param_metadata
 
 
+def _load_cloudformation_template(template_body: str) -> dict:
+    class _CloudFormationLoader(yaml.SafeLoader):
+        """Lightweight loader that treats CloudFormation intrinsics as plain mappings."""
+    
+    def _construct_cfn_tag(loader, tag_suffix, node):
+        if isinstance(node, yaml.ScalarNode):
+            value = loader.construct_scalar(node)
+        elif isinstance(node, yaml.SequenceNode):
+            value = loader.construct_sequence(node)
+        elif isinstance(node, yaml.MappingNode):
+            value = loader.construct_mapping(node)
+        else:
+            value = None
+        return {tag_suffix: value}
+    
+    _CloudFormationLoader.add_multi_constructor('!', _construct_cfn_tag)
+    
+    try:
+        loaded = yaml.load(template_body, Loader=_CloudFormationLoader)
+    except yaml.YAMLError as exc:
+        logging.warning("Unable to parse CloudFormation template for Route53 guardrail validation: %s", exc)
+        return {}
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logging.warning("Unexpected error while parsing CloudFormation template for guardrail validation: %s", exc)
+        return {}
+    
+    if isinstance(loaded, dict):
+        return loaded
+    return {}
+
+
+def _flatten_cfn_expr(expr) -> str | None:
+    if isinstance(expr, str):
+        return expr
+    if isinstance(expr, (int, float)):
+        return str(expr)
+    if isinstance(expr, dict) and len(expr) == 1:
+        tag, value = next(iter(expr.items()))
+        normalized_tag = tag.replace("Fn::", "")
+        if normalized_tag == "Ref" and isinstance(value, str):
+            return f"${{{value}}}"
+        if normalized_tag == "Sub":
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list) and value:
+                return _flatten_cfn_expr(value[0])
+        if normalized_tag == "Join" and isinstance(value, list) and len(value) == 2:
+            delimiter = _flatten_cfn_expr(value[0]) or ""
+            sequence = []
+            for item in value[1] or []:
+                flattened = _flatten_cfn_expr(item)
+                if flattened is None:
+                    return None
+                sequence.append(flattened)
+            return delimiter.join(sequence)
+        if normalized_tag == "GetAtt":
+            if isinstance(value, list):
+                parts = []
+                for part in value:
+                    flattened = _flatten_cfn_expr(part)
+                    parts.append(flattened if flattened is not None else str(part))
+                return ".".join(parts)
+            if isinstance(value, str):
+                return value
+        return None
+    if isinstance(expr, list):
+        pieces = []
+        for item in expr:
+            flattened = _flatten_cfn_expr(item)
+            if flattened is None:
+                return None
+            pieces.append(flattened)
+        return "".join(pieces)
+    return None
+
+
+def _summarize_cfn_expr(expr) -> str:
+    flattened = _flatten_cfn_expr(expr)
+    if flattened is not None:
+        return flattened
+    if isinstance(expr, (dict, list)):
+        try:
+            return json.dumps(expr, default=str)
+        except TypeError:
+            return str(expr)
+    return str(expr)
+
+
+def _summarize_record_target(record_props: dict) -> str:
+    alias_target = record_props.get("AliasTarget")
+    if isinstance(alias_target, dict):
+        dns_name = _summarize_cfn_expr(alias_target.get("DNSName"))
+        hosted_zone = _summarize_cfn_expr(alias_target.get("HostedZoneId"))
+        return f"AliasTarget(DNSName={dns_name}, HostedZoneId={hosted_zone})"
+    
+    resource_records = record_props.get("ResourceRecords")
+    if isinstance(resource_records, list) and resource_records:
+        values = [
+            _summarize_cfn_expr(record)
+            for record in resource_records
+        ]
+        return f"ResourceRecords[{', '.join(values)}]"
+    
+    return "no target"
+
+
+def _is_domainname_apex(name_expr) -> bool:
+    flattened = _flatten_cfn_expr(name_expr)
+    if not flattened:
+        return False
+    
+    normalized = flattened.strip()
+    apex_candidates = {"${DomainName}", "${DomainName}.", "DomainName", "DomainName."}
+    return normalized in apex_candidates
+
+
+def _inspect_route53_record(identifier: str, record_props: dict, issues: list[str], alias_records: list[tuple[str, str, dict]]) -> bool:
+    if not isinstance(record_props, dict):
+        return False
+    
+    name_expr = record_props.get("Name")
+    if not _is_domainname_apex(name_expr):
+        return False
+    
+    record_type = str(record_props.get("Type", "")).upper()
+    target_summary = _summarize_record_target(record_props)
+    
+    if record_type == "CNAME":
+        issues.append(
+            f"{identifier} creates a CNAME for {_summarize_cfn_expr(name_expr)} ({target_summary})."
+        )
+        return True
+    
+    if record_type in {"A", "AAAA"}:
+        alias_target = record_props.get("AliasTarget")
+        if not isinstance(alias_target, dict):
+            issues.append(
+                f"{identifier} sets {record_type} for {_summarize_cfn_expr(name_expr)} without an AliasTarget ({target_summary})."
+            )
+            return True
+        
+        alias_records.append((identifier, record_type, alias_target))
+        
+        dns_name = _summarize_cfn_expr(alias_target.get("DNSName"))
+        hosted_zone = _summarize_cfn_expr(alias_target.get("HostedZoneId"))
+        
+        if dns_name and "DomainName" in dns_name:
+            issues.append(
+                f"{identifier} alias DNSName resolves to {dns_name}; point it at the Application Load Balancer DNS attribute instead."
+            )
+        
+        if hosted_zone and hosted_zone in {"${DomainHostedZoneId}", "DomainHostedZoneId"}:
+            issues.append(
+                f"{identifier} alias HostedZoneId is {hosted_zone}; use the ALB CanonicalHostedZoneID attribute."
+            )
+        
+        return True
+    
+    # Other record types (e.g., MX, TXT) for DomainName are allowed and do not require alias enforcement.
+    return True
+
+
+def _enforce_route53_alias_guardrail(template_body: str) -> None:
+    template = _load_cloudformation_template(template_body)
+    resources = template.get("Resources") if isinstance(template, dict) else None
+    if not isinstance(resources, dict) or not resources:
+        return
+    
+    issues: list[str] = []
+    alias_records: list[tuple[str, str, dict]] = []
+    domainname_records_present = False
+    
+    for logical_id, resource in resources.items():
+        if not isinstance(resource, dict):
+            continue
+        
+        resource_type = resource.get("Type")
+        properties = resource.get("Properties") or {}
+        
+        if resource_type == "AWS::Route53::RecordSet":
+            domainname_records_present |= _inspect_route53_record(logical_id, properties, issues, alias_records)
+        elif resource_type == "AWS::Route53::RecordSetGroup":
+            record_sets = properties.get("RecordSets") or []
+            if isinstance(record_sets, list):
+                for idx, record in enumerate(record_sets):
+                    identifier = f"{logical_id}[{idx}]"
+                    domainname_records_present |= _inspect_route53_record(identifier, record, issues, alias_records)
+    
+    if domainname_records_present and not any(record_type == "A" for _, record_type, _ in alias_records):
+        issues.append("No `Type: A` alias record for `!Ref DomainName` was found. Create an AliasTarget entry pointing to the Application Load Balancer.")
+    
+    if issues:
+        message_lines = [
+            "Route53 guardrail violation: `DomainName` must use alias A/AAAA records that target the Application Load Balancer.",
+            "Detected issues:",
+            *[f" - {issue}" for issue in issues],
+            "Update `infrastructure.yaml` so the Route53 records use `Type: A` (and optionally `AAAA`) with `AliasTarget.DNSName` and `AliasTarget.HostedZoneId` wired to the ALB attributes."
+        ]
+        raise BadPlan("\n".join(message_lines))
+
+
 def validate_cloudformation_template(
         config: SelfDriverConfig,
-        cf_client,
         template_body: str
 ):
+    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     config.log("Validating CloudFormation template before deployment")
     try:
         cf_client.validate_template(TemplateBody=template_body)
@@ -2298,6 +2553,8 @@ def validate_cloudformation_template(
         raise BadPlan(
             f"CloudFormation template validation encountered an unexpected error: {exc}"
         ) from exc
+    
+    _enforce_route53_alias_guardrail(template_body)
 
 
 def push_cloudformation(
@@ -3341,6 +3598,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     get_readonly_files_replacement(config)
                 ]
             ),
+            config.guidance,
             get_architecture_docs(
                 config
             ),
@@ -3437,6 +3695,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                 get_readonly_files_replacement(config)
             ]),
+            config.guidance,
             get_architecture_docs(
                 config
             ),
@@ -3892,7 +4151,7 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
     elif code_file_name_lower.startswith(".env"):
         raise BadPlan("All env vars must be fetched from the os environment.  Do not use .env files or decouple")
     else:
-        raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need JJ or a human to implement it in the Erie Iron agent codebase.")
+        raise AgentBlocked(f"no coder implemented for {code_file_name}.  Need a human to implement it in the Erie Iron agent codebase.")
     
     return common.ensure_list(prompt)
 
@@ -4040,7 +4299,7 @@ def get_docs_msg(config) -> list[LlmMessage]:
 def get_goal_msg(config, description):
     task = config.self_driving_task.task
     return LlmMessage.user_from_data(
-        description, 
+        description,
         {
             "GOAL": task.description,
             "PRIMARY_OBJECTIVE": "achieving this goal is the primary objective of this code iteration",
@@ -4048,7 +4307,8 @@ def get_goal_msg(config, description):
             "risk_notes": task.risk_notes
         }
     )
-    
+
+
 def get_cloudformation_file(config: SelfDriverConfig) -> Path:
     return common.assert_exists(config.sandbox_root_dir / "infrastructure.yaml")
 
@@ -4287,7 +4547,7 @@ def deploy_cloudformation_stacks(
         except Exception as e:
             logging.exception(e)
             config.log(traceback.format_exc())
-            raise AgentBlocked(f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  JJ or a Human needs to clean up manually")
+            raise AgentBlocked(f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  A Human needs to clean up manually")
         
         cloudformation_params = get_stack_parameters(
             config,
@@ -4309,7 +4569,6 @@ def deploy_cloudformation_stacks(
         
         validate_cloudformation_template(
             config,
-            cf_client,
             template_body
         )
         

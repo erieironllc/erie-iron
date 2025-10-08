@@ -16,6 +16,7 @@ from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
 
 import settings
+from botocore.exceptions import ClientError
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
@@ -680,7 +681,58 @@ class Task(BaseErieIronModel):
         
         route53_client = aws_utils.client("route53")
         aws_region = aws_env.get_aws_region()
-        
+        fallback_root_domain = "erieironllc.com"
+        allowed_zone_roots = {fallback_root_domain}
+        if business.domain:
+            allowed_zone_roots.add(business.domain.rstrip('.').lower())
+        hosted_zone_cache: dict[str, Optional[str]] = {}
+
+        def _zone_supports_domain(zone_id: Optional[str], domain_candidate: str) -> tuple[bool, Optional[str]]:
+            if not zone_id:
+                return False, None
+            try:
+                zone_resp = route53_client.get_hosted_zone(Id=zone_id) or {}
+            except ClientError as exc:
+                logging.warning(
+                    "Failed to inspect hosted zone %s for domain %s: %s",
+                    zone_id,
+                    domain_candidate,
+                    exc
+                )
+                return False, None
+            zone_name = (((zone_resp.get("HostedZone") or {})).get("Name") or "").rstrip('.').lower()
+            if not zone_name:
+                return False, None
+            normalized_candidate = domain_candidate.rstrip('.').lower()
+            if zone_name not in allowed_zone_roots:
+                logging.info(
+                    "Hosted zone %s is not an allowed root for %s. Allowed roots: %s",
+                    zone_name,
+                    normalized_candidate,
+                    sorted(allowed_zone_roots)
+                )
+                return False, zone_name
+            if not normalized_candidate.endswith(zone_name):
+                logging.info(
+                    "Hosted zone %s does not align with domain %s; skipping",
+                    zone_name,
+                    normalized_candidate
+                )
+                return False, zone_name
+            return True, zone_name
+
+        def _locate_allowed_zone(domain_candidate: str) -> tuple[Optional[str], Optional[str]]:
+            normalized_candidate = domain_candidate.rstrip('.').lower()
+            for root in allowed_zone_roots:
+                if not normalized_candidate.endswith(root):
+                    continue
+                if root not in hosted_zone_cache:
+                    hosted_zone_cache[root] = domain_manager.find_hosted_zone_id(route53_client, root)
+                zone_id = hosted_zone_cache.get(root)
+                if zone_id:
+                    return zone_id, root
+            return None, None
+
         selected_domain = None
         selected_hosted_zone_id = None
         selected_certificate_arn = None
@@ -691,13 +743,17 @@ class Task(BaseErieIronModel):
             for attempt in range(2):
                 hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_name)
                 certificate_arn = domain_manager.find_certificate_arn(domain_name, aws_region)
-                
+
+                zone_valid, _ = _zone_supports_domain(hosted_zone_id, domain_name)
+                if not zone_valid:
+                    hosted_zone_id, _ = _locate_allowed_zone(domain_name)
+
                 if hosted_zone_id and certificate_arn:
                     selected_domain = domain_name.rstrip('.')
                     selected_hosted_zone_id = hosted_zone_id
                     selected_certificate_arn = certificate_arn
                     break
-                
+
                 is_business_domain_candidate = business.domain and domain_name.endswith(business.domain.lower())
                 should_attempt_management = (
                         attempt == 0
@@ -732,12 +788,23 @@ class Task(BaseErieIronModel):
                 break
         
         if not selected_domain:
-            selected_domain = candidate_domains[-1]
-        
+            selected_domain = candidate_domains[-1].rstrip('.')
+            if not selected_hosted_zone_id:
+                selected_hosted_zone_id, _ = _locate_allowed_zone(selected_domain)
+            if not selected_certificate_arn:
+                selected_certificate_arn = domain_manager.find_certificate_arn(selected_domain, aws_region)
+
+        if selected_domain and not selected_hosted_zone_id:
+            logging.warning(
+                "No allowed Route53 hosted zone found for %s within %s",
+                selected_domain,
+                sorted(allowed_zone_roots)
+            )
+
         if selected_domain and self.get_preferred_domain() != selected_domain:
             self.selfdrivingtask.domain = selected_domain
             self.selfdrivingtask.save(update_fields=["domain"])
-        
+
         return selected_domain, selected_hosted_zone_id, selected_certificate_arn
     
     def get_preferred_domain(self):

@@ -46,12 +46,14 @@ You will be provided
    - field name: `summary`  
    - Provide a clear, multi-sentence synthesis of what the iteration’s logs reveal.  
    - Explain the overall execution outcome and the general scope or pattern of errors.  
+   - Describe *what the errors were* with enough detail and specificity that future iterations can avoid repeating them. Include file names, function names, and error types if present in the logs.
    - If the iteration failed or encountered issues, describe the first significant error in plain terms and identify its likely cause.  
    - You may include brief reasoning about possible systemic or architectural contributors to the failure.  
    - The goal is to give downstream agents an immediate, high-level understanding of what happened and what kind of problem they’re dealing with.  
    - If the iteration didn’t reach code execution (for example, due to deployment or infrastructure failure), state that directly. Use phrasing such as:  
      “Execution was blocked by infrastructure failure. No behavioral feedback on application code is available for this iteration.”  
    - Avoid speculation beyond the evidence in the logs, but make the summary actionable and diagnostic in tone.
+   - Format the `summary` in **Markdown** for human readability, using bullet points, bolding, and code blocks where appropriate. Ensure it is structured for both **human comprehension** and **LLM parsing**, maintaining clarity and semantic cues that downstream agents can reliably interpret.
 
 3. ### Extract Errors  
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  
@@ -80,7 +82,7 @@ You will be provided
 ```json
 {
   "goal_achieved": false,
-  "summary": "Automated test suite executed but multiple test failures occurred. Application code ran, so this iteration produced actionable feedback for fixing specific functions.",
+   "summary": "Application code executed successfully, but two automated test failures occurred. The first (test_process_email) failed an equality assertion in email output normalization, and the second (test_parse_metadata) raised a ValueError due to a None input. These failures indicate logic errors in data validation and output formatting. No infrastructure or deployment issues were detected.",
   "test_errors": [
     {
       "summary": "AssertionError in test_process_email",

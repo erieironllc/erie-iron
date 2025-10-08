@@ -6,11 +6,11 @@ This is the main controller orchestrator for Erie Iron.  The system agent simila
 ### Execution Plan
 1.  Generate profit legally and ethically.  This is an efficient machine for earning money.
 2.  Run as autonomously as possible.
-2.  Keep JJ informed on 
+2.  Keep Leadership informed on 
     * status of the overall objective (profit, money)
     * for each business, report on the performance, risks, short term outlook, long term outlook
-    * identify articles and learning content for JJ to read to know more about the Erie Iron businesses
-    * the system agent will send JJ a status update email at 7am every morning
+    * identify articles and learning content for Leadership to read to know more about the Erie Iron businesses
+    * the system agent will send Leadership a status update email at 7am every morning
 
 ### Execution Plan
 1.  Run in a docker container deployed to AWS EC2
@@ -18,7 +18,7 @@ This is the main controller orchestrator for Erie Iron.  The system agent simila
 3.  Process will identify business opportunities to legally and ethically generate profit as autonomously as possible.  Each opportunity will be stored as a "Business"
 4.  When the system agent identifies a new "Business" opportunity, it calls out to the "ErieIron Business Manager" to create the business.  
 5.  When the system agent identifies an existing business is not performing (ie it is not turning a profit or will not turn a profit in an acceptable amout of time) or is too high risk or is operating illegally or non-ethically, the system agent instructs the business manager to shut down the business
-5.  Daily, the system agent will review each business and send JJ a status update email
+5.  Daily, the system agent will review each business and send Leadership a status update email
 
 
 ## ErieIron Capability Manager
@@ -29,12 +29,12 @@ Manages the Erie Iron capabilities.  A capability can either be executed autonom
     a.  The capability manager identifies if it already has this capability built. If the capability exists it should return the API endpoint to the existing capability.
     b.  If the capability does not exist, the capability manager will identify if it can build it autonomously or if it requires a human to build
     c.  If the capability manager identifies it can build a capability autonomously, it should build it itself autonomously. If in the course of building the capability it identifies it needs new capabilities it goes back to step "b" to identify if it can build it itself or if it needs a human to build it
-    d.  If the capability manager identifies that it needs a human to help build a capability, it shall email JJ requesting the addition of a capability. Examples of this would be where credentials need to be set up for a third-party integration or if money is needed, etc.  Eventually it would be cool if if the capability manager was able to manage third-party integrations and the money itself, but it's possible that in the early days it will need a human a.k.a. JJ to do this
+    d.  If the capability manager identifies that it needs a human to help build a capability, it shall email Leadership requesting the addition of a capability. Examples of this would be where credentials need to be set up for a third-party integration or if money is needed, etc.  Eventually it would be cool if if the capability manager was able to manage third-party integrations and the money itself, but it's possible that in the early days it will need a human a.k.a. Leadership to do this
     e.  The capability manager will continuously assess whether capability is legal and ethical, and assess the risk associated with this capability. It will keep a running log of its assessments
 
 For capabilities that cannot be built autonomously, the system follows a structured escalation path:
 1. Request Capability & Escalate
-   - Send email to JJ detailing:
+   - Send email to Leadership detailing:
      - Required capability
      - Justification and urgency
      - Suggested implementation steps
@@ -48,7 +48,7 @@ For capabilities that cannot be built autonomously, the system follows a structu
    - Maintain state for each escalated capability
 
 4. Escalation Reporting
-   - Include escalation summary in JJ’s 7am daily report
+   - Include escalation summary in Leadership's 7am daily report
    - Mark business as blocked until escalation is resolved
 
 ### Highlevel datastructure

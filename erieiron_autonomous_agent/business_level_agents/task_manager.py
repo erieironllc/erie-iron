@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 from django.db import transaction
 from django.db.models import F, Value, Q
@@ -19,6 +20,100 @@ TASKTYPE_TO_MSGTYPE = {
     TaskType.TASK_EXECUTION: PubSubMessageType.CODING_WORK_REQUESTED
 }
 
+SERIALIZED_TASK_TYPES = {
+    TaskType.PRODUCTION_DEPLOYMENT,
+    TaskType.INITIATIVE_VERIFICATION,
+    TaskType.CODING_APPLICATION,
+    TaskType.CODING_ML,
+    TaskType.DESIGN_WEB_APPLICATION,
+}
+
+SERIALIZED_TASK_TYPE_VALUES = {task_type.value for task_type in SERIALIZED_TASK_TYPES}
+SERIALIZED_READY_STATUS_VALUES = {
+    TaskStatus.NOT_STARTED.value,
+    TaskStatus.BLOCKED.value,
+}
+
+
+def _get_task_type(task: Task) -> Optional[TaskType]:
+    try:
+        return TaskType(task.task_type)
+    except ValueError:
+        return None
+
+
+def _find_next_ready_serial_task(task: Task) -> Optional[Task]:
+    if not task.initiative_id:
+        return None
+
+    candidates = (
+        Task.objects
+        .filter(
+            initiative=task.initiative,
+            task_type__in=SERIALIZED_TASK_TYPE_VALUES,
+            status__in=SERIALIZED_READY_STATUS_VALUES,
+        )
+        .order_by("created_timestamp", "id")
+    )
+
+    for candidate in candidates:
+        if candidate.are_dependencies_complete():
+            return candidate
+
+    return None
+
+
+def _has_serial_task_in_progress(task: Task) -> bool:
+    if not task.initiative_id:
+        return False
+
+    return Task.objects.filter(
+        initiative=task.initiative,
+        task_type__in=SERIALIZED_TASK_TYPE_VALUES,
+        status=TaskStatus.IN_PROGRESS.value
+    ).exclude(id=task.id).exists()
+
+
+def _should_execute_task(task: Task) -> bool:
+    task_type = _get_task_type(task)
+    if task_type not in SERIALIZED_TASK_TYPES:
+        return True
+
+    if _has_serial_task_in_progress(task):
+        return False
+
+    next_ready = _find_next_ready_serial_task(task)
+    if next_ready is None:
+        return True
+
+    return next_ready.id == task.id
+
+
+def _maybe_publish_next_serial_task(task: Task) -> None:
+    task_type = _get_task_type(task)
+    if task_type not in SERIALIZED_TASK_TYPES:
+        return
+
+    if _has_serial_task_in_progress(task):
+        return
+
+    next_ready = _find_next_ready_serial_task(task)
+    if next_ready and next_ready.id != task.id:
+        PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, next_ready.id)
+
+
+def _trigger_next_serial_task(task: Task) -> None:
+    task_type = _get_task_type(task)
+    if task_type not in SERIALIZED_TASK_TYPES:
+        return
+
+    if _has_serial_task_in_progress(task):
+        return
+
+    next_ready = _find_next_ready_serial_task(task)
+    if next_ready:
+        PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, next_ready.id)
+
 
 def on_task_updated(task_id):
     task = Task.objects.get(id=task_id)
@@ -30,7 +125,7 @@ def on_task_updated(task_id):
             Task.objects.filter(id=task_id).update(
                 status=TaskStatus.BLOCKED
             )
-        elif task.allow_execution():
+        elif task.allow_execution() and _should_execute_task(task):
             # not started, not blocked.  do it to it!
             Task.objects.filter(id=task_id).update(
                 status=TaskStatus.IN_PROGRESS
@@ -41,6 +136,8 @@ def on_task_updated(task_id):
             )
 
             PubSubManager.publish_id(msg_type, task.id)
+        else:
+            _maybe_publish_next_serial_task(task)
     elif TaskStatus.FAILED.eq(status):
         logging.error(f"Task {task.id}: {task.description} FAILED")
     elif TaskStatus.COMPLETE.eq(status):
@@ -54,6 +151,8 @@ def on_task_complete(task_id):
         status=TaskStatus.COMPLETE
     )
     task.update_dependent_tasks()
+
+    _trigger_next_serial_task(task)
     
     initiative = task.initiative
     if initiative and initiative.all_tasks_complete():
@@ -91,7 +190,7 @@ Task {task.id}: {task.description} FAILED
 
     aws_utils.get_aws_interface().send_email(
         subject=f"Task failed: {task.id} - {task.description}",
-        recipient="jj@jjschultz.com",
+        recipient="erieironllc@gmail.com",
         body=f"""
 <h3>TaskID</h3>{task.id}<hr>
 

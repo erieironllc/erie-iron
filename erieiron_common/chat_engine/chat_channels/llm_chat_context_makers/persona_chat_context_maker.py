@@ -29,7 +29,7 @@ class BasePersonaContextMaker(BaseChatContextMaker):
 
     def build_base_user_message(self):
         user_message_str = f"""
-I am JJ.  I'd like to develop systems that earn money legally and ethically
+I develop systems that earn money legally and ethically
 """
         base_user_message = LlmMessage.user(user_message_str)
         return base_user_message
@@ -49,8 +49,8 @@ Your mission is to **make money for the business (legally and ethically)** by ex
    - Continuously generate and assess business ideas.
    - Focus on ideas that are **reasonably executable** by:
      - **You**, the automated agent (via APIs, code, tools), **or**
-     - **JJ**, the human operator, when manual action is needed.
-   - Clearly separate tasks you can do vs. tasks JJ must handle.
+     - **Leadership**, the human operator, when manual action is needed.
+   - Clearly separate tasks you can do vs. tasks Leadership must handle.
    - Define and request new capabilities when needed to execute promising ideas.
 
 ## Execution Guidelines
@@ -59,7 +59,7 @@ Your mission is to **make money for the business (legally and ethically)** by ex
 - For every proposed idea or action, include:
   - A **short business case**
   - **Estimated revenue potential**
-  - **Required capabilities/resources** (Agent vs. JJ)
+  - **Required capabilities/resources** (Agent vs. Leadership)
   - A **step-by-step action plan**
 
 ## Behavior and Style

@@ -10,20 +10,16 @@
     {% endif %}
 </h2>
 {% if iteration.evaluation_json %}
-    <p>{{ iteration.evaluation_json.summary }}</p>
+    <p>{{ iteration.evaluation_json.summary|markdown }}</p>
 
     {% if iteration.evaluation_json.error %}
         <hr>
-        <h5 class="mb-2">Error</h5>
-        {{ iteration.evaluation_json.error|json_to_div }}
+        {% include "_error_stack.html" with error=iteration.evaluation_json.error %}
     {% endif %}
 
     {% if iteration.evaluation_json.test_errors %}
         <hr>
-        <h5 class="mb-3">Test Error(s)</h5>
-        {% for te in iteration.evaluation_json.test_errors %}
-            {{ te.logs|json_to_div }}
-        {% endfor %}
+        {% include "_test_errors.html" with test_errors=iteration.evaluation_json.test_errors %}
     {% endif %}
 {% else %}
 
@@ -32,7 +28,7 @@
         {% if previous_iteration and iteration_to_modify.id|not_eq:previous_iteration.id %}
             <p>
                 Iteration {{ iteration.version_number }} started by <b>rolling back to
-                <a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">
+                <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}">
                     Iteration {{ iteration_to_modify.version_number }}'s code
                 </a>
             </b>.
@@ -43,14 +39,14 @@
         {% else %}
             <p>
                 Iteration {{ iteration.version_number }} started with the previous iteration's code
-                (<a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}"
+                (<a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}"
             >Iteration {{ iteration_to_modify.version_number }}</a>)
             </p>
         {% endif %}
     {% endif %}
-    {% if iteration.routing_json %}
-<hr>
-        <b class="mb-3">Iteration {{ iteration_to_modify.version_number }}'s evaluation and subsequent routing path</b>
-        {{ iteration.routing_json|json_to_div:"classification,recovery_path,recovery_path_explanation" }}
-    {% endif %}
+
+    <hr>
+    <b class="mb-3">Iteration {{ iteration_to_modify.version_number }}'s evaluation and subsequent routing path</b>
+    {{ iteration_to_modify.evaluation_json.summary|markdown }}
+    {{ iteration.routing_json|json_to_div:"classification,recovery_path,recovery_path_explanation" }}
 {% endif %}

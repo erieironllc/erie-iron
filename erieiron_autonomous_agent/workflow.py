@@ -49,6 +49,11 @@ def board_workflow(pubsub_manager: PubSubManager):
         portfolio_resource_planner.on_resource_planning_requested,
         T.ANALYSIS_ADDED
     )
+    
+    pubsub_manager.on(
+        T.RESET_TASK_TEST,
+        self_driving_coder_agent.on_reset_task_test
+    )
 
 
 @pubsub_workflow

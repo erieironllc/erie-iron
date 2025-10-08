@@ -73,7 +73,7 @@ Return a **valid JSON object** in the following format:
 }
 ```
 
-Score each opportunity from 1 (definitely do not pursue) to 10 (exceptional low-risk, high-upside fit). Scores of 8+ should indicate readiness for immediate action with minimal JJ involvement.
+Score each opportunity from 1 (definitely do not pursue) to 10 (exceptional low-risk, high-upside fit). Scores of 8+ should indicate readiness for immediate action with minimal Human involvement.
 
 ---
 

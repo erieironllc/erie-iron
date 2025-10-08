@@ -127,6 +127,7 @@ The test code must:
 - Use deterministic data and outputs.
 - Prefer clarity over cleverness.
 - The tests **MUST** extend "from django.test import TestCase"
+- When tests need to read CloudFormation outputs, only assert against logical IDs that satisfy AWS naming rules (`[A-Za-z0-9]+`). Prefer the camel-case outputs already emitted by the stack (e.g., `EmailIngestBucketName`) and never demand snake_case names like `ingest_bucket_name` that CloudFormation cannot produce.
 
 ---
 

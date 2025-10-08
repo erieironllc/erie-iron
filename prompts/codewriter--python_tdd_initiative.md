@@ -12,6 +12,12 @@ You validate whether a Product Initiative is successfully implemented at the end
 
 ---
 
+## CloudFormation Output Naming Rules
+- When validating stack configuration, assert only against CloudFormation outputs whose logical IDs follow AWS requirements (`[A-Za-z0-9]+`, typically camel-case).
+- Never demand snake_case outputs (e.g., `ingest_bucket_name`, `digest_jobs_queue_url`, `email_ingestion_lambda_name`) because CloudFormation cannot produce them.
+
+---
+
 ## Inputs
 
 You receive the Initiative's **description** and **architecture**

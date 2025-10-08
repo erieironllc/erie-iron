@@ -22,6 +22,7 @@ You work in support of test-driven development
 - Use time-bounded polling for eventually-consistent systems; avoid unbounded sleeps
 - Assert externally observable outcomes: API responses, persisted records, emitted events, and log markers
 - Avoid coupling to internal implementation (private functions, internal IDs not surfaced by the API)
+- When verifying CloudFormation stack metadata, only reference `Outputs` whose logical IDs comply with AWS rules (`[A-Za-z0-9]+`). Use the camel-case outputs defined in the template and never assert snake_case outputs such as `ingest_bucket_name`.
 - Expect the prompt to include existing automated tests; study them, avoid duplicating their coverage, and ensure any new tests you add can pass alongside the existing suites without contradiction.
 
 ---

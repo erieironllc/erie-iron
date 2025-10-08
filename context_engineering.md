@@ -9,6 +9,7 @@ This assessment maps Erie Iron's current prompting and orchestration patterns ag
 - **Context packaging from authoritative stores** – functions such as `product_lead.build_chat_data` aggregate KPIs, directives, and prior work into a single payload, reflecting the recommended practice of curating relevant artifacts rather than passing raw databases.
 - **Observability of LLM usage** – `LlmRequest` persistence and logging within `system_agent_llm_interface.llm_chat` enable auditing and replay, aligning with the article's call for traceability across agent chains.
 - **Explicit operating constraints** – prompts embed budget, ethics, and escalation rules (see `prompts/_base_prompt--board_level.md`), which matches the guidance to surface critical guardrails inside the context itself.
+- **DNS alias guardrail** – infrastructure prompts now codify that `DomainName` must resolve through Route53 alias A/AAAA records to the ALB, eliminating the CNAME-at-apex failure mode and demonstrating proactive risk capture in the shared prompt library.
 
 ## Gaps and Misalignments
 - **Task Input Synthesizer still conceptual** – the TIS design is documented (`docs/erie_iron_tis_architecture.md`) but not implemented, so cross-agent context assembly remains ad hoc and manual, contrary to the article's emphasis on automated context orchestration.

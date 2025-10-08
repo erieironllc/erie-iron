@@ -19,6 +19,7 @@ Do not create HUMAN_WORK tasks for DNS, SES identity verification, or DKIM/MX/TX
 - These must be automated through CloudFormation (Route53) or explicit API-backed resources.  
 - Only if a resource truly cannot be automated may a HUMAN_WORK task be created—but treat this as an exception after exhausting automation options.  
 Do not rely on manual DNS or SES domain verification when the domain is managed in Route53. Handle verification in-stack
+- Do not author tasks that point `DomainName` at the ALB with a CNAME. Require Route53 alias A/AAAA records that target the load balancer attributes instead.
 
 # Exemptions
 You do not need to create tasks for:  

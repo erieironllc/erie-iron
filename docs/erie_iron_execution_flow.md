@@ -7,7 +7,7 @@ This document outlines the full agent-based execution architecture of Erie Iron,
 ## 🎯 Erie Iron’s Top-Level Objective
 
 Erie Iron exists to:
-- **Make money** legally and ethically for its owner (JJ)
+- **Make a profit** legally and ethically.  The sole reason Erie Iron exists is to make more money than it spends
 - Run **lean**, **autonomous**, and **scalable** businesses
 - Operate as a portfolio of individually-managed ventures
 
@@ -28,7 +28,7 @@ Erie Iron exists to:
      - Loop with Business Finder and Analyst until a strong opportunity is found
      - Launch the new business via CEO Agent
   4. If capacity is **insufficient** but the opportunity is strong:
-     - Escalate to JJ with rationale, estimated value, and required resources
+     - Escalate to Leadership with rationale, estimated value, and required resources
 
 ---
 
@@ -136,7 +136,7 @@ Erie Iron exists to:
 
 ---
 
-### 9. 👤 JJ Escalation
+### 9. 👤 Leadership Escalation
 **Component**: Human-in-the-loop
 
 - Receives all HUMAN-mode tasks
@@ -151,7 +151,7 @@ Erie Iron exists to:
   - KPIs
   - Completed tasks
   - Blockers
-  - JJ alerts
+  - Leadership alerts
   - Learning material if needed
 
 ---
@@ -168,4 +168,4 @@ Erie Iron exists to:
 | Task Decomposer  | Breaks down tasks into technical steps              |
 | Sales Agent      | Designs customer acquisition & persona strategy     |
 | Execution Engine | Runs tasks via pub/sub                              |
-| JJ               | Human override for blocked or escalated tasks       |
+| Leadership       | Human override for blocked or escalated tasks       |

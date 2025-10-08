@@ -11,8 +11,6 @@
     {% if iteration.evaluation_json.test_errors %}
         <hr>
         <h5>Test Error(s)</h5>
-        {% for te in iteration.evaluation_json.test_errors %}
-            {{ te|json_to_div }}
-        {% endfor %}
+        {% include "_test_errors.html" with test_errors=iteration.evaluation_json.test_errors %}
     {% endif %}
 {% endif %}

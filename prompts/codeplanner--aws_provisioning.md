@@ -110,6 +110,10 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 
 - When a plan introduces or updates an `AWS::EC2::VPCGatewayAttachment` (InternetGatewayAttachment), require `DependsOn: [DefaultPublicRoute]` so route resources delete before CloudFormation detaches the internet gateway.
 
+## DNS Guardrails
+- Whenever the infrastructure change requires publishing DNS for `DomainName`, mandate that the code writer create Route53 `AWS::Route53::RecordSet` resources of `Type: A` (and `AAAA` if IPv6 is expected) that use `AliasTarget` pointing at the Application Load Balancer. Explain that CNAME records are forbidden for `!Ref DomainName`, even when the value is a subdomain.
+- Call out CNAME-at-apex issues explicitly in `risks` or `blocked_reasons` if the existing template or third-party guidance suggests pointing the domain at the ALB via `CNAME`; the plan must direct the alias conversion instead.
+
 ---
 
 ### Service Naming
