@@ -458,70 +458,144 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         "-"
     ]
     
-    config.log("Running Codex CLI", codex_cmd, f"Prompt saved to {prompt_path}")
-    
-    codex_start_time = time.time()
     prior_file_checksum_map = get_file_checksum_map(config.sandbox_root_dir)
-    codex_result = subprocess.run(
-        codex_cmd,
-        input=prompt_text,
-        text=True,
-        capture_output=True,
-        cwd=str(config.sandbox_root_dir),
-        env=os.environ.copy()
-    )
+    feedback_sections: list[str] = []
+    max_validation_attempts = 2
+    attempt = 0
+    changed_paths: list[Path] = []
+    codex_result = None
     
-    stdout_path.write_text(codex_result.stdout or "", encoding="utf-8")
-    stderr_path.write_text(codex_result.stderr or "", encoding="utf-8")
-    
-    # Update the planning JSON with execution artefacts regardless of success so failures retain context.
-    planning_record = copy.deepcopy(config.current_iteration.planning_json or augmented_plan)
-    codex_metadata = planning_record.get("codex_metadata", {})
-    usage_metrics = _extract_codex_usage(
-        codex_result.stdout,
-        codex_result.stderr,
-        last_message_path,
-        config
-    )
-    if usage_metrics:
-        codex_metadata.update(usage_metrics)
-    codex_metadata.update({
-        "stdout_path": str(stdout_path),
-        "stderr_path": str(stderr_path),
-        "last_message_path": str(last_message_path) if last_message_path.exists() else None,
-        "codex_start_time": codex_start_time,
-        "return_code": codex_result.returncode,
-        "execution_completed_at": time.time()
-    })
-    planning_record["codex_metadata"] = codex_metadata
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-            planning_json=planning_record
+    while attempt < max_validation_attempts:
+        attempt += 1
+        prompt_with_feedback = prompt_text
+        if feedback_sections:
+            prompt_with_feedback = prompt_with_feedback + "\n\n" + "\n\n".join(feedback_sections)
+        prompt_path.write_text(prompt_with_feedback, encoding="utf-8")
+        
+        config.log(
+            f"Running Codex CLI (attempt {attempt})",
+            codex_cmd,
+            f"Prompt saved to {prompt_path}"
         )
-    config.current_iteration.refresh_from_db(fields=["planning_json"])
-    
-    if codex_result.returncode != 0:
-        raise ExecutionException(
-            f"Codex CLI exited with code {codex_result.returncode}. See {stdout_path} and {stderr_path} for details."
+        
+        codex_start_time = time.time()
+        codex_result = subprocess.run(
+            codex_cmd,
+            input=prompt_with_feedback,
+            text=True,
+            capture_output=True,
+            cwd=str(config.sandbox_root_dir),
+            env=os.environ.copy()
         )
-    
-    if last_message_path.exists():
-        config.log("Codex CLI final message:", last_message_path.read_text(encoding="utf-8"))
-    
-    config.log(
-        "Codex CLI completed successfully",
-        {
+        
+        stdout_path.write_text(codex_result.stdout or "", encoding="utf-8")
+        stderr_path.write_text(codex_result.stderr or "", encoding="utf-8")
+        
+        # Update the planning JSON with execution artefacts regardless of success so failures retain context.
+        planning_record = copy.deepcopy(config.current_iteration.planning_json or augmented_plan)
+        codex_metadata = planning_record.get("codex_metadata", {})
+        usage_metrics = _extract_codex_usage(
+            codex_result.stdout,
+            codex_result.stderr,
+            last_message_path,
+            config
+        )
+        if usage_metrics:
+            codex_metadata.update(usage_metrics)
+        codex_metadata.update({
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
-            "last_message_path": str(last_message_path)
-        }
-    )
-    
-    changed_paths = _collect_repo_changed_files(
-        config,
-        prior_file_checksum_map,
-        readonly_entries
-    )
+            "last_message_path": str(last_message_path) if last_message_path.exists() else None,
+            "codex_start_time": codex_start_time,
+            "return_code": codex_result.returncode,
+            "execution_completed_at": time.time(),
+            "attempt": attempt
+        })
+        if feedback_sections:
+            codex_metadata["cloudformation_feedback"] = feedback_sections.copy()
+        planning_record["codex_metadata"] = codex_metadata
+        with transaction.atomic():
+            SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                planning_json=planning_record
+            )
+        config.current_iteration.refresh_from_db(fields=["planning_json"])
+        
+        if codex_result.returncode != 0:
+            raise ExecutionException(
+                f"Codex CLI exited with code {codex_result.returncode}. See {stdout_path} and {stderr_path} for details."
+            )
+        
+        if last_message_path.exists():
+            config.log(
+                f"Codex CLI final message (attempt {attempt}):",
+                last_message_path.read_text(encoding="utf-8")
+            )
+        
+        config.log(
+            "Codex CLI completed successfully",
+            {
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "last_message_path": str(last_message_path),
+                "attempt": attempt
+            }
+        )
+        
+        changed_paths = _collect_repo_changed_files(
+            config,
+            prior_file_checksum_map,
+            readonly_entries
+        )
+        
+        normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
+        if "infrastructure.yaml" not in normalized_changed:
+            break
+        
+        infrastructure_path = config.sandbox_root_dir / "infrastructure.yaml"
+        validation_error = None
+        try:
+            template_body = infrastructure_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            validation_error = BadPlan(
+                "`infrastructure.yaml` is missing after Codex execution; restore the file and ensure it is valid."
+            )
+        except OSError as read_exc:
+            validation_error = BadPlan(
+                f"Unable to read `infrastructure.yaml` after Codex execution: {read_exc}"
+            )
+        else:
+            try:
+                validate_cloudformation_template(
+                    config,
+                    template_body
+                )
+            except BadPlan as exc:
+                validation_error = exc
+        
+        if validation_error is None:
+            break
+        
+        if attempt >= max_validation_attempts:
+            raise validation_error
+        
+        feedback_sections.append(
+            textwrap.dedent(
+                f"""
+                ## CloudFormation Validation Feedback
+
+                Validation of `infrastructure.yaml` failed with:
+                {validation_error}
+
+                Apply the error details above to correct `infrastructure.yaml`, then rerun the validation before completing the Codex execution.
+                """
+            ).strip()
+        )
+        config.log(
+            "CloudFormation validation failed after Codex execution; retrying Codex with feedback",
+            str(validation_error)
+        )
+    else:
+        raise ExecutionException("Codex CLI reached maximum validation attempts without resolving infrastructure.yaml errors.")
     
     persisted_code_files = _persist_codex_code_versions(
         config,
@@ -2626,8 +2700,8 @@ def push_cloudformation(
         )
         
         push_time_mins = (time.time() - start_time) / 60
-        if push_time_mins > 10:
-            config.log(f"ERROR! cloudformation deploy for {stack_name} took {push_time_mins} minutes, which is too long!  CODE PLANNER:  think of ways to make cloudformation updates faster\n\n\n\n")
+        if push_time_mins > 30:
+            config.log(f"cloudformation deploy for {stack_name} took {push_time_mins} minutes, which is too long!  CODE PLANNER:  think of ways to make cloudformation updates faster\n\n\n\n")
 
 
 def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_name, deployment_start_datetime):

@@ -201,8 +201,13 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True):
             else:
                 if isinstance(v, dict):
                     v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
-                
-                if use_default_wrapper:
+                    parts.append(f"""
+                    <div class="json_to_div--container">
+                        <label>{display_label}</label>
+                        <div class='pre'>{v}</div>
+                    </div>
+                    """)
+                elif use_default_wrapper:
                     parts.append(f"""
                     <div class="json_to_div--container">
                         <label>{display_label}</label>
