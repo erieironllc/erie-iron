@@ -1197,8 +1197,7 @@ def _iteration_tab_context_evaluation(iteration: SelfDrivingTaskIteration, **_):
 
 
 def _iteration_tab_available_codelog(iteration: SelfDrivingTaskIteration, **_):
-    log_content = getattr(iteration, "log_content_coding", "") or ""
-    return len(log_content) > 200
+    return getattr(iteration, "log_content_coding") or getattr(iteration, "log_content_execution")
 
 
 def _iteration_tab_context_codelog(iteration: SelfDrivingTaskIteration, **_):
@@ -1285,7 +1284,11 @@ def _build_iteration_tabs(
         
         tabs.append(tab_data)
     
-    nav_links = []
+    from erieiron_ui.tab_defitions import TAB_DIVIDER
+    nav_links = [
+        TAB_DIVIDER
+    ]
+    
     if previous_iteration:
         nav_links.append({
             "slug": "previous-iteration-link",

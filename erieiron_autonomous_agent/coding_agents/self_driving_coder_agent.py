@@ -28,7 +28,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, RunningProcess, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
@@ -56,10 +56,8 @@ def execute(task_id: str, reset=False):
     # plan_and_implement_code_changes(
     #     config
     # )
-    # execute_iteration(
-    #     SelfDriverConfig(self_driving_task),
-    #     AwsEnv.DEV,
-    #     force_stack_update=True
+    # build_deploy_exec_iteration(
+    #     SelfDriverConfig(self_driving_task)
     # )
     # return
     
@@ -74,6 +72,7 @@ def execute(task_id: str, reset=False):
             if i == 0:
                 config.iterate_if_necessary()
                 most_recent_iteration = self_driving_task.get_most_recent_iteration()
+                
                 if most_recent_iteration:
                     # we've re-started an self driving task - just execute on the first time around
                     config.set_iteration(most_recent_iteration)
@@ -85,7 +84,10 @@ def execute(task_id: str, reset=False):
                     log_content_execution="",
                     evaluation_json=None
                 )
-                config.current_iteration.refresh_from_db(fields=["log_content_execution", "evaluation_json"])
+                
+                config.current_iteration.refresh_from_db(
+                    fields=["log_content_execution", "evaluation_json"]
+                )
             else:
                 try:
                     config.set_iteration(self_driving_task.iterate())
@@ -100,10 +102,7 @@ def execute(task_id: str, reset=False):
             
             execution_exception = None
             try:
-                execute_iteration(
-                    config,
-                    force_stack_update=i == 0
-                )
+                build_deploy_exec_iteration(config)
             except BadPlan as bpe:
                 config.log(bpe)
                 execution_exception = bpe
@@ -118,8 +117,10 @@ def execute(task_id: str, reset=False):
                 execution_exception = e
                 config.log(e)
             finally:
-                config.set_phase(SdaPhase.EVALUATE)
-                evaluate_iteration_execution(config, execution_exception)
+                evaluate_iteration(
+                    config, 
+                    execution_exception
+                )
         except NeedPlan as npe:
             logging.info(f'NeedPlan - {npe}')
         except RetryableException as retryable_execution_exception:
@@ -547,31 +548,14 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
             readonly_entries
         )
         
+        if not changed_paths:
+            config.log("Codex CLI produced no persistable file changes - falling back to non-codex coding")
+            do_coding(config, planning_data)
+            return
+        
         normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
-        if "infrastructure.yaml" not in normalized_changed:
-            break
         
-        infrastructure_path = config.sandbox_root_dir / "infrastructure.yaml"
-        validation_error = None
-        try:
-            template_body = infrastructure_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            validation_error = BadPlan(
-                "`infrastructure.yaml` is missing after Codex execution; restore the file and ensure it is valid."
-            )
-        except OSError as read_exc:
-            validation_error = BadPlan(
-                f"Unable to read `infrastructure.yaml` after Codex execution: {read_exc}"
-            )
-        else:
-            try:
-                validate_cloudformation_template(
-                    config,
-                    template_body
-                )
-            except BadPlan as exc:
-                validation_error = exc
-        
+        validation_error = validate_all_changed_files(config, normalized_changed, planning_data)
         if validation_error is None:
             break
         
@@ -581,12 +565,10 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         feedback_sections.append(
             textwrap.dedent(
                 f"""
-                ## CloudFormation Validation Feedback
-
-                Validation of `infrastructure.yaml` failed with:
+                Code validaton failed with the following error:
                 {validation_error}
 
-                Apply the error details above to correct `infrastructure.yaml`, then rerun the validation before completing the Codex execution.
+                Apply the error details above to correct the problem
                 """
             ).strip()
         )
@@ -616,10 +598,79 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
             )
         config.current_iteration.refresh_from_db(fields=["planning_json"])
         config.log("Stored code versions for Codex-modified files", persisted_code_files)
+        config.git.add_files()
     else:
-        config.log("Codex CLI produced no persistable file changes (skipping code version update)")
+        config.log("Codex CLI produced no persistable file changes - falling back to non-codex coding")
+        do_coding(config, planning_data)
+
+
+def validate_infrastructure(config, normalized_changed):
+    if "infrastructure.yaml" not in normalized_changed:
+        return
     
-    config.git.add_files()
+    infrastructure_path = config.sandbox_root_dir / "infrastructure.yaml"
+    validation_error = None
+    try:
+        template_body = infrastructure_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        validation_error = BadPlan(
+            "`infrastructure.yaml` is missing after Codex execution; restore the file and ensure it is valid."
+        )
+    except OSError as read_exc:
+        validation_error = BadPlan(
+            f"Unable to read `infrastructure.yaml` after Codex execution: {read_exc}"
+        )
+    else:
+        try:
+            validate_cloudformation_template(
+                config,
+                template_body
+            )
+        except BadPlan as exc:
+            validation_error = exc
+    return validation_error
+
+
+def validate_all_changed_files(config, normalized_changed, planning_data):
+    """Validate all changed files using appropriate validators"""
+    validation_errors = []
+    
+    # Build a lookup from file paths to their validator information
+    validator_lookup = {}
+    if planning_data:
+        for code_file_entry in planning_data.get("code_files", []):
+            file_path = code_file_entry.get("code_file_path")
+            validator = code_file_entry.get("validator")
+            if file_path and validator:
+                validator_lookup[_normalize_relative_path(file_path)] = validator
+    
+    for file_path in normalized_changed:
+        full_path = config.sandbox_root_dir / file_path
+        validator = validator_lookup.get(file_path)
+        
+        # Skip if file doesn't exist or is not a regular file
+        if not full_path.exists() or not full_path.is_file():
+            continue
+        
+        try:
+            file_content = full_path.read_text(encoding="utf-8")
+            validate_code(
+                config,
+                full_path,
+                file_content,
+                validator
+            )
+        except FileNotFoundError:
+            validation_errors.append(BadPlan(f"`{file_path}` is missing after Codex execution; restore the file."))
+        except OSError as read_exc:
+            validation_errors.append(BadPlan(f"Unable to read `{file_path}` after Codex execution: {read_exc}"))
+        except CodeCompilationError as compile_exc:
+            validation_errors.append(BadPlan(f"Validation failed for `{file_path}`: {compile_exc}"))
+        except Exception as exc:
+            validation_errors.append(BadPlan(f"Unexpected validation error for `{file_path}`: {exc}"))
+    
+    # Return the first validation error, or None if all files are valid
+    return validation_errors[0] if validation_errors else None
 
 
 def _persist_codex_code_versions(
@@ -1143,22 +1194,22 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
 def create_task_subdomain(self_driving_task: SelfDrivingTask):
     if TaskType.PRODUCTION_DEPLOYMENT.eq(self_driving_task.task.task_type):
         return
-
+    
     previous_domain = (self_driving_task.domain or "").rstrip('.').lower()
-
+    
     try:
         desired_domain, _, _ = self_driving_task.task.get_domain_and_cert(AwsEnv.DEV)
     except Exception as exc:
         logging.exception("Failed to determine task domain for %s: %s", self_driving_task.task_id, exc)
         raise AgentBlocked(f"unable to determine a valid domain for task {self_driving_task.task_id}")
-
+    
     normalized_desired = (desired_domain or "").rstrip('.').lower()
     if not normalized_desired:
         raise AgentBlocked(f"unable to compute a domain for task {self_driving_task.task_id}")
-
+    
     if previous_domain and previous_domain != normalized_desired:
         domain_manager.delete_subdomain(previous_domain)
-
+    
     if self_driving_task.domain != normalized_desired:
         self_driving_task.domain = normalized_desired
         self_driving_task.save(update_fields=["domain"])
@@ -1167,15 +1218,15 @@ def create_task_subdomain(self_driving_task: SelfDrivingTask):
 def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
     domain_name = (config.domain_name or "").rstrip('.')
     hosted_zone_id = config.hosted_zone_id
-
+    
     if not domain_name or not hosted_zone_id:
         config.log(f"Skipping DNS alias update; missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
         return
-
+    
     stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
     region = config.aws_env.get_aws_region()
     cf_client = boto3.client("cloudformation", region_name=region)
-
+    
     load_balancer_arn = None
     try:
         paginator = cf_client.get_paginator("list_stack_resources")
@@ -1194,11 +1245,11 @@ def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
     except Exception as exc:
         logging.warning("Failed to enumerate load balancers for stack %s: %s", stack_name, exc)
         return
-
+    
     if not load_balancer_arn:
         config.log(f"No Application Load Balancer found in stack {stack_name}; skipping DNS alias update")
         return
-
+    
     elbv2_client = boto3.client("elbv2", region_name=region)
     try:
         lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
@@ -1206,20 +1257,20 @@ def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
     except Exception as exc:
         logging.exception("Failed to describe load balancer %s", load_balancer_arn)
         raise AgentBlocked(f"unable to describe load balancer {load_balancer_arn}: {exc}")
-
+    
     if not load_balancers:
         raise AgentBlocked(f"load balancer {load_balancer_arn} not found after description call")
-
+    
     load_balancer = load_balancers[0]
     dns_name = load_balancer.get("DNSName")
     canonical_zone_id = load_balancer.get("CanonicalHostedZoneId")
     ip_address_type = (load_balancer.get("IpAddressType") or "").lower()
-
+    
     if not dns_name or not canonical_zone_id:
         raise AgentBlocked(f"load balancer {load_balancer_arn} is missing DNS attributes needed for alias creation")
-
+    
     dual_stack = ip_address_type == "dualstack"
-
+    
     try:
         domain_manager.upsert_subdomain_alias(
             hosted_zone_id=hosted_zone_id,
@@ -1232,7 +1283,7 @@ def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
     except Exception as exc:
         logging.exception("Failed to upsert Route53 alias for %s", domain_name)
         raise AgentBlocked(f"failed to configure Route53 alias for {domain_name}: {exc}")
-
+    
     config.log(f"Ensured Route53 alias for {domain_name} targets {dns_name}")
 
 
@@ -1377,6 +1428,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         "AWS_SECRET_ACCESS_KEY": aws_credentials.secret_key,
         "AWS_SESSION_TOKEN": aws_credentials.token,
         "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
+        "STACK_IDENTIFIER": config.self_driving_task.get_cloudformation_key_prefix(aws_env),
         "TASK_NAMESPACE": config.self_driving_task.get_cloudformation_stack_name(aws_env),
         "CLOUDFORMATION_STACK_NAME": config.self_driving_task.get_cloudformation_stack_name(aws_env),
         "DOCKER_BUILDKIT": "1",
@@ -1581,11 +1633,9 @@ def run_docker_command(
         config: SelfDriverConfig,
         command_args: list[str],
         docker_env: dict,
-        running_process: RunningProcess,
         docker_image: str
 ) -> None:
     command_args = common.ensure_list(command_args)
-    task_execution = running_process.task_execution
     iteration = config.current_iteration
     selfdriving_task = iteration.self_driving_task
     sandbox_path = iteration.self_driving_task.sandbox_path
@@ -1614,22 +1664,15 @@ def run_docker_command(
         text=True
     )
     
-    # Update running process with PID
-    running_process.process_id = process.pid
-    running_process.save(update_fields=['process_id'])
-    
     config.log(f"Docker {command_args[-1]} execution started with PID {process.pid}, iteration_id: {iteration.id}")
     
     # Wait for completion
     while process.poll() is None:
-        running_process.update_log_tail()
         time.sleep(2)
     
     end_epoch = int(time.time())
     return_code = process.returncode
     config.log(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
-    
-    running_process.update_log_tail()
     
     if return_code != 0:
         enriched_logs = enrich_local_logs_with_cloudwatch_logs(
@@ -1638,9 +1681,6 @@ def run_docker_command(
             start_epoch,
             end_epoch
         )
-        
-        task_execution.error_msg = enriched_logs
-        task_execution.save()
         
         extracted_exception = extract_exception(config, enriched_logs)
         raise ExecutionException(extracted_exception)
@@ -1794,152 +1834,164 @@ def extract_cloudwatch_lambda_logs(
     return "\n\n".join(combined)
 
 
-def execute_iteration(config: SelfDriverConfig, force_stack_update=False) -> str:
-    running_process = None
-    
-    iteration = config.current_iteration
-    self_driving_task = iteration.self_driving_task
-    
-    task = self_driving_task.task
-    task_type = TaskType(task.task_type)
-    task_execution = init_task_execution(iteration)
-    
+def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
     try:
-        config.set_phase(SdaPhase.DEPLOY)
-        
         docker_env = build_env(config)
         
-        running_process, _ = RunningProcess.objects.update_or_create(
-            task_execution=task_execution,
-            execution_type='docker',
-            log_file_path=str(config.log_path)
-        )
-        
-        docker_file = config.sandbox_root_dir / "Dockerfile"
-        ecr_authenticate_for_dockerfile(
+        docker_image_tag = build_iteration(
             config,
-            docker_file
+            docker_env
         )
         
-        docker_image_tag = build_docker_image(
+        deploy_iteration(
             config,
             docker_env,
-            docker_file
+            docker_image_tag
         )
         
-        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-            docker_tag=docker_image_tag
-        )
-        iteration.refresh_from_db(fields=["docker_tag"])
-        
-        stack_exists = is_stack_exists(config, docker_env)
-        if stack_exists:
-            need_stack_update = is_stack_modified(config)
-        else:
-            need_stack_update = True
-        
-        if need_stack_update or force_stack_update:
-            lambda_datas = None
-            try:
-                lambda_datas = deploy_lambda_packages(config)
-            except BadPlan as bpe:
-                raise bpe
-            except Exception as e:
-                logging.exception(e)
-                raise BadPlan(f"task {task.id} is failing to push lambdas to s3. {e}")
-            
-            try:
-                full_image_uri, ecr_arn = push_image_to_ecr(
-                    config,
-                    docker_image_tag
-                )
-            except BadPlan as bpe:
-                raise bpe
-            except Exception as e:
-                raise BadPlan(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
-            
-            try:
-                empty_stack_buckets(config)
-            except Exception as e:
-                logging.exception(e)
-                raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
-            
-            deploy_cloudformation_stacks(
-                config,
-                docker_env,
-                full_image_uri,
-                ecr_arn,
-                lambda_datas
-            )
-        
-        ensure_alb_alias_record(config)
-
-        if CredentialService.RDS.value in config.business.required_credentials:
-            # special handling for RDS
-            update_rds_env_vars(
-                config,
-                docker_env
-            )
-        
-        manage_db(
+        execute_iteration(
             config,
             docker_env,
-            docker_image_tag,
-            running_process
+            docker_image_tag
         )
-        
-        config.set_phase(SdaPhase.EXECUTION)
-        if TaskType.CODING_ML.eq(task_type):
-            run_docker_command(
-                config=config,
-                docker_env=docker_env,
-                command_args=self_driving_task.main_name,
-                running_process=running_process,
-                docker_image=docker_image_tag
-            )
-            config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
-        elif task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
-            config.log("Skipping automated test run for production deployment task")
-        else:
-            run_docker_command(
-                config=config,
-                docker_env=docker_env,
-                command_args=["test", "--keepdb", "--noinput"],
-                running_process=running_process,
-                docker_image=docker_image_tag
-            )
-            
-            if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
-                task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
-                task_io_dir.mkdir(parents=True, exist_ok=True)
-                
-                input_file = task_io_dir / f"{task.id}-input.json"
-                common.write_json(input_file, task.get_upstream_outputs())
-                
-                output_file = task_io_dir / f"{task.id}-output.json"
-                
-                run_docker_command(
-                    config=config,
-                    docker_env=docker_env,
-                    command_args=[
-                        self_driving_task.main_name,
-                        "--input_file", input_file,
-                        "--output_file", output_file
-                    ],
-                    running_process=running_process,
-                    docker_image=docker_image_tag
-                )
         
         config.log("Docker execution finished")
     finally:
-        if running_process and running_process.is_running:
-            running_process.update_log_tail()
-            running_process.is_running = False
-            running_process.terminated_at = common.get_now()
-            running_process.save(update_fields=['is_running', 'terminated_at'])
-        
-        config.business.snapshot_code(iteration, include_erie_common=False)
+        config.business.snapshot_code(config.current_iteration, include_erie_common=False)
         exec_docker_prune()
+
+
+def execute_iteration(
+        config: SelfDriverConfig, 
+        docker_env: dict, 
+        docker_image_tag: str
+):
+    config.set_phase(SdaPhase.EXECUTION)
+    
+    task = config.task
+    task_type = config.task_type
+    self_driving_task = config.self_driving_task
+    
+    if TaskType.CODING_ML.eq(task_type):
+        run_docker_command(
+            config=config,
+            docker_env=docker_env,
+            command_args=self_driving_task.main_name,
+            docker_image=docker_image_tag
+        )
+        config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
+    elif task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
+        config.log("Skipping automated test run for production deployment task")
+    else:
+        run_docker_command(
+            config=config,
+            docker_env=docker_env,
+            command_args=["test", "--keepdb", "--noinput"],
+            docker_image=docker_image_tag
+        )
+        
+        if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
+            task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
+            task_io_dir.mkdir(parents=True, exist_ok=True)
+            
+            input_file = task_io_dir / f"{task.id}-input.json"
+            common.write_json(input_file, task.get_upstream_outputs())
+            
+            output_file = task_io_dir / f"{task.id}-output.json"
+            
+            run_docker_command(
+                config=config,
+                docker_env=docker_env,
+                command_args=[
+                    self_driving_task.main_name,
+                    "--input_file", input_file,
+                    "--output_file", output_file
+                ],
+                docker_image=docker_image_tag
+            )
+
+
+def deploy_iteration(
+        config: SelfDriverConfig,
+        docker_env: dict,
+        docker_image_tag: str
+):
+    config.set_phase(SdaPhase.DEPLOY)
+    
+    task = config.task
+    lambda_datas = None
+    try:
+        lambda_datas = deploy_lambda_packages(config)
+    except BadPlan as bpe:
+        raise bpe
+    except Exception as e:
+        logging.exception(e)
+        raise BadPlan(f"task {task.id} is failing to push lambdas to s3. {e}")
+    
+    try:
+        full_image_uri, ecr_arn = push_image_to_ecr(
+            config,
+            docker_image_tag
+        )
+    except BadPlan as bpe:
+        raise bpe
+    except Exception as e:
+        raise BadPlan(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+    
+    try:
+        empty_stack_buckets(config)
+    except Exception as e:
+        logging.exception(e)
+        raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
+    
+    deploy_cloudformation_stacks(
+        config,
+        docker_env,
+        full_image_uri,
+        ecr_arn,
+        lambda_datas
+    )
+    
+    ensure_alb_alias_record(config)
+    
+    if CredentialService.RDS.value in config.business.required_credentials:
+        # special handling for RDS
+        update_rds_env_vars(
+            config,
+            docker_env
+        )
+    
+    manage_db(
+        config,
+        docker_env,
+        docker_image_tag
+    )
+
+
+def build_iteration(config, docker_env):
+    config.set_phase(SdaPhase.BUILD)
+    
+    iteration = config.current_iteration
+    task_execution = init_task_execution(iteration)
+    docker_file = config.sandbox_root_dir / "Dockerfile"
+    
+    ecr_authenticate_for_dockerfile(
+        config,
+        docker_file
+    )
+    
+    docker_image_tag = build_docker_image(
+        config,
+        docker_env,
+        docker_file
+    )
+    
+    SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+        docker_tag=docker_image_tag
+    )
+    iteration.refresh_from_db(fields=["docker_tag"])
+    
+    return docker_image_tag
 
 
 def infrastructure_yaml_modified_this_iteration(
@@ -2032,8 +2084,7 @@ def is_stack_exists(config: SelfDriverConfig, docker_env: dict) -> bool:
 def manage_db(
         config: SelfDriverConfig,
         docker_env: dict,
-        docker_image_tag: str,
-        running_process: RunningProcess
+        docker_image_tag: str
 ):
     try:
         aws_region_name = docker_env["AWS_DEFAULT_REGION"]
@@ -2047,7 +2098,6 @@ def manage_db(
             config=config,
             docker_env=docker_env,
             command_args="makemigrations",
-            running_process=running_process,
             docker_image=docker_image_tag
         )
         
@@ -2055,7 +2105,6 @@ def manage_db(
             config=config,
             docker_env=docker_env,
             command_args="migrate",
-            running_process=running_process,
             docker_image=docker_image_tag
         )
     except Exception as e:
@@ -2108,7 +2157,12 @@ def assert_tests_green(config: SelfDriverConfig):
         })
 
 
-def evaluate_iteration_execution(config: SelfDriverConfig, exception: Exception):
+def evaluate_iteration(
+        config: SelfDriverConfig, 
+        exception: Exception
+):
+    config.set_phase(SdaPhase.EVALUATE)
+    
     iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
     
     if isinstance(exception, AgentBlocked):
@@ -4302,6 +4356,22 @@ def validate_code(
                 raise Exception(f"infrastructure.yaml lacks parameters")
         except Exception as e:
             raise CodeCompilationError(code, f"infrastructure.yaml parse error:\n{e}")
+        
+        try:
+            validate_cloudformation_template(
+                config,
+                code
+            )
+        except Exception as exc:
+            raise CodeCompilationError(code, textwrap.dedent(f"""
+                ## CloudFormation Validation Feedback
+
+                Validation of `infrastructure.yaml` failed with:
+                {exc}
+
+                Apply the error details above to correct `infrastructure.yaml`, then rerun the validation before completing the Codex execution.
+                """))
+    
     
     elif code_file_name.endswith(".yaml"):
         try:
@@ -4621,11 +4691,11 @@ def deploy_cloudformation_stacks(
         except Exception as e:
             logging.exception(e)
             config.log(traceback.format_exc())
-
+            
             max_delete_attempts = 3
             stack_cleanup_successful = False
             last_delete_error: Exception | None = None
-
+            
             for attempt in range(1, max_delete_attempts + 1):
                 try:
                     config.log(
@@ -4633,18 +4703,22 @@ def deploy_cloudformation_stacks(
                         f"(attempt {attempt}/{max_delete_attempts})"
                     )
                     cf_client.delete_stack(StackName=stack_name)
-                    cloudformation_wait(config, cf_client, stack_name)
-
+                    cloudformation_wait(
+                        config, 
+                        cf_client, 
+                        stack_name
+                    )
+                    
                     if not get_stack(stack_name, cf_client):
                         stack_cleanup_successful = True
                         config.log(f"Successfully deleted CloudFormation stack {stack_name} after validation failure.")
                         break
-
+                    
                     last_delete_error = CloudFormationException(
                         f"Stack {stack_name} still exists after delete attempt {attempt}."
                     )
                     config.log(str(last_delete_error))
-
+                
                 except cf_client.exceptions.ClientError as delete_exc:
                     last_delete_error = delete_exc
                     message = str(delete_exc)
@@ -4652,20 +4726,20 @@ def deploy_cloudformation_stacks(
                         stack_cleanup_successful = True
                         config.log(f"Stack {stack_name} already deleted or missing; continuing deployment.")
                         break
-
+                    
                     config.log(
                         f"Attempt {attempt}/{max_delete_attempts} failed to delete stack {stack_name}: {message}"
                     )
-
+                
                 except Exception as delete_exc:  # pragma: no cover - defensive cleanup
                     last_delete_error = delete_exc
                     config.log(
                         f"Attempt {attempt}/{max_delete_attempts} raised while deleting stack {stack_name}: {delete_exc}"
                     )
-
+                
                 if attempt < max_delete_attempts:
                     time.sleep(5)
-
+            
             if not stack_cleanup_successful:
                 if last_delete_error:
                     config.log(
@@ -5089,7 +5163,11 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
     )
 
 
-def delete_cloudformation_stack(config, aws_env: AwsEnv, block_while_waiting=True):
+def delete_cloudformation_stack(
+        config, 
+        aws_env: AwsEnv, 
+        block_while_waiting=True
+):
     if not AwsEnv.DEV.eq(aws_env):
         raise Exception(f"cannot delete a non DEV stack")
     
@@ -5451,10 +5529,7 @@ def run_existing_tests(config, self_driving_task):
         return
     
     # make sure the tests run
-    delete_cloudformation_stack(config, AwsEnv.DEV)
-    execute_iteration(
-        config,
-        AwsEnv.DEV
-    )
+    delete_cloudformation_stack(config, AwsEnv.DEV, block_while_waiting=False)
+    build_deploy_exec_iteration(config)
     
     assert_tests_green(config)

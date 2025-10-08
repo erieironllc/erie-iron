@@ -52,6 +52,7 @@ You must:
 ### Preflight Checklist Header
 
 Each generated Python test file must begin with a 5‑line comment header that explicitly states:
+- Generated Date:  Date / Time the test was generated
 - Test type: Acceptance or Unit
 - Any use of unittest.mock: Yes/No
 - Any use of non‑allowlisted stubs: Yes/No
@@ -102,6 +103,7 @@ All acceptance/smoke tests run against resources that are fully isolated and nam
 Test requirements:
 - Connect ONLY to namespaced resources. Never use shared or default resources.
 - Discover resource endpoints/credentials via environment variables and/or Django settings (examples: ERIE_STACK_NAME, TASK_NAMESPACE, DATABASE_URL, MESSAGE_BUS_TOPIC, MESSAGE_BUS_QUEUE, STORAGE_BUCKET, SERVICE_BASE_URL, LLM_PROVIDER, LLM_API_KEY).
+- Use the provided `STACK_IDENTIFIER` environment variable when deriving AWS resource names (S3 buckets, SQS queues, etc.). It mirrors the CloudFormation `StackIdentifier` parameter and is already trimmed to AWS-safe length constraints (63 characters for S3 buckets, 80 for SQS queues). Never concatenate raw `TASK_NAMESPACE` values into resource names if the resulting string would violate service limits—truncate to the documented boundaries or fail the test with remediation guidance instead of asserting on an impossible name.
 - If a required env var or setting is missing, the test MUST fail with self.fail(...) describing exactly what is missing and how to provide it.
 - Do NOT create or rely on global cross-stack dependencies.
 - Clean up test data you create at the application level; infrastructure teardown is handled outside the test.

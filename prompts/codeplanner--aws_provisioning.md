@@ -128,8 +128,9 @@ The name of all of the AWS service instances will be unique based on environment
 When a task requires an S3 bucket (e.g., EMAIL_INGEST_S3_BUCKET, STORAGE_BUCKET, EMAIL_STORAGE_BUCKET):
 
 ### Naming
-Use deterministic names based on the value of env['TASK_NAMESPACE] to avoid collisions:
-${env['TASK_NAMESPACE']}-email-ingest and ${env['TASK_NAMESPACE']}-storage (omit -storage if only one bucket is needed).
+Use deterministic names based on the value of `env['STACK_IDENTIFIER']` (mirrors the trimmed CloudFormation StackIdentifier) to avoid collisions while staying inside AWS length limits:
+- good examples: ${env['STACK_IDENTIFIER']}-email-ingest and ${env['STACK_IDENTIFIER']}-storage (omit -storage if only one bucket is needed). 
+- Keep the final bucket name at or below 63 characters; shorten optional suffixes if necessary instead of overfilling the limit.
 
 ### CloudFormation:
     - Resources: Create the buckets with sane defaults (versioning optional, block public access, server-side encryption AES-256).

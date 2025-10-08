@@ -1,12 +1,13 @@
-        <div class="card my-4">
+        <div class="card my-4 copy-container">
             <div class="card-header d-flex justify-content-between">
                 <small class="text-muted">
                     {{ error.summary }}
                 </small>
+                {% include "_copy_clipboard_btn.html" with target_el=".div_error_logs" %}
             </div>
             <div class="card-body">
                 <dl class="row">
-                    <dd class="col-sm-12 pre">{{ error.logs }}</dd>
+                    <dd class="col-sm-12 pre div_error_logs">{{ error.logs }}</dd>
                 </dl>
             </div>
         </div>

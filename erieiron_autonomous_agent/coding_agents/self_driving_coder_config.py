@@ -297,6 +297,7 @@ class SdaPhase(ErieEnum):
     INIT = auto()
     PLANNING = auto()
     CODING = auto()
+    BUILD = auto()
     DEPLOY = auto()
     EXECUTION = auto()
     EVALUATE = auto()
