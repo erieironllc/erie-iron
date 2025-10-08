@@ -4621,7 +4621,60 @@ def deploy_cloudformation_stacks(
         except Exception as e:
             logging.exception(e)
             config.log(traceback.format_exc())
-            raise AgentBlocked(f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  A Human needs to clean up manually")
+
+            max_delete_attempts = 3
+            stack_cleanup_successful = False
+            last_delete_error: Exception | None = None
+
+            for attempt in range(1, max_delete_attempts + 1):
+                try:
+                    config.log(
+                        f"Attempting to delete wedged CloudFormation stack {stack_name} "
+                        f"(attempt {attempt}/{max_delete_attempts})"
+                    )
+                    cf_client.delete_stack(StackName=stack_name)
+                    cloudformation_wait(config, cf_client, stack_name)
+
+                    if not get_stack(stack_name, cf_client):
+                        stack_cleanup_successful = True
+                        config.log(f"Successfully deleted CloudFormation stack {stack_name} after validation failure.")
+                        break
+
+                    last_delete_error = CloudFormationException(
+                        f"Stack {stack_name} still exists after delete attempt {attempt}."
+                    )
+                    config.log(str(last_delete_error))
+
+                except cf_client.exceptions.ClientError as delete_exc:
+                    last_delete_error = delete_exc
+                    message = str(delete_exc)
+                    if "does not exist" in message.lower():
+                        stack_cleanup_successful = True
+                        config.log(f"Stack {stack_name} already deleted or missing; continuing deployment.")
+                        break
+
+                    config.log(
+                        f"Attempt {attempt}/{max_delete_attempts} failed to delete stack {stack_name}: {message}"
+                    )
+
+                except Exception as delete_exc:  # pragma: no cover - defensive cleanup
+                    last_delete_error = delete_exc
+                    config.log(
+                        f"Attempt {attempt}/{max_delete_attempts} raised while deleting stack {stack_name}: {delete_exc}"
+                    )
+
+                if attempt < max_delete_attempts:
+                    time.sleep(5)
+
+            if not stack_cleanup_successful:
+                if last_delete_error:
+                    config.log(
+                        f"Unable to clean up CloudFormation stack {stack_name} after {max_delete_attempts} attempts: {last_delete_error}"
+                    )
+                raise AgentBlocked(
+                    f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  "
+                    "A Human needs to clean up manually"
+                )
         
         cloudformation_params = get_stack_parameters(
             config,
