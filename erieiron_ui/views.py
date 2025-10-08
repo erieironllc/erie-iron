@@ -1180,22 +1180,8 @@ def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
     return {}
 
 
-def _iteration_tab_available_codex(iteration: SelfDrivingTaskIteration, **_):
-    return common.is_not_empty(iteration.codex_command)
 
 
-def _iteration_tab_context_codex(iteration: SelfDrivingTaskIteration, **_):
-    return {
-        "codex_command": iteration.codex_command
-    }
-
-
-def _iteration_tab_available_code(iteration: SelfDrivingTaskIteration, **_):
-    return iteration.codeversion_set.exists()
-
-
-def _iteration_tab_context_code(iteration: SelfDrivingTaskIteration, **_):
-    return {}
 
 
 def _iteration_tab_available_evaluation(iteration: SelfDrivingTaskIteration, **_):

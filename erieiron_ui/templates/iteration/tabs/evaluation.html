@@ -1,6 +1,6 @@
 {% load erieiron_common_tags %}
 {% if iteration.evaluation_json %}
-    {{ iteration.evaluation_json|json_to_div:"-error,-test_errors" }}
+    {{ iteration.evaluation_json|json_to_md:"-error,-test_errors" }}
 
     {% if iteration.evaluation_json.error %}
         <hr>

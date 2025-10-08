@@ -1112,7 +1112,6 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content_init = models.TextField(null=True)
     planning_json = models.JSONField(null=True)
     evaluation_json = models.JSONField(null=True)
-    codex_command = models.TextField(null=True)
     slowest_cloudformation_resources = models.JSONField(null=True)
     routing_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)

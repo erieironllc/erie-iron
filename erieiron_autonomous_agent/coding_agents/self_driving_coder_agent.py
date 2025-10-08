@@ -42,24 +42,32 @@ from erieiron_common.message_queue.pubsub_manager import PubSubManager
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def execute(task_id: str, reset=False):
+def execute(task_id: str, reset=False, code_now=False):
     self_driving_task = bootstrap_selfdriving_agent(
         task_id,
         reset
     )
     
-    # config = SelfDriverConfig(self_driving_task)
-    # config.set_iteration(
-    #     SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
-    # )
-    # codex_exec(config, config.current_iteration.planning_json)
-    # plan_and_implement_code_changes(
-    #     config
-    # )
-    # build_deploy_exec_iteration(
-    #     SelfDriverConfig(self_driving_task)
-    # )
-    # return
+    if code_now:
+        config = SelfDriverConfig(self_driving_task)
+        config.set_iteration(
+            SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
+        )
+        
+        if config.current_iteration.planning_json:
+            codex_exec(
+                config,
+                config.current_iteration.planning_json
+            )
+        else:
+            plan_and_implement_code_changes(
+                config
+            )
+        
+        build_deploy_exec_iteration(
+            SelfDriverConfig(self_driving_task)
+        )
+        return
     
     for i in range(100):
         config = SelfDriverConfig(self_driving_task)
@@ -311,13 +319,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     config.log("Starting Codex CLI planning/execution pipeline")
     
     iteration_to_modify = config.iteration_to_modify
-    error_summary = None
-    error_logs = None
-    if iteration_to_modify:
-        try:
-            error_summary, error_logs = iteration_to_modify.get_error()
-        except Exception as err:
-            config.log("Failed to collect previous iteration error details", err)
     
     readonly_entries = get_readonly_files_paths(config)
     readonly_lines = []
@@ -444,7 +445,6 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     }
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-            codex_command=prompt_text,
             planning_json=augmented_plan
         )
     config.current_iteration.refresh_from_db(fields=["planning_json"])
@@ -523,6 +523,7 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
             llm_model=LlmModel.OPENAI_GPT_5,
             token_count=total_tokens,
             price=total_cost_usd,
+            response=codex_result.stdout,
             input_messages=[
                 {
                     "role": LlmMessageType.SYSTEM,
@@ -4466,7 +4467,6 @@ def validate_code(
 
                 Apply the error details above to correct `infrastructure.yaml`, then rerun the validation before completing the Codex execution.
                 """))
-    
     
     elif code_file_name.endswith(".yaml"):
         try:

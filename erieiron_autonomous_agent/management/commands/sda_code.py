@@ -16,9 +16,16 @@ class Command(BaseCommand):
             type=bool,
             required=False
         )
+        
+        parser.add_argument(
+            '--code_now',
+            type=bool,
+            required=False
+        )
     
     def handle(self, *args, **options):
         self_driving_coder_agent.execute(
             options.get("task_id"),
-            options.get("reset")
+            options.get("reset"),
+            options.get("code_now")
         )

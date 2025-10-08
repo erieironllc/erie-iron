@@ -47,6 +47,6 @@
 
     <hr>
     <b class="mb-3">Iteration {{ iteration_to_modify.version_number }}'s evaluation and subsequent routing path</b>
-    {{ iteration_to_modify.evaluation_json.summary|markdown }}
-    {{ iteration.routing_json|json_to_div:"classification,recovery_path,recovery_path_explanation" }}
+    {{ iteration_to_modify.evaluation_json|json_to_md:"summary" }}
+    {{ iteration.routing_json|json_to_md:"classification,recovery_path,recovery_path_explanation" }}
 {% endif %}

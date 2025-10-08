@@ -172,7 +172,7 @@
 
                 <div class="tab-pane " id="response" role="tabpanel" aria-labelledby="response-tab">
                     {% if llm_request.response %}
-                        {{ llm_request.response|json_to_div }}
+                        {{ llm_request.response|json_to_pre }}
                     {% endif %}
                 </div>
 
