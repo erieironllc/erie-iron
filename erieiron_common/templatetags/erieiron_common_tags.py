@@ -135,7 +135,7 @@ def json_to_md(json_content, filter_def=None, use_default_wrapper=True):
 
 
 @register.filter(name='json_to_pre')
-def json_to_pre(json_content, filter_def=None, use_default_wrapper=True):
+def json_to_pre(json_content, filter_def=None, use_default_wrapper=True, make_pre=False, apply_md=False):
     return json_to_div(json_content, filter_def, use_default_wrapper, make_pre=True)
 
 

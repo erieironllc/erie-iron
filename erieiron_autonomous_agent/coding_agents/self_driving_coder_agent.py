@@ -56,15 +56,15 @@ def execute(task_id: str, reset=False, code_now=False, plan_now=False):
             SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
         )
         
-        if not plan_now and config.current_iteration.planning_json:
-            codex_exec(
-                config,
-                config.current_iteration.planning_json
-            )
-        else:
-            plan_and_implement_code_changes(
-                config
-            )
+        # if not plan_now and config.current_iteration.planning_json:
+        #     codex_exec(
+        #         config,
+        #         config.current_iteration.planning_json
+        #     )
+        # else:
+        #     plan_and_implement_code_changes(
+        #         config
+        #     )
 
         build_deploy_exec_iteration(
             SelfDriverConfig(self_driving_task)
@@ -2125,10 +2125,10 @@ def is_stack_modified(
     return lambda_modified
 
 
-def is_stack_exists(config: SelfDriverConfig, docker_env: dict) -> bool:
+def is_stack_exists(config: SelfDriverConfig) -> bool:
     stack_status = get_stack_status(
         config.self_driving_task.get_cloudformation_stack_name(config.aws_env),
-        boto3.client("cloudformation", region_name=docker_env['AWS_DEFAULT_REGION'])
+        boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     )
     return stack_status in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]
 
@@ -2438,6 +2438,21 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
         
         try:
             status = matching_stack["StackStatus"]
+            if status.endswith("_IN_PROGRESS") and ("DELETE" in status or "ROLLBACK" in status):
+                try:
+                    new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
+                        config.aws_env,
+                        status=status,
+                        reason="Stack observed in-progress before deployment"
+                    )
+                    config.log(
+                        f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} without waiting for completion.\n"
+                    )
+                    return new_stack_name
+                except Exception as e:
+                    logging.exception(e)
+                    raise e
+                
             if 'ROLLBACK' in status:
                 config.log(f"Deleting broken stack: {stack_name} (status: {status}) attempt {i + 1}\n")
                 
@@ -3988,6 +4003,8 @@ def plan_full_code_changes(config: SelfDriverConfig):
     task = config.self_driving_task.task
     task_type = TaskType(task.task_type)
     
+    stack_valid = is_stack_exists(config)
+    
     system_prompt_files = [
         MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
         "codeplanner--full_plan_base.md",
@@ -4059,7 +4076,14 @@ def plan_full_code_changes(config: SelfDriverConfig):
             "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             config
         ),
-        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
+        f"""The previous iteration failed at the deployment stage.   
+
+        **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
+        - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
+        - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
+
+        **YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM** """
+        if not stack_valid else get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
     ]
     
     planning_data = llm_chat(
@@ -4767,9 +4791,19 @@ def deploy_cloudformation_stacks(
     
     self_driving_task = config.self_driving_task
     sandbox_path = Path(config.sandbox_root_dir)
+    aws_env = config.aws_env
+    
+    def _sync_stack_identity() -> tuple[str, str]:
+        """Keep docker_env stack identifiers aligned with the latest tombstoned state."""
+        current_stack = self_driving_task.get_cloudformation_stack_name(aws_env)
+        current_identifier = self_driving_task.get_cloudformation_key_prefix(aws_env)
+        docker_env["STACK_IDENTIFIER"] = current_identifier
+        docker_env["TASK_NAMESPACE"] = current_stack
+        docker_env["CLOUDFORMATION_STACK_NAME"] = current_stack
+        return current_stack, current_identifier
     
     cfn_file = get_cloudformation_file(config)
-    stack_name = self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    stack_name, _ = _sync_stack_identity()
     initial_stack_name = stack_name
     config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
     
@@ -4780,7 +4814,8 @@ def deploy_cloudformation_stacks(
             stack_name,
             cf_client
         )
-        
+        stack_name, _ = _sync_stack_identity()
+
         if stack_name != initial_stack_name:
             config.log(
                 f"Rotated CloudFormation stack name from {initial_stack_name} to {stack_name} before deployment."
@@ -4817,6 +4852,7 @@ def deploy_cloudformation_stacks(
                     except CloudFormationStackDeleting as deleting_exc:
                         stack_cleanup_successful = True
                         stack_name = deleting_exc.new_stack_name
+                        stack_name, _ = _sync_stack_identity()
                         config.log(
                             f"CloudFormation stack {delete_target} is deleting; will proceed with new stack name {stack_name}."
                         )
@@ -4825,7 +4861,7 @@ def deploy_cloudformation_stacks(
                     if not get_stack(delete_target, cf_client):
                         stack_cleanup_successful = True
                         config.log(f"Successfully deleted CloudFormation stack {delete_target} after validation failure.")
-                        stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
+                        stack_name, _ = _sync_stack_identity()
                         break
                     
                     last_delete_error = CloudFormationException(
