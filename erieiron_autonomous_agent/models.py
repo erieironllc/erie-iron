@@ -967,43 +967,76 @@ class SelfDrivingTask(BaseErieIronModel):
         
         return current_iteration, most_recent_iteration, iteration_to_modify
     
+    DEV_STACK_TOKEN_LENGTH = 6
+
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
     
     def get_cloudformation_key_prefix(self, environment: AwsEnv):
         from erieiron_common.aws_utils import sanitize_aws_name
-        return sanitize_aws_name(
-            self.get_cloudformation_stack_name(environment),
-            max_length=40
-        )
+        task_fragment = self._task_identifier_fragment()
+
+        if AwsEnv.PRODUCTION.eq(environment):
+            return sanitize_aws_name(
+                [self.business.service_token, task_fragment],
+                max_length=40
+            )
+
+        stack_name = self.get_cloudformation_stack_name(environment)
+        token = self._extract_dev_stack_token(stack_name)
+        if token:
+            components = [token, task_fragment]
+        else:
+            components = [stack_name]
+        return sanitize_aws_name(components, max_length=40)
+
+    def namespace_domain_with_stack_identifier(self, domain_name: str | None, environment: AwsEnv) -> str | None:
+        """Adjust the provided domain so its leading label reflects the current StackIdentifier."""
+        if not domain_name:
+            return domain_name
+
+        normalized_domain = domain_name.rstrip('.').lower()
+        stack_identifier = self.get_cloudformation_key_prefix(environment)
+        if not stack_identifier:
+            return normalized_domain
+
+        from erieiron_common.aws_utils import sanitize_aws_name
+        namespaced_label = sanitize_aws_name(stack_identifier, max_length=63)
+
+        if AwsEnv.PRODUCTION.eq(environment):
+            parts = normalized_domain.split('.')
+            if parts and parts[0] == namespaced_label:
+                return normalized_domain
+            return '.'.join([namespaced_label, normalized_domain])
+
+        parts = normalized_domain.split('.')
+        if not parts:
+            return namespaced_label
+
+        if parts[0] == namespaced_label:
+            return normalized_domain
+
+        parts[0] = namespaced_label
+        return '.'.join(parts)
 
     def get_cloudformation_stack_name(self, environment: AwsEnv):
-        if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name:
-            return self.cloudformation_stack_name
-        
-        cloudformation_stack_name = [
-            self.business.service_token,
-            environment.value
-        ]
-        
-        if AwsEnv.PRODUCTION.DEV.eq(environment):
-            cloudformation_stack_name = [
-                *cloudformation_stack_name,
-                self.task.initiative.id,
-                self.task_id
-            ]
-        
-        from erieiron_common.aws_utils import sanitize_aws_name
-        cloudformation_stack_name = sanitize_aws_name(cloudformation_stack_name, max_length=128)
-        
-        if AwsEnv.PRODUCTION.DEV.eq(environment) and self.cloudformation_stack_name != cloudformation_stack_name:
-            with transaction.atomic():
-                SelfDrivingTask.objects.filter(id=self.id).update(
-                    cloudformation_stack_name=cloudformation_stack_name
-                )
-            self.refresh_from_db(fields=["cloudformation_stack_name"])
-        
-        return cloudformation_stack_name
+        if AwsEnv.PRODUCTION.eq(environment):
+            return self._build_production_stack_name()
+
+        if not AwsEnv.DEV.eq(environment):
+            raise ValueError(f"Unsupported AWS environment: {environment}")
+
+        stack_name = self.cloudformation_stack_name
+        if stack_name:
+            return stack_name
+
+        new_name = self._generate_unique_cloudformation_stack_name(environment)
+        with transaction.atomic():
+            SelfDrivingTask.objects.filter(id=self.id).update(
+                cloudformation_stack_name=new_name
+            )
+        self.refresh_from_db(fields=["cloudformation_stack_name"])
+        return new_name
 
     def get_sandbox(self) -> Path:
         return Path(self.sandbox_path)
@@ -1016,7 +1049,7 @@ class SelfDrivingTask(BaseErieIronModel):
             reason: str | None = None
     ) -> str:
         """Allocate a fresh CloudFormation stack name and tombstone the old one."""
-        if not AwsEnv.PRODUCTION.DEV.eq(environment):
+        if not AwsEnv.DEV.eq(environment):
             raise ValueError("Stack name rotation is only supported for DEV environment")
 
         current_name = self.cloudformation_stack_name
@@ -1066,7 +1099,8 @@ class SelfDrivingTask(BaseErieIronModel):
             *,
             exclude: set[str] | None = None
     ) -> str:
-        from erieiron_common.aws_utils import sanitize_aws_name
+        if not AwsEnv.DEV.eq(environment):
+            raise ValueError("Unique stack name generation is only supported for DEV environment")
         exclude = set(filter(None, exclude or set()))
         base_components = self._base_cloudformation_stack_components(environment)
         tombstoned_names = set(
@@ -1083,25 +1117,58 @@ class SelfDrivingTask(BaseErieIronModel):
             exclude.add(self.cloudformation_stack_name)
 
         for attempt in range(20):
-            suffix = common.random_string(6)
-            candidate = sanitize_aws_name([*base_components, suffix], max_length=128)
+            token = common.random_string(self.DEV_STACK_TOKEN_LENGTH)
+            candidate = self._compose_dev_stack_name(token, base_components)
             if candidate not in exclude:
                 return candidate
         
         # Fallback: include a timestamp to guarantee uniqueness
-        suffix = f"fallback-{int(common.get_now().timestamp())}"
-        return sanitize_aws_name([*base_components, suffix], max_length=128)
+        token = common.random_string(self.DEV_STACK_TOKEN_LENGTH)
+        fallback_suffix = f"fallback-{int(common.get_now().timestamp())}"
+        return self._compose_dev_stack_name(token, [*base_components, fallback_suffix])
 
     def _base_cloudformation_stack_components(self, environment: AwsEnv) -> list[str]:
-        parts = [self.business.service_token, environment.value]
-        if AwsEnv.PRODUCTION.DEV.eq(environment):
+        parts = [self.business.service_token]
+        if AwsEnv.PRODUCTION.eq(environment):
+            parts.append(self._task_identifier_fragment())
+        else:
             initiative_id = getattr(self.task, "initiative_id", None)
-            task_id = getattr(self, "task_id", None)
-            if initiative_id is not None:
-                parts.append(str(initiative_id))
-            if task_id:
-                parts.append(str(task_id))
+            parts.extend(
+                filter(
+                    None,
+                    [
+                        environment.value,
+                        str(initiative_id) if initiative_id is not None else None,
+                        self._task_identifier_fragment()
+                    ]
+                )
+            )
         return parts
+
+    def _build_production_stack_name(self) -> str:
+        from erieiron_common.aws_utils import sanitize_aws_name
+        return sanitize_aws_name(
+            self._base_cloudformation_stack_components(AwsEnv.PRODUCTION),
+            max_length=128
+        )
+
+    def _compose_dev_stack_name(self, token: str, base_components: list[str]) -> str:
+        from erieiron_common.aws_utils import sanitize_aws_name
+        return sanitize_aws_name([token, *base_components], max_length=128)
+
+    def _extract_dev_stack_token(self, stack_name: str) -> str | None:
+        if not stack_name:
+            return None
+        token = stack_name.split('-', 1)[0]
+        if len(token) == self.DEV_STACK_TOKEN_LENGTH and token.isalnum():
+            return token
+        return None
+
+    def _task_identifier_fragment(self) -> str:
+        task_id = getattr(self, "task_id", None)
+        if task_id is not None:
+            return str(task_id).replace("task_", "")
+        return str(getattr(self.task, "id", "task"))
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
@@ -1202,6 +1269,11 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             "error" in self.evaluation_json,
             "test_errors" in self.evaluation_json
         ])
+    
+    def get_unit_test_errors(self) -> list[dict]:
+        return common.ensure_list(
+            common.get(self, ["evaluation_json", "test_errors"])
+        )
     
     def get_error_llm_msg(self, label: str) -> list[LlmMessage]:
         d = {

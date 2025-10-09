@@ -83,8 +83,11 @@ class SelfDriverConfig:
         else:
             self.aws_env = AwsEnv.DEV
         
-        domain_name, hosted_zone_id, certificate_arn = self.task.get_domain_and_cert(self.aws_env)
-        self.domain_name = domain_name
+        raw_domain_name, hosted_zone_id, certificate_arn = self.task.get_domain_and_cert(self.aws_env)
+        self.domain_name = self.self_driving_task.namespace_domain_with_stack_identifier(
+            raw_domain_name,
+            self.aws_env
+        )
         self.hosted_zone_id = hosted_zone_id
         self.certificate_arn = certificate_arn
         

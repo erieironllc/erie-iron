@@ -2,7 +2,6 @@ import copy
 import json
 import logging
 import os
-import pprint
 import re
 import shutil
 import subprocess
@@ -39,6 +38,8 @@ from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_T
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
+STACK_STATUS_NO_STACK = "NO_STACK"
+
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
@@ -56,16 +57,16 @@ def execute(task_id: str, reset=False, code_now=False, plan_now=False):
             SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
         )
         
-        # if not plan_now and config.current_iteration.planning_json:
-        #     codex_exec(
-        #         config,
-        #         config.current_iteration.planning_json
-        #     )
-        # else:
-        #     plan_and_implement_code_changes(
-        #         config
-        #     )
-
+        if not plan_now and config.current_iteration.planning_json:
+            codex_exec(
+                config,
+                config.current_iteration.planning_json
+            )
+        else:
+            plan_and_implement_code_changes(
+                config
+            )
+        
         build_deploy_exec_iteration(
             SelfDriverConfig(self_driving_task)
         )
@@ -1242,6 +1243,10 @@ def create_task_subdomain(self_driving_task: SelfDrivingTask):
     
     try:
         desired_domain, _, _ = self_driving_task.task.get_domain_and_cert(AwsEnv.DEV)
+        desired_domain = self_driving_task.namespace_domain_with_stack_identifier(
+            desired_domain,
+            AwsEnv.DEV
+        )
     except Exception as exc:
         logging.exception("Failed to determine task domain for %s: %s", self_driving_task.task_id, exc)
         raise AgentBlocked(f"unable to determine a valid domain for task {self_driving_task.task_id}")
@@ -1340,12 +1345,17 @@ def build_docker_image(
     current_iteration = config.current_iteration
     self_driving_task = current_iteration.self_driving_task
     
-    docker_image_tag = sanitize_aws_name([
+    docker_image_tag_parts = [
         self_driving_task.business.name,
         self_driving_task.id,
-        current_iteration.version_number,
-        str(time.time())[-5:]
-    ], max_length=128)
+        current_iteration.version_number
+    ]
+    
+    if config.current_iteration.evaluation_json:
+        # we already deployed this iteration, force a new docker image tag to make sure cloudformation updates
+        docker_image_tag_parts.append(str(time.time())[-5:])
+    
+    docker_image_tag = sanitize_aws_name(docker_image_tag_parts, max_length=128)
     
     config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
     sandbox_path = self_driving_task.sandbox_path
@@ -2126,10 +2136,11 @@ def is_stack_modified(
 
 
 def is_stack_exists(config: SelfDriverConfig) -> bool:
-    stack_status = get_stack_status(
-        config.self_driving_task.get_cloudformation_stack_name(config.aws_env),
-        boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    )
+    return get_stack_status(config) != STACK_STATUS_NO_STACK
+
+
+def is_stack_operational(config: SelfDriverConfig) -> bool:
+    stack_status = get_stack_status(config)
     return stack_status in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]
 
 
@@ -2258,9 +2269,7 @@ def evaluate_iteration(
     ])
     
     aws_env = config.aws_env
-    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
-    stack_name = config.self_driving_task.get_cloudformation_stack_name(aws_env)
-    stack_status = get_stack_status(stack_name, cf_client)
+    stack_status = get_stack_status(config)
     
     messages += LlmMessage.user_from_data(
         "Cloudformation Status",
@@ -2423,8 +2432,8 @@ def get_previous_iteration_summaries_msg(config):
                 "iteration_summary": prev_iter.evaluation_json.get("summary"),
             }
             for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
-                evaluation_json__isnull=False
-            ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
+            evaluation_json__isnull=False
+        ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
         ],
         "iteration_summary"
     )
@@ -2452,12 +2461,12 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
                     raise CloudFormationException(
                         f"Stack {stack_name} reported status {status} and cannot be rotated"
                     ) from exc
-
+                
                 config.log(
                     f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} before deployment.\n"
                 )
                 return new_stack_name
-
+            
             try:
                 cloudformation_wait(config, cf_client, stack_name)
                 return stack_name
@@ -2519,7 +2528,7 @@ def cloudformation_wait(
                     raise CloudFormationException(
                         f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
                     ) from exc
-
+                
                 config.log(
                     f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name} and exiting wait."
                 )
@@ -2540,7 +2549,7 @@ def cloudformation_wait(
                     raise CloudFormationException(
                         f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
                     ) from exc
-
+                
                 config.log(
                     f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
                 )
@@ -2565,11 +2574,14 @@ def cloudformation_wait(
         assert_cloudformation_stack_valid(stack_name, cf_client)
 
 
-def get_stack_status(stack_name, cf_client):
+def get_stack_status(config: SelfDriverConfig) -> str:
+    stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
+    
     try:
         return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])['StackStatus']
     except:
-        return "NO_STACK"
+        return STACK_STATUS_NO_STACK
 
 
 def get_stack(stack_name, cf_client):
@@ -4013,8 +4025,6 @@ def plan_full_code_changes(config: SelfDriverConfig):
     task = config.self_driving_task.task
     task_type = TaskType(task.task_type)
     
-    stack_valid = is_stack_exists(config)
-    
     system_prompt_files = [
         MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
         "codeplanner--full_plan_base.md",
@@ -4086,14 +4096,8 @@ def plan_full_code_changes(config: SelfDriverConfig):
             "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             config
         ),
-        f"""The previous iteration failed at the deployment stage.   
-
-        **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
-        - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
-        - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
-
-        **YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM** """
-        if not stack_valid else get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
+        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
+    
     ]
     
     planning_data = llm_chat(
@@ -4574,15 +4578,50 @@ def get_docs_msg(config) -> list[LlmMessage]:
 
 def get_goal_msg(config, description):
     task = config.self_driving_task.task
-    return LlmMessage.user_from_data(
-        description,
-        {
-            "GOAL": task.description,
-            "PRIMARY_OBJECTIVE": "achieving this goal is the primary objective of this code iteration",
-            "test_plan": task.test_plan,
-            "risk_notes": task.risk_notes
-        }
-    )
+    
+    goal = textwrap.dedent(f"""
+        ## YOUR GOAL
+        Write code to implement and/or deploy this task:
+        '''
+        {task.description}
+        '''
+        
+        ## Test Plan (FYI)
+        {task.test_plan}
+        
+        ## Risk Notes (FYI)
+        {task.risk_notes}
+    """)
+    
+    test_errors = config.iteration_to_modify.get_unit_test_errors() if config.iteration_to_modify else []
+    
+    if is_stack_exists(config):
+        if not is_stack_operational(config):
+            goal = textwrap.dedent(f"""
+                The previous iteration failed at the deployment stage.   
+
+                **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
+                - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
+                - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
+
+                **YOUR GOAL IS TO FIX THE DEPLOYMENT PROBLEM** 
+            """)
+        elif test_errors:
+            goal = textwrap.dedent(f"""
+                One or more of the tests in support of {task.description} are failing.  
+                
+                Your GOAL is to **MAKE THE FAILING TESTS PASS**
+            """)
+    
+    d = {
+        "PRIMARY_OBJECTIVE": "achieving this goal is the primary objective of this code iteration",
+        "GOAL": goal
+    }
+    
+    if test_errors:
+        d["failing_tests"] = test_errors
+    
+    return LlmMessage.user_from_data(description, d)
 
 
 def get_cloudformation_file(config: SelfDriverConfig) -> Path:
@@ -4811,7 +4850,7 @@ def deploy_cloudformation_stacks(
         docker_env["STACK_IDENTIFIER"] = current_identifier
         docker_env["TASK_NAMESPACE"] = current_stack
         docker_env["CLOUDFORMATION_STACK_NAME"] = current_stack
-
+        
         if cloudformation_params is not None:
             synced = False
             for param in cloudformation_params:
@@ -4839,7 +4878,7 @@ def deploy_cloudformation_stacks(
             cf_client
         )
         stack_name, _ = _sync_stack_identity()
-
+        
         if stack_name != initial_stack_name:
             config.log(
                 f"Rotated CloudFormation stack name from {initial_stack_name} to {stack_name} before deployment."
@@ -4932,7 +4971,7 @@ def deploy_cloudformation_stacks(
             ecr_arn,
             lambda_datas
         )
-
+        
         _sync_stack_identity(cloudformation_params)
         
         config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")

@@ -129,6 +129,18 @@ def top_nav_dropdowns(context):
     return entries
 
 
+@register.filter(name='dynamic_format')
+def dynamic_format(content):
+    try:
+        content = json.loads(content)
+    except:
+        ...
+    
+    if isinstance(content, dict):
+        return mark_safe(f"<div class='pre'>{ pprint_json(content)}</div>")
+    else:
+        return mark_safe(markdown.markdown(content))
+
 @register.filter(name='json_to_md')
 def json_to_md(json_content, filter_def=None, use_default_wrapper=True):
     return json_to_div(json_content, filter_def, use_default_wrapper, apply_md=True )
@@ -449,7 +461,7 @@ def label(s: str):
 
 @register.filter
 def pprint_json(value):
-    return json.dumps(value, indent=4)
+    return mark_safe(json.dumps(value, indent=4))
 
 
 @register.filter
