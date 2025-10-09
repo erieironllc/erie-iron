@@ -8,9 +8,10 @@ import threading
 import time
 import urllib
 import uuid
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple
 from urllib.parse import quote_plus
 from urllib.parse import unquote_plus
 
@@ -25,6 +26,33 @@ from erieiron_common import settings_common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
+
+STACK_STATUS_NO_STACK = "NO_STACK"
+SHARED_VPC_NAME = "erie-iron-shared-vpc"
+SHARED_VPC_CIDR = "10.90.0.0/16"
+SHARED_VPC_ID = "vpc-0069eeaf60f597540"
+SHARED_PUBLIC_SUBNETS = [
+    ("erie-iron-shared-public-a", "10.90.0.0/20"),
+    ("erie-iron-shared-public-b", "10.90.16.0/20"),
+]
+SHARED_PRIVATE_SUBNETS = [
+    ("erie-iron-shared-private-a", "10.90.32.0/20"),
+    ("erie-iron-shared-private-b", "10.90.48.0/20"),
+]
+SHARED_NAT_EIP_NAME = "erie-iron-shared-nat-eip"
+SHARED_NAT_GATEWAY_NAME = "erie-iron-shared-nat-gateway"
+SHARED_PUBLIC_ROUTE_TABLE_NAME = "erie-iron-shared-public-rt"
+SHARED_PRIVATE_ROUTE_TABLE_NAME = "erie-iron-shared-private-rt"
+SHARED_RDS_SECURITY_GROUP_NAME = "erie-iron-shared-rds-sg"
+SHARED_RDS_SECURITY_GROUP_ID = "sg-05578f857876a5108"
+
+
+@dataclass(slots=True)
+class SharedVpcContext:
+    vpc_id: str
+    cidr_block: str
+    public_subnet_ids: list[str]
+    private_subnet_ids: list[str]
 
 
 def client(client_name) -> boto3.session.Session.client:
@@ -199,7 +227,7 @@ def sanitize_aws_name(name: str, max_length: int = 128) -> str:
     
     if not re.match(r"^[a-z]", s):
         s = ("t" + s)[:max_length]
-
+    
     return s[0:max_length]
 
 
@@ -774,3 +802,484 @@ BODY:
         # if delete_when_done:
         #     from erieiron_common.common import quietly_delete
         #     quietly_delete(file_path)
+
+
+def _describe_availability_zones(region: str) -> list[str]:
+    ec2_client = boto3.client("ec2", region_name=region)
+    zones = []
+    resp = ec2_client.describe_availability_zones(AllAvailabilityZones=False)
+    for az in resp.get("AvailabilityZones", []):
+        if az.get("State") == "available":
+            zones.append(az.get("ZoneName"))
+    return sorted(filter(None, zones)) or [f"{region}a"]
+
+
+def ensure_shared_vpc_exists(aws_env) -> SharedVpcContext:
+    region = aws_env.get_aws_region()
+    ec2_resource = boto3.resource("ec2", region_name=region)
+    ec2_client = boto3.client("ec2", region_name=region)
+    
+    vpcs = list(
+        ec2_resource.vpcs.filter(
+            Filters=[{"Name": "tag:Name", "Values": [SHARED_VPC_NAME]}]
+        )
+    )
+    
+    if vpcs:
+        vpc = vpcs[0]
+    else:
+        logging.info("Creating shared VPC %s in %s", SHARED_VPC_NAME, region)
+        vpc = ec2_resource.create_vpc(CidrBlock=SHARED_VPC_CIDR)
+        vpc.wait_until_available()
+        vpc.create_tags(
+            Tags=[
+                {"Key": "Name", "Value": SHARED_VPC_NAME},
+                {"Key": "ManagedBy", "Value": "ErieIron"},
+            ]
+        )
+        ec2_client.modify_vpc_attribute(
+            VpcId=vpc.id,
+            EnableDnsHostnames={"Value": True}
+        )
+        ec2_client.modify_vpc_attribute(
+            VpcId=vpc.id,
+            EnableDnsSupport={"Value": True}
+        )
+    
+    azs = _describe_availability_zones(region)
+    
+    import ipaddress
+    def ensure_subnet(name: str, cidr: str, az_index: int, map_public_ip: bool) -> str:
+        existing = list(
+            ec2_resource.subnets.filter(
+                Filters=[{"Name": "tag:Name", "Values": [name]}]
+            )
+        )
+        if existing:
+            subnet = existing[0]
+        else:
+            # Check for CIDR conflicts in the VPC before creating
+            try:
+                subnets_resp = ec2_client.describe_subnets(
+                    Filters=[
+                        {"Name": "vpc-id", "Values": [vpc.id]}
+                    ]
+                )
+            except Exception as exc:
+                logging.warning("Failed to describe subnets for VPC %s: %s", vpc.id, exc)
+                subnets_resp = {"Subnets": []}
+            requested_cidr = ipaddress.ip_network(cidr)
+            conflict_subnet_id = None
+            for s in subnets_resp.get("Subnets", []):
+                s_cidr = s.get("CidrBlock")
+                s_id = s.get("SubnetId")
+                if not s_cidr or not s_id:
+                    continue
+                try:
+                    s_net = ipaddress.ip_network(s_cidr)
+                except Exception:
+                    continue
+                # If there is any overlap
+                if requested_cidr.overlaps(s_net):
+                    conflict_subnet_id = s_id
+                    break
+            if conflict_subnet_id:
+                logging.warning("CIDR conflict detected for %s (%s); using existing subnet %s", name, cidr, conflict_subnet_id)
+                return conflict_subnet_id
+            az = azs[az_index % len(azs)]
+            logging.info("Creating subnet %s (%s) in %s", name, cidr, az)
+            subnet = ec2_resource.create_subnet(
+                VpcId=vpc.id,
+                CidrBlock=cidr,
+                AvailabilityZone=az
+            )
+            # Wait for subnet to become available (no built-in waiter in boto3)
+            for _ in range(10):
+                desc = ec2_client.describe_subnets(SubnetIds=[subnet.id])["Subnets"][0]
+                if desc.get("State") == "available":
+                    break
+                time.sleep(2)
+            subnet.create_tags(
+                Tags=[
+                    {"Key": "Name", "Value": name},
+                    {"Key": "ManagedBy", "Value": "ErieIron"},
+                ]
+            )
+        try:
+            ec2_client.modify_subnet_attribute(
+                SubnetId=subnet.id,
+                MapPublicIpOnLaunch={"Value": map_public_ip}
+            )
+        except ClientError as exc:
+            logging.warning("Failed to update MapPublicIpOnLaunch for %s: %s", subnet.id, exc)
+        return subnet.id
+    
+    public_subnets = [
+        ensure_subnet(name, cidr, idx, True)
+        for idx, (name, cidr) in enumerate(SHARED_PUBLIC_SUBNETS)
+    ]
+    private_subnets = [
+        ensure_subnet(name, cidr, idx, False)
+        for idx, (name, cidr) in enumerate(SHARED_PRIVATE_SUBNETS)
+    ]
+    
+    # Ensure internet gateway for the shared VPC
+    igws = list(
+        ec2_resource.internet_gateways.filter(
+            Filters=[{"Name": "attachment.vpc-id", "Values": [vpc.id]}]
+        )
+    )
+    if igws:
+        igw = igws[0]
+    else:
+        igw = ec2_resource.create_internet_gateway()
+        igw.create_tags(
+            Tags=[
+                {"Key": "Name", "Value": f"{SHARED_VPC_NAME}-igw"},
+                {"Key": "ManagedBy", "Value": "ErieIron"},
+            ]
+        )
+        igw.attach_to_vpc(VpcId=vpc.id)
+    
+    # Public route table with default route to IGW
+    def ensure_route_table(name: str):
+        tables = list(
+            ec2_resource.route_tables.filter(
+                Filters=[{"Name": "tag:Name", "Values": [name]}]
+            )
+        )
+        if tables:
+            table = tables[0]
+        else:
+            table = ec2_resource.create_route_table(VpcId=vpc.id)
+            table.create_tags(
+                Tags=[
+                    {"Key": "Name", "Value": name},
+                    {"Key": "ManagedBy", "Value": "ErieIron"},
+                ]
+            )
+        return table
+    
+    public_route_table = ensure_route_table(SHARED_PUBLIC_ROUTE_TABLE_NAME)
+    try:
+        ec2_client.create_route(
+            RouteTableId=public_route_table.id,
+            DestinationCidrBlock="0.0.0.0/0",
+            GatewayId=igw.id
+        )
+    except ClientError as exc:
+        if "RouteAlreadyExists" not in str(exc):
+            logging.warning("Failed to create default route on %s: %s", public_route_table.id, exc)
+    
+    for subnet_id in public_subnets:
+        associations = public_route_table.associations
+        if not any(getattr(assoc, "subnet_id", None) == subnet_id for assoc in associations):
+            try:
+                public_route_table.associate_with_subnet(SubnetId=subnet_id)
+            except ClientError as exc:
+                logging.warning("Failed to associate %s with %s: %s", subnet_id, public_route_table.id, exc)
+    
+    def ensure_nat_gateway(subnet_id: str) -> str:
+        nat_resp = ec2_client.describe_nat_gateways(
+            Filters=[
+                {"Name": "tag:Name", "Values": [SHARED_NAT_GATEWAY_NAME]},
+                {"Name": "state", "Values": ["available", "pending"]},
+            ]
+        )
+        nat_gateways = nat_resp.get("NatGateways", [])
+        if nat_gateways:
+            nat = nat_gateways[0]
+            nat_gateway_id = nat.get("NatGatewayId")
+            if nat.get("State") != "available" and nat_gateway_id:
+                waiter = ec2_client.get_waiter("nat_gateway_available")
+                try:
+                    waiter.wait(NatGatewayIds=[nat_gateway_id])
+                except Exception as exc:
+                    logging.warning("Waiter for NAT gateway %s failed: %s", nat_gateway_id, exc)
+            return nat_gateway_id
+        
+        eip_resp = ec2_client.describe_addresses(
+            Filters=[{"Name": "tag:Name", "Values": [SHARED_NAT_EIP_NAME]}]
+        )
+        eip_addresses = eip_resp.get("Addresses", [])
+        allocation_id = None
+        for address in eip_addresses:
+            if address.get("Domain") == "vpc" and address.get("AllocationId"):
+                allocation_id = address["AllocationId"]
+                break
+        if not allocation_id:
+            alloc_resp = ec2_client.allocate_address(
+                Domain="vpc",
+                TagSpecifications=[
+                    {
+                        "ResourceType": "elastic-ip",
+                        "Tags": [
+                            {"Key": "Name", "Value": SHARED_NAT_EIP_NAME},
+                            {"Key": "ManagedBy", "Value": "ErieIron"},
+                        ],
+                    }
+                ],
+            )
+            allocation_id = alloc_resp.get("AllocationId")
+        
+        create_resp = ec2_client.create_nat_gateway(
+            SubnetId=subnet_id,
+            AllocationId=allocation_id,
+            TagSpecifications=[
+                {
+                    "ResourceType": "natgateway",
+                    "Tags": [
+                        {"Key": "Name", "Value": SHARED_NAT_GATEWAY_NAME},
+                        {"Key": "ManagedBy", "Value": "ErieIron"},
+                    ],
+                }
+            ],
+        )
+        nat_gateway_id = (create_resp.get("NatGateway") or {}).get("NatGatewayId")
+        if nat_gateway_id:
+            waiter = ec2_client.get_waiter("nat_gateway_available")
+            try:
+                waiter.wait(NatGatewayIds=[nat_gateway_id])
+            except Exception as exc:
+                logging.warning("Waiter for NAT gateway %s failed: %s", nat_gateway_id, exc)
+        return nat_gateway_id
+    
+    nat_gateway_id = ensure_nat_gateway(public_subnets[0])
+    
+    private_route_table = ensure_route_table(SHARED_PRIVATE_ROUTE_TABLE_NAME)
+    if nat_gateway_id:
+        try:
+            ec2_client.create_route(
+                RouteTableId=private_route_table.id,
+                DestinationCidrBlock="0.0.0.0/0",
+                NatGatewayId=nat_gateway_id
+            )
+        except ClientError as exc:
+            if "RouteAlreadyExists" not in str(exc):
+                logging.warning("Failed to create private route on %s: %s", private_route_table.id, exc)
+    
+    for subnet_id in private_subnets:
+        associations = private_route_table.associations
+        if not any(getattr(assoc, "subnet_id", None) == subnet_id for assoc in associations):
+            try:
+                private_route_table.associate_with_subnet(SubnetId=subnet_id)
+            except ClientError as exc:
+                logging.warning("Failed to associate %s with %s: %s", subnet_id, private_route_table.id, exc)
+    
+    return SharedVpcContext(
+        vpc_id=vpc.id,
+        cidr_block=getattr(vpc, "cidr_block", SHARED_VPC_CIDR),
+        public_subnet_ids=public_subnets,
+        private_subnet_ids=private_subnets,
+    )
+
+
+def ensure_shared_rds_security_group(
+        aws_env=None,
+        developer_cidr: str | None = None
+) -> str:
+    shared_vpc = get_shared_vpc()
+    
+    if aws_env is not None:
+        region = aws_env.get_aws_region()
+    else:
+        region = get_aws_region()
+    ec2_client = boto3.client("ec2", region_name=region)
+    ec2_resource = boto3.resource("ec2", region_name=region)
+    
+    filters = [
+        {"Name": "tag:Name", "Values": [SHARED_RDS_SECURITY_GROUP_NAME]},
+        {"Name": "vpc-id", "Values": [shared_vpc.vpc_id]}
+    ]
+    resp = ec2_client.describe_security_groups(Filters=filters)
+    groups = resp.get("SecurityGroups", [])
+    
+    if groups:
+        sg_id = groups[0]["GroupId"]
+        sg = ec2_resource.SecurityGroup(sg_id)
+    else:
+        logging.info("Creating shared RDS security group %s", SHARED_RDS_SECURITY_GROUP_NAME)
+        create_resp = ec2_client.create_security_group(
+            GroupName=SHARED_RDS_SECURITY_GROUP_NAME,
+            Description="Shared database access for Erie Iron stacks",
+            VpcId=shared_vpc.vpc_id
+        )
+        sg_id = create_resp.get("GroupId")
+        ec2_client.create_tags(
+            Resources=[sg_id],
+            Tags=[
+                {"Key": "Name", "Value": SHARED_RDS_SECURITY_GROUP_NAME},
+                {"Key": "ManagedBy", "Value": "ErieIron"},
+            ]
+        )
+        sg = ec2_resource.SecurityGroup(sg_id)
+    
+    desired_cidrs = [shared_vpc.cidr_block]
+    if developer_cidr:
+        desired_cidrs.append(developer_cidr)
+    
+    def _has_rule(cidr: str) -> bool:
+        for perm in sg.ip_permissions:
+            if perm.get("IpProtocol") != "tcp":
+                continue
+            if perm.get("FromPort") != 5432 or perm.get("ToPort") != 5432:
+                continue
+            for ip_range in perm.get("IpRanges", []):
+                if ip_range.get("CidrIp") == cidr:
+                    return True
+        return False
+    
+    for cidr in filter(None, desired_cidrs):
+        if _has_rule(cidr):
+            continue
+        try:
+            sg.authorize_ingress(
+                IpPermissions=[
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 5432,
+                        "ToPort": 5432,
+                        "IpRanges": [
+                            {
+                                "CidrIp": cidr,
+                                "Description": "Erie Iron shared database access",
+                            }
+                        ],
+                    }
+                ]
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "InvalidPermission.Duplicate":
+                logging.warning("Failed adding SG ingress for %s: %s", cidr, exc)
+    
+    return sg.id
+
+
+@lru_cache(maxsize=1)
+def get_shared_vpc() -> SharedVpcContext:
+    region = get_aws_region()
+    ec2_client = boto3.client("ec2", region_name=region)
+    
+    try:
+        vpc_resp = ec2_client.describe_vpcs(VpcIds=[SHARED_VPC_ID])
+    except ClientError as exc:
+        raise RuntimeError(
+            f"Failed to describe shared VPC {SHARED_VPC_ID} in {region}: {exc}"
+        ) from exc
+    
+    vpcs = vpc_resp.get("Vpcs", [])
+    if not vpcs:
+        raise RuntimeError(f"Shared VPC {SHARED_VPC_ID} not found in {region}")
+    
+    vpc = vpcs[0]
+    cidr_block = vpc.get("CidrBlock") or SHARED_VPC_CIDR
+    
+    def _resolve_subnets(subnet_specs):
+        if not subnet_specs:
+            return []
+        
+        expected_names = [name for name, _ in subnet_specs]
+        expected_cidrs = [cidr for _, cidr in subnet_specs]
+        
+        try:
+            subnet_resp = ec2_client.describe_subnets(
+                Filters=[
+                    {"Name": "vpc-id", "Values": [SHARED_VPC_ID]},
+                    {"Name": "tag:Name", "Values": expected_names},
+                ]
+            )
+        except ClientError as exc:
+            raise RuntimeError(
+                f"Failed describing shared subnets in {SHARED_VPC_ID}: {exc}"
+            ) from exc
+        
+        name_to_id = {}
+        vpc_ids_for_names = {}
+        cidr_to_id = {}
+        for subnet in subnet_resp.get("Subnets", []):
+            tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
+            subnet_name = tags.get("Name")
+            subnet_id = subnet.get("SubnetId")
+            vpc_id = subnet.get("VpcId")
+            cidr_block = subnet.get("CidrBlock")
+            if subnet_name and subnet_id:
+                name_to_id[subnet_name] = subnet_id
+                vpc_ids_for_names[subnet_name] = vpc_id
+            if cidr_block and subnet_id:
+                cidr_to_id[cidr_block] = subnet_id
+        
+        missing = [name for name in expected_names if name not in name_to_id]
+        # If any subnets missing, try to find them anywhere (not just in SHARED_VPC_ID)
+        if missing:
+            try:
+                fallback_resp = ec2_client.describe_subnets(
+                    Filters=[
+                        {"Name": "tag:Name", "Values": missing}
+                    ]
+                )
+            except ClientError as exc:
+                raise RuntimeError(
+                    f"Failed fallback search for shared subnets {missing}: {exc}"
+                ) from exc
+            found_any = False
+            for subnet in fallback_resp.get("Subnets", []):
+                tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
+                subnet_name = tags.get("Name")
+                subnet_id = subnet.get("SubnetId")
+                vpc_id = subnet.get("VpcId")
+                cidr_block = subnet.get("CidrBlock")
+                if subnet_name and subnet_id:
+                    if subnet_name in missing:
+                        found_any = True
+                        # Warn if found in another VPC
+                        if vpc_id != SHARED_VPC_ID:
+                            logging.warning(
+                                "Found shared subnet %s in VPC %s instead of %s; updating SHARED_VPC_ID",
+                                subnet_name, vpc_id, SHARED_VPC_ID
+                            )
+                        name_to_id[subnet_name] = subnet_id
+                        vpc_ids_for_names[subnet_name] = vpc_id
+                if cidr_block and subnet_id:
+                    cidr_to_id[cidr_block] = subnet_id
+            still_missing = [name for name in expected_names if name not in name_to_id]
+            # If still missing, try CIDR-based lookup as a fallback
+            if still_missing:
+                try:
+                    cidr_fallback_resp = ec2_client.describe_subnets(
+                        Filters=[
+                            {"Name": "cidr-block", "Values": [cidr for _, cidr in subnet_specs]}
+                        ]
+                    )
+                except ClientError as exc:
+                    raise RuntimeError(
+                        f"Failed CIDR fallback search for shared subnets {still_missing}: {exc}"
+                    ) from exc
+                for subnet in cidr_fallback_resp.get("Subnets", []):
+                    subnet_id = subnet.get("SubnetId")
+                    cidr_block = subnet.get("CidrBlock")
+                    tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
+                    subnet_name = tags.get("Name")
+                    # Try to map missing entries by CIDR
+                    for idx, expected_name in enumerate(expected_names):
+                        expected_cidr = subnet_specs[idx][1]
+                        if expected_name not in name_to_id and cidr_block == expected_cidr:
+                            name_to_id[expected_name] = subnet_id
+                            logging.warning("Resolved missing subnet %s by CIDR match (%s -> %s)", expected_name, cidr_block, subnet_id)
+                still_missing = [name for name in expected_names if name not in name_to_id]
+                if still_missing:
+                    raise RuntimeError(
+                        f"Missing expected shared subnets {still_missing} in VPC {SHARED_VPC_ID} or any other VPC (including CIDR fallback)"
+                    )
+        
+        return [name_to_id[name] for name in expected_names]
+    
+    public_subnet_ids = _resolve_subnets(SHARED_PUBLIC_SUBNETS)
+    private_subnet_ids = _resolve_subnets(SHARED_PRIVATE_SUBNETS)
+    
+    return SharedVpcContext(
+        vpc_id=vpc.get("VpcId", SHARED_VPC_ID),
+        cidr_block=cidr_block,
+        public_subnet_ids=public_subnet_ids,
+        private_subnet_ids=private_subnet_ids,
+    )
+

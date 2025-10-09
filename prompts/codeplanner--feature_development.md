@@ -49,6 +49,12 @@ If the implementation fails validation:
 
 ---
 
+---
+
+- Erie Iron provisions every stack inside the shared VPC named `erie-iron-shared-vpc`. Plans must never propose creating or modifying VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints—reuse the provided networking parameters instead.
+
+---
+
 #### Success Criteria
 
 You may set `"goal_achieved": true` only if all Django tests pass and the implemented feature meets the defined GOAL criteria.

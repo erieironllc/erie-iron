@@ -101,7 +101,8 @@ All planning logic and file instructions must explicitly support resolving the d
         • Does this affect config, test, deployment, or permissions?
         • Is this field used in a schema, serializer, or downstream consumer?
 - Plan the entire arc of the change, not just the local fix.
-- Any RDS adjustments must include tightening security groups so ingress is limited to the application VPC CIDR and the `ClientIpForRemoteAccess` parameter, preserving developer access while preventing broader exposure.
+- Any RDS adjustments must ensure the database security group allows Postgres (tcp/5432) ingress from the web service security group while keeping CIDR-based rules limited to the shared `VpcCidr` and the `ClientIpForRemoteAccess` parameter.
+- Plans must keep web-facing ECS services in the shared VPC private subnets—call out `PrivateSubnet1Id`/`PrivateSubnet2Id` and `AssignPublicIp: DISABLED` so tasks do not leave the internal network.
 - Plans that add or update **any** service (including ECS/Fargate services) connecting to the database **must** instruct the code writer to inject
   `ERIEIRON_DB_NAME`, `ERIEIRON_DB_HOST`, and `ERIEIRON_DB_PORT` environment variables alongside `RDS_SECRET_ARN`, using
   values derived from `!GetAtt RDSInstance.Endpoint` attributes (host and port) and the configured DB name (`appdb` unless
@@ -109,7 +110,17 @@ All planning logic and file instructions must explicitly support resolving the d
 
 If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, serialization, logging, permissions), plan all necessary edits in this iteration.
 
-- When a plan introduces or updates an `AWS::EC2::VPCGatewayAttachment` (InternetGatewayAttachment), require `DependsOn: [DefaultPublicRoute]` so route resources delete before CloudFormation detaches the internet gateway.
+### Web Container Startup Enforcement
+- Plans must enforce that web containers start only via `gunicorn`; never propose fallbacks to Django’s `runserver`.
+- If `gunicorn` or the WSGI entrypoint is missing, the plan must direct the startup script to exit non-zero with a clear single-line error (e.g., `echo "[startup][error] gunicorn not found" >&2; exit 1`) instead of attempting a fallback.
+- Require `gunicorn` to be installed in the image (ensure `requirements.txt` or the Docker build layer installs it) and treat its absence as a build/startup defect.
+- Explicitly fail the plan—call out in `blocked_reasons` or plan acceptance criteria—if any startup script path invokes `python -m django runserver` or similar. Valid execution paths launch `gunicorn` or abort with the non-zero error exit.
+
+## VPC Strategy
+- Erie Iron deploys every stack into a single shared VPC named `erie-iron-shared-vpc`. Plans must never propose creating or modifying VPC-level resources (VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints).
+- Assume the template receives parameters for `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr`. Treat these values as immutable inputs.
+- When assigning security groups or subnet lists, reference the provided parameters directly. Do not generate `Condition` blocks or fallbacks for creating fresh networking resources.
+- If a failure involves networking, constrain remediation to stack-owned constructs (security groups, ECS service configuration, ALB listeners) and leave the shared VPC infrastructure untouched.
 
 ## DNS Guardrails
 - Whenever the infrastructure change requires publishing DNS for `DomainName`, mandate that the code writer create Route53 `AWS::Route53::RecordSet` resources of `Type: A` (and `AAAA` if IPv6 is expected) that use `AliasTarget` pointing at the Application Load Balancer. Explain that CNAME records are forbidden for `!Ref DomainName`, even when the value is a subdomain.

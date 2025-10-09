@@ -32,13 +32,11 @@ from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_s
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager
-from erieiron_common.aws_utils import sanitize_aws_name
+from erieiron_common.aws_utils import sanitize_aws_name, STACK_STATUS_NO_STACK
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-
-STACK_STATUS_NO_STACK = "NO_STACK"
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -1199,6 +1197,7 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
     config.set_phase(SdaPhase.INIT)
     self_driving_task.get_git().pull()
+    # ensure_shared_vpc_exists(config.aws_env)
     
     create_task_subdomain(self_driving_task)
     config.iterate_if_necessary()
@@ -2431,9 +2430,7 @@ def get_previous_iteration_summaries_msg(config):
                 "iteration_timestamp": prev_iter.timestamp,
                 "iteration_summary": prev_iter.evaluation_json.get("summary"),
             }
-            for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
-            evaluation_json__isnull=False
-        ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
+            for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
         ],
         "iteration_summary"
     )
@@ -5140,10 +5137,12 @@ def get_stack_parameters(
     
     aws_region = aws_env.get_aws_region()
     
+    developer_cidr = common.get_ip_address()
+    shared_vpc = aws_utils.get_shared_vpc()
+    
     known_params = {
         "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
-        "ClientIpForRemoteAccess": common.get_ip_address(),
-        "VpcStrategy": "Shared" if AwsEnv.PRODUCTION.eq(aws_env) else "Unique",
+        "ClientIpForRemoteAccess": developer_cidr,
         "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
         "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
@@ -5166,6 +5165,17 @@ def get_stack_parameters(
     known_params["DomainName"] = config.domain_name
     known_params["DomainHostedZoneId"] = config.hosted_zone_id
     known_params["AlbCertificateArn"] = config.certificate_arn
+    
+    # Shared networking parameters
+    known_params["VpcId"] = shared_vpc.vpc_id
+    known_params.setdefault("VpcCidr", shared_vpc.cidr_block)
+    if len(shared_vpc.public_subnet_ids) >= 2:
+        known_params["PublicSubnet1Id"] = shared_vpc.public_subnet_ids[0]
+        known_params["PublicSubnet2Id"] = shared_vpc.public_subnet_ids[1]
+    if len(shared_vpc.private_subnet_ids) >= 2:
+        known_params["PrivateSubnet1Id"] = shared_vpc.private_subnet_ids[0]
+        known_params["PrivateSubnet2Id"] = shared_vpc.private_subnet_ids[1]
+    known_params["SecurityGroupId"] = aws_utils.SHARED_RDS_SECURITY_GROUP_ID
     
     for lambda_data in lambda_datas or []:
         known_params[lambda_data['s3_key_param']] = lambda_data['s3_key_name']

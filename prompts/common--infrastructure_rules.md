@@ -22,14 +22,10 @@
     - **S3 buckets must always set `DeletionPolicy: !Ref DeletePolicy` and, if `DeletePolicy` is `Delete`, must be emptied automatically (using a lifecycle rule or a cleanup Lambda) so CloudFormation can delete the bucket without manual intervention.**
     - **For IAM roles, ensure that no inline policies or external policy attachments prevent deletion. All policies must be removed (or detached) before the role can be deleted.**
     - **CloudFormation stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
-- Per-task stacks default to a **Shared VPC** strategy; only propose a **Unique VPC** when the task explicitly requires owning the network resources.
-- All stacks accept a `VpcStrategy` parameter with allowed values `[Shared, Unique]`. Conditions must include `UseSharedVpc` and `UseUniqueVpc` so prompts, plans, and templates consistently branch on the selected strategy.
-- When authoring **Shared VPC** stacks (`UseSharedVpc`), treat the VPC as read-only: never create or delete InternetGateways, route tables, or default routes, and always consume the provided subnets and networking resources.
-- When authoring **Unique VPC** stacks (`UseUniqueVpc`), InternetGateway, VPCGatewayAttachment, route table, and default route resources are permitted, but they **must** be guarded with `Condition: UseUniqueVpc` and the gateway attachment must specify `DependsOn: [DefaultPublicRoute]` to guarantee safe teardown sequencing.
-- Route53 subdomain routing (not separate VPCs) supplies tenant isolation for Shared VPC deployments; do not expect network-level isolation when `VpcStrategy` is `Shared`.
+- Erie Iron deploys every stack inside the shared VPC `erie-iron-shared-vpc`. Plans and templates must rely on `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr` parameters and must not create or modify VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints.
+- ECS/Fargate web services must run inside this shared VPC using the provided private subnets. Configure `AwsvpcConfiguration.Subnets` with `!Ref PrivateSubnet1Id` and `!Ref PrivateSubnet2Id` (keeping `AssignPublicIp: DISABLED`) so tasks stay on the internal network.
+- Proposals should scope networking changes to stack-owned resources such as security groups, ECS services, and ALB listeners. Route53 subdomain routing supplies tenant isolation for tenants sharing the same VPC.
     - **Only manage DNS for the provided `DomainName` value inside the stack. Do not invent additional subdomains such as `${StackIdentifier}.${DomainName}`—application aliases must target the ALB, and other subdomain hierarchy remains external.**
-- Teardown guidance must reflect the strategy: Unique VPC workflows delete routes before detaching the IGW, while Shared VPC instructions must never mention IGW detachment or route deletion steps.
-- If CloudFormation reports `DELETE_FAILED` while detaching an internet gateway, determine the active strategy: Unique VPC stacks usually need corrected `DependsOn` ordering, whereas Shared VPC stacks should remove any IGW or route resources from the template.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
@@ -60,7 +56,9 @@
     - use PostgreSQL engine version >= 16.8
     - Do not assume or configure any locally running PostgreSQL service.
     - Source all connection details from environment variables or AWS Secrets Manager.
-    - RDS security groups must only allow inbound traffic from the VPC CIDR (e.g., `VpcCidr`) and the `ClientIpForRemoteAccess` parameter so developers can connect from their current public IP without exposing the database to broader internet ranges.
+- RDS security groups must explicitly allow Postgres (tcp/5432) from the stack's web service security group while keeping CIDR rules tightly scoped:
+    - Add an ingress rule referencing the web ECS security group (e.g., `SourceSecurityGroupId: !Ref WebServiceSecurityGroup`) so application tasks can reach the database.
+    - Limit any CIDR-based ingress to the shared network (`!Ref VpcCidr`) and the `ClientIpForRemoteAccess` parameter; never broaden beyond these ranges.
 
 ### CloudFormation Update Efficiency Guidelines
 Plans must avoid replacement of stateful resources. If replacement is unavoidable, the plan must:
@@ -85,10 +83,7 @@ The RDS cloudformation configuration should always look like this:
       MasterUsername: postgres
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
-      VPCSecurityGroups: !If
-        - CreateNewVPC
-        - [!Ref RDSSecurityGroup]
-        - [!Ref ExistingRDSSecurityGroupId]
+      VPCSecurityGroups: [!Ref SecurityGroupId ]
       DBSubnetGroupName: !Ref DBSubnetGroup
       BackupRetentionPeriod: 7
       MultiAZ: false
@@ -104,7 +99,7 @@ The RDS cloudformation configuration should always look like this:
 - The DBInstanceIdentifier must be parameterized (e.g. `!Sub "${StackIdentifier}-db"`) to namespace the auto-generated secret.
 - CloudFormation must output `!GetAtt RDSInstance.MasterUserSecret.SecretArn` **only**; do not create a `RdsMasterSecretName` (or any secret name) output parameter.
 - No `Parameters.RdsSecretArn`, no `SecretTargetAttachment`, and no Lambda custom resource are required for this pattern.
-- RDSSecurityGroup ingress rules must include **exactly** two sources: the VPC’s internal CIDR block and `ClientIpForRemoteAccess`. Remove any broader public CIDR ranges or legacy rules that would expose the database beyond those endpoints.
+- The shared security group referenced by `SecurityGroupId` already permits safe access; do not generate stack-specific security groups unless explicitly required.
 
 ### RDS Application Environment Wiring
 - Every ECS/Fargate task definition or container that connects to this database must define the following environment
@@ -250,19 +245,28 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
     Default: 1
     MinValue: 1
     Description: "task count for the service."
-  VpcStrategy:
+  VpcId:
     Type: String
-    AllowedValues: ["Shared", "Unique"]
-    Description: "Choose whether this stack uses a Shared VPC (reuse ExistingVpcId) or a Unique VPC per stack (create a new VPC)."
-Conditions:
-  UseSharedVpc: !Equals [!Ref VpcStrategy, "Shared"]
-  UseUniqueVpc: !Equals [!Ref VpcStrategy, "Unique"]
-  CreateNewVPC: !Or 
-    - !Condition UseUniqueVpc
-    - !And [!Condition UseSharedVpc, !Equals [!Ref ExistingVpcId, ""]]
-  UseExistingVpc: !And [!Condition UseSharedVpc, !Not [!Equals [!Ref ExistingVpcId, ""]]]
-  UseExistingRdsSg: !Not [!Equals [!Ref ExistingRDSSecurityGroupId, ""]]
-  CreateVpcEndpointsInNewVPC: !And [!Condition CreateNewVPC, !Equals [!Ref EnableVpcEndpoints, "true"]]
+    Description: 'ID of the shared Erie Iron VPC (ex: erie-iron-shared-vpc).'
+  PublicSubnet1Id:
+    Type: String
+    Description: 'Public subnet 1 inside the shared VPC.'
+  PublicSubnet2Id:
+    Type: String
+    Description: 'Public subnet 2 inside the shared VPC.'
+  PrivateSubnet1Id:
+    Type: String
+    Description: 'Private subnet 1 inside the shared VPC.'
+  PrivateSubnet2Id:
+    Type: String
+    Description: 'Private subnet 2 inside the shared VPC.'
+  VpcCidr:
+    Type: String
+    Default: '10.90.0.0/16'
+    Description: 'CIDR block of the shared VPC for security group rules.'
+  SecurityGroupId:
+    Type: String
+    Description: 'Shared security group that allows database connectivity from Erie Iron infrastructure.'
 ```
 
 - `DomainName` and `DomainHostedZoneId` drive Route53 records (root alias, SES verification, MX, DKIM) and must be referenced by any DNS resources you add to the template.
