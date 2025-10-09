@@ -2438,34 +2438,26 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
         
         try:
             status = matching_stack["StackStatus"]
-            if status.endswith("_IN_PROGRESS") and ("DELETE" in status or "ROLLBACK" in status):
+            if "ROLLBACK" in status or status.startswith("DELETE"):
                 try:
                     new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
                         config.aws_env,
                         status=status,
-                        reason="Stack observed in-progress before deployment"
+                        reason="Stack observed rolling back or deleting before deployment"
                     )
+                except ValueError as exc:
                     config.log(
-                        f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} without waiting for completion.\n"
+                        f"Stack {stack_name} reported status {status} but rotation is not permitted: {exc}"
                     )
-                    return new_stack_name
-                except Exception as e:
-                    logging.exception(e)
-                    raise e
-                
-            if 'ROLLBACK' in status:
-                config.log(f"Deleting broken stack: {stack_name} (status: {status}) attempt {i + 1}\n")
-                
-                try:
-                    resources = cf_client.describe_stack_resources(StackName=stack_name)['StackResources']
-                    for r in resources:
-                        if r['ResourceStatus'] == 'DELETE_FAILED':
-                            config.log(f"Resource {r['LogicalResourceId']} stuck in DELETE_FAILED. Manual cleanup may be required.\n")
-                            # Optional: custom cleanup logic could go here
-                except Exception as e:
-                    config.log(f"Failed to describe stack resources: {e}\n")
-                cf_client.delete_stack(StackName=stack_name)
-            
+                    raise CloudFormationException(
+                        f"Stack {stack_name} reported status {status} and cannot be rotated"
+                    ) from exc
+
+                config.log(
+                    f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} before deployment.\n"
+                )
+                return new_stack_name
+
             try:
                 cloudformation_wait(config, cf_client, stack_name)
                 return stack_name
@@ -2497,8 +2489,6 @@ def cloudformation_wait(
     previous_status = None
     
     while True:
-        time.sleep(poll_interval)
-        
         stack = get_stack(stack_name, cf_client)
         if not stack:
             return
@@ -2507,39 +2497,58 @@ def cloudformation_wait(
         if first_status is None:
             first_status = status
             config.log(f"Stack {stack_name} first_status is {first_status}")
+        elif status != previous_status:
+            config.log(f"Stack {stack_name} status changed from {previous_status} to {status}")
         
-        if (
-                throw_on_fail
-                and previous_status is not None
-                and "ROLLBACK" not in previous_status
-                and status.endswith("_IN_PROGRESS")
-                and "ROLLBACK" in status
-        ):
-            config.log(
-                f"Stack {stack_name} transitioned from {previous_status} to {status}; exiting wait early for agent handling."
-            )
-            raise CloudFormationException(
-                f"Stack {stack_name} entered rollback ({status}) after {previous_status}."
-            )
-        
-        if status.startswith("DELETE") and status.endswith("_IN_PROGRESS"):
-            new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
-                config.aws_env,
-                status=status,
-                reason="Stack observed deleting during wait"
-            )
-            config.log(
-                f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
-            )
-            raise CloudFormationStackDeleting(
-                stack_name=stack_name,
-                status=status,
-                new_stack_name=new_stack_name
-            )
         if throw_on_fail:
-            if status.startswith("ROLLBACK_"):
-                if not (first_status and "ROLLBACK" in first_status):
-                    break
+            if "ROLLBACK" in status:
+                config.log(
+                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
+                )
+                raise CloudFormationException(
+                    f"Stack {stack_name} entered rollback while waiting: {status}"
+                )
+            if status.startswith("DELETE"):
+                try:
+                    new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
+                        config.aws_env,
+                        status=status,
+                        reason="Stack observed deleting during deployment wait"
+                    )
+                except ValueError as exc:
+                    raise CloudFormationException(
+                        f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
+                    ) from exc
+
+                config.log(
+                    f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name} and exiting wait."
+                )
+                raise CloudFormationStackDeleting(
+                    stack_name=stack_name,
+                    status=status,
+                    new_stack_name=new_stack_name
+                )
+        else:
+            if status.startswith("DELETE") and status.endswith("_IN_PROGRESS"):
+                try:
+                    new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
+                        config.aws_env,
+                        status=status,
+                        reason="Stack observed deleting during wait"
+                    )
+                except ValueError as exc:
+                    raise CloudFormationException(
+                        f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
+                    ) from exc
+
+                config.log(
+                    f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
+                )
+                raise CloudFormationStackDeleting(
+                    stack_name=stack_name,
+                    status=status,
+                    new_stack_name=new_stack_name
+                )
         
         previous_status = status
         if not status.endswith("_IN_PROGRESS"):
@@ -2550,6 +2559,7 @@ def cloudformation_wait(
             raise CloudFormationException(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
         
         config.log(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
+        time.sleep(poll_interval)
     
     if throw_on_fail:
         assert_cloudformation_stack_valid(stack_name, cf_client)
@@ -4793,13 +4803,27 @@ def deploy_cloudformation_stacks(
     sandbox_path = Path(config.sandbox_root_dir)
     aws_env = config.aws_env
     
-    def _sync_stack_identity() -> tuple[str, str]:
-        """Keep docker_env stack identifiers aligned with the latest tombstoned state."""
+    def _sync_stack_identity(cloudformation_params: list[dict] | None = None) -> tuple[str, str]:
+        """Keep stack identifiers aligned across docker env and pending CloudFormation params."""
+        self_driving_task.refresh_from_db()
         current_stack = self_driving_task.get_cloudformation_stack_name(aws_env)
         current_identifier = self_driving_task.get_cloudformation_key_prefix(aws_env)
         docker_env["STACK_IDENTIFIER"] = current_identifier
         docker_env["TASK_NAMESPACE"] = current_stack
         docker_env["CLOUDFORMATION_STACK_NAME"] = current_stack
+
+        if cloudformation_params is not None:
+            synced = False
+            for param in cloudformation_params:
+                if param.get("ParameterKey") == "StackIdentifier":
+                    param["ParameterValue"] = current_identifier
+                    synced = True
+                    break
+            if not synced:
+                cloudformation_params.append({
+                    "ParameterKey": "StackIdentifier",
+                    "ParameterValue": current_identifier
+                })
         return current_stack, current_identifier
     
     cfn_file = get_cloudformation_file(config)
@@ -4908,6 +4932,8 @@ def deploy_cloudformation_stacks(
             ecr_arn,
             lambda_datas
         )
+
+        _sync_stack_identity(cloudformation_params)
         
         config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
         

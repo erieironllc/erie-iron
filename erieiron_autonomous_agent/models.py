@@ -1021,6 +1021,14 @@ class SelfDrivingTask(BaseErieIronModel):
 
         current_name = self.cloudformation_stack_name
         if current_name:
+            try:
+                import boto3
+                logging.info(f"Deleting tombstoned stack {current_name}")
+                cf_client = boto3.client("cloudformation", region_name=environment.get_aws_region())
+                cf_client.delete_stack(StackName=current_name)
+            except Exception as e:
+                logging.exception(e)
+            
             AgentTombstone.objects.update_or_create(
                 business=self.business,
                 name=current_name,
