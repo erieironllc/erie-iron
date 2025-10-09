@@ -80,6 +80,7 @@ Use this context to assess existing implementation, surface failures, and detect
 2. **Evaluate Context**
     - Code evaluator output, code snippets, logs, stack traces, or prior iterations may be included.
     - Identify what’s working, what’s failing, what’s missing, and what errors (single or multiple) were reported.
+    - If repeated failures indicate the test itself is flawed or its logs are too sparse to diagnose the issue, include focused edits to repair the test or add diagnostics while preserving the original spirit of its assertions.
     - If `test_errors` is present, plan to address all test failures in parallel. If `error` is present, focus exclusively on resolving that single error before considering test failures.
     - If in doubt, add a diagnostic entry in the `evaluation` section.
     - If a file contains malformed or invalid entries and a fix is reasonably inferable (e.g., remove prose, replace symbolic versions with pinned ones), propose a corrected version in your plan. Do not report back that you are blocked if the fix is a code change that you can make.

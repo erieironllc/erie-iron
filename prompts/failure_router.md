@@ -10,6 +10,7 @@ You will be given:
 
 - A stack trace
 - Optional: associated metadata like code context or package versions
+- A list of previous iteration summaries
 - A list of previously learned lessons (each includes: title, description, and error snippet)
 
 If an architecture document is provided (e.g., docs/architecture.md), treat it as the authoritative source for intended infrastructure. If the runtime behavior contradicts the documented architecture (e.g., connecting to localhost when RDS is required), treat this as a provisioning issue.
@@ -53,6 +54,12 @@ Based on the classification and severity, decide where to route this issue:
 - ESCALATE_TO_HUMAN → Use if a human needs to act (e.g., credentials, infra)
 - AWS_PROVISIONING_PLANNER → Use if the error relates to a missing AWS resource, AWS service, or AWS configuration that must be provisioned before the application can run correctly (e.g., missing S3 bucket, undefined IAM role, unconfigured CloudFormation stack).
 
+- If the same tests (unit, integration, or functional) have failed repeatedly across multiple iterations (three or more), escalate to the planner as this suggests a deeper issue not resolved by direct fixes.
+
+### Precedence
+- If previous iteration summaries indicate the same tests have failed repeatedly across three or more iterations, the agent MUST choose recovery_path = ESCALATE_TO_PLANNER and set recovery_path_reason = 'Repeated test failures across iterations indicate an architectural/design problem requiring planner-level intervention'. 
+- This ESCALATE_TO_PLANNER decision takes precedence over other special routing rules (including AWS provisioning rules) except when logs include explicit IAM permission denial lines containing the string 'is not authorized to perform', in which case AWS_PROVISIONING_PLANNER remains required.
+
 
 ### Recovery Path Reason
 field name:  "recovery_path_reason"
@@ -80,6 +87,15 @@ An array listing the relative paths of code files likely needed to understand or
 
 
 ------
+
+### Repeated Failures on Same Tests
+
+If the previous iteration summaries indicate that the same tests (unit, integration, or functional) have failed repeatedly across multiple iterations (three or more), this signals that direct fixes are not resolving the underlying issue. In such cases:
+
+- **classification:** retain the classification from the current failure
+- **recovery_path:** ESCALATE_TO_PLANNER
+- **recovery_path_reason:** "Repeated test failures across iterations indicate a deeper architectural or design issue that requires planner-level intervention"
+
 
 ## Special Routing Rules
 

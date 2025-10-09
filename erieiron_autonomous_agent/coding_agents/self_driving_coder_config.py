@@ -172,6 +172,7 @@ class SelfDriverConfig:
         # Start a background thread to tail the logfile contents to logging.info()
         import threading
         stop_tailing = threading.Event()
+        iteration_version = self.current_iteration.version_number
         
         def tail_logfile():
             """Tail the logfile and stream new content to logging.info()"""
@@ -195,7 +196,7 @@ class SelfDriverConfig:
                                     if new_content:
                                         new_content = common.truncate_text_lines(new_content)
                                         for line in new_content.splitlines():
-                                            logging.info(line)
+                                            logging.info(f"(v{iteration_version}) {line}")
                                 
                                 last_position = current_size
                         
@@ -247,6 +248,9 @@ class SelfDriverConfig:
                     )
     
     def get_log_content(self):
+        if not self.log_f:
+            return ""
+        
         try:
             self.log_f.flush()
             return self.log_path.read_text()

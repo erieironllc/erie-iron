@@ -42,19 +42,21 @@ from erieiron_common.message_queue.pubsub_manager import PubSubManager
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def execute(task_id: str, reset=False, code_now=False):
+def execute(task_id: str, reset=False, code_now=False, plan_now=False):
     self_driving_task = bootstrap_selfdriving_agent(
         task_id,
         reset
     )
     
-    if code_now:
+    if plan_now or code_now:
         config = SelfDriverConfig(self_driving_task)
+        config.init_log()
+        
         config.set_iteration(
             SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
         )
         
-        if config.current_iteration.planning_json:
+        if not plan_now and config.current_iteration.planning_json:
             codex_exec(
                 config,
                 config.current_iteration.planning_json
@@ -63,7 +65,7 @@ def execute(task_id: str, reset=False, code_now=False):
             plan_and_implement_code_changes(
                 config
             )
-        
+
         build_deploy_exec_iteration(
             SelfDriverConfig(self_driving_task)
         )
@@ -582,9 +584,7 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         )
         
         if not changed_paths:
-            config.log("Codex CLI produced no persistable file changes - falling back to non-codex coding")
-            do_coding(config, planning_data)
-            return
+            raise BadPlan("Codex CLI produced no persistable file changes")
         
         normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
         
@@ -629,23 +629,22 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         planning_data
     )
     
-    if persisted_code_files:
-        planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
-        if not isinstance(planning_record, dict):
-            planning_record = {}
-        codex_metadata = planning_record.get("codex_metadata", {})
-        codex_metadata["persisted_code_files"] = persisted_code_files
-        planning_record["codex_metadata"] = codex_metadata
-        with transaction.atomic():
-            SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                planning_json=planning_record
-            )
-        config.current_iteration.refresh_from_db(fields=["planning_json"])
-        config.log("Stored code versions for Codex-modified files", persisted_code_files)
-        config.git.add_files()
-    else:
-        config.log("Codex CLI produced no persistable file changes - falling back to non-codex coding")
-        do_coding(config, planning_data)
+    planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
+    if not isinstance(planning_record, dict):
+        planning_record = {}
+    
+    codex_metadata = planning_record.get("codex_metadata", {})
+    codex_metadata["persisted_code_files"] = persisted_code_files
+    planning_record["codex_metadata"] = codex_metadata
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            planning_json=planning_record
+        )
+    
+    config.current_iteration.refresh_from_db(fields=["planning_json"])
+    config.log("Stored code versions for Codex-modified files", persisted_code_files)
+    config.git.add_files()
 
 
 def validate_infrastructure(config, normalized_changed):
@@ -1344,7 +1343,8 @@ def build_docker_image(
     docker_image_tag = sanitize_aws_name([
         self_driving_task.business.name,
         self_driving_task.id,
-        current_iteration.version_number
+        current_iteration.version_number,
+        str(time.time())[-5:]
     ], max_length=128)
     
     config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
@@ -2328,18 +2328,6 @@ def evaluate_iteration(
     if common.parse_bool(eval_data.get("goal_achieved")):
         raise GoalAchieved(eval_data)
     
-    previous_iteration_summaries = [
-        {
-            "iteration_id": prev_iter.id,
-            "iteration_is_current_iteration": prev_iter == iteration,
-            "iteration_timestamp": prev_iter.timestamp,
-            "iteration_summary": prev_iter.evaluation_json.get("summary"),
-        }
-        for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
-            evaluation_json__isnull=False
-        ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
-    ]
-    
     previous_iteration_evals = []
     if config.iteration_to_modify and config.iteration_to_modify != config.previous_iteration:
         previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
@@ -2372,10 +2360,8 @@ def evaluate_iteration(
                 ("<env_vars>", get_env_var_names(config)),
             ]),
             get_goal_msg(config, "Task Goal"),
-            LlmMessage.user_from_data(
-                f"**All Previous Iteration Summaries**",
-                previous_iteration_summaries,
-                "iteration_summary"
+            get_previous_iteration_summaries_msg(
+                config
             ),
             LlmMessage.user_from_data(
                 f"**Recent Iteration Full Evaluations**",
@@ -2424,6 +2410,26 @@ def evaluate_iteration(
     return eval_data
 
 
+def get_previous_iteration_summaries_msg(config):
+    iteration = config.current_iteration
+    
+    return LlmMessage.user_from_data(
+        f"**All Previous Iteration Summaries**  try to not to repeat these same errors ",
+        [
+            {
+                "iteration_id": prev_iter.id,
+                "iteration_is_current_iteration": prev_iter == iteration,
+                "iteration_timestamp": prev_iter.timestamp,
+                "iteration_summary": prev_iter.evaluation_json.get("summary"),
+            }
+            for prev_iter in config.self_driving_task.selfdrivingtaskiteration_set.filter(
+                evaluation_json__isnull=False
+            ).order_by("timestamp") if prev_iter.evaluation_json.get("summary")
+        ],
+        "iteration_summary"
+    )
+
+
 def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_client):
     for i in range(5):
         matching_stack = get_stack(stack_name, cf_client)
@@ -2447,6 +2453,7 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
             
             try:
                 cloudformation_wait(config, cf_client, stack_name)
+                return stack_name
             except CloudFormationStackDeleting as deleting_exc:
                 config.log(
                     f"Stack {deleting_exc.stack_name} is deleting; switching to {deleting_exc.new_stack_name} during preparation."
@@ -2817,7 +2824,7 @@ def push_cloudformation(
                 Capabilities=["CAPABILITY_NAMED_IAM"]
             )
         
-        pprint.pprint(get_stack(stack_name, cf_client))
+        # pprint.pprint(get_stack(stack_name, cf_client))
         
         # Update SelfDrivingTask.cloudformation_stack_id with the deployed stack's physical ID
         try:
@@ -3751,6 +3758,9 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                 get_architecture_docs(
                     config
                 ),
+                get_previous_iteration_summaries_msg(
+                    config
+                ),
                 previous_iteration.get_error_llm_msg(
                     f"Error observed while executing the previous code iteration (Iteration {previous_iteration.version_number})"
                 ),
@@ -4049,14 +4059,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
             "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             config
         ),
-        f"""The previous iteration failed at the deployment stage.   
-
-        **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
-        - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
-        - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
-
-        **YOUR PRIMARY OBJECTIVE AT THIS POINT IS TO FIX THE DEPLOYMENT PROBLEM** """
-        if iteration_to_modify.has_error() else get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
+        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
     ]
     
     planning_data = llm_chat(

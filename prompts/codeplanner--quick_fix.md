@@ -46,6 +46,7 @@ Your inputs are:
         • Any relevant prior lessons
       You will not have access to the full task description or iteration history. Assume this is a one-shot patch based solely on the failure context.
     - Code evaluator output, code snippets, logs, stack traces, or prior iterations may be included.
+    - If repeated failures suggest the test itself is incorrect or lacking diagnostic output, include targeted edits to fix the test or add logging while preserving the test’s original intent.
     - Identify what’s working, what’s failing, and what’s missing.
     - If in doubt, add a diagnostic entry in the `evaluation` section.
     - Warnings should be ignored unless they directly interfere with resolving the diagnosed error (e.g., cause test failures, deployment errors, or runtime exceptions). Prioritize fixing exceptions, errors, failed assertions, and clear regressions. Attempting to resolve benign warnings can lead to regressions or distraction from fixing the error.

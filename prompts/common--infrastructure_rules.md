@@ -211,7 +211,7 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 - The following parameters are required in every `infrastructure.yaml` file. 
 - This section **must** be written **exactly** as follows with **no modifications**
 - IAM roles are created within the stack
-```
+```yaml
   StackIdentifier:
     Type: String
     AllowedPattern: '^[a-z0-9-]{1,40}$'

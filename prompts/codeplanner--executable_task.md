@@ -58,5 +58,6 @@ Unlike application features that respond to user input, executable tasks are inv
 
 If execution fails:
 - Use logs and error messages to identify the root cause.
+- If the failing test appears incorrect or its logs are too sparse after repeated failures, plan updates to repair the test or add diagnostics while maintaining the original behavioral intent.
 - Restrict code changes to only the failing component(s).
 - Avoid making unrelated refactors.

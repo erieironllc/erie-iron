@@ -5,6 +5,7 @@ You are developing code in the **Test-Driven-Development style**.  The automated
 You must follow these constraints:
 
 - When implementing or modifying tests **Only modify <test_file_path>.** You may not create additional test files under any circumstances.
+- If repeated iterations show the test itself is faulty or lacks the logging needed to diagnose failures, update it to correct the issue or add focused diagnostics while keeping the test’s spirit intact.
 - You may modify or add tests inside `<test_file_path>`, if doing so is necessary to bring the implementation closer to the GOAL or to fix a failing assertion.
 - You must preserve the original **intent and spirit** of the test logic generated in the first iteration, as defined by Test Driven Development (TDD). This means:
   - Don’t remove or neuter failing tests just to make the code pass.

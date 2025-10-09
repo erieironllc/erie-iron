@@ -57,6 +57,7 @@ When you recieve a chat request:
   messages.
 - Generalize from **Previously Learned Lessons**: if a lesson applies here, assume similar cases will recur and pre-empt
   them in this iteration.
+- When repeated failures indicate a test is faulty or missing useful diagnostics, plan minimal edits to correct or instrument that test while keeping its original intent intact.
 - Perform a quick dependency and contract audit for the files you plan to change:
     - Imports and names introduced by this plan exist and are spelled consistently.
     - Env variables referenced are documented in the plan and read directly from `os.environ`.

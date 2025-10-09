@@ -43,6 +43,7 @@ This work may involve editing or creating multiple files across different parts 
 
 If the implementation fails validation:
 - First, examine the test logs and determine **which layer** is responsible for the failure (frontend, backend, infrastructure, etc.).
+- If the failing test appears incorrect or its logs are too sparse after repeated failures, plan updates to repair the test or add diagnostics while maintaining the original behavioral intent.
 - Propose changes only in the layer(s) responsible for the failure.
 - Do not make unrelated edits to other parts of the stack.
 

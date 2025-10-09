@@ -51,6 +51,7 @@ All planning logic and file instructions must explicitly support resolving the d
         • Any relevant prior lessons
       You will not have access to the full task description or iteration history. Assume this is a one-shot patch based solely on the failure context.
     - Code evaluator output, code snippets, logs, stack traces, or prior iterations may be included.
+    - If repeated failures suggest the test itself is incorrect or lacking diagnostic output, include targeted edits to fix the test or add logging while preserving the test’s original intent.
     - Identify what’s working, what’s failing, and what’s missing.
     - If in doubt, add a diagnostic entry in the `evaluation` section.
     - If a file contains malformed or invalid entries and a fix is reasonably inferable (e.g., remove prose, replace symbolic versions with pinned ones), propose a corrected version in your plan. Do not report back that you are blocked if the fix is a code change that you can make.
