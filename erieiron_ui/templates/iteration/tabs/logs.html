@@ -2,3 +2,50 @@
     {% include "_copy_clipboard_btn.html" with target_el="#div_logs" %}
 </div>
 <div class="pre " id="div_logs">{{ iteration.log_content_coding|default_if_none:"" }}{{ iteration.log_content_execution|default_if_none:"" }}</div>
+<script>
+    (function () {
+        const logsEl = document.getElementById('div_logs');
+        if (!logsEl || logsEl.dataset.autoScrollInitialized === 'true') {
+            return;
+        }
+        logsEl.dataset.autoScrollInitialized = 'true';
+
+        const scrollLogsToBottom = () => {
+            try {
+                logsEl.scrollTop = logsEl.scrollHeight;
+            } catch (err) {
+                console.warn('Failed to scroll logs output', err);
+            }
+        };
+
+        let observer = null;
+        if (typeof MutationObserver === 'function') {
+            observer = new MutationObserver(() => {
+                scrollLogsToBottom();
+            });
+
+            observer.observe(logsEl, {childList: true, subtree: true, characterData: true});
+        }
+
+        scrollLogsToBottom();
+
+        const onLoad = () => {
+            scrollLogsToBottom();
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onLoad, {once: true});
+        } else {
+            onLoad();
+        }
+
+        window.addEventListener('load', onLoad);
+
+        window.addEventListener('beforeunload', () => {
+            if (observer) {
+                observer.disconnect();
+            }
+            window.removeEventListener('load', onLoad);
+        });
+    })();
+</script>

@@ -1113,6 +1113,7 @@ def _task_tab_context_edit(task, business, self_driving_task) -> dict:
         "sandbox_path": sandbox_path,
         "cloudformation_stack_name": cloudformation_stack_name,
         "cloudformation_stack_url": cloudformation_stack_url,
+        "logs_prefix": cloudformation_stack_name.split("-")[0] if cloudformation_stack_name else None,
         "task_status_choices": TaskStatus.choices(),
         "task_execution_schedule_choices": TaskExecutionSchedule.choices(),
         "task_type_choices": TaskType.choices(),

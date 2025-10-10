@@ -119,6 +119,7 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 ## VPC Strategy
 - Erie Iron deploys every stack into a single shared VPC named `erie-iron-shared-vpc`. Plans must never propose creating or modifying VPC-level resources (VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints).
 - Assume the template receives parameters for `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr`. Treat these values as immutable inputs.
+- Plans must keep the RDS subnet group wired to `!Ref PublicSubnet1Id` and `!Ref PublicSubnet2Id` (never the private subnet parameters) and ensure the `AWS::RDS::DBInstance` retains `PubliclyAccessible: true` so JJ can reach the database from their laptop.
 - When assigning security groups or subnet lists, reference the provided parameters directly. Do not generate `Condition` blocks or fallbacks for creating fresh networking resources.
 - If a failure involves networking, constrain remediation to stack-owned constructs (security groups, ECS service configuration, ALB listeners) and leave the shared VPC infrastructure untouched.
 

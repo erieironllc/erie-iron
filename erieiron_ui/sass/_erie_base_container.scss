@@ -5,7 +5,9 @@ body {
 
   .pre {
     display: block; /* <pre> is block-level */
-    white-space: pre; /* preserve whitespace exactly */
+    white-space: pre-wrap; /* preserve whitespace but allow wrapping */
+    word-wrap: break-word; /* wrap long words to prevent overflow */
+    overflow-wrap: anywhere; /* allow breaking long unbreakable text */
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     tab-size: 4; /* control tab width */
     overflow: auto; /* scroll when needed */

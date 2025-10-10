@@ -189,46 +189,48 @@ def ensure_iam_role_exists_and_get_arn(role_name: str) -> str:
 def sanitize_aws_name(name: str, max_length: int = 128) -> str:
     if not name:
         raise Exception("no name supplied")
-    
+
     if common.is_list_like(name):
         name = common.safe_join(name, "-")
-    name = name.replace("_", "-").replace(" ", "-").lower()
-    
-    if len(name) <= max_length:
-        return name
-    
-    parts = name.split("-")
-    if len(parts) == 1:
-        return name[:max_length]
-    
-    # Preserve the first two parts entirely
-    lengths = [len(p) for p in parts]
-    protected_count = min(2, len(lengths))
-    
-    # Iteratively truncate the remaining parts until under max_length
-    while sum(lengths) + len(parts) - 1 > max_length:
-        # Find index of longest part that is not protected and greater than 1 char
-        idx = max(
-            (i for i in range(protected_count, len(lengths)) if lengths[i] > 1),
-            key=lambda i: lengths[i],
-            default=None
-        )
-        if idx is None:
-            break
-        lengths[idx] -= 1
-    
-    truncated_parts = [p[:l] for p, l in zip(parts, lengths)]
-    s = "-".join(truncated_parts)
-    
-    # consecutive dashes not allowed
-    while "--" in s:
-        s = s.replace("--", "-")
-    s = s.strip("-")
-    
-    if not re.match(r"^[a-z]", s):
-        s = ("t" + s)[:max_length]
-    
-    return s[0:max_length]
+
+    name = str(name)
+    name = name.replace("_", "-").replace(" ", "-")
+    name = re.sub(r"[^A-Za-z0-9-]", "-", name)
+    name = re.sub(r"-+", "-", name)
+    name = name.strip("-").lower()
+
+    if not name:
+        name = "t"
+
+    if len(name) > max_length:
+        parts = name.split("-")
+        if len(parts) == 1:
+            name = name[:max_length]
+        else:
+            lengths = [len(p) for p in parts]
+            protected_count = min(2, len(lengths))
+
+            while sum(lengths) + (len(parts) - 1) > max_length:
+                idx = max(
+                    (i for i in range(protected_count, len(lengths)) if lengths[i] > 1),
+                    key=lambda i: lengths[i],
+                    default=None
+                )
+                if idx is None:
+                    break
+                lengths[idx] -= 1
+
+            truncated_parts = [p[:l] for p, l in zip(parts, lengths)]
+            name = "-".join(truncated_parts)
+            name = re.sub(r"-+", "-", name).strip("-")
+
+    if not name:
+        name = "t"
+
+    if not re.match(r"^[a-z]", name):
+        name = f"t{name}"
+
+    return name[:max_length]
 
 
 def assert_account_name(required_account_name):
@@ -1282,4 +1284,3 @@ def get_shared_vpc() -> SharedVpcContext:
         public_subnet_ids=public_subnet_ids,
         private_subnet_ids=private_subnet_ids,
     )
-

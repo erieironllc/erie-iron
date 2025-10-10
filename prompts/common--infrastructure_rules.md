@@ -23,6 +23,22 @@
     - **For IAM roles, ensure that no inline policies or external policy attachments prevent deletion. All policies must be removed (or detached) before the role can be deleted.**
     - **CloudFormation stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
 - Erie Iron deploys every stack inside the shared VPC `erie-iron-shared-vpc`. Plans and templates must rely on `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr` parameters and must not create or modify VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints.
+
+- When writing or updating any `infrastructure.yaml` file, **always** include an ingress rule that allows the ALB to reach ECS tasks from within the shared VPC. This rule must look exactly like this:
+
+  ```yaml
+  EcsIngressFromVpc:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroupId
+      IpProtocol: tcp
+      FromPort: 8006
+      ToPort: 8006
+      CidrIp: !Ref VpcCidr
+      Description: Allow ALB to reach ECS tasks on port 8006 from within the VPC
+  ```
+  
+  This ensures every web service can respond to ALB health checks and traffic within the shared network. Do **not** hardcode any source CIDRs or security group IDs for this rule—always use `!Ref VpcCidr`.
 - ECS/Fargate web services must run inside this shared VPC using the provided private subnets. Configure `AwsvpcConfiguration.Subnets` with `!Ref PrivateSubnet1Id` and `!Ref PrivateSubnet2Id` (keeping `AssignPublicIp: DISABLED`) so tasks stay on the internal network.
 - Proposals should scope networking changes to stack-owned resources such as security groups, ECS services, and ALB listeners. Route53 subdomain routing supplies tenant isolation for tenants sharing the same VPC.
     - **Only manage DNS for the provided `DomainName` value inside the stack. Do not invent additional subdomains such as `${StackIdentifier}.${DomainName}`—application aliases must target the ALB, and other subdomain hierarchy remains external.**
@@ -93,6 +109,21 @@ The RDS cloudformation configuration should always look like this:
         - Key: Name
           Value: !Sub ${StackIdentifier}-db-instance
 ```
+
+- The `DBSubnetGroup` defined in `infrastructure.yaml` must list `!Ref PublicSubnet1Id` and `!Ref PublicSubnet2Id` so the database resides in the public subnets and remains reachable from JJ's laptop. Do **not** use the private subnet parameters for this subnet group.  DBSubnetGroup should look like this (note the public SubnetIds):
+```yaml
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS database within the shared Erie Iron VPC
+      SubnetIds:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub ${StackIdentifier}-db-subnet-group
+```
+- Always keep `PubliclyAccessible: true` on the RDS instance so the shared security group and developer IP CIDR rules continue to allow direct access during development.
 
 ### RDS Secret Management Contract
 - Use `ManageMasterUserPassword: true` in `AWS::RDS::DBInstance`.

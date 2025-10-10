@@ -13,7 +13,14 @@
         </div>
         <div class="col-md-6">
             <div class="mb-3">
+            {% if logs_prefix %}
+                <div class="d-flex justify-content-between">
+                    <label class="form-label">CloudFormation Stack</label>
+                    <a target=_blank href="https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#logsV2:log-groups$3FlogGroupNameFilter$3D{{ logs_prefix }}">Cloudwatch</a>
+                </div>
+            {% else %}
                 <label class="form-label">CloudFormation Stack</label>
+            {% endif %}
                 {% if cloudformation_stack_url %}
                     <div>
                         <a target="_blank" href="{{ cloudformation_stack_url }}">{{ cloudformation_stack_name }}</a>

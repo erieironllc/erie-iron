@@ -969,6 +969,15 @@ class SelfDrivingTask(BaseErieIronModel):
     
     DEV_STACK_TOKEN_LENGTH = 6
 
+    def _generate_dev_stack_token(self) -> str:
+        """Generate a stack token whose leading character is a letter."""
+        for _ in range(32):
+            token = common.random_string(self.DEV_STACK_TOKEN_LENGTH).lower()
+            if token and token[0].isalpha():
+                return token
+        fallback_suffix = common.random_string(self.DEV_STACK_TOKEN_LENGTH - 1).lower()
+        return f"a{fallback_suffix}"
+
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
     
@@ -1117,13 +1126,13 @@ class SelfDrivingTask(BaseErieIronModel):
             exclude.add(self.cloudformation_stack_name)
 
         for attempt in range(20):
-            token = common.random_string(self.DEV_STACK_TOKEN_LENGTH)
+            token = self._generate_dev_stack_token()
             candidate = self._compose_dev_stack_name(token, base_components)
             if candidate not in exclude:
                 return candidate
         
         # Fallback: include a timestamp to guarantee uniqueness
-        token = common.random_string(self.DEV_STACK_TOKEN_LENGTH)
+        token = self._generate_dev_stack_token()
         fallback_suffix = f"fallback-{int(common.get_now().timestamp())}"
         return self._compose_dev_stack_name(token, [*base_components, fallback_suffix])
 

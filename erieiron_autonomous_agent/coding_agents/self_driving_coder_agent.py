@@ -2000,7 +2000,7 @@ def deploy_iteration(
         raise BadPlan(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
     
     try:
-        empty_stack_buckets(config)
+        empty_stack_buckets(config, delete=False)
     except Exception as e:
         config.log(e)
         raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
@@ -2444,7 +2444,13 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
         
         try:
             status = matching_stack["StackStatus"]
-            if "ROLLBACK" in status or status.startswith("DELETE"):
+            need_rotate = (
+                    # status.endswith("FAILED")
+                    # or ("ROLLBACK" in status or status.startswith("DELETE")) and not status.endswith("COMPLETE")
+                    status.startswith("DELETE") and not status.endswith("COMPLETE")
+            )
+            
+            if need_rotate:
                 try:
                     new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
                         config.aws_env,
@@ -2505,6 +2511,16 @@ def cloudformation_wait(
             config.log(f"Stack {stack_name} first_status is {first_status}")
         elif status != previous_status:
             config.log(f"Stack {stack_name} status changed from {previous_status} to {status}")
+            if "ROLLBACK" in status:
+                config.log(
+                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
+                )
+                if throw_on_fail:
+                    raise CloudFormationException(
+                        f"Stack {stack_name} entered rollback while waiting: {status}"
+                    )
+                else:
+                    return
         
         if throw_on_fail:
             if "ROLLBACK" in status:
@@ -2802,6 +2818,124 @@ def _enforce_route53_alias_guardrail(template_body: str) -> None:
         raise BadPlan("\n".join(message_lines))
 
 
+def _record_is_ses_mx(record_props: dict) -> bool:
+    if not isinstance(record_props, dict):
+        return False
+
+    record_type = str(record_props.get("Type", "")).upper()
+    if record_type != "MX":
+        return False
+
+    name_expr = record_props.get("Name")
+    flattened_name = _flatten_cfn_expr(name_expr) or ""
+    normalized_name = flattened_name.rstrip(".")
+    if normalized_name not in {"${DomainName}", "DomainName"}:
+        return False
+
+    resource_records = record_props.get("ResourceRecords")
+    if not isinstance(resource_records, list):
+        return False
+
+    for record in resource_records:
+        flattened_record = _flatten_cfn_expr(record) or ""
+        if "inbound-smtp." in flattened_record and ".amazonaws.com" in flattened_record:
+            return True
+
+    return False
+
+
+def _template_defines_ses_mx(template_body: str) -> bool:
+    template = _load_cloudformation_template(template_body)
+    resources = template.get("Resources") if isinstance(template, dict) else None
+    if not isinstance(resources, dict):
+        return False
+
+    for resource in resources.values():
+        if not isinstance(resource, dict):
+            continue
+
+        resource_type = resource.get("Type")
+        properties = resource.get("Properties") or {}
+
+        if resource_type == "AWS::Route53::RecordSet" and _record_is_ses_mx(properties):
+            return True
+
+        if resource_type == "AWS::Route53::RecordSetGroup":
+            record_sets = properties.get("RecordSets") or []
+            if isinstance(record_sets, list):
+                for record in record_sets:
+                    if _record_is_ses_mx(record):
+                        return True
+
+    return False
+
+
+def _wait_for_ses_dkim_success(
+        config: SelfDriverConfig,
+        domain_name: str,
+        poll_interval_seconds: int = 30,
+        max_wait_minutes: int = 15
+) -> None:
+    poll_interval_seconds = max(poll_interval_seconds, 5)
+    region = config.aws_env.get_aws_region()
+    ses_client = boto3.client("sesv2", region_name=region)
+
+    config.log(
+        f"SES MX record detected; waiting for DKIM verification SUCCESS for {domain_name} in region {region}."
+    )
+
+    deadline = time.time() + max_wait_minutes * 60
+    last_status = None
+
+    while True:
+        if time.time() > deadline:
+            raise AgentBlocked({
+                "desc": f"Timed out waiting for SES DKIM verification to reach SUCCESS for {domain_name}",
+                "dkim_status": last_status,
+                "domain": domain_name,
+                "region": region
+            })
+
+        try:
+            response = ses_client.get_email_identity(EmailIdentity=domain_name)
+        except ses_client.exceptions.NotFoundException:
+            status = "NOT_FOUND"
+            tokens = []
+            signing_enabled = None
+        except Exception as exc:
+            config.log(f"Error fetching SES DKIM status for {domain_name}: {exc}")
+            time.sleep(poll_interval_seconds)
+            continue
+        else:
+            dkim_attrs = response.get("DkimAttributes") or {}
+            status = (dkim_attrs.get("Status") or "").upper()
+            tokens = dkim_attrs.get("Tokens") or []
+            signing_enabled = dkim_attrs.get("SigningEnabled")
+
+        if status != last_status:
+            token_preview = ", ".join(tokens) if tokens else "<no tokens>"
+            config.log(
+                f"Waiting for SES DKIM SUCCESS for {domain_name}; current status: {status or 'UNKNOWN'}; "
+                f"SigningEnabled={signing_enabled}; Tokens={token_preview}"
+            )
+            last_status = status
+
+        if status == "SUCCESS":
+            config.log(f"SES DKIM verification succeeded for {domain_name}.")
+            return
+
+        if status in {"FAILED", "TEMPORARY_FAILURE"}:
+            raise AgentBlocked({
+                "desc": f"SES DKIM verification {status.lower()} for {domain_name}",
+                "dkim_status": status,
+                "domain": domain_name,
+                "region": region,
+                "dkim_tokens": tokens
+            })
+
+        time.sleep(poll_interval_seconds)
+
+
 def validate_cloudformation_template(
         config: SelfDriverConfig,
         template_body: str
@@ -2836,8 +2970,6 @@ def push_cloudformation(
         template_body = template_body or cfn_file.read_text()
         
         if get_stack(stack_name, cf_client):
-            assert_cloudformation_stack_valid(stack_name, cf_client)
-            
             config.log(f"Updating existing stack: {stack_name}\n")
             try:
                 cf_client.update_stack(
@@ -4826,6 +4958,35 @@ def get_relevant_code_files(
     return LlmMessage.user_from_data("Relevant Code Files", files_unique.values())
 
 
+def sync_stack_identity(
+        config: SelfDriverConfig,
+        docker_env: dict,
+        cloudformation_params: list[dict] | None = None
+) -> tuple[str, str]:
+    self_driving_task = config.self_driving_task
+    
+    self_driving_task.refresh_from_db()
+    current_stack = self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    current_identifier = self_driving_task.get_cloudformation_key_prefix(config.aws_env)
+    docker_env["STACK_IDENTIFIER"] = current_identifier
+    docker_env["TASK_NAMESPACE"] = current_stack
+    docker_env["CLOUDFORMATION_STACK_NAME"] = current_stack
+    
+    if cloudformation_params is not None:
+        synced = False
+        for param in cloudformation_params:
+            if param.get("ParameterKey") == "StackIdentifier":
+                param["ParameterValue"] = current_identifier
+                synced = True
+                break
+        if not synced:
+            cloudformation_params.append({
+                "ParameterKey": "StackIdentifier",
+                "ParameterValue": current_identifier
+            })
+    return current_stack, current_identifier
+
+
 def deploy_cloudformation_stacks(
         config: SelfDriverConfig,
         docker_env: dict,
@@ -4834,36 +4995,13 @@ def deploy_cloudformation_stacks(
         lambda_datas: dict
 ):
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    
+
     self_driving_task = config.self_driving_task
     sandbox_path = Path(config.sandbox_root_dir)
     aws_env = config.aws_env
     
-    def _sync_stack_identity(cloudformation_params: list[dict] | None = None) -> tuple[str, str]:
-        """Keep stack identifiers aligned across docker env and pending CloudFormation params."""
-        self_driving_task.refresh_from_db()
-        current_stack = self_driving_task.get_cloudformation_stack_name(aws_env)
-        current_identifier = self_driving_task.get_cloudformation_key_prefix(aws_env)
-        docker_env["STACK_IDENTIFIER"] = current_identifier
-        docker_env["TASK_NAMESPACE"] = current_stack
-        docker_env["CLOUDFORMATION_STACK_NAME"] = current_stack
-        
-        if cloudformation_params is not None:
-            synced = False
-            for param in cloudformation_params:
-                if param.get("ParameterKey") == "StackIdentifier":
-                    param["ParameterValue"] = current_identifier
-                    synced = True
-                    break
-            if not synced:
-                cloudformation_params.append({
-                    "ParameterKey": "StackIdentifier",
-                    "ParameterValue": current_identifier
-                })
-        return current_stack, current_identifier
-    
     cfn_file = get_cloudformation_file(config)
-    stack_name, _ = _sync_stack_identity()
+    stack_name, _ = sync_stack_identity(config, docker_env)
     initial_stack_name = stack_name
     config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
     
@@ -4874,91 +5012,12 @@ def deploy_cloudformation_stacks(
             stack_name,
             cf_client
         )
-        stack_name, _ = _sync_stack_identity()
+        stack_name, _ = sync_stack_identity(config, docker_env)
         
         if stack_name != initial_stack_name:
             config.log(
                 f"Rotated CloudFormation stack name from {initial_stack_name} to {stack_name} before deployment."
             )
-        
-        try:
-            if get_stack(stack_name, cf_client):
-                assert_cloudformation_stack_valid(
-                    stack_name,
-                    cf_client
-                )
-        except Exception as e:
-            logging.exception(e)
-            config.log(traceback.format_exc())
-            
-            max_delete_attempts = 3
-            stack_cleanup_successful = False
-            last_delete_error: Exception | None = None
-            
-            for attempt in range(1, max_delete_attempts + 1):
-                try:
-                    config.log(
-                        f"Attempting to delete wedged CloudFormation stack {stack_name} "
-                        f"(attempt {attempt}/{max_delete_attempts})"
-                    )
-                    delete_target = stack_name
-                    cf_client.delete_stack(StackName=delete_target)
-                    try:
-                        cloudformation_wait(
-                            config,
-                            cf_client,
-                            delete_target
-                        )
-                    except CloudFormationStackDeleting as deleting_exc:
-                        stack_cleanup_successful = True
-                        stack_name = deleting_exc.new_stack_name
-                        stack_name, _ = _sync_stack_identity()
-                        config.log(
-                            f"CloudFormation stack {delete_target} is deleting; will proceed with new stack name {stack_name}."
-                        )
-                        break
-                    
-                    if not get_stack(delete_target, cf_client):
-                        stack_cleanup_successful = True
-                        config.log(f"Successfully deleted CloudFormation stack {delete_target} after validation failure.")
-                        stack_name, _ = _sync_stack_identity()
-                        break
-                    
-                    last_delete_error = CloudFormationException(
-                        f"Stack {delete_target} still exists after delete attempt {attempt}."
-                    )
-                    config.log(str(last_delete_error))
-                
-                except cf_client.exceptions.ClientError as delete_exc:
-                    last_delete_error = delete_exc
-                    message = str(delete_exc)
-                    if "does not exist" in message.lower():
-                        stack_cleanup_successful = True
-                        config.log(f"Stack {stack_name} already deleted or missing; continuing deployment.")
-                        break
-                    
-                    config.log(
-                        f"Attempt {attempt}/{max_delete_attempts} failed to delete stack {stack_name}: {message}"
-                    )
-                
-                except Exception as delete_exc:  # pragma: no cover - defensive cleanup
-                    last_delete_error = delete_exc
-                    config.log(
-                        f"Attempt {attempt}/{max_delete_attempts} raised while deleting stack {stack_name}: {delete_exc}"
-                    )
-                
-                if attempt < max_delete_attempts:
-                    time.sleep(5)
-            
-            if not stack_cleanup_successful:
-                if last_delete_error:
-                    config.log(
-                        f"Unable to clean up CloudFormation stack {stack_name} after {max_delete_attempts} attempts: {last_delete_error}"
-                    )
-                raise AgentBlocked(
-                    f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  "
-                    "A Human needs to clean up manually"
-                )
         
         cloudformation_params = get_stack_parameters(
             config,
@@ -4969,7 +5028,7 @@ def deploy_cloudformation_stacks(
             lambda_datas
         )
         
-        _sync_stack_identity(cloudformation_params)
+        sync_stack_identity(config, docker_env, cloudformation_params)
         
         config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
         
@@ -4992,7 +5051,25 @@ def deploy_cloudformation_stacks(
             cloudformation_params,
             template_body=template_body
         )
-        
+
+        if _template_defines_ses_mx(template_body):
+            domain_name_param = next(
+                (
+                    param.get("ParameterValue")
+                    for param in cloudformation_params
+                    if isinstance(param, dict) and param.get("ParameterKey") == "DomainName"
+                ),
+                None
+            )
+
+            domain_name_value = (domain_name_param or "").strip()
+            if domain_name_value:
+                _wait_for_ses_dkim_success(config, domain_name_value)
+            else:
+                config.log(
+                    "Detected SES MX record in CloudFormation template, but no DomainName parameter value was provided; skipping DKIM wait."
+                )
+
         config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
     except BadPlan as bpe:
         logging.exception(bpe)
@@ -5098,6 +5175,77 @@ def deploy_cloudformation_stacks(
             config.log(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}\n")
         
         raise cfe
+
+
+def delete_wedged_cloudformation_stack(config, docker_env, stack_name):
+    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
+    max_delete_attempts = 3
+    stack_cleanup_successful = False
+    last_delete_error: Exception | None = None
+    for attempt in range(1, max_delete_attempts + 1):
+        try:
+            config.log(
+                f"Attempting to delete wedged CloudFormation stack {stack_name} "
+                f"(attempt {attempt}/{max_delete_attempts})"
+            )
+            delete_target = stack_name
+            cf_client.delete_stack(StackName=delete_target)
+            try:
+                cloudformation_wait(
+                    config,
+                    cf_client,
+                    delete_target
+                )
+            except CloudFormationStackDeleting as deleting_exc:
+                stack_cleanup_successful = True
+                stack_name = deleting_exc.new_stack_name
+                stack_name, _ = sync_stack_identity(config, docker_env)
+                config.log(
+                    f"CloudFormation stack {delete_target} is deleting; will proceed with new stack name {stack_name}."
+                )
+                break
+            
+            if not get_stack(delete_target, cf_client):
+                stack_cleanup_successful = True
+                config.log(f"Successfully deleted CloudFormation stack {delete_target} after validation failure.")
+                stack_name, _ = sync_stack_identity(config, docker_env)
+                break
+            
+            last_delete_error = CloudFormationException(
+                f"Stack {delete_target} still exists after delete attempt {attempt}."
+            )
+            config.log(str(last_delete_error))
+        
+        except cf_client.exceptions.ClientError as delete_exc:
+            last_delete_error = delete_exc
+            message = str(delete_exc)
+            if "does not exist" in message.lower():
+                stack_cleanup_successful = True
+                config.log(f"Stack {stack_name} already deleted or missing; continuing deployment.")
+                break
+            
+            config.log(
+                f"Attempt {attempt}/{max_delete_attempts} failed to delete stack {stack_name}: {message}"
+            )
+        
+        except Exception as delete_exc:  # pragma: no cover - defensive cleanup
+            last_delete_error = delete_exc
+            config.log(
+                f"Attempt {attempt}/{max_delete_attempts} raised while deleting stack {stack_name}: {delete_exc}"
+            )
+        
+        if attempt < max_delete_attempts:
+            time.sleep(5)
+    if not stack_cleanup_successful:
+        if last_delete_error:
+            config.log(
+                f"Unable to clean up CloudFormation stack {stack_name} after {max_delete_attempts} attempts: {last_delete_error}"
+            )
+        raise AgentBlocked(
+            f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  "
+            "A Human needs to clean up manually"
+        )
+    return stack_name
 
 
 def validate_parameters(
@@ -5406,7 +5554,7 @@ def delete_cloudformation_stack(
         config.log(f"CloudFormation stack {stack_name} does not exist. Nothing to delete.")
         return
     
-    empty_stack_buckets(config)
+    empty_stack_buckets(config, delete=True)
     
     config.log(f"Deleting CloudFormation stack {stack_name} in {get_aws_region()}")
     cf_client.delete_stack(StackName=stack_name)
@@ -5423,7 +5571,7 @@ def delete_cloudformation_stack(
             config.log(f"Delete request finished for stack {stack_name}")
 
 
-def empty_stack_buckets(config: SelfDriverConfig):
+def empty_stack_buckets(config: SelfDriverConfig, delete=True):
     if not AwsEnv.DEV.eq(config.aws_env):
         return
     
@@ -5493,8 +5641,9 @@ def empty_stack_buckets(config: SelfDriverConfig):
             config.log(f"Successfully emptied S3 bucket: {bucket_name}")
             
             # Delete the bucket after emptying
-            s3_client.delete_bucket(Bucket=bucket_name)
-            config.log(f"Deleted S3 bucket: {bucket_name}")
+            if delete:
+                s3_client.delete_bucket(Bucket=bucket_name)
+                config.log(f"Deleted S3 bucket: {bucket_name}")
         
         except Exception as e:
             config.log(f"S3 bucket {bucket_name} no longer exists ({e}), skipping...")
