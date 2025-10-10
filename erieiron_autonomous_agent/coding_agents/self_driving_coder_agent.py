@@ -10,6 +10,8 @@ import textwrap
 import time
 import traceback
 from collections import defaultdict
+from datetime import datetime, timezone as dt_timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +35,7 @@ from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager
 from erieiron_common.aws_utils import sanitize_aws_name, STACK_STATUS_NO_STACK
+from erieiron_common.date_utils import to_utc
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -1733,6 +1736,7 @@ def run_docker_command(
 def enrich_local_logs_with_cloudwatch_logs(
         local_logs,
         config,
+        stack_name,
         start_epoch,
         end_epoch
 ):
@@ -1740,7 +1744,6 @@ def enrich_local_logs_with_cloudwatch_logs(
     try:
         cw_text = extract_cloudwatch_lambda_logs(
             local_logs=local_logs,
-            config=config,
             lookback_minutes=120
         )
         
@@ -1756,7 +1759,7 @@ def enrich_local_logs_with_cloudwatch_logs(
     # Also collect stack-scoped CloudWatch logs within the docker execution window
     try:
         stack_scoped = extract_cloudwatch_stack_logs_for_window(
-            config=config,
+            stack_name=stack_name,
             start_time=start_epoch - 5,  # small buffer
             end_time=end_epoch + 5
         )
@@ -1784,7 +1787,6 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
 # Helper to extract CloudWatch Lambda logs given RequestIds
 def extract_cloudwatch_lambda_logs(
         local_logs: str,
-        config: SelfDriverConfig,
         lookback_minutes: int = 60,
         max_groups: int = 50
 ) -> str:
@@ -1818,7 +1820,7 @@ def extract_cloudwatch_lambda_logs(
                 break
             next_token = resp.get("nextToken")
     except Exception as e:
-        config.log(f"Failed to list CloudWatch log groups: {e}")
+        logging.info(f"Failed to list CloudWatch log groups: {e}")
         return ""
     
     if not log_groups:
@@ -1852,7 +1854,7 @@ def extract_cloudwatch_lambda_logs(
             )
             query_id = q["queryId"]
         except Exception as e:
-            config.log(f"start_query failed for batch {batch}: {e}")
+            logging.info(f"start_query failed for batch {batch}: {e}")
             continue
         
         # Poll for completion
@@ -1873,13 +1875,14 @@ def extract_cloudwatch_lambda_logs(
                 break
         
         if status != "Complete":
-            config.log(f"Logs Insights query did not complete (status={status}) for batch {batch}")
+            logging.info(f"Logs Insights query did not complete (status={status}) for batch {batch}")
     
     return "\n\n".join(combined)
 
 
 def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
     start_epoch = int(time.time())
+    stack_name = None
     try:
         docker_env = build_env(config)
         
@@ -1890,7 +1893,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
         )
         
         start_epoch = int(time.time())
-        deploy_iteration(
+        _, stack_name = deploy_iteration(
             config,
             docker_env,
             docker_image_tag
@@ -1906,16 +1909,19 @@ def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
         config.log("Docker execution finished")
     
     except Exception as e:
-        enriched_logs = enrich_local_logs_with_cloudwatch_logs(
-            config.get_log_content(),
-            config,
-            start_epoch,
-            int(time.time())
-        )
-        extracted_exception = extract_exception(config, enriched_logs)
-        
-        config.log(enriched_logs)
-        config.log(extracted_exception)
+        config.log(common.get_stack_trace_as_string(e))
+        if stack_name:
+            enriched_logs = enrich_local_logs_with_cloudwatch_logs(
+                config.get_log_content(),
+                config,
+                stack_name,
+                start_epoch,
+                int(time.time())
+            )
+            extracted_exception = extract_exception(config, enriched_logs)
+            
+            config.log(enriched_logs)
+            config.log(extracted_exception)
     
     finally:
         config.business.snapshot_code(config.current_iteration, include_erie_common=False)
@@ -2005,7 +2011,7 @@ def deploy_iteration(
         config.log(e)
         raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
     
-    deploy_cloudformation_stacks(
+    stack_name = deploy_cloudformation_stacks(
         config,
         docker_env,
         full_image_uri,
@@ -2027,6 +2033,8 @@ def deploy_iteration(
         docker_env,
         docker_image_tag
     )
+    
+    return full_image_uri, stack_name
 
 
 def build_iteration(config, docker_env):
@@ -2445,8 +2453,8 @@ def prepare_stack_for_update(config: SelfDriverConfig, stack_name: str, cf_clien
         try:
             status = matching_stack["StackStatus"]
             need_rotate = (
-                    # status.endswith("FAILED")
-                    # or ("ROLLBACK" in status or status.startswith("DELETE")) and not status.endswith("COMPLETE")
+                # status.endswith("FAILED")
+                # or ("ROLLBACK" in status or status.startswith("DELETE")) and not status.endswith("COMPLETE")
                     status.startswith("DELETE") and not status.endswith("COMPLETE")
             )
             
@@ -2821,26 +2829,26 @@ def _enforce_route53_alias_guardrail(template_body: str) -> None:
 def _record_is_ses_mx(record_props: dict) -> bool:
     if not isinstance(record_props, dict):
         return False
-
+    
     record_type = str(record_props.get("Type", "")).upper()
     if record_type != "MX":
         return False
-
+    
     name_expr = record_props.get("Name")
     flattened_name = _flatten_cfn_expr(name_expr) or ""
     normalized_name = flattened_name.rstrip(".")
     if normalized_name not in {"${DomainName}", "DomainName"}:
         return False
-
+    
     resource_records = record_props.get("ResourceRecords")
     if not isinstance(resource_records, list):
         return False
-
+    
     for record in resource_records:
         flattened_record = _flatten_cfn_expr(record) or ""
         if "inbound-smtp." in flattened_record and ".amazonaws.com" in flattened_record:
             return True
-
+    
     return False
 
 
@@ -2849,24 +2857,24 @@ def _template_defines_ses_mx(template_body: str) -> bool:
     resources = template.get("Resources") if isinstance(template, dict) else None
     if not isinstance(resources, dict):
         return False
-
+    
     for resource in resources.values():
         if not isinstance(resource, dict):
             continue
-
+        
         resource_type = resource.get("Type")
         properties = resource.get("Properties") or {}
-
+        
         if resource_type == "AWS::Route53::RecordSet" and _record_is_ses_mx(properties):
             return True
-
+        
         if resource_type == "AWS::Route53::RecordSetGroup":
             record_sets = properties.get("RecordSets") or []
             if isinstance(record_sets, list):
                 for record in record_sets:
                     if _record_is_ses_mx(record):
                         return True
-
+    
     return False
 
 
@@ -2879,14 +2887,14 @@ def _wait_for_ses_dkim_success(
     poll_interval_seconds = max(poll_interval_seconds, 5)
     region = config.aws_env.get_aws_region()
     ses_client = boto3.client("sesv2", region_name=region)
-
+    
     config.log(
         f"SES MX record detected; waiting for DKIM verification SUCCESS for {domain_name} in region {region}."
     )
-
+    
     deadline = time.time() + max_wait_minutes * 60
     last_status = None
-
+    
     while True:
         if time.time() > deadline:
             raise AgentBlocked({
@@ -2895,7 +2903,7 @@ def _wait_for_ses_dkim_success(
                 "domain": domain_name,
                 "region": region
             })
-
+        
         try:
             response = ses_client.get_email_identity(EmailIdentity=domain_name)
         except ses_client.exceptions.NotFoundException:
@@ -2911,7 +2919,7 @@ def _wait_for_ses_dkim_success(
             status = (dkim_attrs.get("Status") or "").upper()
             tokens = dkim_attrs.get("Tokens") or []
             signing_enabled = dkim_attrs.get("SigningEnabled")
-
+        
         if status != last_status:
             token_preview = ", ".join(tokens) if tokens else "<no tokens>"
             config.log(
@@ -2919,11 +2927,11 @@ def _wait_for_ses_dkim_success(
                 f"SigningEnabled={signing_enabled}; Tokens={token_preview}"
             )
             last_status = status
-
+        
         if status == "SUCCESS":
             config.log(f"SES DKIM verification succeeded for {domain_name}.")
             return
-
+        
         if status in {"FAILED", "TEMPORARY_FAILURE"}:
             raise AgentBlocked({
                 "desc": f"SES DKIM verification {status.lower()} for {domain_name}",
@@ -2932,7 +2940,7 @@ def _wait_for_ses_dkim_success(
                 "region": region,
                 "dkim_tokens": tokens
             })
-
+        
         time.sleep(poll_interval_seconds)
 
 
@@ -3033,7 +3041,6 @@ def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_na
     except Exception:
         return []
     
-    from datetime import datetime, timezone as dt_timezone
     if isinstance(deployment_start_datetime, str):
         try:
             # Attempt ISO 8601 parsing
@@ -4995,7 +5002,7 @@ def deploy_cloudformation_stacks(
         lambda_datas: dict
 ):
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-
+    
     self_driving_task = config.self_driving_task
     sandbox_path = Path(config.sandbox_root_dir)
     aws_env = config.aws_env
@@ -5051,7 +5058,7 @@ def deploy_cloudformation_stacks(
             cloudformation_params,
             template_body=template_body
         )
-
+        
         if _template_defines_ses_mx(template_body):
             domain_name_param = next(
                 (
@@ -5061,7 +5068,7 @@ def deploy_cloudformation_stacks(
                 ),
                 None
             )
-
+            
             domain_name_value = (domain_name_param or "").strip()
             if domain_name_value:
                 _wait_for_ses_dkim_success(config, domain_name_value)
@@ -5069,7 +5076,7 @@ def deploy_cloudformation_stacks(
                 config.log(
                     "Detected SES MX record in CloudFormation template, but no DomainName parameter value was provided; skipping DKIM wait."
                 )
-
+        
         config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
     except BadPlan as bpe:
         logging.exception(bpe)
@@ -5084,97 +5091,109 @@ def deploy_cloudformation_stacks(
     except CloudFormationException as cfe:
         config.log(f"Error deploying CloudFormation stack {stack_name}: {cfe}\n")
         config.log(traceback.format_exc())
-        try:
-            events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
-            # Filter events to only include those that occurred after deployment start_time
-            from datetime import datetime, timezone
-            deployment_start_datetime = datetime.fromtimestamp(start_time, tz=timezone.utc)
-            recent_events = [
-                e for e in events
-                if e['Timestamp'] >= deployment_start_datetime
-            ]
-            # Sort events in ascending order (oldest first)
-            recent_events.sort(key=lambda x: x['Timestamp'])
-            
-            failed_events = [
-                f"{e['Timestamp']} | Stack: {e['StackName']} | {e['LogicalResourceId']} ({e['ResourceType']}) | Status: {e['ResourceStatus']} | Reason: {e.get('ResourceStatusReason', '')} | PhysicalId: {e.get('PhysicalResourceId', '')} | Token: {e.get('ClientRequestToken', '')}"
-                for e in recent_events if "FAILED" in e["ResourceStatus"]
-            ]
-            config.log("CloudFormation failure events:\n")
-            config.log("\n".join(failed_events) + "\n")
-            
-            # Also describe the top 3 failed resources in more detail
-            failed_logical_ids = [e["LogicalResourceId"] for e in recent_events if "FAILED" in e["ResourceStatus"]]
-            config.log("\nDetailed resource descriptions for top failures:\n")
-            for logical_id in failed_logical_ids[:3]:
-                try:
-                    resource_details = cf_client.describe_stack_resource(
-                        StackName=stack_name,
-                        LogicalResourceId=logical_id
-                    )
-                    config.log(json.dumps(resource_details, indent=2, default=str) + "\n")
-                except Exception as ex:
-                    config.log(f"Failed to describe resource {logical_id}: {ex}\n")
-        except Exception as event_ex:
-            config.log(f"Failed to fetch stack events: {event_ex}\n")
-        
-        from datetime import datetime, timedelta
-        config.log("\nRecent CloudTrail events in this region (last 15 min):\n")
-        try:
-            ct_client = boto3.client("cloudtrail", region_name=config.aws_env.get_aws_region())
-            end_time = common.get_now()
-            ct_query_start_time = end_time - timedelta(minutes=15)
-            
-            ct_events = ct_client.lookup_events(
-                StartTime=ct_query_start_time,
-                EndTime=end_time,
-                MaxResults=100
-            )
-            
-            # Filter events to only include those that occurred after deployment start_time
-            from datetime import timezone
-            deployment_start_datetime = datetime.fromtimestamp(start_time, tz=timezone.utc)
-            recent_ct_events = [
-                event for event in ct_events.get("Events", [])
-                if event['EventTime'] >= deployment_start_datetime
-            ]
-            # Sort events in ascending order (oldest first)
-            recent_ct_events.sort(key=lambda x: x['EventTime'])
-            
-            for ct_event in recent_ct_events:
-                cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
-                error_message: str = cloudtrain_event_data.get("errorMessage")
-                if error_message:
-                    if "No updates are to be performed" in error_message:
-                        continue
-                    
-                    if error_message.lower().startswith("stack with id") and error_message.lower().endswith("does not exist"):
-                        continue
-                    
-                    config.log(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
-                    config.log(json.dumps(cloudtrain_event_data, indent=4))
-        
-        except Exception as ct_ex:
-            config.log(f"Failed to fetch CloudTrail events: {ct_ex}\n")
-        
-        try:
-            end_time = time.time()
-            start_epoch = max(0, int(start_time) - 60)
-            end_epoch = int(end_time) + 60
-            config.log("\nCloudWatch logs for stack resources since deployment start:\n")
-            stack_logs = extract_cloudwatch_stack_logs_for_window(
-                config=config,
-                start_time=start_epoch,
-                end_time=end_epoch
-            )
-            if stack_logs:
-                config.log(stack_logs + "\n")
-            else:
-                config.log("No CloudWatch log entries found for stack resources in this window.\n")
-        except Exception as stack_log_ex:
-            config.log(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}\n")
+        config.log(read_cloudformation_failures(
+            config,
+            stack_name,
+            config.aws_env.get_aws_region(),
+            start_time
+        ))
         
         raise cfe
+    
+    return stack_name
+
+
+def read_cloudformation_failures(config, stack_name, aws_region, start_time) -> str:
+    error_lines = []
+    cf_client = boto3.client("cloudformation", region_name=aws_region)
+    try:
+        events = cf_client.describe_stack_events(StackName=stack_name)["StackEvents"]
+        # Filter events to only include those that occurred after deployment start_time
+        deployment_start_datetime = to_utc(start_time)
+        recent_events = [
+            e for e in events
+            if e['Timestamp'] >= deployment_start_datetime
+        ]
+        # Sort events in ascending order (oldest first)
+        recent_events.sort(key=lambda x: x['Timestamp'])
+        
+        failed_events = [
+            f"{e['Timestamp']} | Stack: {e['StackName']} | {e['LogicalResourceId']} ({e['ResourceType']}) | Status: {e['ResourceStatus']} | Reason: {e.get('ResourceStatusReason', '')} | PhysicalId: {e.get('PhysicalResourceId', '')} | Token: {e.get('ClientRequestToken', '')}"
+            for e in recent_events if "FAILED" in e["ResourceStatus"]
+        ]
+        error_lines.append("CloudFormation failure events:")
+        error_lines.append("\n".join(failed_events))
+        
+        # Also describe the top 3 failed resources in more detail
+        failed_logical_ids = [e["LogicalResourceId"] for e in recent_events if "FAILED" in e["ResourceStatus"]]
+        error_lines.append("\nDetailed resource descriptions for top failures:")
+        for logical_id in failed_logical_ids[:3]:
+            try:
+                resource_details = cf_client.describe_stack_resource(
+                    StackName=stack_name,
+                    LogicalResourceId=logical_id
+                )
+                error_lines.append(json.dumps(resource_details, indent=2, default=str))
+            except Exception as ex:
+                error_lines.append(f"Failed to describe resource {logical_id}: {ex}")
+    except Exception as event_ex:
+        error_lines.append(f"Failed to fetch stack events: {event_ex}")
+    
+    error_lines.append("\nRecent CloudTrail events in this region (last 15 min):")
+    try:
+        ct_client = boto3.client("cloudtrail", region_name=aws_region)
+        end_time = common.get_now()
+        ct_query_start_time = end_time - timedelta(minutes=15)
+        
+        ct_events = ct_client.lookup_events(
+            StartTime=ct_query_start_time,
+            EndTime=end_time,
+            MaxResults=100
+        )
+        
+        # Filter events to only include those that occurred after deployment start_time
+        deployment_start_datetime = to_utc(start_time)
+        recent_ct_events = [
+            event for event in ct_events.get("Events", [])
+            if event['EventTime'] >= deployment_start_datetime
+        ]
+        # Sort events in ascending order (oldest first)
+        recent_ct_events.sort(key=lambda x: x['EventTime'])
+        
+        for ct_event in recent_ct_events:
+            cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
+            error_message: str = cloudtrain_event_data.get("errorMessage")
+            if error_message:
+                if "No updates are to be performed" in error_message:
+                    continue
+                
+                if error_message.lower().startswith("stack with id") and error_message.lower().endswith("does not exist"):
+                    continue
+                
+                error_lines.append(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
+                error_lines.append(json.dumps(cloudtrain_event_data, indent=4))
+    
+    except Exception as ct_ex:
+        error_lines.append(f"Failed to fetch CloudTrail events: {ct_ex}")
+    
+    try:
+        end_time = time.time()
+        start_epoch = max(0, int(start_time) - 60)
+        end_epoch = int(end_time) + 60
+        error_lines.append("\nCloudWatch logs for stack resources since deployment start:")
+        stack_logs = extract_cloudwatch_stack_logs_for_window(
+            stack_name=stack_name,
+            start_time=start_epoch,
+            end_time=end_epoch
+        )
+        if stack_logs:
+            error_lines.append(stack_logs)
+        else:
+            error_lines.append("No CloudWatch log entries found for stack resources in this window.")
+    except Exception as stack_log_ex:
+        error_lines.append(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}")
+    
+    return common.safe_join(error_lines, "\n")
 
 
 def delete_wedged_cloudformation_stack(config, docker_env, stack_name):
@@ -5651,7 +5670,7 @@ def empty_stack_buckets(config: SelfDriverConfig, delete=True):
 
 # Helper to extract CloudWatch stack logs for a time window
 def extract_cloudwatch_stack_logs_for_window(
-        config: SelfDriverConfig,
+        stack_name: str,
         start_time: int,
         end_time: int,
         max_groups: int = 50
@@ -5665,16 +5684,7 @@ def extract_cloudwatch_stack_logs_for_window(
         cf = aws_utils.client("cloudformation")
         logs = aws_utils.client("logs")
     except Exception as e:
-        config.log(f"Unable to create AWS clients: {e}")
-        return ""
-    
-    # Determine stack name
-    try:
-        stack_name = config.self_driving_task.cloudformation_stack_name
-        if not stack_name:
-            return ""
-    except Exception as e:
-        config.log(f"Could not resolve stack name: {e}")
+        logging.error(f"Unable to create AWS clients: {e}")
         return ""
     
     from datetime import datetime, timezone
@@ -5710,7 +5720,7 @@ def extract_cloudwatch_stack_logs_for_window(
                 elif rtype == "AWS::ECS::Service" and phys:
                     ecs_service_identifiers.append(phys)
     except Exception as e:
-        config.log(f"Failed to enumerate stack resources for {stack_name}: {e}")
+        logging.info(f"Failed to enumerate stack resources for {stack_name}: {e}")
     
     service_event_records = []
     ecs_log_groups = set()
@@ -5719,7 +5729,7 @@ def extract_cloudwatch_stack_logs_for_window(
         try:
             ecs_client = aws_utils.client("ecs")
         except Exception as e:
-            config.log(f"Failed to create ECS client: {e}")
+            logging.info(f"Failed to create ECS client: {e}")
     
     def _build_ecs_describe_kwargs(identifier: str) -> dict:
         if not identifier:
@@ -5752,7 +5762,7 @@ def extract_cloudwatch_stack_logs_for_window(
             try:
                 resp = ecs_client.describe_services(**kwargs)
             except Exception as e:
-                config.log(f"Failed to describe ECS service {service_identifier}: {e}")
+                logging.info(f"Failed to describe ECS service {service_identifier}: {e}")
                 continue
             for failure in resp.get("failures", []):
                 failure_arn = failure.get("arn") or service_identifier
@@ -5785,7 +5795,7 @@ def extract_cloudwatch_stack_logs_for_window(
                 td_resp = ecs_client.describe_task_definition(taskDefinition=task_def_arn)
                 task_def = td_resp.get("taskDefinition", {})
             except Exception as e:
-                config.log(f"Failed to describe ECS task definition {task_def_arn}: {e}")
+                logging.info(f"Failed to describe ECS task definition {task_def_arn}: {e}")
                 continue
             for container in task_def.get("containerDefinitions", []):
                 log_config = container.get("logConfiguration") or {}
@@ -5818,7 +5828,7 @@ def extract_cloudwatch_stack_logs_for_window(
                     break
                 next_token = resp.get("nextToken")
         except Exception as e:
-            config.log(f"Fallback discovery failed: {e}")
+            logging.info(f"Fallback discovery failed: {e}")
     
     # Deduplicate and clip to max_groups
     log_group_names = list(dict.fromkeys([n for n in log_group_names if isinstance(n, str) and n.strip()]))[:max_groups]
@@ -5845,7 +5855,7 @@ def extract_cloudwatch_stack_logs_for_window(
             )
             query_id = q["queryId"]
         except Exception as e:
-            config.log(f"start_query failed for batch {batch}: {e}")
+            logging.info(f"start_query failed for batch {batch}: {e}")
             continue
         
         status = "Running"
@@ -5864,7 +5874,7 @@ def extract_cloudwatch_stack_logs_for_window(
                 break
         
         if status != "Complete":
-            config.log(f"Logs Insights window query did not complete (status={status}) for batch {batch}")
+            logging.info(f"Logs Insights window query did not complete (status={status}) for batch {batch}")
     
     output_sections = []
     if service_event_records:

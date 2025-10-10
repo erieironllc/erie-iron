@@ -766,3 +766,8 @@ def get_prev_monday(d=None):
 
     offset = (d.weekday()) % 7
     return d - timedelta(days=offset)
+
+
+def to_utc(start_time):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(start_time, tz=timezone.utc)

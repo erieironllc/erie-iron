@@ -20,7 +20,7 @@
         >version {{ iteration_to_modify.version_number }}</a>)
         </p>
     {% endif %}
-    <p>Iteration {{ iteration_to_modify.version_number }} summary: {{ iteration_to_modify.evaluation_json.summary }}</p>
+    <p>Iteration {{ iteration_to_modify.version_number }} summary: {{ iteration_to_modify.evaluation_json.summary|markdown }}</p>
 {% endif %}
 
 {% if iteration.routing_json %}
