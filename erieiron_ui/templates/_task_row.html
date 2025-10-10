@@ -20,7 +20,7 @@
                 </div>
                 <div class="me-2">
                     {% if task.first_iteration_time %}
-                        {{ task.first_iteration_time|date:"m/d/Y h:i:s a" }}
+                        {{ task.last_iteration_time|date:"m/d/Y h:i:s a" }}
                     {% endif %}
                 </div>
             </small>

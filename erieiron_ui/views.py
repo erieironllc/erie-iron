@@ -836,6 +836,7 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
         executions = task_executions.get(task.id, [])
         
         first_iteration = common.first(iterations)
+        last_iteration = common.last(iterations)
         last_execution = common.last(executions)
         
         last_execution_time = last_execution.executed_time if last_execution else None
@@ -844,6 +845,7 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
             last_execution_time = last_iteration.timestamp if last_iteration else None
         
         task.first_iteration_time = first_iteration.timestamp if first_iteration else None
+        task.last_iteration_time = last_iteration.timestamp if last_iteration else None
         task.last_execution_time = last_execution_time
     
     return {"tasks": tasks}
@@ -1181,10 +1183,6 @@ def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
     return {}
 
 
-
-
-
-
 def _iteration_tab_available_evaluation(iteration: SelfDrivingTaskIteration, **_):
     return bool(getattr(iteration, "evaluation_json", None))
 
@@ -1384,7 +1382,7 @@ def view_self_driver_latest_iteration(request, task_id):
 
 def view_self_driver_iteration(request, iteration_id, tab='routing'):
     from erieiron_ui import tab_defitions
-
+    
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
     
     self_driving_task = iteration.self_driving_task
@@ -1490,10 +1488,10 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
 @json_endpoint
 def view_iteration_logs(request, iteration_id):
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
-
+    
     log_content_coding = getattr(iteration, "log_content_coding", None) or ""
     log_content_execution = getattr(iteration, "log_content_execution", None) or ""
-
+    
     return {
         "log_text": f"{log_content_coding}{log_content_execution}",
     }
@@ -1501,7 +1499,7 @@ def view_iteration_logs(request, iteration_id):
 
 def action_resolve_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
-
+    
     try:
         resolve_data = json.loads(rget(request, "output"))
     except:
@@ -2189,6 +2187,12 @@ def view_llm_request(request, llm_request_id):
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name)
     ]
+    iteration = llm_request.task_iteration
+    task = iteration.self_driving_task.task
+    initiative = task.initiative
+    previous_iteration: SelfDrivingTaskIteration | None = iteration.get_previous_iteration()
+    next_iteration: SelfDrivingTaskIteration | None = iteration.get_next_iteration()
+    
     if llm_request.business_id:
         breadcrumbs.append(
             (reverse('view_business_tab', args=['product-initiatives', llm_request.business_id]), llm_request.business.name),
@@ -2197,15 +2201,14 @@ def view_llm_request(request, llm_request_id):
             breadcrumbs.append(
                 (reverse('view_initiative_tab', args=['tasks', llm_request.initiative_id]), llm_request.initiative.title),
             )
-            if llm_request.task_iteration:
-                task = llm_request.task_iteration.self_driving_task.task
+            if iteration:
                 breadcrumbs.append(
                     (f"{reverse(view_task, args=[task.id])}#iterations", task.get_name())
                 )
                 breadcrumbs.append(
                     (
                         reverse('view_self_driver_iteration', args=[llm_request.task_iteration_id]),
-                        f"Iteration {llm_request.task_iteration.version_number}"
+                        f"Iteration {iteration.version_number}"
                     )
                 )
     
@@ -2224,10 +2227,17 @@ def view_llm_request(request, llm_request_id):
                 "value": f"{m.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
             })
     
+    llm_requests = list(iteration.llmrequest_set.order_by("-timestamp"))
+    
     return send_response(
         request,
         "llm_request.html",
         {
+            "iteration": iteration,
+            "task": task,
+            "initiative": initiative,
+            "business": initiative.business,
+            "tabs": _build_iteration_tabs(iteration, task, previous_iteration, next_iteration, None, None, llm_requests),
             "llm_request": llm_request,
             "model_choices": model_choices,
             "model_choice_value": f"{LlmModel.OPENAI_GPT_5.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MINIMAL}"

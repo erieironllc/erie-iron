@@ -1198,7 +1198,6 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
     is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
     config.set_phase(SdaPhase.INIT)
     self_driving_task.get_git().pull()
-    # ensure_shared_vpc_exists(config.aws_env)
     
     create_task_subdomain(self_driving_task)
     config.iterate_if_necessary()
@@ -1210,7 +1209,7 @@ def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
             include_erie_common=True
         )
     
-    if not self_driving_task.selfdrivingtaskiteration_set.exists():
+    if not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
         if not is_production_deployment:
             run_existing_tests(config, self_driving_task)
         
