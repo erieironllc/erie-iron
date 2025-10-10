@@ -41,6 +41,7 @@ urlpatterns = [
     
     path("iteration/delete/<uuid:iteration_id>", views.action_delete_iteration, name="action_delete_iteration"),
     path("iteration/rollback/<uuid:iteration_id>", views.action_rollback_iteration, name="action_rollback_iteration"),
+    path("iteration/<uuid:iteration_id>/logs", views.view_iteration_logs, name="view_iteration_logs"),
     path("iteration/<slug:tab>/<str:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration_tab"),
     path("iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
 

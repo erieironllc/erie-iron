@@ -101,7 +101,7 @@
                     <div class="d-flex justify-content-between align-items-start">
                         <div class="w-100 me-3">
                             {% for inp_msg in llm_request.input_messages %}
-                                <div class="card mb-4 iteration_card">
+                                <div class="card mb-4 iteration_card copy-container">
                                     <div class="card-header d-flex justify-content-between"
                                          role="button"
                                          aria-expanded="false"
@@ -114,13 +114,15 @@
                                             <small class="text-muted nowrap " style="white-space: nowrap;">
                                                 {{ inp_msg.role }} msg
                                                 (${{ inp_msg.content|llm_msg_cost:llm_request.llm_model|floatformat:3 }})
-                                                - {{ inp_msg.content|truncatechars:250 }}
+                                                - {{ inp_msg.content|truncatechars:50 }}
                                             </small>
                                         </div>
+
+                                        {% include "_copy_clipboard_btn.html" with target_el=".llmrequest_msg" %}
                                     </div>
                                     <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
                                         <dl class="row">
-                                            <pre id="llmrequest-content-{{ forloop.counter }}">{{ inp_msg.content }}</pre>
+                                            <pre class="llmrequest_msg" id="llmrequest-content-{{ forloop.counter }}">{{ inp_msg.content }}</pre>
                                         </dl>
                                     </div>
                                 </div>

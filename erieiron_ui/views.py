@@ -1384,7 +1384,7 @@ def view_self_driver_latest_iteration(request, task_id):
 
 def view_self_driver_iteration(request, iteration_id, tab='routing'):
     from erieiron_ui import tab_defitions
-    
+
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
     
     self_driving_task = iteration.self_driving_task
@@ -1487,9 +1487,21 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
     )
 
 
+@json_endpoint
+def view_iteration_logs(request, iteration_id):
+    iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
+
+    log_content_coding = getattr(iteration, "log_content_coding", None) or ""
+    log_content_execution = getattr(iteration, "log_content_execution", None) or ""
+
+    return {
+        "log_text": f"{log_content_coding}{log_content_execution}",
+    }
+
+
 def action_resolve_task(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
-    
+
     try:
         resolve_data = json.loads(rget(request, "output"))
     except:

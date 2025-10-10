@@ -2,8 +2,10 @@
 
 You are developing code in the **Test-Driven-Development style**.  The automated test file is located at `<test_file_path>`. 
 
-You must follow these constraints:
+## Constraints
 
+- When tests need to send emails, always use "erieironllc@gmail.com" as the "FROM" address.
+- Tests should only send emails to internal domains (e.g., *@erieiron.com or the application's business domain) and must never send emails externally.
 - When implementing or modifying tests **Only modify <test_file_path>.** You may not create additional test files under any circumstances.
 - If repeated iterations show the test itself is faulty or lacks the logging needed to diagnose failures, update it to correct the issue or add focused diagnostics while keeping the test’s spirit intact.
 - You may modify or add tests inside `<test_file_path>`, if doing so is necessary to bring the implementation closer to the GOAL or to fix a failing assertion.
@@ -32,28 +34,13 @@ Violating these constraints may result in invalid task execution or untrustworth
 
 ---
 
-## Real AWS Integration Test Environment
-- Tests execute in an isolated AWS account and CloudFormation stack. Assume production-like conditions.
-- Never use LocalStack, moto, botocore Stubber, or any AWS emulator for acceptance or smoke tests.
-- Do not set `endpoint_url` on boto3 clients to non-AWS hosts. Clients must call real AWS endpoints in the region from `AWS_DEFAULT_REGION`.
-- IAM permissions must be satisfied by roles defined in `infrastructure.yaml`. Create or update stack-managed roles whose `RoleName` begins with `!Ref StackIdentifier` and remains under 64 characters; update those roles when more access is required.
-- Prefer long-lived infrastructure defined in the stack. Create only ephemeral data-plane resources during tests when explicitly allowed by evaluator guidance.
-- Add idempotency, bounded retries with jitter, and short timeouts to accommodate eventual consistency without flakiness.
+## Integration and Environment Strategy
 
-- If you need an Environment variable but it's not in the environment, you have two choices:
-    1.  Create a reasonable default value (if a reasonable default exists) 
-    2.  Return "Blocked" to have a human set it up (if a reasonable default does not exist)
-- The stack must create whatever IAM roles it needs, prefixing each role name with the StackIdentifier value and keeping the name length at or below 64 characters.
-- The `settings.py` file must **always** reside in the root of the Django application—directly alongside `manage.py`.
-  - Do **not** place `settings.py` inside a subdirectory.
-  - ❌ Incorrect: `"app/settings.py"`
-  - ✅ Correct: `"settings.py"` 
-- Include diagnostic logging in all plans.
-- Minimize iteration count. Minimize file sprawl.
-- Only emit blocked according to the criteria in Blocked Output Example.
-- When database-related errors occur (e.g., `django.db.utils.OperationalError`, connection refused/timeouts, authentication failures), you **must** plan edits to the settings module to fully configure `DATABASES` from AWS Secrets Manager rather than escalating to a human.
-- if editing settings.py, you may **must always** set the "DATABASES" variable with this line of code:  "DATABASES = agent_tools.get_django_settings_databases_conf()".  You may **never** delete this line of code
-- you **may not** edit the file self_driving_coder_agent.py.  
-    - if you need edits to self_driving_coder_agent.py, you must return as "Blocked"
-    - only return "Blocked" in this case if you have no workarounds in the code that you are able to edit
-    - if you feel you need to edit self_driving_coder_agent.py, look further at the error.  It's likely the fix is not in self_driving_coder_agent.py, rather the fix is in code that you have access to modify
+- Tests must validate that the full workflow **really works in the deployed stack**. They should assert functional success end-to-end rather than rely on mocked dependencies or isolated components.
+- AWS and other integrations should be exercised through the actual deployed environment (for example, real S3 uploads, SES email sends, or RDS queries)
+- Tests **must avoid** asserting internal configuration details such as role names, stack identifiers, or region values.
+- The objective is to prove that the system’s observable outcomes are correct in a real environment — e.g., data is stored, events are processed, and external effects occur as expected.
+- Mocking or stubbing of AWS services is **not allowed**; tests must run against real or stack-provisioned resources that mirror production conditions.
+- When instability or eventual consistency may cause flakiness, tests should include bounded retries with jitter and clear diagnostics rather than disabling validation.
+- Logging and diagnostics should focus on visibility of functional flow (what succeeded or failed), not on enforcing static configuration expectations.
+

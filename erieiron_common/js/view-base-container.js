@@ -724,8 +724,14 @@ BaseContainerView = ErieView.extend({
             const copy_container = btn.closest(".copy-container");
             if (copy_container.length){
                 target_el = $(targetSelector + ":visible", copy_container).first();
+                if (!target_el.length){
+                    target_el = $(targetSelector, copy_container).first();
+                }
             }else{
                 target_el = $(targetSelector + ":visible").first();
+                if (!target_el.length){
+                    target_el = $(targetSelector).first();
+                }
             }
         }else{
             target_el = $(targetSelector);
