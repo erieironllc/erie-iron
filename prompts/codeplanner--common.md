@@ -212,6 +212,8 @@ Do **not** emit blocked:
   require the `RDS` secret schema, and specify fail-fast behavior when the env var/secret is missing at runtime.
 - Do **not** escalate to a human for routine Django `DATABASES` wiring. Treat it as a standard, safe edit to the
   settings module.
+- Do **not** emit `blocked` because a CloudFormation stack is in a transitional or rollback state (for example
+  `*_ROLLBACK_*` or `*_CLEANUP_IN_PROGRESS`). The orchestration layer will stabilize or rotate stacks
 
 ---
 

@@ -10,7 +10,7 @@ from django.contrib import messages
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
-from django.utils import timezone
+from django.utils import timezone, formats
 from django.utils.html import escape
 
 from erieiron_autonomous_agent import system_agent_llm_interface
@@ -1016,10 +1016,18 @@ def _task_tab_context_latest_iteration(task, business, self_driving_task) -> dic
     return {"iteration": iteration}
 
 
+def _task_tab_context_latest_iteration_logs(task, business, self_driving_task) -> dict:
+    if not self_driving_task:
+        return {"iteration": None}
+
+    iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
+    return {"iteration": iteration}
+
+
 def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
     if not self_driving_task:
         return {"iterations": []}
-    
+
     iterations = list(self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp"))
     if not iterations:
         return {"iterations": []}
@@ -1494,6 +1502,45 @@ def view_iteration_logs(request, iteration_id):
     
     return {
         "log_text": f"{log_content_coding}{log_content_execution}",
+    }
+
+
+@json_endpoint
+def view_task_latest_iteration_logs(request, task_id):
+    task = get_object_or_404(Task, pk=task_id)
+    self_driving_task = getattr(task, "selfdrivingtask", None)
+
+    if not self_driving_task:
+        return {
+            "log_text": "",
+            "iteration_id": None,
+        }
+
+    iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
+    if not iteration:
+        return {
+            "log_text": "",
+            "iteration_id": None,
+        }
+
+    log_content_coding = getattr(iteration, "log_content_coding", None) or ""
+    log_content_execution = getattr(iteration, "log_content_execution", None) or ""
+
+    timestamp = getattr(iteration, "timestamp", None)
+    timestamp_display = None
+    if timestamp:
+        try:
+            localized = timezone.localtime(timestamp)
+        except (ValueError, TypeError, AttributeError):
+            localized = timestamp
+        timestamp_display = formats.date_format(localized, "DATETIME_FORMAT")
+
+    return {
+        "log_text": f"{log_content_coding}{log_content_execution}",
+        "iteration_id": str(iteration.id),
+        "iteration_version_number": iteration.version_number,
+        "iteration_timestamp": timestamp.isoformat() if timestamp else None,
+        "iteration_timestamp_display": timestamp_display,
     }
 
 

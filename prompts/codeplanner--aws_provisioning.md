@@ -129,6 +129,13 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 
 ---
 
+## CloudFormation Stack State Guardrail
+- Do **not** return a `blocked` response solely because the CloudFormation stack is in a rollback or cleanup state (for
+  example `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS`, `ROLLBACK_COMPLETE`, or similar transitional statuses). The
+  orchestration layer will stabilize or rotate stacks before the deploy step.
+
+---
+
 ### Service Naming
 
 The name of all of the AWS service instances will be unique based on environment and other factors.  The unique name prefix is defined at deploy time and passed to cloudformation as a parameter named 'StackIdentifier'.  as such:

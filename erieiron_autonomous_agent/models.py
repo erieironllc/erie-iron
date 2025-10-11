@@ -1544,6 +1544,19 @@ class CodeVersion(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     codebert_embedding = VectorField(dimensions=768, null=True)
     
+    def has_diff(self) -> bool:
+        previous_version = (
+            CodeVersion.objects
+            .filter(code_file=self.code_file, created_at__lt=self.created_at)
+            .order_by('-created_at')
+            .first()
+        )
+        
+        if not previous_version:
+            return False
+    
+        return common.is_not_empty(self.get_diff())
+    
     def get_diff(self) -> str:
         try:
             previous_version = (

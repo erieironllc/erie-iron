@@ -2408,6 +2408,7 @@ def cloudformation_wait(
         if not stack:
             return
         
+        time.sleep(poll_interval)
         status = stack['StackStatus']
         if first_status is None:
             first_status = status
@@ -2424,6 +2425,14 @@ def cloudformation_wait(
                     )
                 else:
                     return
+        
+        wait_time = time.time() - start_time
+        if wait_time > timeout:
+            raise CloudFormationException(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
+        config.log(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
+        
+        if "COMPLETE" in status and status.endswith("IN_PROGRESS"):
+            continue
         
         if throw_on_fail:
             if "ROLLBACK" in status:
@@ -2479,12 +2488,7 @@ def cloudformation_wait(
         if not status.endswith("_IN_PROGRESS"):
             break
         
-        wait_time = time.time() - start_time
-        if wait_time > timeout:
-            raise CloudFormationException(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
         
-        config.log(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
-        time.sleep(poll_interval)
     
     if throw_on_fail:
         assert_cloudformation_stack_valid(stack_name, cf_client)

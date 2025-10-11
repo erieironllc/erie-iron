@@ -171,6 +171,13 @@ TASK_TAB_DEFINITIONS = [
         "context_fn": views._task_tab_context_iterations,
     },
     {
+        "slug": "latest_iteration_logs",
+        "label": "Logs",
+        "template": "task/tabs/latest_iteration_logs.html",
+        "availability_fn": views._task_tab_available_iterations,
+        "context_fn": views._task_tab_context_latest_iteration_logs,
+    },
+    {
         "slug": "latest_iteration",
         "label": "Latest Iteration",
         "template": "task/tabs/iterations.html",

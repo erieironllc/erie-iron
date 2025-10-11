@@ -1,0 +1,146 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <small class="text-muted"
+               id="task_latest_iteration_meta"
+               data-empty-meta="No iteration available yet."
+               data-prefix="Latest iteration:">
+            {% if iteration %}
+                Latest iteration: Version {{ iteration.version_number }}{% if iteration.timestamp %} ({{ iteration.timestamp }}){% endif %}
+            {% else %}
+                No iteration available yet.
+            {% endif %}
+        </small>
+        {% include "_copy_clipboard_btn.html" with target_el="#task_latest_iteration_logs" %}
+    </div>
+
+    <div class="pre"
+         id="task_latest_iteration_logs"
+         data-logs-url="{% url 'view_task_latest_iteration_logs' task.id %}"
+         data-empty-msg="No iteration logs available yet."
+         data-current-iteration-id="{{ iteration.id|default_if_none:'' }}">{% if iteration %}{{ iteration.log_content_coding|default_if_none:"" }}{{ iteration.log_content_execution|default_if_none:"" }}{% else %}No iteration logs available yet.{% endif %}</div>
+</div>
+<script>
+    (function () {
+        const logsEl = $('#task_latest_iteration_logs');
+        if (!logsEl.length) {
+            return;
+        }
+        
+        
+        const node = $(".col-main-content").first()[0];
+        if (node) {
+            node.scrollTop = node.scrollHeight;
+        }
+        
+
+        const noLogsMessage = logsEl.data('emptyMsg') || '';
+        const initialIterationId = logsEl.data('currentIterationId') || null;
+        if (initialIterationId) {
+            logsEl.data('currentIterationId', initialIterationId);
+        }
+        logsEl.data('currentLogText', logsEl.text());
+
+        const metaEl = $('#task_latest_iteration_meta');
+        const emptyMetaText = metaEl.data('emptyMeta') || 'No iteration available yet.';
+        const metaPrefix = metaEl.data('prefix') || 'Latest iteration:';
+
+        if (window.taskLogsPolling && window.taskLogsPolling.timer) {
+            window.clearInterval(window.taskLogsPolling.timer);
+        }
+        window.taskLogsPolling = window.taskLogsPolling || {};
+        window.taskLogsPolling.inFlight = false;
+
+        const scrollToBottom = (el) => {
+            const node = el[0];
+            if (node) {
+                node.scrollTop = node.scrollHeight;
+            }
+        };
+
+        const clearPolling = () => {
+            if (window.taskLogsPolling.timer) {
+                window.clearInterval(window.taskLogsPolling.timer);
+                window.taskLogsPolling.timer = null;
+            }
+            window.taskLogsPolling.inFlight = false;
+        };
+
+        const fetchLogs = () => {
+            const target = $('#task_latest_iteration_logs');
+            if (target.length === 0) {
+                clearPolling();
+                return;
+            }
+
+            const fetchUrl = target.data('logsUrl');
+            if (!fetchUrl) {
+                return;
+            }
+
+            if (window.taskLogsPolling.inFlight) {
+                return;
+            }
+            window.taskLogsPolling.inFlight = true;
+
+            $.ajax({
+                url: fetchUrl,
+                type: 'GET',
+                dataType: 'json',
+                cache: false,
+                success: function (resp) {
+                    if (!resp) {
+                        return;
+                    }
+
+                    let logText = resp['log_text'] || '';
+                    const iterationId = resp['iteration_id'] || null;
+                    const previousIterationId = target.data('currentIterationId') || null;
+
+                    if (!iterationId && !logText) {
+                        logText = noLogsMessage;
+                    }
+
+                    const previous = target.data('currentLogText');
+                    const iterationChanged = iterationId && iterationId !== previousIterationId;
+
+                    if (metaEl.length) {
+                        if (iterationId) {
+                            const versionNumber = resp['iteration_version_number'];
+                            const timestampDisplay = resp['iteration_timestamp_display'] || '';
+                            let metaText = metaPrefix;
+                            if (typeof versionNumber !== 'undefined' && versionNumber !== null) {
+                                metaText += ` Version ${versionNumber}`;
+                            }
+                            if (timestampDisplay) {
+                                metaText += ` (${timestampDisplay})`;
+                            }
+                            metaEl.text(metaText);
+                        } else {
+                            metaEl.text(emptyMetaText);
+                        }
+                    }
+
+                    if (iterationChanged || previous !== logText) {
+                        target.text(logText);
+                        target.data('currentLogText', logText);
+                        target.data('currentIterationId', iterationId || null);
+                        scrollToBottom(target);
+                    }
+                },
+                complete: function () {
+                    window.taskLogsPolling.inFlight = false;
+                },
+                error: function () {
+                    window.taskLogsPolling.inFlight = false;
+                }
+            });
+        };
+
+        scrollToBottom(logsEl);
+        window.taskLogsPolling.timer = window.setInterval(fetchLogs, 1000);
+        window.taskLogsPolling.fetchLogs = fetchLogs;
+        fetchLogs();
+    })();
+</script>
