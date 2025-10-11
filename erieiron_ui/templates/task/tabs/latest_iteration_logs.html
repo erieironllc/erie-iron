@@ -23,24 +23,28 @@
 </div>
 <script>
     (function () {
-        const logsEl = $('#task_latest_iteration_logs');
-        if (!logsEl.length) {
+        const logs_el = $('#task_latest_iteration_logs');
+        if (!logs_el.length) {
             return;
         }
         
         
-        const node = $(".col-main-content").first()[0];
-        if (node) {
-            node.scrollTop = node.scrollHeight;
-        }
+        const scrollToBottom = () => {
+            const scroll_el = $(".col-main-content").first()[0];
+            if (scroll_el) {
+                scroll_el.scrollTop = scroll_el.scrollHeight;
+            }
+        };
+        scrollToBottom();
+
         
 
-        const noLogsMessage = logsEl.data('emptyMsg') || '';
-        const initialIterationId = logsEl.data('currentIterationId') || null;
+        const noLogsMessage = logs_el.data('emptyMsg') || '';
+        const initialIterationId = logs_el.data('currentIterationId') || null;
         if (initialIterationId) {
-            logsEl.data('currentIterationId', initialIterationId);
+            logs_el.data('currentIterationId', initialIterationId);
         }
-        logsEl.data('currentLogText', logsEl.text());
+        logs_el.data('currentLogText', logs_el.text());
 
         const metaEl = $('#task_latest_iteration_meta');
         const emptyMetaText = metaEl.data('emptyMeta') || 'No iteration available yet.';
@@ -51,13 +55,6 @@
         }
         window.taskLogsPolling = window.taskLogsPolling || {};
         window.taskLogsPolling.inFlight = false;
-
-        const scrollToBottom = (el) => {
-            const node = el[0];
-            if (node) {
-                node.scrollTop = node.scrollHeight;
-            }
-        };
 
         const clearPolling = () => {
             if (window.taskLogsPolling.timer) {
@@ -126,7 +123,7 @@
                         target.text(logText);
                         target.data('currentLogText', logText);
                         target.data('currentIterationId', iterationId || null);
-                        scrollToBottom(target);
+                        scrollToBottom();
                     }
                 },
                 complete: function () {
@@ -138,7 +135,7 @@
             });
         };
 
-        scrollToBottom(logsEl);
+        scrollToBottom();
         window.taskLogsPolling.timer = window.setInterval(fetchLogs, 1000);
         window.taskLogsPolling.fetchLogs = fetchLogs;
         fetchLogs();

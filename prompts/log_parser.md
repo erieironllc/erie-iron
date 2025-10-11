@@ -10,6 +10,7 @@ You must:
    - Preserve the original order and newline structure.
    - Focus on fields such as `Status:`, `Reason:`, and `Resource:` or `ResourceType:`.  
    - If multiple CloudFormation resources failed, include all of them.
+   - Do **not** dwell on specific `StackStatus` values (e.g. `UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS`). Simply note that the CloudFormation create/update failed and include the failure events themselves.
 
 3. **Include contextual AWS authorization or permission messages** if present anywhere near the failure:
    - Lines containing strings such as `"is not authorized to perform"`, `"AccessDenied"`, or `"Permission denied"`.

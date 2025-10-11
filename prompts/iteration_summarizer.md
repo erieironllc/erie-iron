@@ -48,6 +48,7 @@ You will be provided
    - Explain the overall execution outcome and the general scope or pattern of errors.  
    - Describe *what the errors were* with enough detail and specificity that future iterations can avoid repeating them. Include file names, function names, and error types if present in the logs.
    - If the iteration failed or encountered issues, describe the first significant error in plain terms and identify its likely cause.  If multple CloudFormation failures are found, include **all** cloudformation failure events
+   - When CloudFormation deployment fails, explicitly state that the create/update failed and enumerate the failure events. Avoid anchoring the summary on specific `StackStatus` values.
    - You may include brief reasoning about possible systemic or architectural contributors to the failure.  
    - The goal is to give downstream agents an immediate, high-level understanding of what happened and what kind of problem they’re dealing with.  
    - If the iteration didn’t reach code execution (for example, due to deployment or infrastructure failure), state that directly. Use phrasing such as:  
@@ -88,7 +89,7 @@ Specifically:
 5. If present, also include AWS permission or authorization errors:
    - Lines containing `"is not authorized to perform"`, `"AccessDenied"`, or `"Permission denied"`.
    - Include 2–3 lines of surrounding context for clarity.
-6. Present this information in the `summary` field if relevant, and in the `error.logs` field when a CloudFormation or infra-level failure caused the iteration to fail.
+6. Present this information in the `summary` field if relevant, and in the `error.logs` field when a CloudFormation or infra-level failure caused the iteration to fail. Focus the narrative on the failed create/update action rather than enumerating `StackStatus` strings.
 
 This ensures that the summarizer not only reports *what* failed, but also captures *why* it failed.
 

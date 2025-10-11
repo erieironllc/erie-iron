@@ -322,7 +322,18 @@ def _build_llm_spend_context(
         initiative_daily[initiative_key][bucket] += price
         
         task_id = record.get("task_iteration__self_driving_task__task__id")
-        task_label = record.get("task_iteration__self_driving_task__task__description") or "Task"
+        task_label = record.get("task_iteration__self_driving_task__task__id") or "Task"
+        
+        if "task_" in task_label:
+            task_label = task_label[len("task_"):]
+        
+        task_label = task_label.split("--")[-1]
+        
+        task_label = (task_label
+                .replace("_", " ")
+                .replace("-", " ")
+                .capitalize())
+        
         if task_id:
             task_key = (task_id, task_label)
             task_daily[task_key][bucket] += price

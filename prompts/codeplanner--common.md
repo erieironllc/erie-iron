@@ -685,10 +685,13 @@ All plans must include diagnostic logging to support debugging and validation.
     - any caught exceptions or failures
 - **AWS-related tasks** must include comments justifying IAM or infrastructure permissions
 
-### Logging support squashing repeated errors
+### Repeated Test Failures and Logging Escalation
 
-If the code or tests are continuing to fail on the same error in multiple sequential iterations, **increase** the
-verbosity of the logging on each iteration to help downstream agents debug the issue
+When the same test continues to fail across multiple iterations:
+- Incrementally increase diagnostic visibility across both the test and the related application code. 
+- Add structured, contextual logging that surfaces the root cause — including inputs, expected vs. actual values, relevant environment variables, and error stack traces — without overwhelming the logs with redundant noise. 
+- Each iteration should meaningfully expand insight rather than volume. 
+- If repeated failures persist, increase log verbosity and scope with each cycle to expose deeper layers of execution context, enabling downstream agents to identify and resolve the underlying issue more efficiently.
 
 ---
 
