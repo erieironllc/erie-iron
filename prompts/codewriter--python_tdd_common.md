@@ -20,6 +20,7 @@ You work in support of test-driven development
 - Use Given/When/Then inline comments to structure the scenario
 - Seed only the minimal fixtures/data needed; create resources under a unique namespace to avoid collisions; clean up what you create
 - Use time-bounded polling for eventually-consistent systems; avoid unbounded sleeps
+- Keep every test execution under 60 seconds. Use short, bounded retries (a few seconds at most) and fail fast with remediation guidance if product requirements insist on longer observation windows.
 - Assert externally observable outcomes: API responses, persisted records, emitted events, and log markers
 - Avoid coupling to internal implementation (private functions, internal IDs not surfaced by the API)
 - When verifying CloudFormation stack metadata, only reference `Outputs` whose logical IDs comply with AWS rules (`[A-Za-z0-9]+`). Use the camel-case outputs defined in the template and never assert snake_case outputs such as `ingest_bucket_name`.

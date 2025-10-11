@@ -35,7 +35,8 @@ Tests must prefer assertions that provide context for debugging when they fail. 
 - Deterministic and idempotent: the test can be re-run without manual cleanup
 - No destructive operations outside the test namespace
 - Do not modify global configuration or long-lived data
-- Network timeouts and waits are bounded (overall test should complete quickly under normal conditions)
+- Network timeouts and waits are tightly bounded—the entire test module must finish well under 60 seconds.
+- Never add sleeps, waits, polling loops, or backoffs whose cumulative delay exceeds 60 seconds; prefer fast checks and fail fast with remediation guidance if a requirement demands longer waits.
 
 ---
 

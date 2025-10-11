@@ -49,7 +49,7 @@
   },
   "required": ["goal_achieved", "summary"],
   "additionalProperties": false,
-  "oneOf": [
+  "anyOf": [
     { "required": ["error"] },
     { "required": ["test_errors"] }
   ]

@@ -1,4 +1,7 @@
-## Handler Function
+## Special Instructions for AWS Lambda functions
+When writing or modifying a Lambda, these rules **must** be followed.  If you discover a lambda that does not comport to these rules, it must be fixed
+
+### Handler Function
 - You must define exactly one entrypoint function named `lambda_handler`.
 - The handler must use the AWS Lambda signature:
   ```python
@@ -8,11 +11,11 @@
 
 ---
 
-## Dependency Awareness
+### Dependency Awareness
 - The following pypi packages are available at runtime:
 <included_dependencies>
 
-- At the top of the file, include a structured header comment that lists all the required PyPI packages for this Lambda. This header will be parsed at deploy time to install dependencies.
+- At the top of the file, **you must** include a structured header comment that lists all the required PyPI packages for this Lambda. This header will be parsed at deploy time to install dependencies.
 - Format:
   ```python
   # LAMBDA_DEPENDENCIES: ["requests", "boto3"]
@@ -27,14 +30,14 @@
 
 ---
 
-## Execution Environment
+### Execution Environment
 - Do not write to local disk or depend on any files that are not bundled into the deployment package.
 - All computation must be stateless unless explicitly instructed otherwise.
 - Use in-memory caching or reuse of global variables only if safe and explicitly helpful.
 
 ---
 
-## Logging
+### Logging
 - Use `print()` for logging. These will be captured by AWS CloudWatch.
 - At a minimum, log:
   - Function start
@@ -44,12 +47,12 @@
 
 ---
 
-## Retry & Idempotency Awareness
+### Retry & Idempotency Awareness
 - Lambda functions may be retried automatically. Design your logic to be safe to execute more than once unless explicitly told otherwise.
 
 ---
 
-## SES Receipt Rule Set Delete Handling
+### SES Receipt Rule Set Delete Handling
 Insert a step in the deletion handler:
 - On `DELETE`, send a request with `"RuleSetName": ""` to SES before attempting to remove the resource.
 - If an error `"RuleSetName is required"` is returned, retry with empty string.

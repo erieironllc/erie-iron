@@ -71,7 +71,7 @@ def execute(task_id: str, reset=False, code_now=False, plan_now=False):
         )
         return
     
-    for i in range(100):
+    for i in range(20):
         config = SelfDriverConfig(self_driving_task)
         
         try:
@@ -197,6 +197,8 @@ full logs:
 def plan_and_implement_code_changes(config):
     planning_data = plan_code_changes(config)
     config.set_phase(SdaPhase.CODING)
+    
+    ## TODO - inspect the code changes planned in planning_data.  if any of them is a lambda, do not use codex
     
     if USE_CODEX:
         codex_exec(config, planning_data)
@@ -352,14 +354,13 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     plan_path = config.artifacts_dir / f"{config.current_iteration.id}_plan.json"
     plan_path.write_text(json.dumps(planning_data, indent=2, default=str), encoding="utf-8")
     
-    guidance_text = config.guidance.text if config.guidance else None
-    
     reference_prompts = [
         "prompts/common--general_coding_rules.md",
         "prompts/common--infrastructure_rules.md",
         "prompts/common--credentials_architecture.md",
         "prompts/codewriter--common.md",
         "prompts/codewriter--python_coder.md",
+        "prompts/codewriter--lambda_coder.md",
         "prompts/codewriter--aws_cloudformation_coder.md",
         "prompts/codewriter--requirements.txt.md",
     ]
@@ -389,10 +390,10 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     {json.dumps(get_lessons(config, TASK_DESC_CODE_WRITING), indent=4)}
     """))
     
-    if guidance_text:
+    if config.guidance:
         prompt_parts.append(textwrap.dedent(f"""
-        ## Additional Guidance
-        {guidance_text}
+        ## Important Additional Guidance
+        {config.guidance}
         """))
     
     if readonly_lines:
@@ -645,6 +646,16 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     config.current_iteration.refresh_from_db(fields=["planning_json"])
     config.log("Stored code versions for Codex-modified files", persisted_code_files)
     config.git.add_files()
+
+
+def get_guidance_msg(config: SelfDriverConfig):
+    if not config.guidance:
+        return []
+    else:
+        return LlmMessage.sys_from_data(
+            "## Important Additional Guidance",
+            {"guidance_instructions": config.guidance}
+        )
 
 
 def validate_infrastructure(config, normalized_changed):
@@ -1123,6 +1134,10 @@ def plan_code_changes(config):
     planning_data = None
     route_to = route_code_changes(config)
     
+    if route_to in [DevelopmentRoutingPath.DIRECT_FIX, DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER] and config.guidance:
+        config.log(f"rerouting dev path from {route_to} to {DevelopmentRoutingPath.ESCALATE_TO_PLANNER} as we have task level guidance")
+        route_to = DevelopmentRoutingPath.ESCALATE_TO_PLANNER
+    
     if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
         config.log(f"PHASE - plan_code_changes: {config.current_iteration.id}")
         planning_data = plan_full_code_changes(config)
@@ -1357,7 +1372,6 @@ def build_docker_image(
     docker_image_tag = sanitize_aws_name(docker_image_tag_parts, max_length=128)
     
     config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
-    sandbox_path = self_driving_task.sandbox_path
     
     docker_build_cmd = common.strings([
         "docker",
@@ -1389,7 +1403,7 @@ def build_docker_image(
 if you want to debug the docker container, run this 
 
 docker run --rm -it \
-  -v {self_driving_task.sandbox_path}:/app \
+  -v {config.sandbox_root_dir}:/app \
   -w /app \
   {env_flags} \
   {docker_image_tag} \
@@ -1691,11 +1705,10 @@ def run_docker_command(
     command_args = common.ensure_list(command_args)
     iteration = config.current_iteration
     selfdriving_task = iteration.self_driving_task
-    sandbox_path = iteration.self_driving_task.sandbox_path
     
     cmd = [
         "docker", "run", "--rm",
-        "-v", f"{sandbox_path}:/app",
+        "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
         *build_env_flags(docker_env),
         docker_image,
@@ -1704,7 +1717,7 @@ def run_docker_command(
     ]
     
     config.log("\n" + "=" * 50 + "\n")
-    config.log(f"RUNNING {' '.join(cmd)} in {sandbox_path}\n")
+    config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
     
     # Capture docker run start time
@@ -1836,7 +1849,7 @@ def execute_iteration(
         )
         
         if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
-            task_io_dir = Path(self_driving_task.sandbox_path) / "task_io"
+            task_io_dir = Path(config.sandbox_root_dir) / "task_io"
             task_io_dir.mkdir(parents=True, exist_ok=True)
             
             input_file = task_io_dir / f"{task.id}-input.json"
@@ -2487,8 +2500,6 @@ def cloudformation_wait(
         previous_status = status
         if not status.endswith("_IN_PROGRESS"):
             break
-        
-        
     
     if throw_on_fail:
         assert_cloudformation_stack_valid(stack_name, cf_client)
@@ -3191,7 +3202,9 @@ def perform_code_review(
             "Relevant past lessons",
             config
         ),
-        config.guidance,
+        get_guidance_msg(
+            config
+        ),
         LlmMessage.user_from_data(
             "Code Review Input: Proposed Code Changes for Current Iteration",
             [
@@ -3701,6 +3714,7 @@ def write_test(
                     "codewriter--python_tdd_common.md",
                     "common--infrastructure_rules.md",
                     "codewriter--common.md",
+                    "codewriter--lambda_coder.md",
                     "common--iam_role.md",
                     "common--domain_management.md",
                     "common--llm_chat.md",
@@ -3827,17 +3841,17 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                         get_readonly_files_replacement(config)
                     ]
                 ),
+                get_guidance_msg(
+                    config
+                ),
                 get_architecture_docs(
                     config
                 ),
                 get_previous_iteration_summaries_msg(
                     config
                 ),
-                previous_iteration.get_error_llm_msg(
-                    f"Error observed while executing the previous code iteration (Iteration {previous_iteration.version_number})"
-                ),
                 iteration_to_modify.get_error_llm_msg(
-                    f"Error observed while executing the code iteration we are modifying (Iteration {iteration_to_modify.version_number})"
+                    f"Error observed why building, deploying, or executing the code are modifying (Iteration {iteration_to_modify.version_number})"
                 ),
                 get_tombstone_message(
                     config
@@ -3893,6 +3907,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     "common--forbidden_actions.md",
                     "common--environment_variables.md",
                     "common--infrastructure_rules.md",
+                    "codewriter--lambda_coder.md",
                     "common--credentials_architecture.md"
                 ], replacements=[
                     ("<business_tag>", config.business.service_token),
@@ -3904,7 +3919,9 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                     get_readonly_files_replacement(config)
                 ]
             ),
-            config.guidance,
+            get_guidance_msg(
+                config
+            ),
             get_architecture_docs(
                 config
             ),
@@ -3993,7 +4010,8 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 "common--forbidden_actions.md",
                 "common--environment_variables.md",
                 "common--credentials_architecture.md",
-                "common--infrastructure_rules.md"
+                "common--infrastructure_rules.md",
+                "codewriter--lambda_coder.md"
             ], replacements=[
                 ("<business_tag>", config.business.service_token),
                 ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
@@ -4001,7 +4019,9 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                 get_readonly_files_replacement(config)
             ]),
-            config.guidance,
+            get_guidance_msg(
+                config
+            ),
             get_architecture_docs(
                 config
             ),
@@ -4071,7 +4091,8 @@ def plan_full_code_changes(config: SelfDriverConfig):
         "common--forbidden_actions.md",
         "common--credentials_architecture.md",
         "common--environment_variables.md",
-        "common--infrastructure_rules.md"
+        "common--infrastructure_rules.md",
+        "codewriter--lambda_coder.md"
     ]
     
     if config.self_driving_task.test_file_path:
@@ -4123,7 +4144,9 @@ def plan_full_code_changes(config: SelfDriverConfig):
         get_file_structure_msg(
             config.sandbox_root_dir
         ) if not iteration_to_modify.has_error() else [],
-        config.guidance,
+        get_guidance_msg(
+            config
+        ),
         get_prev_attemp_summaries(
             config
         ),
@@ -4904,7 +4927,6 @@ def deploy_cloudformation_stacks(
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     
     self_driving_task = config.self_driving_task
-    sandbox_path = Path(config.sandbox_root_dir)
     aws_env = config.aws_env
     
     cfn_file = get_cloudformation_file(config)

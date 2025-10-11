@@ -1514,6 +1514,8 @@ class CodeFile(BaseErieIronModel):
         abs_file_path = common.assert_exists(abs_file_path)
         
         self_driving_task = task_iteration.self_driving_task
+        self_driving_task.refresh_from_db(fields=["sandbox_path"])
+        
         business = self_driving_task.business
         
         code = abs_file_path.read_text()

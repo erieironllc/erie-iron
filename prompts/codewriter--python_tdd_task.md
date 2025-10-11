@@ -12,6 +12,7 @@ This test is being generated at the start of the implementation.  No implementat
 - Your job is to hold the future implementation accountable to clear, testable outcomes
 - If the acceptance criteria are vague or missing, fail the test with a helpful message so future iterations will fix it
 - Always include at least one test per acceptance criterion.
+- Keep individual tests and the overall module runtime under 60 seconds. Use short, bounded retries instead of long sleeps, and fail fast with remediation guidance if the specification demands longer observation windows.
 
 ---
 
