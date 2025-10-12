@@ -129,6 +129,8 @@ The test code must:
 - If live credentials for external providers (e.g., LLMs) are required but not present, fail the test with a clear remediation message rather than stubbing or mocking.
 - Use realistic input examples, not placeholders, when possible.
 - Tests must exercise the full system path (e.g., database, message bus, LLM calls). In acceptance tests, mocks and stubs are not allowed except for narrowly scoped, pre-approved cases (e.g., FakeClock, InMemoryEmailSink).
+- When asserting AWS Lambda behavior, never import the Lambda module or call `lambda_handler` directly. Trigger the workflow that causes AWS to invoke the Lambda (e.g., enqueue the event, drop the object in S3) and assert the externally observable results instead.
+- Unless the task explicitly calls for validating AWS infrastructure provisioning, do not assert CloudFormation templates, stack outputs, IAM policies, or other AWS configuration details; verify the final observable behavior instead.
 - Use deterministic data and outputs.
 - Prefer clarity over cleverness.
 - The tests **MUST** extend "from django.test import TestCase"

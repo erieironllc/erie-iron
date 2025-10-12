@@ -230,19 +230,25 @@ def process_response(initiative, eng_lead_response):
     
     for task_data in eng_lead_response.get("tasks", []):
         task_id = task_data.get("task_id")
-        
+
         validated_ids = set(task_data.get("validated_requirements", []))
         initiative_req_ids = set(str(req.id) for req in initiative.requirements.all())
         invalid_ids = validated_ids - initiative_req_ids
         if invalid_ids:
             raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
-        
+
+        existing_task = Task.objects.filter(id=task_id).first() if task_id else None
+
+        test_plan_value = task_data.get("test_plan")
+        if test_plan_value is None:
+            test_plan_value = existing_task.test_plan if existing_task else ""
+
         defaults = {
             "initiative": initiative,
             "status": TaskStatus.NOT_STARTED,
             "description": task_data.get("task_description", ""),
             "risk_notes": task_data.get("risk_notes", ""),
-            "test_plan": task_data.get("test_plan", ""),
+            "test_plan": test_plan_value,
             "completion_criteria": task_data.get("completion_criteria"),
             "requires_test": common.parse_bool(task_data.get("requires_test")),
             "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule")),
@@ -282,7 +288,7 @@ def process_response(initiative, eng_lead_response):
         fields_to_compare = {
             "description": task_data.get("task_description", ""),
             "risk_notes": task_data.get("risk_notes", ""),
-            "test_plan": task_data.get("test_plan", ""),
+            "test_plan": test_plan_value,
             "completion_criteria": task_data.get("completion_criteria"),
             "requires_test": common.parse_bool(task_data.get("requires_test")),
             "execution_schedule": task_data.get("execution_schedule"),

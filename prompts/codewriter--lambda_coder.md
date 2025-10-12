@@ -24,6 +24,8 @@ When writing or modifying a Lambda, these rules **must** be followed.  If you di
   ```python
   # LAMBDA_DEPENDENCIES: []
   ```
+- Any package listed in `# LAMBDA_DEPENDENCIES` **must** also be present in the base container `requirements.txt`; add it there if it is missing.
+- When adding a dependency that already exists in `requirements.txt`, you must reuse the existing pinned version. Never declare conflicting package versions across lambdas or between a lambda and the base container.
 - You may only use modules that are included in these packages - these are the only external modules available at runtime
 - Do not assume availability of any packages that were not explicitly listed.
 - Imports must work when the file and its dependencies are zipped and extracted into a flat directory structure.

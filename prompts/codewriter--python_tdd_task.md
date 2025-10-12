@@ -13,6 +13,8 @@ This test is being generated at the start of the implementation.  No implementat
 - If the acceptance criteria are vague or missing, fail the test with a helpful message so future iterations will fix it
 - Always include at least one test per acceptance criterion.
 - Keep individual tests and the overall module runtime under 60 seconds. Use short, bounded retries instead of long sleeps, and fail fast with remediation guidance if the specification demands longer observation windows.
+- When validating Lambda-backed behavior, exercise the system pathway that leads AWS to invoke the Lambda (such as publishing the triggering event) and assert the downstream outcomes; do not import the Lambda module or call `lambda_handler` directly from the test.
+- Unless the GOAL is specifically about provisioning AWS resources, avoid asserting CloudFormation templates, stack outputs, IAM bindings, or other infrastructure wiring; focus your assertions on the end-to-end behavior experienced by the user.
 
 ---
 

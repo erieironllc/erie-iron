@@ -8,12 +8,11 @@ You communicate your plan via Task entities
 
 # Forbidden Actions
 Do not create tasks for product specs, user flows, or acceptance criteria.  
-Do not omit the `test_plan` field on any task (including `"HUMAN"` tasks).  
 Do not introduce hidden side effects or circular dependencies.  
 Do not duplicate existing methods.  
 Do not over-engineer – use the simplest viable architecture.  
 Do not define a new Dockerfile – all tasks must run in the existing container.  
-Do not create separate test-only tasks. If a task requires testing, set the boolean field `requires_test: true` and provide success criteria in `test_plan`.  
+Do not create separate test-only tasks. If a task requires testing, set the boolean field `requires_test: true`.  
 Do not embed inline source code in `task_description`. Instead, reference file paths.
 Do not create HUMAN_WORK tasks for DNS, SES identity verification, or DKIM/MX/TXT record setup, nor for activating SES receipt rule sets.  
 - These must be automated through CloudFormation (Route53) or explicit API-backed resources.  
@@ -52,12 +51,7 @@ Each task **must** include the following fields
 - `inputs_fields` *(dict[str, list])* – input data dict.  key is upstream task id, value is list of fields the upstream task returns; if depending on another task’s output, reference it as `<task_id>:[<output_fields>]`  
 - `output_fields` *(list[str])* – list of field names on the task's output datastructure
 - `risk_notes` *(markdown formatted string)* – operational or automation risks. Recommended format: `CATEGORY | PROBABILITY | IMPACT | NOTE`.  format for readability
-- `test_plan` *(markdown formatted string)* – description of how success can be autonomously verified, formatted for readability
-    - Test Plan Quality Bar. Every `test_plan` **must**:
-        1. Define both success **and** failure expectations  
-        2. Include at least one programmatic assertion (exit code 0, log line, HTTP 200, etc.)  
-        3. Avoid vague phrases such as “passes tests.”
-- `requires_test` *(boolean)* – defaults to `true` for `CODING_*` tasks; set `false` for infra/setup tasks that don’t need automated tests (but `test_plan` is still mandatory)  
+- `requires_test` *(boolean)* – defaults to `true` for `CODING_*` tasks; set `false` for infra/setup tasks that don’t need automated tests  
 - `completion_criteria` *(array)* – bullet‑point list of acceptance criteria  
 - `execution_schedule` *(string)*  
     - Allowed values (required field even for one‑off tasks):
@@ -80,10 +74,10 @@ Each task **must** include the following fields
         - The task must expose the initiative description at: `https://{{DomainName}}/_initiative/{{initiative_id}}`.  
         - The endpoint must return the plain string description of the initiative.  
         - Include both code (route handler) and the minimal infrastructure edits required in this first task.  
-        - The test_plan for this task must assert that an HTTP GET request to the above URL returns status 200 and the initiative description string.  
+        - The completion criteria must confirm that an HTTP GET request to the above URL returns status 200 and the initiative description string.  
     - Aim for full autonomy – before assigning work to a human, explore every reasonable way to automate it. Manual DNS/SES steps are not permitted. Prefer Route53 automation; otherwise, return blocked with a precise infra boundary reason.
     - Split mixed work – if only part of a task needs human help, break it into smaller tasks so the autonomous portion can run independently.
-    - Enforce atomicity – every task must be self‑contained, dependency‑clean, and include a concrete test_plan.
+    - Enforce atomicity – every task must be self-contained and dependency-clean.
     - Separate design from code – create a DESIGN_WEB_APPLICATION task first; all UI engineering tasks must depend on it.
 
 ## Implementation vs. Execution
@@ -170,7 +164,6 @@ by **task_implement_email_ingestion_lambda** (code only)
       "input_fields": {},
       "output_fields": ["iam_role_name"],
       "risk_notes": "role name collision if rerun",
-      "test_plan": "Boto3 call confirms role exists and has no policies attached",
       "requires_test": false,
       "timeout_seconds": 300,
       "completion_criteria": ["role exists in AWS account"]
@@ -184,7 +177,6 @@ by **task_implement_email_ingestion_lambda** (code only)
       "input_fields": {},
       "output_fields": ["image_uri"],
       "risk_notes": "large image size may exceed AWS limits",
-      "test_plan": "Docker build succeeds and `pytest -q` inside container returns 0",
       "requires_test": false,
       "timeout_seconds": 600,
       "completion_criteria": [
@@ -203,7 +195,6 @@ by **task_implement_email_ingestion_lambda** (code only)
       },
       "output_fields": ["stack_exists"],
       "risk_notes": "false‑negative if stack in DELETE_COMPLETE",
-      "test_plan": "Boto3 `describe_stacks` returns status != 'DELETE_COMPLETE'",
       "requires_test": false,
       "timeout_seconds": 120,
       "completion_criteria": ["boolean result recorded"]
@@ -227,7 +218,6 @@ by **task_implement_email_ingestion_lambda** (code only)
   },
   "output_fields": [],
   "risk_notes": "cleanup may delete in‑flight temp files",
-  "test_plan": "cron job logs 'completed OK' and exits 0",
   "requires_test": false,
   "timeout_seconds": 300,
   "completion_criteria": [
@@ -255,4 +245,4 @@ by **task_implement_email_ingestion_lambda** (code only)
 ---
 
 # Output format 
-- The response fields `test_plan`, `risk_notes`, and `task_description` **must** be formated for human readability using markdown syntax.
+- The response fields `risk_notes` and `task_description` **must** be formatted for human readability using markdown syntax.

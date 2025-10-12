@@ -25,7 +25,6 @@
           "input_fields",
           "output_fields",
           "risk_notes",
-          "test_plan",
           "requires_test",
           "completion_criteria",
           "execution_schedule",
@@ -68,13 +67,9 @@
             "type": "string",
             "description": "Operational or automation risk notes"
           },
-          "test_plan": {
-            "type": "string",
-            "description": "How success and failure are autonomously verified"
-          },
           "requires_test": {
             "type": "boolean",
-            "description": "Whether an automated test is required (test_plan still mandatory)"
+            "description": "Whether an automated test is required"
           },
           "completion_criteria": {
             "type": "array",

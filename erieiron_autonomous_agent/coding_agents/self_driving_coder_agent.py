@@ -42,13 +42,20 @@ from erieiron_common.message_queue.pubsub_manager import PubSubManager
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def execute(task_id: str, reset=False, code_now=False, plan_now=False):
+def execute(
+        task_id: str,
+        reset=False,
+        code_now=False,
+        plan_now=False,
+        deploy_now=False
+
+):
     self_driving_task = bootstrap_selfdriving_agent(
         task_id,
         reset
     )
     
-    if plan_now or code_now:
+    if deploy_now or plan_now or code_now:
         config = SelfDriverConfig(self_driving_task)
         config.init_log()
         
@@ -56,15 +63,17 @@ def execute(task_id: str, reset=False, code_now=False, plan_now=False):
             SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
         )
         
-        if not plan_now and config.current_iteration.planning_json:
-            codex_exec(
-                config,
-                config.current_iteration.planning_json
-            )
-        else:
-            plan_and_implement_code_changes(
-                config
-            )
+        if not deploy_now:
+            config.current_iteration.codeversion_set.all().delete()
+            if not plan_now and config.current_iteration.planning_json:
+                codex_exec(
+                    config,
+                    config.current_iteration.planning_json
+                )
+            else:
+                plan_and_implement_code_changes(
+                    config
+                )
         
         build_deploy_exec_iteration(
             SelfDriverConfig(self_driving_task)
@@ -322,340 +331,338 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
     """Execute the plan using the Codex CLI pipeline."""
     config.log("Starting Codex CLI planning/execution pipeline")
     
-    iteration_to_modify = config.iteration_to_modify
-    
-    readonly_entries = get_readonly_files_paths(config)
-    readonly_lines = []
-    for entry in common.ensure_list(readonly_entries):
-        if not entry:
-            continue
-        description_parts = [entry.get("description")]
-        if entry.get("alternatives"):
-            description_parts.append(
-                f"If a change is required, route it to {entry['alternatives']} instead."
-            )
-        description_text = "; ".join([p for p in description_parts if p])
-        readonly_lines.append(
-            f"- {entry.get('path')}: {description_text or 'This path is read-only.'}"
-        )
-    
-    code_file_entries = common.ensure_list(planning_data.get("code_files"))
-    code_file_paths = [
-        entry.get("code_file_path")
-        for entry in code_file_entries
-        if isinstance(entry, dict) and entry.get("code_file_path")
-    ]
-    code_file_summary_lines = [f"- {path}" for path in code_file_paths]
-    
-    business = config.business
-    initiative = config.initiative
-    task = config.task
-    
     plan_path = config.artifacts_dir / f"{config.current_iteration.id}_plan.json"
-    plan_path.write_text(json.dumps(planning_data, indent=2, default=str), encoding="utf-8")
-    
-    reference_prompts = [
-        "prompts/common--general_coding_rules.md",
-        "prompts/common--infrastructure_rules.md",
-        "prompts/common--credentials_architecture.md",
-        "prompts/codewriter--common.md",
-        "prompts/codewriter--python_coder.md",
-        "prompts/codewriter--lambda_coder.md",
-        "prompts/codewriter--aws_cloudformation_coder.md",
-        "prompts/codewriter--requirements.txt.md",
-    ]
-    
-    prompt_parts = [
-        textwrap.dedent(f"""
-        You are the Codex CLI agent assisting Erie Iron's self-driving coding workflow.
-        Operate strictly within the sandboxed repository at {config.sandbox_root_dir}.
-        Follow the approved development plan saved at {plan_path} and summarised below.
-        Before editing a file, consult the relevant engineering standards from the prompts
-        directory (see the Reference Prompts section).
-        Do not commit or push changes; the orchestrator handles git commits.
-        """),
-        textwrap.dedent(f"""
-        ### Risk Notes
-        {task.risk_notes or 'None provided.'}
-        """),
-        textwrap.dedent(f"""
-        ## Business & Architecture Context
-        Business Service Token: {business.service_token}
-        Initiative ID: {initiative.id}
-        """)
-    ]
-    
-    prompt_parts.append(textwrap.dedent(f"""
-    ### Lessons Learned - do not repeat these errors 
-    {json.dumps(get_lessons(config, TASK_DESC_CODE_WRITING), indent=4)}
-    """))
-    
-    if config.guidance:
-        prompt_parts.append(textwrap.dedent(f"""
-        ## Important Additional Guidance
-        {config.guidance}
-        """))
-    
-    if readonly_lines:
-        prompt_parts.append(textwrap.dedent("""
-        ## Read-only Paths
-        These paths must **never** be modified 
-        """ + "\n".join(readonly_lines)))
-    
-    if code_file_summary_lines:
-        prompt_parts.append(textwrap.dedent("""
-        ## Files Highlighted by the Plan
-        Review the instructions for each file in the plan JSON and modify only what is necessary.
-        """ + "\n".join(code_file_summary_lines)))
-    
-    for path in reference_prompts:
-        prompt_parts.append(textwrap.dedent(f"""
-        
-        {Path(path).read_text()}
-        """))
-    
-    guardrail_marker = "Route53 Root Alias Guardrail"
-    if not any(guardrail_marker in part for part in prompt_parts):
-        prompt_parts.append(textwrap.dedent("""
-
-        ### Route53 Root Alias Guardrail
-        - Domain DNS must be published with Route53 `AWS::Route53::RecordSet` alias records. Create `Type: A` (and `AAAA` when IPv6 is required) entries that target the Application Load Balancer via `AliasTarget.DNSName` and `AliasTarget.HostedZoneId`.
-        - Do **not** create a `CNAME` for `!Ref DomainName`, even when it contains subdomains; apex-style aliases keep Route53 compliant with DNS standards.
-        - Continue using CNAMEs only for tokenized SES sub-records such as DKIM keys.
-        """))
-    
-    prompt_parts.append(textwrap.dedent(f"""
-
-    ## Execution Checklist
-    1. Read the full development plan at {plan_path}.
-    2. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
-    3. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
-    4. No read-only files modified
-    5. Leave the repository with changes ready for review; do not commit.
-    """))
-    
-    prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
-    
     prompt_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_prompt.txt"
-    prompt_path.write_text(prompt_text, encoding="utf-8")
-    
-    # Persist Codex-specific metadata onto the planning JSON for future debugging.
-    augmented_plan = copy.deepcopy(planning_data)
-    augmented_plan["codex_metadata"] = {
-        "plan_path": str(plan_path),
-        "prompt_path": str(prompt_path),
-        "code_file_paths": code_file_paths,
-    }
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-            planning_json=augmented_plan
-        )
-    config.current_iteration.refresh_from_db(fields=["planning_json"])
-    
     stdout_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_stdout.log"
     stderr_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_stderr.log"
     last_message_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_last_message.txt"
     
-    codex_cmd = [
-        "codex",
-        "exec",
-        "--full-auto",
-        "--json",
-        "--cd",
-        str(config.sandbox_root_dir),
-        "--output-last-message",
-        str(last_message_path),
-        "-"
-    ]
-    
-    prior_file_checksum_map = get_file_checksum_map(config.sandbox_root_dir)
-    feedback_sections: list[str] = []
-    max_validation_attempts = 2
-    attempt = 0
-    changed_paths: list[Path] = []
-    codex_result = None
-    
-    while attempt < max_validation_attempts:
-        attempt += 1
-        prompt_with_feedback = prompt_text
-        if feedback_sections:
-            prompt_with_feedback = prompt_with_feedback + "\n\n" + "\n\n".join(feedback_sections)
-        prompt_path.write_text(prompt_with_feedback, encoding="utf-8")
+    try:
         
-        config.log(
-            f"Running Codex CLI (attempt {attempt})",
-            codex_cmd,
-            f"Prompt saved to {prompt_path}"
-        )
+        iteration_to_modify = config.iteration_to_modify
         
-        codex_start_time = time.time()
-        codex_result = subprocess.run(
-            codex_cmd,
-            input=prompt_with_feedback,
-            text=True,
-            capture_output=True,
-            cwd=str(config.sandbox_root_dir),
-            env=os.environ.copy()
-        )
+        readonly_entries = get_readonly_files_paths(config)
+        readonly_lines = []
+        for entry in common.ensure_list(readonly_entries):
+            if not entry:
+                continue
+            description_parts = [entry.get("description")]
+            if entry.get("alternatives"):
+                description_parts.append(
+                    f"If a change is required, route it to {entry['alternatives']} instead."
+                )
+            description_text = "; ".join([p for p in description_parts if p])
+            readonly_lines.append(
+                f"- {entry.get('path')}: {description_text or 'This path is read-only.'}"
+            )
         
-        stdout_path.write_text(codex_result.stdout or "", encoding="utf-8")
-        stderr_path.write_text(codex_result.stderr or "", encoding="utf-8")
+        code_file_entries = common.ensure_list(planning_data.get("code_files"))
+        code_file_paths = [
+            entry.get("code_file_path")
+            for entry in code_file_entries
+            if isinstance(entry, dict) and entry.get("code_file_path")
+        ]
+        code_file_summary_lines = [f"- {path}" for path in code_file_paths]
         
-        # Update the planning JSON with execution artefacts regardless of success so failures retain context.
-        planning_record = copy.deepcopy(config.current_iteration.planning_json or augmented_plan)
-        codex_metadata = planning_record.get("codex_metadata", {})
-        usage_metrics = _extract_codex_usage(
-            codex_result.stdout,
-            codex_result.stderr,
-            last_message_path,
-            config
-        )
+        business = config.business
+        initiative = config.initiative
+        task = config.task
         
-        total_cost_usd = 0
-        total_tokens = 0
-        if usage_metrics:
-            codex_metadata.update(usage_metrics)
+        plan_path.write_text(json.dumps(planning_data, indent=2, default=str), encoding="utf-8")
         
-        LlmRequest.objects.create(
-            title="Codex",
-            reasoning_effort=LlmReasoningEffort.MEDIUM,
-            verbosity=LlmVerbosity.LOW,
-            business=business,
-            initiative=initiative,
-            task_iteration=config.current_iteration,
-            llm_model=LlmModel.OPENAI_GPT_5,
-            token_count=total_tokens,
-            price=total_cost_usd,
-            response=codex_result.stdout,
-            input_messages=[
+        reference_prompts = [
+            "prompts/common--general_coding_rules.md",
+            "prompts/common--infrastructure_rules.md",
+            "prompts/common--credentials_architecture.md",
+            "prompts/codewriter--common.md",
+            "prompts/codewriter--python_coder.md",
+            "prompts/codewriter--lambda_coder.md",
+            "prompts/codewriter--aws_cloudformation_coder.md",
+            "prompts/codewriter--requirements.txt.md",
+        ]
+        
+        prompt_parts = [
+            textwrap.dedent(f"""
+            You are the Codex CLI agent assisting Erie Iron's self-driving coding workflow.
+            Operate strictly within the sandboxed repository at {config.sandbox_root_dir}.
+            Follow the approved development plan saved at {plan_path} and summarised below.
+            Before editing a file, consult the relevant engineering standards from the prompts
+            directory (see the Reference Prompts section).
+            Do not commit or push changes; the orchestrator handles git commits.
+            """),
+            textwrap.dedent(f"""
+            ### Risk Notes
+            {task.risk_notes or 'None provided.'}
+            """),
+            textwrap.dedent(f"""
+            ## Business & Architecture Context
+            Business Service Token: {business.service_token}
+            Initiative ID: {initiative.id}
+            """)
+        ]
+        
+        prompt_parts.append(textwrap.dedent(f"""
+        ### Lessons Learned - do not repeat these errors 
+        {json.dumps(get_lessons(config, TASK_DESC_CODE_WRITING), indent=4)}
+        """))
+        
+        if config.guidance:
+            prompt_parts.append(textwrap.dedent(f"""
+            ## Important Additional Guidance
+            {config.guidance}
+            """))
+        
+        if readonly_lines:
+            prompt_parts.append(textwrap.dedent("""
+            ## Read-only Paths
+            These paths must **never** be modified 
+            """ + "\n".join(readonly_lines)))
+        
+        if code_file_summary_lines:
+            prompt_parts.append(textwrap.dedent("""
+            ## Files Highlighted by the Plan
+            Review the instructions for each file in the plan JSON and modify only what is necessary.
+            """ + "\n".join(code_file_summary_lines)))
+        
+        for path in reference_prompts:
+            prompt_parts.append(textwrap.dedent(f"""
+            
+            {Path(path).read_text()}
+            """))
+        
+        guardrail_marker = "Route53 Root Alias Guardrail"
+        if not any(guardrail_marker in part for part in prompt_parts):
+            prompt_parts.append(textwrap.dedent("""
+
+            ### Route53 Root Alias Guardrail
+            - Domain DNS must be published with Route53 `AWS::Route53::RecordSet` alias records. Create `Type: A` (and `AAAA` when IPv6 is required) entries that target the Application Load Balancer via `AliasTarget.DNSName` and `AliasTarget.HostedZoneId`.
+            - Do **not** create a `CNAME` for `!Ref DomainName`, even when it contains subdomains; apex-style aliases keep Route53 compliant with DNS standards.
+            - Continue using CNAMEs only for tokenized SES sub-records such as DKIM keys.
+            """))
+        
+        prompt_parts.append(textwrap.dedent(f"""
+
+        ## Execution Checklist
+        1. Read the full development plan at {plan_path}.
+        2. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
+        3. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
+        4. No read-only files modified
+        5. Leave the repository with changes ready for review; do not commit.
+        """))
+        
+        prompt_text = "\n\n".join(part.strip() for part in prompt_parts if part)
+        
+        prompt_path.write_text(prompt_text, encoding="utf-8")
+        
+        # Persist Codex-specific metadata onto the planning JSON for future debugging.
+        augmented_plan = copy.deepcopy(planning_data)
+        augmented_plan["codex_metadata"] = {
+            "plan_path": str(plan_path),
+            "prompt_path": str(prompt_path),
+            "code_file_paths": code_file_paths,
+        }
+        with transaction.atomic():
+            SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                planning_json=augmented_plan
+            )
+        config.current_iteration.refresh_from_db(fields=["planning_json"])
+        
+        codex_cmd = [
+            "codex",
+            "exec",
+            "--full-auto",
+            "--json",
+            "--cd",
+            str(config.sandbox_root_dir),
+            "--output-last-message",
+            str(last_message_path),
+            "-"
+        ]
+        
+        prior_file_checksum_map = get_file_checksum_map(config.sandbox_root_dir)
+        feedback_sections: list[str] = []
+        max_validation_attempts = 2
+        attempt = 0
+        changed_paths: list[Path] = []
+        codex_result = None
+        
+        while attempt < max_validation_attempts:
+            attempt += 1
+            prompt_with_feedback = prompt_text
+            if feedback_sections:
+                prompt_with_feedback = prompt_with_feedback + "\n\n" + "\n\n".join(feedback_sections)
+            prompt_path.write_text(prompt_with_feedback, encoding="utf-8")
+            
+            config.log(
+                f"Running Codex CLI (attempt {attempt})",
+                codex_cmd,
+                f"Prompt saved to {prompt_path}"
+            )
+            
+            codex_start_time = time.time()
+            codex_result = subprocess.run(
+                codex_cmd,
+                input=prompt_with_feedback,
+                text=True,
+                capture_output=True,
+                cwd=str(config.sandbox_root_dir),
+                env=os.environ.copy()
+            )
+            
+            stdout_path.write_text(codex_result.stdout or "", encoding="utf-8")
+            stderr_path.write_text(codex_result.stderr or "", encoding="utf-8")
+            
+            # Update the planning JSON with execution artefacts regardless of success so failures retain context.
+            planning_record = copy.deepcopy(config.current_iteration.planning_json or augmented_plan)
+            codex_metadata = planning_record.get("codex_metadata", {})
+            usage_metrics = _extract_codex_usage(
+                codex_result.stdout,
+                codex_result.stderr,
+                last_message_path,
+                config
+            )
+            
+            total_cost_usd = 0
+            total_tokens = 0
+            if usage_metrics:
+                codex_metadata.update(usage_metrics)
+            
+            LlmRequest.objects.create(
+                title="Codex",
+                reasoning_effort=LlmReasoningEffort.MEDIUM,
+                verbosity=LlmVerbosity.LOW,
+                business=business,
+                initiative=initiative,
+                task_iteration=config.current_iteration,
+                llm_model=LlmModel.OPENAI_GPT_5,
+                token_count=total_tokens,
+                price=total_cost_usd,
+                response=codex_result.stdout,
+                input_messages=[
+                    {
+                        "role": LlmMessageType.SYSTEM,
+                        "content": prompt_with_feedback
+                    },
+                    {
+                        "role": LlmMessageType.USER,
+                        "content": json.dumps(planning_data, indent=4)
+                    }
+                ]
+            )
+            
+            codex_metadata.update({
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "last_message_path": str(last_message_path) if last_message_path.exists() else None,
+                "codex_start_time": codex_start_time,
+                "return_code": codex_result.returncode,
+                "execution_completed_at": time.time(),
+                "attempt": attempt
+            })
+            if feedback_sections:
+                codex_metadata["cloudformation_feedback"] = feedback_sections.copy()
+            planning_record["codex_metadata"] = codex_metadata
+            with transaction.atomic():
+                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                    planning_json=planning_record
+                )
+            config.current_iteration.refresh_from_db(fields=["planning_json"])
+            
+            if codex_result.returncode != 0:
+                raise ExecutionException(
+                    f"Codex CLI exited with code {codex_result.returncode}. See {stdout_path} and {stderr_path} for details."
+                )
+            
+            if last_message_path.exists():
+                config.log(
+                    f"Codex CLI final message (attempt {attempt}):",
+                    last_message_path.read_text(encoding="utf-8")
+                )
+            
+            config.log(
+                "Codex CLI completed successfully",
                 {
-                    "role": LlmMessageType.SYSTEM,
-                    "content": prompt_with_feedback
-                },
-                {
-                    "role": LlmMessageType.USER,
-                    "content": json.dumps(planning_data, indent=4)
+                    "stdout_path": str(stdout_path),
+                    "stderr_path": str(stderr_path),
+                    "last_message_path": str(last_message_path),
+                    "attempt": attempt
                 }
-            ]
+            )
+            
+            changed_paths = _collect_repo_changed_files(
+                config,
+                prior_file_checksum_map,
+                readonly_entries
+            )
+            
+            if not changed_paths:
+                raise BadPlan("Codex CLI produced no persistable file changes")
+            
+            normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
+            
+            validation_error = validate_all_changed_files(
+                config,
+                normalized_changed,
+                planning_data
+            )
+            
+            if validation_error is None:
+                break
+            
+            if attempt >= max_validation_attempts:
+                raise validation_error
+            
+            extract_lessons(
+                config,
+                TASK_DESC_CODE_WRITING,
+                validation_error
+            )
+            
+            feedback_sections.append(
+                textwrap.dedent(
+                    f"""
+                    Code validaton failed with the following error:
+                    {validation_error}
+
+                    Apply the error details above to correct the problem
+                    """
+                ).strip()
+            )
+            config.log(
+                "CloudFormation validation failed after Codex execution; retrying Codex with feedback",
+                str(validation_error)
+            )
+        else:
+            raise ExecutionException("Codex CLI reached maximum validation attempts without resolving infrastructure.yaml errors.")
+        
+        persisted_code_files = _persist_codex_code_versions(
+            config,
+            changed_paths,
+            planning_data
         )
         
-        codex_metadata.update({
-            "stdout_path": str(stdout_path),
-            "stderr_path": str(stderr_path),
-            "last_message_path": str(last_message_path) if last_message_path.exists() else None,
-            "codex_start_time": codex_start_time,
-            "return_code": codex_result.returncode,
-            "execution_completed_at": time.time(),
-            "attempt": attempt
-        })
-        if feedback_sections:
-            codex_metadata["cloudformation_feedback"] = feedback_sections.copy()
+        planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
+        if not isinstance(planning_record, dict):
+            planning_record = {}
+        
+        codex_metadata = planning_record.get("codex_metadata", {})
+        codex_metadata["persisted_code_files"] = persisted_code_files
         planning_record["codex_metadata"] = codex_metadata
+        
         with transaction.atomic():
             SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
                 planning_json=planning_record
             )
+        
         config.current_iteration.refresh_from_db(fields=["planning_json"])
-        
-        if codex_result.returncode != 0:
-            raise ExecutionException(
-                f"Codex CLI exited with code {codex_result.returncode}. See {stdout_path} and {stderr_path} for details."
-            )
-        
-        if last_message_path.exists():
-            config.log(
-                f"Codex CLI final message (attempt {attempt}):",
-                last_message_path.read_text(encoding="utf-8")
-            )
-        
-        config.log(
-            "Codex CLI completed successfully",
-            {
-                "stdout_path": str(stdout_path),
-                "stderr_path": str(stderr_path),
-                "last_message_path": str(last_message_path),
-                "attempt": attempt
-            }
-        )
-        
-        changed_paths = _collect_repo_changed_files(
-            config,
-            prior_file_checksum_map,
-            readonly_entries
-        )
-        
-        if not changed_paths:
-            raise BadPlan("Codex CLI produced no persistable file changes")
-        
-        normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
-        
-        validation_error = validate_all_changed_files(
-            config,
-            normalized_changed,
-            planning_data
-        )
-        
-        if validation_error is None:
-            break
-        
-        if attempt >= max_validation_attempts:
-            raise validation_error
-        
-        extract_lessons(
-            config,
-            TASK_DESC_CODE_WRITING,
-            validation_error
-        )
-        
-        feedback_sections.append(
-            textwrap.dedent(
-                f"""
-                Code validaton failed with the following error:
-                {validation_error}
-
-                Apply the error details above to correct the problem
-                """
-            ).strip()
-        )
-        config.log(
-            "CloudFormation validation failed after Codex execution; retrying Codex with feedback",
-            str(validation_error)
-        )
-    else:
-        raise ExecutionException("Codex CLI reached maximum validation attempts without resolving infrastructure.yaml errors.")
-    
-    persisted_code_files = _persist_codex_code_versions(
-        config,
-        changed_paths,
-        planning_data
-    )
-    
-    planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
-    if not isinstance(planning_record, dict):
-        planning_record = {}
-    
-    codex_metadata = planning_record.get("codex_metadata", {})
-    codex_metadata["persisted_code_files"] = persisted_code_files
-    planning_record["codex_metadata"] = codex_metadata
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-            planning_json=planning_record
-        )
-    
-    config.current_iteration.refresh_from_db(fields=["planning_json"])
-    config.log("Stored code versions for Codex-modified files", persisted_code_files)
-    config.git.add_files()
+        config.log("Stored code versions for Codex-modified files", persisted_code_files)
+        config.git.add_files()
+    finally:
+        common.quietly_delete([stdout_path, stderr_path, last_message_path, plan_path, prompt_path])
 
 
 def get_guidance_msg(config: SelfDriverConfig):
-    if not config.guidance:
-        return []
-    else:
-        return LlmMessage.sys_from_data(
-            "## Important Additional Guidance",
-            {"guidance_instructions": config.guidance}
-        )
+    return config.guidance
 
 
 def validate_infrastructure(config, normalized_changed):
@@ -1543,6 +1550,15 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     
     for lambda_data in lambda_datas:
         dependencies = lambda_data["dependencies"]
+        
+        dependencies_normalized = []
+        for d in dependencies:
+            if "erieiron-public-common" in d:
+                dependencies_normalized.append("erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git")
+            else:
+                dependencies_normalized.append(d)
+        dependencies = dependencies_normalized
+        
         code_file_path = lambda_data["code_file_path"]
         full_lambda_path = config.sandbox_root_dir / code_file_path
         
@@ -1556,10 +1572,24 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
             if dependencies:
                 req_file = temp_dir_path / "requirements.txt"
                 req_file.write_text("\n".join(dependencies))
-                
-                subprocess.run([
-                    "pip", "install", "-r", str(req_file), "-t", str(temp_dir_path)
-                ], check=True)
+                config.log(f"building dependencies for {code_file_path}: {dependencies}")
+                try:
+                    subprocess.run(
+                        [
+                            "docker", "run", "--rm",
+                            "--entrypoint", "/bin/bash",
+                            "-v", f"{temp_dir_path}:/var/task",
+                            "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-with-git",
+                            "-c", "pip install -r /var/task/requirements.txt -t /var/task"
+                        ],
+                        stdout=config.log_f,
+                        stderr=subprocess.STDOUT,
+                        check=True
+                    )
+                    asdf = 1
+                except Exception as e:
+                    logging.exception(e)
+                    raise e
             
             s3_key_name = aws_utils.sanitize_aws_name(common.safe_join([
                 config.task.id,
@@ -1570,6 +1600,7 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
             
             zip_path = temp_dir_path / s3_key_name
             shutil.make_archive(zip_path.with_suffix(""), 'zip', root_dir=temp_dir_path)
+            logging.info(f"Uploading {code_file_path} package.  {zip_path} → {s3_key_name} ({zip_path.stat().st_size / (1024 * 1024):.2f}MB)")
             
             s3.upload_file(
                 str(zip_path),
