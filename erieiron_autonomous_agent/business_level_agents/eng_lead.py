@@ -239,16 +239,11 @@ def process_response(initiative, eng_lead_response):
 
         existing_task = Task.objects.filter(id=task_id).first() if task_id else None
 
-        test_plan_value = task_data.get("test_plan")
-        if test_plan_value is None:
-            test_plan_value = existing_task.test_plan if existing_task else ""
-
         defaults = {
             "initiative": initiative,
             "status": TaskStatus.NOT_STARTED,
             "description": task_data.get("task_description", ""),
             "risk_notes": task_data.get("risk_notes", ""),
-            "test_plan": test_plan_value,
             "completion_criteria": task_data.get("completion_criteria"),
             "requires_test": common.parse_bool(task_data.get("requires_test")),
             "execution_schedule": TaskExecutionSchedule(task_data.get("execution_schedule")),
@@ -288,7 +283,6 @@ def process_response(initiative, eng_lead_response):
         fields_to_compare = {
             "description": task_data.get("task_description", ""),
             "risk_notes": task_data.get("risk_notes", ""),
-            "test_plan": test_plan_value,
             "completion_criteria": task_data.get("completion_criteria"),
             "requires_test": common.parse_bool(task_data.get("requires_test")),
             "execution_schedule": task_data.get("execution_schedule"),

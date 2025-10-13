@@ -6,14 +6,16 @@ urlpatterns = [
     path("", views.view_businesses, name="view_home"),
     path("businesses/", views.view_businesses, name="view_businesses"),
     path("businesses/<slug:tab>/", views.view_businesses, name="view_businesses_tab"),
-    path("business/<uuid:business_id>", views.view_business, name="view_business"),
-    path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
+    
     path("_business/add", views.action_add_business, name="action_add_business"),
     path("_business/find", views.action_find_business, name="action_find_business"),
     path("_business/update/<uuid:business_id>", views.action_update_business, name="action_update_business"),
     path("_business/bootstrap/<uuid:business_id>", views.action_bootstrap_business, name="action_bootstrap_business"),
+    path("_business/newdomain/<uuid:business_id>", views.action_business_new_domain, name="action_business_new_domain"),
     path("_business/regenerate_architecture/<uuid:business_id>", views.action_business_regenerate_architecture, name="action_business_regenerate_architecture"),
     path("_business/delete/<uuid:business_id>", views.action_delete_business, name="action_delete_business"),
+    path("business/<uuid:business_id>", views.view_business, name="view_business"),
+    path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
     
     path("initiative/<str:initiative_id>", views.view_initiative, name="view_initiative"),
     path("initiative/<slug:tab>/<str:initiative_id>", views.view_initiative, name="view_initiative_tab"),

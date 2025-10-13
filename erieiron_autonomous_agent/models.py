@@ -55,6 +55,7 @@ class Business(BaseErieIronModel):
     web_desired_count = models.PositiveIntegerField(default=1)
     autonomy_level = models.TextField(null=True, choices=Level.choices())
     domain = models.TextField(null=True)
+    route53_hosted_zone_id = models.TextField(null=True, blank=True)
     github_repo_url = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -534,7 +535,6 @@ class Task(BaseErieIronModel):
         blank=True
     )
     risk_notes = models.TextField()
-    test_plan = models.TextField()
     completion_criteria = models.JSONField(default=list)
     comment_requests = models.JSONField(default=list)
     current_spend = models.FloatField(null=True)
@@ -695,7 +695,12 @@ class Task(BaseErieIronModel):
             domain_candidate = _build_domain(root_domain).rstrip('.').lower()
             selected_domain = domain_candidate
 
-            hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
+            stored_zone_id = getattr(business, "route53_hosted_zone_id", None)
+            stored_domain = (business.domain or "").rstrip('.').lower()
+            if stored_zone_id and stored_domain == domain_candidate:
+                hosted_zone_id = stored_zone_id
+            else:
+                hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
             certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
 
             needs_domain_management = (
@@ -710,7 +715,7 @@ class Task(BaseErieIronModel):
                 try:
                     domain_manager.manage_domain(business)
                 except Exception:
-                    logging.exception("Failed to manage root domain for %s", business.service_token)
+                    logging.info("Failed to manage root domain for %s.  will try other candidates", business.service_token)
                 else:
                     hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
                     certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
@@ -739,6 +744,16 @@ class Task(BaseErieIronModel):
             if self_driving_task.domain != selected_domain:
                 self_driving_task.domain = selected_domain
                 self_driving_task.save(update_fields=["domain"])
+
+            if selected_hosted_zone_id:
+                current_zone_id = getattr(business, "route53_hosted_zone_id", None)
+                if current_zone_id != selected_hosted_zone_id:
+                    setattr(business, "route53_hosted_zone_id", selected_hosted_zone_id)
+                    if hasattr(business, "save"):
+                        try:
+                            business.save(update_fields=["route53_hosted_zone_id"])
+                        except TypeError:
+                            business.save()
 
         return selected_domain or "", selected_hosted_zone_id, selected_certificate_arn
     
@@ -1028,13 +1043,24 @@ class SelfDrivingTask(BaseErieIronModel):
 
         with transaction.atomic():
             SelfDrivingTask.objects.filter(id=self.id).update(
-                cloudformation_stack_name=new_name
+                cloudformation_stack_name=new_name,
+                cloudformation_stack_id=None
             )
-        self.refresh_from_db(fields=["cloudformation_stack_name"])
+        self.refresh_from_db(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
 
         logging.info(
             "Rotated CloudFormation stack name for task %s: %s -> %s", self.id, current_name, new_name
         )
+
+        try:
+            # Refresh cached identifiers so dependent systems observe the rotation immediately.
+            self.get_cloudformation_key_prefix(environment)
+        except Exception:
+            logging.exception(
+                "Failed to compute new stack identifier for task %s after rotating to %s",
+                self.id,
+                new_name
+            )
 
         if self.task:
             try:

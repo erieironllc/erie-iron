@@ -32,6 +32,16 @@ BaseContainerView = ErieView.extend({
 
     init_view: function (options) {
         this.tooltip_instances = [];
+        
+        $("input").each(function() {
+            $(this).attr({
+                autocomplete: "off",
+                "data-lpignore": "true",
+                "data-1p-ignore": "true",
+                "data-1password-disable": "true",
+                "data-1password-ignore": "true"
+            });
+        });
 
 
         $(document).ready(function () {

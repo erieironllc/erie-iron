@@ -2424,7 +2424,10 @@ def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
                     raise CloudFormationException(
                         f"Stack {stack_name} reported status {status} and cannot be rotated"
                     ) from exc
-                
+
+                config.refresh_domain_metadata()
+                sync_stack_identity(config, docker_env)
+
                 config.log(
                     f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} before deployment.\n"
                 )
@@ -2434,9 +2437,11 @@ def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
                 cloudformation_wait(config, cf_client, stack_name)
                 return stack_name
             except CloudFormationStackDeleting as deleting_exc:
+                config.refresh_domain_metadata()
                 config.log(
                     f"Stack {deleting_exc.stack_name} is deleting; switching to {deleting_exc.new_stack_name} during preparation."
                 )
+                sync_stack_identity(config, docker_env)
                 return deleting_exc.new_stack_name
         except cf_client.exceptions.ClientError as e:
             if "does not exist" in str(e):
@@ -2520,7 +2525,8 @@ def cloudformation_wait(
                     raise CloudFormationException(
                         f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
                     ) from exc
-                
+
+                config.refresh_domain_metadata()
                 config.log(
                     f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name} and exiting wait."
                 )
@@ -2541,7 +2547,8 @@ def cloudformation_wait(
                     raise CloudFormationException(
                         f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
                     ) from exc
-                
+
+                config.refresh_domain_metadata()
                 config.log(
                     f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
                 )
@@ -3271,8 +3278,8 @@ def perform_code_review(
         # Goal
         {task.description}
 
-        # Test Plan
-        {task.test_plan or 'none'}
+        # Acceptance Criteria
+        {task.completion_criteria or 'none'}
 
         # Risk Notes
         {task.risk_notes or 'none'}
@@ -3669,7 +3676,7 @@ def write_task_tdd_test(config: SelfDriverConfig):
             "**Please one-shot write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
             {
                 "GOAL": task.description,
-                "test_plan": task.test_plan,
+                "acceptance_criteria": task.completion_criteria,
                 "risk_notes": task.risk_notes
             }
         )
@@ -4698,8 +4705,8 @@ def get_goal_msg(config, description):
         {task.description}
         '''
         
-        ## Test Plan (FYI)
-        {task.test_plan}
+        ## Acceptance Criteria
+        {task.completion_criteria}
         
         ## Risk Notes (FYI)
         {task.risk_notes}
@@ -4978,6 +4985,8 @@ def deploy_cloudformation_stacks(
         ecr_arn: str,
         lambda_datas: dict
 ):
+    import logging
+    import boto3
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     
     self_driving_task = config.self_driving_task
@@ -5013,6 +5022,11 @@ def deploy_cloudformation_stacks(
         template_body
     )
     
+    disable_lambda_concurrency(
+        config,
+        stack_name
+    )
+    
     push_cloudformation(
         config,
         stack_name,
@@ -5044,6 +5058,39 @@ def deploy_cloudformation_stacks(
     return stack_name
 
 
+def disable_lambda_concurrency(config:SelfDriverConfig, stack_name: str):
+    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
+    lambda_client = boto3.client("lambda", region_name=config.aws_env.get_aws_region())
+    
+    existing_stack = get_stack(stack_name, cf_client)
+    if not existing_stack:
+        return 
+        
+    try:
+        resources = cf_client.describe_stack_resources(StackName=stack_name).get('StackResources', [])
+        for res in resources:
+            if res.get('ResourceType') == 'AWS::Lambda::Function' and res.get('PhysicalResourceId'):
+                function_name = res['PhysicalResourceId']
+                try:
+                    resp = lambda_client.get_function_concurrency(FunctionName=function_name)
+                    reserved = resp.get('ReservedConcurrentExecutions')
+                    if reserved is not None and reserved > 0:
+                        logging.info(f"Disabling reserved concurrency for Lambda function {function_name}: was set to {reserved}")
+                        lambda_client.put_function_concurrency(
+                            FunctionName=function_name,
+                            ReservedConcurrentExecutions=0
+                        )
+                        logging.info(f"Set ReservedConcurrentExecutions=0 for {function_name} to avoid update conflicts")
+                    else:
+                        logging.info(f"Lambda function {function_name} does not have reserved concurrency set (>0); skipping")
+                except lambda_client.exceptions.ResourceNotFoundException:
+                    logging.info(f"Lambda function {function_name} not found, skipping concurrency check.")
+                except Exception as exc:
+                    logging.info(f"Error checking/disabling concurrency for {function_name}: {exc}")
+    except Exception as e:
+        raise AgentBlocked(e)
+
+
 def delete_wedged_cloudformation_stack(config, docker_env, stack_name):
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     max_delete_attempts = 3
@@ -5066,6 +5113,7 @@ def delete_wedged_cloudformation_stack(config, docker_env, stack_name):
             except CloudFormationStackDeleting as deleting_exc:
                 stack_cleanup_successful = True
                 stack_name = deleting_exc.new_stack_name
+                config.refresh_domain_metadata()
                 stack_name, _ = sync_stack_identity(config, docker_env)
                 config.log(
                     f"CloudFormation stack {delete_target} is deleting; will proceed with new stack name {stack_name}."
@@ -5075,6 +5123,7 @@ def delete_wedged_cloudformation_stack(config, docker_env, stack_name):
             if not get_stack(delete_target, cf_client):
                 stack_cleanup_successful = True
                 config.log(f"Successfully deleted CloudFormation stack {delete_target} after validation failure.")
+                config.refresh_domain_metadata()
                 stack_name, _ = sync_stack_identity(config, docker_env)
                 break
             
@@ -5431,6 +5480,7 @@ def delete_cloudformation_stack(
         try:
             cloudformation_wait(config, cf_client, stack_name)
         except CloudFormationStackDeleting as deleting_exc:
+            config.refresh_domain_metadata()
             config.log(
                 f"Stack {deleting_exc.stack_name} is deleting; moving forward with new stack name {deleting_exc.new_stack_name}."
             )

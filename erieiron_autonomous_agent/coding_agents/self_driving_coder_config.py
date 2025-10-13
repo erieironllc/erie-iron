@@ -21,7 +21,6 @@ LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 USE_CODEX = True
 
-
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",
     TaskType.CODING_APPLICATION: "codeplanner--feature_development.md",
@@ -104,7 +103,14 @@ class SelfDriverConfig:
         
         self.model_code_planning = LlmModel.OPENAI_GPT_5
         
+        self.refresh_domain_metadata()
         # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
+    
+    def refresh_domain_metadata(self) -> None:
+        domain_name, hosted_zone_id, certificate_arn = self.task.get_domain_and_cert(self.aws_env)
+        self.domain_name = (domain_name or "").rstrip('.').lower()
+        self.hosted_zone_id = hosted_zone_id
+        self.certificate_arn = certificate_arn
     
     def set_phase(self, phase: 'SdaPhase'):
         self.phase = phase
@@ -284,7 +290,7 @@ class CloudFormationException(Exception):
 
 class CloudFormationStackDeleting(Exception):
     """Signal raised when a stack enters a delete workflow."""
-
+    
     def __init__(self, stack_name: str, status: str, new_stack_name: str):
         self.stack_name = stack_name
         self.status = status

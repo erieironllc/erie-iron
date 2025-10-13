@@ -6,21 +6,22 @@
             <div class="mb-3">
                 <label class="form-label">Sandbox dir</label>
                 <div class="d-flex justify-content-between">
-                    <input type="text" class="form-control w-75" value="{{ sandbox_path }}" disabled>
+                    <input type="text" class="form-control " value="{{ sandbox_path }}" disabled>
                     {% include "_copy_clipboard_btn.html" with target_el="#div_iteration_debug_link" %}
                 </div>
             </div>
         </div>
         <div class="col-md-6">
             <div class="mb-3">
-            {% if logs_prefix %}
-                <div class="d-flex justify-content-between">
+                {% if logs_prefix %}
+                    <div class="d-flex justify-content-between">
+                        <label class="form-label">CloudFormation Stack</label>
+                        <a target=_blank
+                           href="https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#logsV2:log-groups$3FlogGroupNameFilter$3D{{ logs_prefix }}">Cloudwatch</a>
+                    </div>
+                {% else %}
                     <label class="form-label">CloudFormation Stack</label>
-                    <a target=_blank href="https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#logsV2:log-groups$3FlogGroupNameFilter$3D{{ logs_prefix }}">Cloudwatch</a>
-                </div>
-            {% else %}
-                <label class="form-label">CloudFormation Stack</label>
-            {% endif %}
+                {% endif %}
                 {% if cloudformation_stack_url %}
                     <div>
                         <a target="_blank" href="{{ cloudformation_stack_url }}">{{ cloudformation_stack_name }}</a>
@@ -34,38 +35,17 @@
 
     <hr>
 
-    <h5>Edit Task Fields</h5>
     <form action="{% url 'action_update_task' task.id %}" method="post">
         {% csrf_token %}
         <div class="row">
+            
             <div class="col-md-6">
-                <div class="mb-3">
-                    <label for="description" class="form-label">Description</label>
-                    <textarea name="description" id="description" class="form-control" rows="3">{{ task.description }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="risk_notes" class="form-label">Risk Notes</label>
-                    <textarea name="risk_notes" id="risk_notes" class="form-control" rows="3">{{ task.risk_notes }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="test_plan" class="form-label">Test Plan</label>
-                    <textarea name="test_plan" id="test_plan" class="form-control" rows="3">{{ task.test_plan }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label for="completion_criteria" class="form-label">Completion Criteria</label>
-                    <textarea name="completion_criteria" id="completion_criteria" class="form-control"
-                              rows="3">{{ task.completion_criteria|json_dumps }}</textarea>
-                    <small class="text-muted">Enter JSON array of criteria.</small>
-                </div>
-
                 <div class="mb-3">
                     <label for="status" class="form-label">Status</label>
                     <select name="status" id="status" class="form-select">
                         {% for value, label in task_status_choices %}
-                            <option value="{{ value }}" {% if task.status == value %}selected{% endif %}>{{ label }}</option>
+                            <option value="{{ value }}"
+                                    {% if task.status == value %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -74,7 +54,8 @@
                     <label for="role_assignee" class="form-label">Role Assignee</label>
                     <select name="role_assignee" id="role_assignee" class="form-select">
                         {% for value, label in task_role_choices %}
-                            <option value="{{ value }}" {% if task.role_assignee == value %}selected{% endif %}>{{ label }}</option>
+                            <option value="{{ value }}"
+                                    {% if task.role_assignee == value %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -83,7 +64,8 @@
                     <label for="phase" class="form-label">Phase</label>
                     <select name="phase" id="phase" class="form-select">
                         {% for value, label in task_phase_choices %}
-                            <option value="{{ value }}" {% if task.phase == value %}selected{% endif %}>{{ label }}</option>
+                            <option value="{{ value }}"
+                                    {% if task.phase == value %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -92,7 +74,8 @@
                     <label for="task_type" class="form-label">Task Type</label>
                     <select name="task_type" id="task_type" class="form-select">
                         {% for value, label in task_type_choices %}
-                            <option value="{{ value }}" {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
+                            <option value="{{ value }}"
+                                    {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -101,26 +84,12 @@
                     <label for="execution_schedule" class="form-label">Execution Schedule</label>
                     <select name="execution_schedule" id="execution_schedule" class="form-select">
                         {% for value, label in task_execution_schedule_choices %}
-                            <option value="{{ value }}" {% if task.execution_schedule == value %}selected{% endif %}>{{ label }}</option>
+                            <option value="{{ value }}"
+                                    {% if task.execution_schedule == value %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
 
-                <div class="mb-3">
-                    <label for="execution_start_time" class="form-label">Execution Start Time</label>
-                    <input type="datetime-local" name="execution_start_time" id="execution_start_time"
-                           class="form-control"
-                           value="{% if task.execution_start_time %}{{ task.execution_start_time|date:'Y-m-d\TH:i' }}{% endif %}">
-                </div>
-
-                <div class="mb-3 form-check">
-                    <input type="checkbox" name="requires_test" id="requires_test" class="form-check-input"
-                           {% if task.requires_test %}checked{% endif %}>
-                    <label for="requires_test" class="form-check-label">Requires Test</label>
-                </div>
-            </div>
-
-            <div class="col-md-6">
                 <div class="mb-3">
                     <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
                     <input type="number" name="timeout_seconds" id="timeout_seconds" class="form-control"
@@ -133,15 +102,43 @@
                            value="{% if task.max_budget_usd %}{{ task.max_budget_usd }}{% endif %}">
                 </div>
 
+
                 <div class="mb-3">
-                    <label for="goal" class="form-label">Goal</label>
-                    <textarea name="goal" id="goal" class="form-control" rows="3">{{ task.goal }}</textarea>
+                    <label for="execution_start_time" class="form-label">Execution Start Time</label>
+                    <input type="datetime-local" name="execution_start_time" id="execution_start_time"
+                           class="form-control"
+                           value="
+                                   {% if task.execution_start_time %}{{ task.execution_start_time|date:'Y-m-d\TH:i' }}{% endif %}">
+                </div>
+
+                <div class="mb-3 form-check">
+                    <input type="checkbox" name="requires_test" id="requires_test" class="form-check-input"
+                           {% if task.requires_test %}checked{% endif %}>
+                    <label for="requires_test" class="form-check-label">Requires Test</label>
+                </div>
+
+            </div>
+
+            <div class="col-md-6">
+                <div class="mb-3">
+                    <label for="description" class="form-label">Description</label>
+                    <textarea name="description" id="description" class="form-control"
+                              rows="6">{{ task.description }}</textarea>
                 </div>
 
                 <div class="mb-3">
-                    <label for="notes" class="form-label">Notes</label>
-                    <textarea name="notes" id="notes" class="form-control" rows="3">{{ task.notes }}</textarea>
+                    <label for="completion_criteria" class="form-label">Completion Criteria</label>
+                    <textarea name="completion_criteria" id="completion_criteria" class="form-control"
+                              rows="6">{{ task.completion_criteria|json_dumps }}</textarea>
+                    <small class="text-muted">Enter JSON array of criteria.</small>
                 </div>
+
+                <div class="mb-3">
+                    <label for="risk_notes" class="form-label">Risk Notes</label>
+                    <textarea name="risk_notes" id="risk_notes" class="form-control"
+                              rows="6">{{ task.risk_notes }}</textarea>
+                </div>
+
             </div>
         </div>
 

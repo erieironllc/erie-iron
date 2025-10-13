@@ -186,12 +186,20 @@
 
             <button type="submit" class="btn btn-primary">Save Changes</button>
             <a href="{% url 'view_business' business.id %}" class="btn btn-secondary ms-2">Cancel</a>
+
         </form>
 
-        <div class="mt-4">
-            <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
+        <div class="d-flex justify-content-end" style="margin-top: -40px">
+            <form method="post" action="{% url 'action_business_new_domain' business.id %}" class="d-inline ms-2">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-warning"
+                        onclick="return confirm('Are you sure you want to register a new Domain for this business?')">
+                    New Domain
+                </button>
+            </form>
+            <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline ms-2">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger"
                         onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
                     Bootstrap
                 </button>

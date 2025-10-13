@@ -20,7 +20,7 @@ from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
-from erieiron_common import common
+from erieiron_common import common, domain_manager
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -330,9 +330,9 @@ def _build_llm_spend_context(
         task_label = task_label.split("--")[-1]
         
         task_label = (task_label
-                .replace("_", " ")
-                .replace("-", " ")
-                .capitalize())
+                      .replace("_", " ")
+                      .replace("-", " ")
+                      .capitalize())
         
         if task_id:
             task_key = (task_id, task_label)
@@ -1030,7 +1030,7 @@ def _task_tab_context_latest_iteration(task, business, self_driving_task) -> dic
 def _task_tab_context_latest_iteration_logs(task, business, self_driving_task) -> dict:
     if not self_driving_task:
         return {"iteration": None}
-
+    
     iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
     return {"iteration": iteration}
 
@@ -1038,7 +1038,7 @@ def _task_tab_context_latest_iteration_logs(task, business, self_driving_task) -
 def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
     if not self_driving_task:
         return {"iterations": []}
-
+    
     iterations = list(self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp"))
     if not iterations:
         return {"iterations": []}
@@ -1269,6 +1269,9 @@ def _build_iteration_tabs(
         llm_requests,
 ):
     from erieiron_ui import tab_defitions
+    
+    if not iteration:
+        return []
     
     tabs = []
     for definition in tab_defitions.ITERATION_TAB_DEFINITIONS:
@@ -1524,23 +1527,23 @@ def view_iteration_logs(request, iteration_id):
 def view_task_latest_iteration_logs(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
     self_driving_task = getattr(task, "selfdrivingtask", None)
-
+    
     if not self_driving_task:
         return {
             "log_text": "",
             "iteration_id": None,
         }
-
+    
     iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
     if not iteration:
         return {
             "log_text": "",
             "iteration_id": None,
         }
-
+    
     log_content_coding = getattr(iteration, "log_content_coding", None) or ""
     log_content_execution = getattr(iteration, "log_content_execution", None) or ""
-
+    
     timestamp = getattr(iteration, "timestamp", None)
     timestamp_display = None
     if timestamp:
@@ -1549,7 +1552,7 @@ def view_task_latest_iteration_logs(request, task_id):
         except (ValueError, TypeError, AttributeError):
             localized = timestamp
         timestamp_display = formats.date_format(localized, "DATETIME_FORMAT")
-
+    
     return {
         "log_text": f"{log_content_coding}{log_content_execution}",
         "iteration_id": str(iteration.id),
@@ -1899,7 +1902,6 @@ def action_update_task(request, task_id):
         # Get form data
         description = rget(request, 'description', '').strip()
         risk_notes = rget(request, 'risk_notes', '').strip()
-        test_plan = rget(request, 'test_plan', '').strip()
         timeout_seconds = rget(request, 'timeout_seconds', '').strip()
         max_budget_usd = rget(request, 'max_budget_usd', '').strip()
         status = rget(request, 'status', '').strip()
@@ -1912,7 +1914,6 @@ def action_update_task(request, task_id):
         update_data = {
             'description': description,
             'risk_notes': risk_notes,
-            'test_plan': test_plan,
             'status': status,
             'task_type': task_type,
             'execution_schedule': execution_schedule,
@@ -2035,6 +2036,20 @@ def action_update_business(request, business_id):
     except Exception as e:
         messages.error(request, f'Error updating business: {str(e)}')
         return redirect(reverse('view_business', args=[business_id]))
+
+
+def action_business_new_domain(request, business_id):
+    if request.method != 'POST':
+        raise Exception()
+    
+    business = get_object_or_404(Business, pk=business_id)
+    business.needs_domain = True
+    business.domain = None
+    business.save(update_fields=["domain", "needs_domain"])
+    
+    domain_manager.manage_domain(business)
+    
+    return redirect(reverse('view_business_tab', args=['edit', business_id]))
 
 
 def action_bootstrap_business(request, business_id):
@@ -2250,10 +2265,9 @@ def view_llm_request(request, llm_request_id):
         (reverse(view_businesses), Business.get_erie_iron_business().name)
     ]
     iteration = llm_request.task_iteration
-    task = iteration.self_driving_task.task
-    initiative = task.initiative
-    previous_iteration: SelfDrivingTaskIteration | None = iteration.get_previous_iteration()
-    next_iteration: SelfDrivingTaskIteration | None = iteration.get_next_iteration()
+    task = iteration.self_driving_task.task if iteration else None
+    previous_iteration: SelfDrivingTaskIteration | None = iteration.get_previous_iteration() if iteration else None
+    next_iteration: SelfDrivingTaskIteration | None = iteration.get_next_iteration() if iteration else None
     
     if llm_request.business_id:
         breadcrumbs.append(
@@ -2289,7 +2303,7 @@ def view_llm_request(request, llm_request_id):
                 "value": f"{m.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
             })
     
-    llm_requests = list(iteration.llmrequest_set.order_by("-timestamp"))
+    llm_requests = list(iteration.llmrequest_set.order_by("-timestamp")) if iteration else []
     
     return send_response(
         request,
@@ -2297,8 +2311,8 @@ def view_llm_request(request, llm_request_id):
         {
             "iteration": iteration,
             "task": task,
-            "initiative": initiative,
-            "business": initiative.business,
+            "initiative": llm_request.initiative,
+            "business": llm_request.business,
             "tabs": _build_iteration_tabs(iteration, task, previous_iteration, next_iteration, None, None, llm_requests),
             "llm_request": llm_request,
             "model_choices": model_choices,

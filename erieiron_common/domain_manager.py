@@ -1,10 +1,12 @@
+import hashlib
 import logging
 import time
 import uuid
-from typing import Optional
+from typing import Iterable, Optional
 
 import boto3
 from botocore.exceptions import ClientError
+from django.db import transaction
 
 import settings
 from erieiron_autonomous_agent.models import Business
@@ -15,19 +17,36 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 
 def manage_domain(business: Business):
+    if isinstance(business, Business) and getattr(business, "pk", None):
+        with transaction.atomic():
+            locked_business = Business.objects.select_for_update().get(pk=business.pk)
+            _manage_domain_core(locked_business)
+            business.domain = locked_business.domain
+            business.route53_hosted_zone_id = getattr(locked_business, "route53_hosted_zone_id", None)
+            return
+
+    _manage_domain_core(business)
+
+
+def _manage_domain_core(business: Business):
     if not business.needs_domain:
         return
-    
+
     if not business.domain:
         chosen_domain = find_domain(business)
         register_domain(chosen_domain)
-        
+
         business.domain = chosen_domain
-        business.save()
-    
-    hosted_zone_id = create_hosted_zone(business.domain)
-    ensure_wildcard_certificate(business.domain, hosted_zone_id)
-    update_dns(business.domain, hosted_zone_id)
+        _persist_business_domain(business)
+
+    normalized_domain = _normalize_domain_name(business.domain)
+    if getattr(business, "domain", None) != normalized_domain:
+        business.domain = normalized_domain
+        _persist_business_domain(business)
+
+    hosted_zone_id = _ensure_business_hosted_zone(business, normalized_domain)
+    ensure_wildcard_certificate(normalized_domain, hosted_zone_id)
+    update_dns(normalized_domain, hosted_zone_id)
 
 
 def register_domain(chosen_domain):
@@ -110,9 +129,11 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
         return
     
     route53 = aws_utils.client("route53")
-    changes = []
+
+    change_lookup: dict[tuple[str, str], dict] = {}
     for record in validation_records:
-        changes.append({
+        key = (record["Name"], record["Type"])
+        change_lookup[key] = {
             "Action": "UPSERT",
             "ResourceRecordSet": {
                 "Name": record["Name"],
@@ -120,36 +141,58 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
                 "TTL": 300,
                 "ResourceRecords": [{"Value": record["Value"]}]
             }
-        })
-    
+        }
+
+    changes = list(change_lookup.values())
+
     if not changes:
         return
-    
-    route53.change_resource_record_sets(
-        HostedZoneId=hosted_zone_id,
-        ChangeBatch={
-            "Comment": f"ACM validation for {certificate_arn}",
-            "Changes": changes
-        }
-    )
+
+    try:
+        route53.change_resource_record_sets(
+            HostedZoneId=hosted_zone_id,
+            ChangeBatch={
+                "Comment": f"ACM validation for {certificate_arn}",
+                "Changes": changes
+            }
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "InvalidChangeBatch":
+            raise
+
+        if _validation_records_already_exist(route53, hosted_zone_id, changes):
+            logging.info(
+                "ACM validation records already exist for %s; continuing without changes",
+                certificate_arn
+            )
+            return
+        raise
 
 
 def create_hosted_zone(chosen_domain):
+    normalized_domain = _normalize_domain_name(chosen_domain)
     route53 = aws_utils.client("route53")
+
+    # Reuse an existing hosted zone if one already exists; repeated stack rotations or
+    # fallback domain handling should not create duplicate hosted zones in Route53.
+    existing_hosted_zone_id = find_hosted_zone_id(route53, normalized_domain)
+    if existing_hosted_zone_id:
+        return existing_hosted_zone_id
+
     try:
         hz_resp = route53.create_hosted_zone(
-            Name=chosen_domain,
-            CallerReference=str(uuid.uuid4())
+            Name=_ensure_fqdn(normalized_domain),
+            CallerReference=_deterministic_caller_reference(normalized_domain)
         )
-        hosted_zone_id = hz_resp["HostedZone"]["Id"]
+        hosted_zone_id = _normalize_hosted_zone_id(hz_resp["HostedZone"]["Id"])
+        _wait_for_hosted_zone_visible(route53, hosted_zone_id, normalized_domain)
     except ClientError as e:
         # If already exists, find it
         if "HostedZoneAlreadyExists" in str(e):
-            zones = route53.list_hosted_zones_by_name(DNSName=chosen_domain)
-            hosted_zone_id = zones["HostedZones"][0]["Id"]
+            hosted_zone_id = _resolve_existing_hosted_zone(route53, normalized_domain)
         else:
             raise e
-    
+
     return hosted_zone_id
 
 
@@ -195,9 +238,17 @@ def update_dns(chosen_domain, hosted_zone_id):
 
 
 def domain_available(domain: str) -> bool:
-    resp = get_route53domains_client().check_domain_availability(
-        DomainName=domain
-    )
+    try:
+        resp = get_route53domains_client().check_domain_availability(
+            DomainName=domain
+        )
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code")
+        if error_code in {"UnsupportedTLD", "OperationNotSupported"}:
+            logging.info("Route53Domains does not support TLD for %s: %s", domain, error_code)
+            return False
+        logging.warning("Failed to check domain availability for %s: %s", domain, exc)
+        return False
     return resp.get("Availability") == "AVAILABLE"
 
 
@@ -394,25 +445,223 @@ def _normalize_hosted_zone_id(hosted_zone_id: Optional[str]) -> Optional[str]:
     return str(hosted_zone_id).split("/")[-1]
 
 
+def _hosted_zone_id_path(hosted_zone_id: str | None) -> Optional[str]:
+    if not hosted_zone_id:
+        return None
+    hosted_zone_id = str(hosted_zone_id)
+    return hosted_zone_id if hosted_zone_id.startswith("/") else f"/hostedzone/{hosted_zone_id}"
+
+
+def _validation_records_already_exist(route53_client, hosted_zone_id: str, changes: list[dict]) -> bool:
+    if not changes:
+        return True
+
+    desired = {
+        (
+            change["ResourceRecordSet"].get("Name"),
+            change["ResourceRecordSet"].get("Type")
+        ): change
+        for change in changes
+    }
+
+    paginator = route53_client.get_paginator("list_resource_record_sets")
+    for page in paginator.paginate(HostedZoneId=hosted_zone_id):
+        for record_set in page.get("ResourceRecordSets", []) or []:
+            key = (record_set.get("Name"), record_set.get("Type"))
+            if key not in desired:
+                continue
+
+            desired_records = desired[key]["ResourceRecordSet"].get("ResourceRecords", []) or []
+            existing_records = record_set.get("ResourceRecords", []) or []
+
+            desired_values = sorted(record.get("Value") for record in desired_records)
+            existing_values = sorted(record.get("Value") for record in existing_records)
+
+            if desired_values == existing_values:
+                desired.pop(key)
+
+            if not desired:
+                return True
+
+    return False
+
+
+def _deterministic_caller_reference(domain_name: str) -> str:
+    normalized = _normalize_domain_name(domain_name)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"erieiron-hz-{digest}"
+
+
 def _ensure_fqdn(name: str) -> str:
     if not name:
         return name
     return name.rstrip('.') + '.'
 
 
+def _normalize_domain_name(domain: str | None) -> str:
+    return (domain or "").strip().rstrip('.').lower()
+
+
+def _list_all_hosted_zones(route53_client) -> Iterable[dict]:
+    marker = None
+    while True:
+        kwargs = {}
+        if marker:
+            kwargs["Marker"] = marker
+        response = route53_client.list_hosted_zones(**kwargs)
+        for zone in response.get("HostedZones", []) or []:
+            yield zone
+        if not response.get("IsTruncated"):
+            break
+        marker = response.get("NextMarker")
+
+
+def _match_hosted_zone_id(
+        zones: Iterable[dict],
+        target_domain: str,
+        *,
+        caller_reference: str | None = None
+) -> Optional[str]:
+    normalized_target = _normalize_domain_name(target_domain)
+    fallback_id: Optional[str] = None
+    for zone in zones or []:
+        name = _normalize_domain_name(zone.get("Name"))
+        if name != normalized_target:
+            continue
+        zone_id = _normalize_hosted_zone_id(zone.get("Id"))
+        if caller_reference and zone.get("CallerReference") == caller_reference:
+            return zone_id
+        if fallback_id is None:
+            fallback_id = zone_id
+    return fallback_id
+
+
 def find_hosted_zone_id(route53_client, domain: str) -> Optional[str]:
-    if not domain:
+    normalized_domain = _normalize_domain_name(domain)
+    if not normalized_domain:
         return None
-    
-    labels = domain.rstrip('.').split('.')
-    for idx in range(len(labels)):
-        candidate = '.'.join(labels[idx:])
-        dns_name = _ensure_fqdn(candidate)
-        resp = route53_client.list_hosted_zones_by_name(DNSName=dns_name, MaxItems="1")
-        zones = resp.get("HostedZones", [])
-        if zones and zones[0].get("Name", "").rstrip('.') == candidate:
-            return _normalize_hosted_zone_id(zones[0].get("Id"))
+
+    caller_ref = _deterministic_caller_reference(normalized_domain)
+
+    try:
+        response = route53_client.list_hosted_zones_by_name(
+            DNSName=_ensure_fqdn(normalized_domain),
+            MaxItems="1"
+        )
+        hosted_zone_id = _match_hosted_zone_id(
+            response.get("HostedZones"),
+            normalized_domain,
+            caller_reference=caller_ref
+        )
+        if hosted_zone_id:
+            return hosted_zone_id
+    except Exception:
+        ...
+
+    zones_snapshot = list(_list_all_hosted_zones(route53_client))
+    hosted_zone_id = _match_hosted_zone_id(
+        zones_snapshot,
+        normalized_domain,
+        caller_reference=caller_ref
+    )
+    if hosted_zone_id:
+        return hosted_zone_id
+
     return None
+
+
+def _wait_for_hosted_zone_visible(route53_client, hosted_zone_id: str, domain: str, *, max_attempts: int = 10, delay_seconds: float = 1.0) -> None:
+    normalized_id = _normalize_hosted_zone_id(hosted_zone_id)
+    if not normalized_id:
+        return
+
+    for attempt in range(max_attempts):
+        if _hosted_zone_matches(route53_client, normalized_id, domain):
+            return
+        time.sleep(delay_seconds)
+
+    logging.warning(
+        "Hosted zone %s for %s was not visible after %s attempts",
+        normalized_id,
+        domain,
+        max_attempts
+    )
+
+
+def _resolve_existing_hosted_zone(
+        route53_client,
+        domain: str,
+        *,
+        max_attempts: int = 20,
+        delay_seconds: float = 1.0,
+        max_delay_seconds: float = 8.0
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            hosted_zone_id = find_hosted_zone_id(route53_client, domain)
+            if hosted_zone_id:
+                return hosted_zone_id
+        except Exception as exc:  # pragma: no cover - defensive
+            last_error = exc
+        time.sleep(delay_seconds)
+        delay_seconds = min(delay_seconds * 1.5, max_delay_seconds)
+
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Existing hosted zone for {domain} not found after {max_attempts} attempts")
+
+
+def _ensure_business_hosted_zone(business: Business, domain: str) -> str:
+    route53_client = aws_utils.client("route53")
+    stored_id = _normalize_hosted_zone_id(getattr(business, "route53_hosted_zone_id", None))
+
+    if stored_id and not _hosted_zone_matches(route53_client, stored_id, domain):
+        stored_id = None
+
+    if not stored_id:
+        stored_id = create_hosted_zone(domain)
+        _persist_business_hosted_zone_id(business, stored_id)
+    else:
+        _persist_business_hosted_zone_id(business, stored_id, only_if_changed=True)
+    return stored_id
+
+
+def _hosted_zone_matches(route53_client, hosted_zone_id: str, domain: str) -> bool:
+    try:
+        response = route53_client.get_hosted_zone(Id=_hosted_zone_id_path(hosted_zone_id))
+    except ClientError:
+        return False
+
+    zone_name = _normalize_domain_name(response.get("HostedZone", {}).get("Name"))
+    return zone_name == _normalize_domain_name(domain)
+
+
+def _persist_business_hosted_zone_id(business: Business, hosted_zone_id: str, only_if_changed: bool = False) -> None:
+    normalized_id = _normalize_hosted_zone_id(hosted_zone_id)
+    if not normalized_id:
+        return
+
+    current = _normalize_hosted_zone_id(getattr(business, "route53_hosted_zone_id", None))
+    if only_if_changed and current == normalized_id:
+        return
+
+    setattr(business, "route53_hosted_zone_id", normalized_id)
+    if hasattr(business, "save"):
+        try:
+            business.save(update_fields=["route53_hosted_zone_id"])
+        except TypeError:
+            business.save()
+
+
+def _persist_business_domain(business: Business) -> None:
+    if not hasattr(business, "save"):
+        return
+    try:
+        business.save(update_fields=["domain"])
+    except TypeError:
+        business.save()
+
 
 
 def find_certificate_arn(domain: str, region: str) -> Optional[str]:
