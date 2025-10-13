@@ -130,11 +130,12 @@ The test code must:
 - Use realistic input examples, not placeholders, when possible.
 - Tests must exercise the full system path (e.g., database, message bus, LLM calls). In acceptance tests, mocks and stubs are not allowed except for narrowly scoped, pre-approved cases (e.g., FakeClock, InMemoryEmailSink).
 - When asserting AWS Lambda behavior, never import the Lambda module or call `lambda_handler` directly. Trigger the workflow that causes AWS to invoke the Lambda (e.g., enqueue the event, drop the object in S3) and assert the externally observable results instead.
-- Unless the task explicitly calls for validating AWS infrastructure provisioning, do not assert CloudFormation templates, stack outputs, IAM policies, or other AWS configuration details; verify the final observable behavior instead.
+- Unless the task explicitly calls for validating AWS infrastructure provisioning, do not assert CloudFormation templates, stack outputs, IAM policies, or other AWS configuration details. Focus on end-to-end behavior and observable outcomes; asserting infrastructure settings is too brittle.
 - Use deterministic data and outputs.
 - Prefer clarity over cleverness.
 - The tests **MUST** extend "from django.test import TestCase"
-- When tests need to read CloudFormation outputs, only assert against logical IDs that satisfy AWS naming rules (`[A-Za-z0-9]+`). Prefer the camel-case outputs already emitted by the stack (e.g., `EmailIngestBucketName`) and never demand snake_case names like `ingest_bucket_name` that CloudFormation cannot produce.
+- When tests need to read CloudFormation parameters or outputs, only assert against logical IDs that start with a letter and contain only alphanumeric characters (`[A-Za-z0-9]+`). Prefer the camel-case outputs already emitted by the stack (e.g., `EmailIngestBucketName`) and never demand snake_case or other invalid names that CloudFormation cannot produce.
+- Never add assertions that require invalid parameter or output names; if required values are missing, fail with remediation guidance instead of insisting on impossible identifiers.
 
 ### Email Guidelines
 

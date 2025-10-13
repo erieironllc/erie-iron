@@ -14,7 +14,7 @@ This test is being generated at the start of the implementation.  No implementat
 - Always include at least one test per acceptance criterion.
 - Keep individual tests and the overall module runtime under 60 seconds. Use short, bounded retries instead of long sleeps, and fail fast with remediation guidance if the specification demands longer observation windows.
 - When validating Lambda-backed behavior, exercise the system pathway that leads AWS to invoke the Lambda (such as publishing the triggering event) and assert the downstream outcomes; do not import the Lambda module or call `lambda_handler` directly from the test.
-- Unless the GOAL is specifically about provisioning AWS resources, avoid asserting CloudFormation templates, stack outputs, IAM bindings, or other infrastructure wiring; focus your assertions on the end-to-end behavior experienced by the user.
+- Unless the GOAL is specifically about provisioning AWS resources, avoid asserting CloudFormation templates, stack outputs, IAM bindings, or other infrastructure wiring. Focus assertions on end-to-end behavior experienced by the user; infrastructure implementation details are too brittle.
 
 ---
 
@@ -25,9 +25,9 @@ This test is being generated at the start of the implementation.  No implementat
 - Do not include placeholder code such as 'TODO: add S3 integration later.'
 - All S3 code must be deployable and production-ready.
 
-## CloudFormation Output Naming Rules
-- When tests need to inspect CloudFormation outputs, limit assertions to logical IDs that CloudFormation can actually emit (alphanumeric / camel-case, e.g., `EmailIngestBucketName`).
-- Do **not** assert the presence of snake_case outputs such as `ingest_bucket_name`, `digest_jobs_queue_url`, or any other name containing underscores—those violate CloudFormation rules and will never exist.
+## CloudFormation Parameter and Output Naming Rules
+- When tests need to inspect CloudFormation parameters or outputs, limit assertions to logical IDs that start with a letter and contain only alphanumeric characters (camel-case, e.g., `EmailIngestBucketName`).
+- Do **not** assert the presence of snake_case, hyphenated, digit-prefixed, or otherwise invalid identifiers (e.g., `ingest_bucket_name`, `1QueueUrl`). If a necessary value is missing, fail with remediation guidance instead of demanding impossible names.
 
 ---
 

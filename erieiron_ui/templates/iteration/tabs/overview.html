@@ -29,7 +29,7 @@
     <div>
         <h5>Development Path:</h5>
         {% if iteration_to_modify %}
-            <a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">Iteration {{ iteration_to_modify.version_number }}</a>
+            <a href="{% url 'view_self_driver_iteration' iteration_to_modify.id %}">Iteration {{ iteration_to_modify.version_number }}</a>
         {% endif %}
         {% for llm_request in all_llm_requests %}
             <i class="bi bi-arrow-right-short"></i>

@@ -24,8 +24,9 @@ You work in support of test-driven development
 - Assert externally observable outcomes: API responses, persisted records, emitted events, and log markers
 - Avoid coupling to internal implementation (private functions, internal IDs not surfaced by the API)
 - When covering AWS Lambda flows, drive the system through the entrypoint that causes AWS to fire the Lambda (queue message, S3 upload, scheduled trigger, etc.) and assert the resulting external effects; never import the Lambda module or call `lambda_handler` directly from the test.
-- Unless the assignment explicitly focuses on provisioning AWS infrastructure, do not assert CloudFormation stacks, resource properties, or IAM wiring; concentrate on the observable product behavior instead.
-- When verifying CloudFormation stack metadata, only reference `Outputs` whose logical IDs comply with AWS rules (`[A-Za-z0-9]+`). Use the camel-case outputs defined in the template and never assert snake_case outputs such as `ingest_bucket_name`.
+- Unless the assignment explicitly focuses on provisioning AWS infrastructure, do not assert CloudFormation stacks, resource properties, or IAM wiring. Concentrate on observable product behavior; assertions on infrastructure implementation details are too brittle.
+- When verifying CloudFormation stack metadata, only reference parameter or output logical IDs that start with a letter and contain only alphanumeric characters (`[A-Za-z0-9]+`). Use the camel-case names defined in the template and never assert snake_case or other invalid identifiers.
+- Never require invalid parameter or output names in assertions; if required data is missing, fail with remediation guidance instead of demanding impossible identifiers.
 - Expect the prompt to include existing automated tests; study them, avoid duplicating their coverage, and ensure any new tests you add can pass alongside the existing suites without contradiction.
 
 ---
