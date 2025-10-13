@@ -38,8 +38,11 @@ from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExe
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
+import os
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 
 
 def execute(
@@ -1383,6 +1386,7 @@ def build_docker_image(
     docker_build_cmd = common.strings([
         "docker",
         "build",
+        "--platform", "linux/arm64",
         "--build-arg", f"ERIEIRON_PUBLIC_COMMON_SHA={ERIEIRON_PUBLIC_COMMON_VERSION}",
         "-t", docker_image_tag,
         "-f", docker_file,
@@ -1410,6 +1414,7 @@ def build_docker_image(
 if you want to debug the docker container, run this 
 
 docker run --rm -it \
+  --platform linux/arm64 \
   -v {config.sandbox_root_dir}:/app \
   -w /app \
   {env_flags} \
@@ -1548,6 +1553,17 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     
     lambda_datas = get_stack_lambdas(config)
     
+    # Pre-pull the ARM64 Lambda Python image before building dependencies
+    subprocess.run(
+        [
+            "docker", "pull", "--platform", "linux/arm64",
+            "public.ecr.aws/lambda/python:3.11"
+        ],
+        check=True,
+        stdout=config.log_f,
+        stderr=subprocess.STDOUT
+    )
+    
     for lambda_data in lambda_datas:
         dependencies = lambda_data["dependencies"]
         
@@ -1577,23 +1593,32 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
                     subprocess.run(
                         [
                             "docker", "run", "--rm",
+                            "--platform", "linux/arm64",
                             "--entrypoint", "/bin/bash",
                             "-v", f"{temp_dir_path}:/var/task",
-                            "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-with-git",
-                            "-c", "pip install -r /var/task/requirements.txt -t /var/task"
+                            "public.ecr.aws/lambda/python:3.11",
+                            "-c",
+                            (
+                                "set -euxo pipefail && "
+                                "yum install -y git && "
+                                "pip install --no-cache-dir --only-binary=:all: "
+                                "-r /var/task/requirements.txt -t /var/task && "
+                                "ls -lh /var/task"
+                            ),
                         ],
                         stdout=config.log_f,
                         stderr=subprocess.STDOUT,
                         check=True
                     )
-                    asdf = 1
                 except Exception as e:
                     logging.exception(e)
                     raise e
             
             s3_key_name = aws_utils.sanitize_aws_name(common.safe_join([
                 config.task.id,
-                config.current_iteration.version_number
+                common.get_basename(code_file_path),
+                config.current_iteration.version_number,
+                time.time()
             ], "-"), 1000) + ".zip"
             
             logging.info(f"Packaging Lambda: {code_file_path} → {s3_key_name} with dependencies: {dependencies}")
@@ -1739,6 +1764,7 @@ def run_docker_command(
     
     cmd = [
         "docker", "run", "--rm",
+        "--platform", "linux/arm64",
         "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
         *build_env_flags(docker_env),

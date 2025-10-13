@@ -234,7 +234,7 @@ ITERATION_TAB_DEFINITIONS = [
     {
         "slug": "routing",
         "label": "Iteration",
-        "template": "iteration/tabs/routing.html",
+        "template": "iteration/tabs/overview.html",
         "availability_fn": views._iteration_tab_available_routing,
         "context_fn": views._iteration_tab_context_routing,
     },

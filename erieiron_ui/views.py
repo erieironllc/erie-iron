@@ -1191,7 +1191,11 @@ def _iteration_tab_available_routing(iteration: SelfDrivingTaskIteration, **_):
 
 
 def _iteration_tab_context_routing(iteration: SelfDrivingTaskIteration, **_):
-    return {}
+    active_llm_calls = iteration.llmrequest_set.filter(response__isnull=True).order_by("timestamp")
+    return {
+        "all_llm_requests": iteration.llmrequest_set.all().order_by("timestamp"),
+        "active_llm_calls": active_llm_calls
+    }
 
 
 def _iteration_tab_available_planning(iteration: SelfDrivingTaskIteration, **_):

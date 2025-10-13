@@ -1,0 +1,67 @@
+{% load erieiron_common_tags %}
+<h2 class="mb-3">
+    Iteration {{ iteration.version_number }}
+    {% if iteration.achieved_goal %}
+        <span class="badge bg-success ms-2">Goal Achieved</span>
+    {% elif iteration.evaluation_json %}
+        <span class="badge bg-danger ms-2">Failed</span>
+    {% else %}
+        <span class="badge bg-info ms-2">In Progress</span>
+    {% endif %}
+</h2>
+
+<hr>
+
+
+{% if iteration.evaluation_json %}
+    <p>{{ iteration.evaluation_json.summary|markdown }}</p>
+
+    {% if iteration.evaluation_json.error %}
+        <hr>
+        {% include "_error_stack.html" with error=iteration.evaluation_json.error %}
+    {% endif %}
+
+    {% if iteration.evaluation_json.test_errors %}
+        <hr>
+        {% include "_test_errors.html" with test_errors=iteration.evaluation_json.test_errors %}
+    {% endif %}
+{% else %}
+    <div>
+        <h5>Development Path:</h5>
+        {% if iteration_to_modify %}
+            <a href="{% url 'view_self_driver_iteration_tab' 'evaluation' iteration_to_modify.id %}">Iteration {{ iteration_to_modify.version_number }}</a>
+        {% endif %}
+        {% for llm_request in all_llm_requests %}
+            <i class="bi bi-arrow-right-short"></i>
+            <a href="{% url 'view_llm_request' llm_request.id %}">
+                {{ llm_request.title|title }}
+            </a>
+        {% endfor %}
+    </div>
+
+    <div class="pre mt-5" 
+         id="div_logs"
+         data-iteration-id="{{ iteration.id }}"
+         data-logs-url="{% url 'view_iteration_logs' iteration.id %}">
+        {{ iteration.log_content_coding|default_if_none:"" }}{{ iteration.log_content_execution|default_if_none:"" }}
+    </div>
+    <script>
+        (function () {
+            const logsEl = $('#div_logs');
+            if (!logsEl.length) {
+                return;
+            }
+
+            const node = logsEl[0];
+            if (node) {
+                node.scrollTop = node.scrollHeight;
+            }
+
+            if (window.iteration_view && typeof window.iteration_view.setupLogPolling === 'function') {
+                window.iteration_view.setupLogPolling();
+            }
+        })();
+    </script>
+
+{% endif %}
+
