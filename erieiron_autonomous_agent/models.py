@@ -16,7 +16,6 @@ from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
 
 import settings
-from botocore.exceptions import ClientError
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
@@ -652,160 +651,96 @@ class Task(BaseErieIronModel):
         from erieiron_common.aws_utils import sanitize_aws_name
         return sanitize_aws_name([str(self.id)], max_length=63).lower()
     
-    def get_domain_and_cert(self, aws_env: AwsEnv) -> tuple[str, str, str]:
+    def get_domain_and_cert(self, aws_env: AwsEnv) -> tuple[str, Optional[str], Optional[str]]:
         from erieiron_common import aws_utils, domain_manager
-        
+
         business = self.initiative.business
-        sub_domain = self.get_sub_domain()
-        
-        erie_iron_subdomain = f"{sub_domain}.erieironllc.com"
-        
-        preferred_domain = self.get_preferred_domain()
-        
-        computed_domain = None
-        if AwsEnv.PRODUCTION.eq(aws_env):
-            computed_domain = (business.domain or erie_iron_subdomain)
-        elif business.domain:
-            computed_domain = f"{sub_domain}.{business.domain}"
-        else:
-            computed_domain = erie_iron_subdomain
-        if computed_domain:
-            computed_domain = computed_domain.rstrip('.').lower()
-        
-        candidate_domains = []
-        for domain_candidate in [preferred_domain, computed_domain, erie_iron_subdomain.rstrip('.')]:
-            if domain_candidate and domain_candidate not in candidate_domains:
-                candidate_domains.append(domain_candidate)
-        if not candidate_domains:
-            candidate_domains.append(erie_iron_subdomain.rstrip('.'))
-        
+
+        try:
+            self_driving_task = self.selfdrivingtask
+        except SelfDrivingTask.DoesNotExist:  # pragma: no cover - defensive
+            self_driving_task = self.create_self_driving_env()
+
+        normalized_business_domain = (business.domain or "").rstrip('.').lower() or None
+        fallback_root_domain = "erieironllc.com"
+        fallback_root_domain = fallback_root_domain.rstrip('.').lower()
+
+        def _candidate_roots() -> list[str]:
+            roots: list[str] = []
+            if normalized_business_domain:
+                roots.append(normalized_business_domain)
+            if fallback_root_domain not in roots:
+                roots.append(fallback_root_domain)
+            return roots
+
+        def _build_domain(root: str) -> str:
+            if AwsEnv.PRODUCTION.eq(aws_env):
+                return root
+            stack_identifier = self_driving_task.get_cloudformation_key_prefix(aws_env)
+            if not stack_identifier:
+                return root
+            return f"{stack_identifier}.{root}"
+
         route53_client = aws_utils.client("route53")
         aws_region = aws_env.get_aws_region()
-        fallback_root_domain = "erieironllc.com"
-        allowed_zone_roots = {fallback_root_domain}
-        if business.domain:
-            allowed_zone_roots.add(business.domain.rstrip('.').lower())
-        hosted_zone_cache: dict[str, Optional[str]] = {}
 
-        def _zone_supports_domain(zone_id: Optional[str], domain_candidate: str) -> tuple[bool, Optional[str]]:
-            if not zone_id:
-                return False, None
-            try:
-                zone_resp = route53_client.get_hosted_zone(Id=zone_id) or {}
-            except ClientError as exc:
-                logging.warning(
-                    "Failed to inspect hosted zone %s for domain %s: %s",
-                    zone_id,
-                    domain_candidate,
-                    exc
-                )
-                return False, None
-            zone_name = (((zone_resp.get("HostedZone") or {})).get("Name") or "").rstrip('.').lower()
-            if not zone_name:
-                return False, None
-            normalized_candidate = domain_candidate.rstrip('.').lower()
-            if zone_name not in allowed_zone_roots:
-                logging.info(
-                    "Hosted zone %s is not an allowed root for %s. Allowed roots: %s",
-                    zone_name,
-                    normalized_candidate,
-                    sorted(allowed_zone_roots)
-                )
-                return False, zone_name
-            if not normalized_candidate.endswith(zone_name):
-                logging.info(
-                    "Hosted zone %s does not align with domain %s; skipping",
-                    zone_name,
-                    normalized_candidate
-                )
-                return False, zone_name
-            return True, zone_name
-
-        def _locate_allowed_zone(domain_candidate: str) -> tuple[Optional[str], Optional[str]]:
-            normalized_candidate = domain_candidate.rstrip('.').lower()
-            for root in allowed_zone_roots:
-                if not normalized_candidate.endswith(root):
-                    continue
-                if root not in hosted_zone_cache:
-                    hosted_zone_cache[root] = domain_manager.find_hosted_zone_id(route53_client, root)
-                zone_id = hosted_zone_cache.get(root)
-                if zone_id:
-                    return zone_id, root
-            return None, None
-
-        selected_domain = None
-        selected_hosted_zone_id = None
-        selected_certificate_arn = None
-        
         attempted_domain_management = False
-        
-        for domain_name in candidate_domains:
-            for attempt in range(2):
-                hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_name)
-                certificate_arn = domain_manager.find_certificate_arn(domain_name, aws_region)
+        selected_domain: Optional[str] = None
+        selected_hosted_zone_id: Optional[str] = None
+        selected_certificate_arn: Optional[str] = None
 
-                zone_valid, _ = _zone_supports_domain(hosted_zone_id, domain_name)
-                if not zone_valid:
-                    hosted_zone_id, _ = _locate_allowed_zone(domain_name)
+        candidate_roots = _candidate_roots()
 
-                if hosted_zone_id and certificate_arn:
-                    selected_domain = domain_name.rstrip('.')
-                    selected_hosted_zone_id = hosted_zone_id
-                    selected_certificate_arn = certificate_arn
-                    break
+        for root_domain in candidate_roots:
+            domain_candidate = _build_domain(root_domain).rstrip('.').lower()
+            selected_domain = domain_candidate
 
-                is_business_domain_candidate = business.domain and domain_name.endswith(business.domain.lower())
-                should_attempt_management = (
-                        attempt == 0
-                        and is_business_domain_candidate
-                        and business.needs_domain
-                        and not attempted_domain_management
-                )
-                
-                if should_attempt_management:
-                    attempted_domain_management = True
-                    try:
-                        domain_manager.manage_domain(business)
-                    except Exception:
-                        logging.exception("Failed to manage root domain for %s", business.service_token)
-                    continue
-                
-                if not hosted_zone_id:
-                    logging.info(
-                        "Unable to locate a Route53 hosted zone for domain '%s'. switching to fallback %s",
-                        domain_name,
-                        erie_iron_subdomain
-                    )
-                elif not certificate_arn:
-                    logging.info(
-                        "Unable to locate an ACM certificate for domain '%s'. switching to fallback %s",
-                        domain_name,
-                        erie_iron_subdomain
-                    )
-                break
-            
-            if selected_domain:
-                break
-        
-        if not selected_domain:
-            selected_domain = candidate_domains[-1].rstrip('.')
-            if not selected_hosted_zone_id:
-                selected_hosted_zone_id, _ = _locate_allowed_zone(selected_domain)
-            if not selected_certificate_arn:
-                selected_certificate_arn = domain_manager.find_certificate_arn(selected_domain, aws_region)
+            hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
+            certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
 
-        if selected_domain and not selected_hosted_zone_id:
-            logging.warning(
-                "No allowed Route53 hosted zone found for %s within %s",
-                selected_domain,
-                sorted(allowed_zone_roots)
+            needs_domain_management = (
+                root_domain == normalized_business_domain
+                and business.needs_domain
+                and not (hosted_zone_id and certificate_arn)
+                and not attempted_domain_management
             )
 
-        if selected_domain and self.get_preferred_domain() != selected_domain:
-            self.selfdrivingtask.domain = selected_domain
-            self.selfdrivingtask.save(update_fields=["domain"])
+            if needs_domain_management:
+                attempted_domain_management = True
+                try:
+                    domain_manager.manage_domain(business)
+                except Exception:
+                    logging.exception("Failed to manage root domain for %s", business.service_token)
+                else:
+                    hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
+                    certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
 
-        return selected_domain, selected_hosted_zone_id, selected_certificate_arn
+            if hosted_zone_id:
+                selected_hosted_zone_id = hosted_zone_id
+            if certificate_arn:
+                selected_certificate_arn = certificate_arn
+
+            if selected_hosted_zone_id and selected_certificate_arn:
+                break
+
+        if not selected_domain and candidate_roots:
+            selected_domain = _build_domain(candidate_roots[-1]).rstrip('.').lower()
+
+        if selected_domain:
+            if not selected_hosted_zone_id:
+                selected_hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, selected_domain)
+                if not selected_hosted_zone_id:
+                    logging.warning("No Route53 hosted zone found for %s", selected_domain)
+            if not selected_certificate_arn:
+                selected_certificate_arn = domain_manager.find_certificate_arn(selected_domain, aws_region)
+                if not selected_certificate_arn:
+                    logging.warning("No ACM certificate found for %s in %s", selected_domain, aws_region)
+
+            if self_driving_task.domain != selected_domain:
+                self_driving_task.domain = selected_domain
+                self_driving_task.save(update_fields=["domain"])
+
+        return selected_domain or "", selected_hosted_zone_id, selected_certificate_arn
     
     def get_preferred_domain(self):
         if self.selfdrivingtask:
@@ -1100,6 +1035,17 @@ class SelfDrivingTask(BaseErieIronModel):
         logging.info(
             "Rotated CloudFormation stack name for task %s: %s -> %s", self.id, current_name, new_name
         )
+
+        if self.task:
+            try:
+                # Refresh the cached domain so tombstoned stacks update subdomain labels.
+                self.task.get_domain_and_cert(environment)
+            except Exception:
+                logging.exception(
+                    "Failed to refresh task domain for %s after rotating stack to %s",
+                    self.id,
+                    new_name
+                )
         return new_name
 
     def _generate_unique_cloudformation_stack_name(

@@ -1267,10 +1267,7 @@ def create_task_subdomain(self_driving_task: SelfDrivingTask):
     
     try:
         desired_domain, _, _ = self_driving_task.task.get_domain_and_cert(AwsEnv.DEV)
-        desired_domain = self_driving_task.namespace_domain_with_stack_identifier(
-            desired_domain,
-            AwsEnv.DEV
-        )
+        desired_domain = (desired_domain or "").rstrip('.').lower()
     except Exception as exc:
         logging.exception("Failed to determine task domain for %s: %s", self_driving_task.task_id, exc)
         raise AgentBlocked(f"unable to determine a valid domain for task {self_driving_task.task_id}")
