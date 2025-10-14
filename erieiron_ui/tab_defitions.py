@@ -171,6 +171,13 @@ TASK_TAB_DEFINITIONS = [
         "context_fn": views._task_tab_context_iterations,
     },
     {
+        "slug": "codefiles",
+        "label": "Code Files",
+        "template": "task/tabs/codefiles.html",
+        "availability_fn": views._task_tab_available_codefiles,
+        "context_fn": views._task_tab_context_codefiles,
+    },
+    {
         "slug": "latest_iteration_logs",
         "label": "Logs",
         "template": "task/tabs/latest_iteration_logs.html",

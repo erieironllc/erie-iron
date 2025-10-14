@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SdaInitialAction
 
 
 class Command(BaseCommand):
@@ -12,34 +13,14 @@ class Command(BaseCommand):
         )
         
         parser.add_argument(
-            '--reset',
-            type=bool,
-            required=False
-        )
-        
-        parser.add_argument(
-            '--code_now',
-            type=bool,
-            required=False
-        )
-        
-        parser.add_argument(
-            '--plan_now',
-            type=bool,
-            required=False
-        )
-        
-        parser.add_argument(
-            '--deploy_now',
-            type=bool,
+            '--action',
+            type=str,
+            choices=[a.name for a in SdaInitialAction],
             required=False
         )
     
     def handle(self, *args, **options):
         self_driving_coder_agent.execute(
             options.get("task_id"),
-            options.get("reset"),
-            options.get("code_now"),
-            options.get("plan_now"),
-            options.get("deploy_now")
+            SdaInitialAction.valid_or(options.get("action"))
         )

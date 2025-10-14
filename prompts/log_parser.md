@@ -16,10 +16,15 @@ You must:
    - Lines containing strings such as `"is not authorized to perform"`, `"AccessDenied"`, or `"Permission denied"`.
    - Include 2–3 surrounding lines for context.
 
-4. Return the result as a **plain unstructured string** containing:
+4. **If any test failures are present, the output must always include the filename of the failing test(s).**
+   - The filename can usually be detected from lines like `"File ..."`, `"in test_..."`, or pytest output containing the test path.
+   - Preserve its context and show at least a few lines around it.
+
+5. Return the result as a **plain unstructured string** containing:
    - The stack trace,
    - Any CloudFormation failure section(s),
    - Any authorization-related errors,
+   - The filename(s) of failing test(s) if applicable,
    - Minimum surrounding context to make sense of the failure.
 
 Do not format the response as JSON or markdown. Just return the log snippet exactly as it appears.

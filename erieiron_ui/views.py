@@ -2,8 +2,9 @@ import difflib
 import json
 import logging
 import uuid
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, date
+from pathlib import Path
 from urllib.parse import quote
 
 from django.contrib import messages
@@ -17,7 +18,7 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
-from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile
+from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile, CodeVersion
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager
@@ -1038,7 +1039,7 @@ def _task_tab_context_latest_iteration_logs(task, business, self_driving_task) -
 def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
     if not self_driving_task:
         return {"iterations": []}
-    
+
     iterations = list(self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp"))
     if not iterations:
         return {"iterations": []}
@@ -1055,6 +1056,105 @@ def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
         iteration.total_price = llm_cost_total
     
     return {"iterations": iterations}
+
+
+def _task_tab_available_codefiles(task, business, self_driving_task) -> bool:
+    if not self_driving_task:
+        return False
+
+    return CodeVersion.objects.filter(
+        task_iteration__self_driving_task=self_driving_task
+    ).exists()
+
+
+def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
+    if not self_driving_task:
+        return {"code_file_tree": []}
+
+    code_versions = list(
+        CodeVersion.objects
+        .filter(task_iteration__self_driving_task=self_driving_task)
+        .select_related("code_file", "task_iteration")
+        .order_by("code_file__file_path", "task_iteration__timestamp", "id")
+    )
+
+    if not code_versions:
+        return {"code_file_tree": []}
+
+    file_entries: dict[str, dict] = {}
+    for code_version in code_versions:
+        code_file = code_version.code_file
+        iteration = code_version.task_iteration
+        if not code_file or not iteration:
+            continue
+
+        file_entry = file_entries.setdefault(
+            code_file.file_path,
+            {
+                "path": code_file.file_path,
+                "iterations": OrderedDict(),
+            }
+        )
+
+        file_entry["iterations"][iteration.id] = {
+            "id": iteration.id,
+            "version_number": iteration.version_number,
+            "timestamp": iteration.timestamp,
+        }
+
+    if not file_entries:
+        return {"code_file_tree": []}
+
+    tree_root = {
+        "name": "",
+        "path": "",
+        "type": "dir",
+        "children": OrderedDict(),
+    }
+
+    for file_path, entry in sorted(file_entries.items()):
+        parts = [part for part in Path(file_path).parts if part]
+        if not parts:
+            continue
+
+        node = tree_root
+        ancestry: list[str] = []
+        for directory in parts[:-1]:
+            ancestry.append(directory)
+            children = node.setdefault("children", OrderedDict())
+            if directory not in children:
+                children[directory] = {
+                    "name": directory,
+                    "path": "/".join(ancestry),
+                    "type": "dir",
+                    "children": OrderedDict(),
+                }
+            node = children[directory]
+
+        iterations = list(entry["iterations"].values())
+        iterations.sort(key=lambda item: item["version_number"])
+
+        node.setdefault("children", OrderedDict())[parts[-1]] = {
+            "name": parts[-1],
+            "path": file_path,
+            "type": "file",
+            "iterations": iterations,
+        }
+
+    def _ordered_children(node: dict) -> dict:
+        children = node.get("children", OrderedDict())
+        ordered_children = []
+        for child_name, child_node in sorted(
+            children.items(),
+            key=lambda item: (0 if item[1]["type"] == "dir" else 1, item[0])
+        ):
+            ordered_children.append(_ordered_children(child_node))
+        node["children"] = ordered_children
+        return node
+
+    ordered_tree = _ordered_children(tree_root)
+
+    return {"code_file_tree": ordered_tree["children"]}
 
 
 def _task_tab_available_executions(task, business, self_driving_task) -> bool:

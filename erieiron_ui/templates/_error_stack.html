@@ -1,7 +1,9 @@
         <div class="card my-4 copy-container">
             <div class="card-header d-flex justify-content-between">
                 <small class="text-muted">
-                    {{ error.summary }}
+                    {% if error.file_name %}
+                    {{ error.file_name }}:<br>
+                    {% endif %}{{ error.summary }}
                 </small>
                 {% include "_copy_clipboard_btn.html" with target_el=".div_error_logs" %}
             </div>

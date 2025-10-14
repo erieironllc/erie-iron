@@ -37,12 +37,16 @@
             "type": "string",
             "description": "Short, planner-ready title of the test failure or error."
           },
+          "file_name": {
+            "type": "string",
+            "description": "the path of the failing test's file, verified for accuracy"
+          },
           "logs": {
             "type": "string",
             "description": "Full relevant log excerpt for the test failure or error."
           }
         },
-        "required": ["summary", "logs"],
+        "required": ["summary", "logs", "file_name"],
         "additionalProperties": false
       }
     }

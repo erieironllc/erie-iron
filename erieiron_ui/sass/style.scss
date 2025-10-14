@@ -11,3 +11,38 @@
 @import "erie_task_card";
 
 
+.code-file-tree {
+  font-size: 0.95rem;
+}
+
+.code-file-tree__list {
+  list-style: none;
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.code-file-tree__item {
+  margin-bottom: 0.5rem;
+}
+
+.code-file-tree__summary {
+  cursor: pointer;
+}
+
+.code-file-tree__file {
+  font-weight: 600;
+}
+
+.code-file-tree__iterations {
+  list-style: none;
+  margin: 0.25rem 0 0 0.75rem;
+  padding: 0;
+}
+
+.code-file-tree__iteration {
+  margin-bottom: 0.25rem;
+}
+
+.code-file-tree__iteration a {
+  margin-right: 0.5rem;
+}

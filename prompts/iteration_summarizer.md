@@ -44,17 +44,15 @@ You will be provided
 
 2. **Write an Evaluation Summary**  
    - field name: `summary`  
-   - Provide a clear, multi-sentence synthesis of what the iteration’s logs reveal.  
-   - Explain the overall execution outcome and the general scope or pattern of errors.  
-   - Describe *what the errors were* with enough detail and specificity that future iterations can avoid repeating them. Include file names, function names, and error types if present in the logs.
-   - If the iteration failed or encountered issues, describe the first significant error in plain terms and identify its likely cause.  If multple CloudFormation failures are found, include **all** cloudformation failure events. When both runtime or infrastructure errors and test failures occur, acknowledge both categories in the summary.
-   - When CloudFormation deployment fails, explicitly state that the create/update failed and enumerate the failure events. Avoid anchoring the summary on specific `StackStatus` values.
-   - You may include brief reasoning about possible systemic or architectural contributors to the failure.  
-   - The goal is to give downstream agents an immediate, high-level understanding of what happened and what kind of problem they’re dealing with.  
-   - If the iteration didn’t reach code execution (for example, due to deployment or infrastructure failure), state that directly. Use phrasing such as:  
-     “Execution was blocked by infrastructure failure. No behavioral feedback on application code is available for this iteration.”  
-   - Avoid speculation beyond the evidence in the logs, but make the summary actionable and diagnostic in tone.
-   - Format the `summary` in **Markdown** for human readability, using bullet points, **bolding**, and `code` blocks where appropriate. Ensure it is structured for both **human comprehension** and **LLM parsing**, maintaining clarity and semantic cues that downstream agents can reliably interpret.
+   - Summarize what the iteration logs show in clear, compact terms.  
+   - **Purpose:** Give downstream LLMs an immediate, actionable understanding of what happened.  
+   - **Include:**  
+     - **Outcome:** Did execution or tests succeed or fail?  
+     - **Cause:** Primary error(s) and affected components (file, function, service).  
+     - **Scope:** If both infra/runtime and test errors exist, mention both.  
+     - **CloudFormation:** If deployment failed, say so and list all failure events.  Do not mention if deploy succeeded.  Avoid anchoring summary on specific StackStatus values - only matters if deploy failed or succeeded.
+     - **Blocked Runs:** If execution never started, state that directly (e.g., “Execution blocked by infrastructure failure.”).  
+   - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers. Avoid verbosity or speculation; prefer clarity and brevity.
 
 3. ### Extract Errors  
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multple CloudFormation failures are found, include **all** cloudformation failure events
@@ -71,6 +69,7 @@ You will be provided
    - field name: `test_errors`  
    - This must be an array of objects, each with:  
      - `summary`: Short, planner-ready title (test name, error type)  
+     - `file_name`: the path of the failing test's file, verified for accuracy
      - `logs`: Full relevant log excerpt for that test failure (with stack trace if present).  
 
    **Important:**  
@@ -93,6 +92,8 @@ Specifically:
 
 This ensures that the summarizer not only reports *what* failed, but also captures *why* it failed.
 
+### DO NOT INVENT
+- do not infer or invent filenames or file paths. Only report filenames that appear verbatim in the provided logs (matching a stack-trace File \"...\" line). If none are present, set filename to null, mark provenance: 'none', and include the exact log excerpt used."
 
 ---
 
@@ -109,10 +110,12 @@ This ensures that the summarizer not only reports *what* failed, but also captur
   "test_errors": [
     {
       "summary": "AssertionError in test_process_email",
+      "file_name": "/app/core/tests/test_email.py",
       "logs": "======================================================================\nFAIL: test_process_email (tests.test_email_processor)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/app/tests/test_email_processor.py\", line 45, in test_process_email\n    self.assertEqual(result, expected)\nAssertionError: 'foo' != 'bar'"
     },
     {
       "summary": "ValueError in test_parse_metadata",
+      "file_name": "/app/core/tests/test_email.py",
       "logs": "======================================================================\nERROR: test_parse_metadata (tests.test_metadata_parser)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/app/tests/test_metadata_parser.py\", line 22, in test_parse_metadata\n    parse_metadata(None)\nValueError: Metadata input cannot be None"
     }
   ]

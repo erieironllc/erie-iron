@@ -653,18 +653,18 @@ class Task(BaseErieIronModel):
     
     def get_domain_and_cert(self, aws_env: AwsEnv) -> tuple[str, Optional[str], Optional[str]]:
         from erieiron_common import aws_utils, domain_manager
-
+        
         business = self.initiative.business
-
+        
         try:
             self_driving_task = self.selfdrivingtask
         except SelfDrivingTask.DoesNotExist:  # pragma: no cover - defensive
             self_driving_task = self.create_self_driving_env()
-
+        
         normalized_business_domain = (business.domain or "").rstrip('.').lower() or None
         fallback_root_domain = "erieironllc.com"
         fallback_root_domain = fallback_root_domain.rstrip('.').lower()
-
+        
         def _candidate_roots() -> list[str]:
             roots: list[str] = []
             if normalized_business_domain:
@@ -672,7 +672,7 @@ class Task(BaseErieIronModel):
             if fallback_root_domain not in roots:
                 roots.append(fallback_root_domain)
             return roots
-
+        
         def _build_domain(root: str) -> str:
             if AwsEnv.PRODUCTION.eq(aws_env):
                 return root
@@ -680,36 +680,36 @@ class Task(BaseErieIronModel):
             if not stack_identifier:
                 return root
             return f"{stack_identifier}.{root}"
-
+        
         route53_client = aws_utils.client("route53")
         aws_region = aws_env.get_aws_region()
-
+        
         attempted_domain_management = False
         selected_domain: Optional[str] = None
         selected_hosted_zone_id: Optional[str] = None
         selected_certificate_arn: Optional[str] = None
-
+        
         candidate_roots = _candidate_roots()
-
+        
         for root_domain in candidate_roots:
             domain_candidate = _build_domain(root_domain).rstrip('.').lower()
             selected_domain = domain_candidate
-
+            
             stored_zone_id = getattr(business, "route53_hosted_zone_id", None)
             stored_domain = (business.domain or "").rstrip('.').lower()
-            if stored_zone_id and stored_domain == domain_candidate:
+            if stored_zone_id and stored_domain == root_domain:
                 hosted_zone_id = stored_zone_id
             else:
                 hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
             certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
-
+            
             needs_domain_management = (
-                root_domain == normalized_business_domain
-                and business.needs_domain
-                and not (hosted_zone_id and certificate_arn)
-                and not attempted_domain_management
+                    root_domain == normalized_business_domain
+                    and business.needs_domain
+                    and not (hosted_zone_id and certificate_arn)
+                    and not attempted_domain_management
             )
-
+            
             if needs_domain_management:
                 attempted_domain_management = True
                 try:
@@ -719,18 +719,18 @@ class Task(BaseErieIronModel):
                 else:
                     hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
                     certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
-
+            
             if hosted_zone_id:
                 selected_hosted_zone_id = hosted_zone_id
             if certificate_arn:
                 selected_certificate_arn = certificate_arn
-
+            
             if selected_hosted_zone_id and selected_certificate_arn:
                 break
-
+        
         if not selected_domain and candidate_roots:
             selected_domain = _build_domain(candidate_roots[-1]).rstrip('.').lower()
-
+        
         if selected_domain:
             if not selected_hosted_zone_id:
                 selected_hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, selected_domain)
@@ -740,11 +740,11 @@ class Task(BaseErieIronModel):
                 selected_certificate_arn = domain_manager.find_certificate_arn(selected_domain, aws_region)
                 if not selected_certificate_arn:
                     logging.warning("No ACM certificate found for %s in %s", selected_domain, aws_region)
-
+            
             if self_driving_task.domain != selected_domain:
                 self_driving_task.domain = selected_domain
                 self_driving_task.save(update_fields=["domain"])
-
+            
             if selected_hosted_zone_id:
                 current_zone_id = getattr(business, "route53_hosted_zone_id", None)
                 if current_zone_id != selected_hosted_zone_id:
@@ -754,7 +754,7 @@ class Task(BaseErieIronModel):
                             business.save(update_fields=["route53_hosted_zone_id"])
                         except TypeError:
                             business.save()
-
+        
         return selected_domain or "", selected_hosted_zone_id, selected_certificate_arn
     
     def get_preferred_domain(self):
@@ -918,7 +918,7 @@ class SelfDrivingTask(BaseErieIronModel):
         return current_iteration, most_recent_iteration, iteration_to_modify
     
     DEV_STACK_TOKEN_LENGTH = 6
-
+    
     def _generate_dev_stack_token(self) -> str:
         """Generate a stack token whose leading character is a letter."""
         for _ in range(32):
@@ -927,20 +927,20 @@ class SelfDrivingTask(BaseErieIronModel):
                 return token
         fallback_suffix = common.random_string(self.DEV_STACK_TOKEN_LENGTH - 1).lower()
         return f"a{fallback_suffix}"
-
+    
     def get_require_tests(self) -> bool:
         return self.task and self.task.requires_test
     
     def get_cloudformation_key_prefix(self, environment: AwsEnv):
         from erieiron_common.aws_utils import sanitize_aws_name
         task_fragment = self._task_identifier_fragment()
-
+        
         if AwsEnv.PRODUCTION.eq(environment):
             return sanitize_aws_name(
                 [self.business.service_token, task_fragment],
                 max_length=40
             )
-
+        
         stack_name = self.get_cloudformation_stack_name(environment)
         token = self._extract_dev_stack_token(stack_name)
         if token:
@@ -981,14 +981,14 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_cloudformation_stack_name(self, environment: AwsEnv):
         if AwsEnv.PRODUCTION.eq(environment):
             return self._build_production_stack_name()
-
+        
         if not AwsEnv.DEV.eq(environment):
             raise ValueError(f"Unsupported AWS environment: {environment}")
-
+        
         stack_name = self.cloudformation_stack_name
         if stack_name:
             return stack_name
-
+        
         new_name = self._generate_unique_cloudformation_stack_name(environment)
         with transaction.atomic():
             SelfDrivingTask.objects.filter(id=self.id).update(
@@ -996,10 +996,10 @@ class SelfDrivingTask(BaseErieIronModel):
             )
         self.refresh_from_db(fields=["cloudformation_stack_name"])
         return new_name
-
+    
     def get_sandbox(self) -> Path:
         return Path(self.sandbox_path)
-
+    
     def rotate_cloudformation_stack_name(
             self,
             environment: AwsEnv,
@@ -1010,7 +1010,7 @@ class SelfDrivingTask(BaseErieIronModel):
         """Allocate a fresh CloudFormation stack name and tombstone the old one."""
         if not AwsEnv.DEV.eq(environment):
             raise ValueError("Stack name rotation is only supported for DEV environment")
-
+        
         current_name = self.cloudformation_stack_name
         if current_name:
             try:
@@ -1037,21 +1037,21 @@ class SelfDrivingTask(BaseErieIronModel):
                     }
                 }
             )
-
+        
         exclude = {current_name} if current_name else set()
         new_name = self._generate_unique_cloudformation_stack_name(environment, exclude=exclude)
-
+        
         with transaction.atomic():
             SelfDrivingTask.objects.filter(id=self.id).update(
                 cloudformation_stack_name=new_name,
                 cloudformation_stack_id=None
             )
         self.refresh_from_db(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
-
+        
         logging.info(
             "Rotated CloudFormation stack name for task %s: %s -> %s", self.id, current_name, new_name
         )
-
+        
         try:
             # Refresh cached identifiers so dependent systems observe the rotation immediately.
             self.get_cloudformation_key_prefix(environment)
@@ -1061,7 +1061,7 @@ class SelfDrivingTask(BaseErieIronModel):
                 self.id,
                 new_name
             )
-
+        
         if self.task:
             try:
                 # Refresh the cached domain so tombstoned stacks update subdomain labels.
@@ -1073,7 +1073,7 @@ class SelfDrivingTask(BaseErieIronModel):
                     new_name
                 )
         return new_name
-
+    
     def _generate_unique_cloudformation_stack_name(
             self,
             environment: AwsEnv,
@@ -1092,11 +1092,11 @@ class SelfDrivingTask(BaseErieIronModel):
             ).values_list("name", flat=True)
         )
         exclude.update(filter(None, tombstoned_names))
-
+        
         # Always avoid the current persisted name
         if self.cloudformation_stack_name:
             exclude.add(self.cloudformation_stack_name)
-
+        
         for attempt in range(20):
             token = self._generate_dev_stack_token()
             candidate = self._compose_dev_stack_name(token, base_components)
@@ -1107,7 +1107,7 @@ class SelfDrivingTask(BaseErieIronModel):
         token = self._generate_dev_stack_token()
         fallback_suffix = f"fallback-{int(common.get_now().timestamp())}"
         return self._compose_dev_stack_name(token, [*base_components, fallback_suffix])
-
+    
     def _base_cloudformation_stack_components(self, environment: AwsEnv) -> list[str]:
         parts = [self.business.service_token]
         if AwsEnv.PRODUCTION.eq(environment):
@@ -1125,18 +1125,18 @@ class SelfDrivingTask(BaseErieIronModel):
                 )
             )
         return parts
-
+    
     def _build_production_stack_name(self) -> str:
         from erieiron_common.aws_utils import sanitize_aws_name
         return sanitize_aws_name(
             self._base_cloudformation_stack_components(AwsEnv.PRODUCTION),
             max_length=128
         )
-
+    
     def _compose_dev_stack_name(self, token: str, base_components: list[str]) -> str:
         from erieiron_common.aws_utils import sanitize_aws_name
         return sanitize_aws_name([token, *base_components], max_length=128)
-
+    
     def _extract_dev_stack_token(self, stack_name: str) -> str | None:
         if not stack_name:
             return None
@@ -1144,7 +1144,7 @@ class SelfDrivingTask(BaseErieIronModel):
         if len(token) == self.DEV_STACK_TOKEN_LENGTH and token.isalnum():
             return token
         return None
-
+    
     def _task_identifier_fragment(self) -> str:
         task_id = getattr(self, "task_id", None)
         if task_id is not None:
@@ -1171,6 +1171,14 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     slowest_cloudformation_resources = models.JSONField(null=True)
     routing_json = models.JSONField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
+    
+    def get_all_log_content(self):
+        return "\n\n".join(common.filter_none([
+            self.log_content_init,
+            self.log_content_coding,
+            self.log_content_execution,
+            self.log_content_evaluation
+        ]))
     
     def get_latest_execution(self) -> TaskExecution:
         te = self.taskexecution_set.last()
@@ -1528,7 +1536,7 @@ class CodeVersion(BaseErieIronModel):
         
         if not previous_version:
             return False
-    
+        
         return common.is_not_empty(self.get_diff())
     
     def get_diff(self) -> str:

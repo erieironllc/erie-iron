@@ -26,19 +26,18 @@ from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, CloudFormationStackDeleting, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, CloudFormationStackDeleting, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative, LlmRequest
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager
+from erieiron_common import common, aws_utils, domain_manager, cloudformation_log_reader, cloudformation_utils
 from erieiron_common.aws_utils import sanitize_aws_name, STACK_STATUS_NO_STACK
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-import os
 
 sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -47,18 +46,11 @@ os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 
 def execute(
         task_id: str,
-        reset=False,
-        code_now=False,
-        plan_now=False,
-        deploy_now=False
-
+        one_off_action: SdaInitialAction = None
 ):
-    self_driving_task = bootstrap_selfdriving_agent(
-        task_id,
-        reset
-    )
+    self_driving_task = bootstrap_selfdriving_agent(task_id)
     
-    if deploy_now or plan_now or code_now:
+    if one_off_action:
         config = SelfDriverConfig(self_driving_task)
         config.init_log()
         
@@ -66,24 +58,34 @@ def execute(
             SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
         )
         
-        if not deploy_now:
-            config.current_iteration.codeversion_set.all().delete()
-            if not plan_now and config.current_iteration.planning_json:
-                codex_exec(
-                    config,
-                    config.current_iteration.planning_json
-                )
-            else:
-                plan_and_implement_code_changes(
-                    config
-                )
+        if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
+            config.current_iteration.log_content_coding = None
+            config.current_iteration.save()
         
-        build_deploy_exec_iteration(
-            SelfDriverConfig(self_driving_task)
-        )
+        if not SdaInitialAction.EVAL.eq(one_off_action):
+            config.current_iteration.log_content_execution = None
+            config.current_iteration.save()
+        
+        if SdaInitialAction.CODE.eq(one_off_action):
+            codex_exec(
+                config,
+                config.current_iteration.planning_json
+            )
+        elif SdaInitialAction.PLAN.eq(one_off_action):
+            plan_and_implement_code_changes(
+                config
+            )
+        
+        if not SdaInitialAction.EVAL.eq(one_off_action):
+            build_deploy_exec_iteration(
+                SelfDriverConfig(self_driving_task)
+            )
+        
+        evaluate_iteration(config)
+        
         return
     
-    for i in range(20):
+    for i in range(10):
         config = SelfDriverConfig(self_driving_task)
         
         try:
@@ -111,16 +113,12 @@ def execute(
                     fields=["log_content_execution", "evaluation_json"]
                 )
             else:
-                try:
-                    config.set_iteration(self_driving_task.iterate())
-                    
-                    if config.iteration_to_modify and i > 0:
-                        config.iteration_to_modify.write_to_disk()
-                    
-                    plan_and_implement_code_changes(config)
+                config.set_iteration(self_driving_task.iterate())
                 
-                finally:
-                    config.reset_log()
+                if config.iteration_to_modify and i > 0:
+                    config.iteration_to_modify.write_to_disk()
+                
+                plan_and_implement_code_changes(config)
             
             execution_exception = None
             try:
@@ -277,6 +275,8 @@ def handle_goal_achieved(config):
 
 
 def do_coding(config, planning_data):
+    config.current_iteration.codeversion_set.all().delete()
+    
     cr_exception = None
     failed_code_reviews = []
     for review_iteration_idx in range(5):
@@ -331,6 +331,8 @@ def on_reset_task_test(task_id):
 
 
 def codex_exec(config: SelfDriverConfig, planning_data: dict):
+    config.current_iteration.codeversion_set.all().delete()
+    
     """Execute the plan using the Codex CLI pipeline."""
     config.log("Starting Codex CLI planning/execution pipeline")
     
@@ -670,7 +672,7 @@ def get_guidance_msg(config: SelfDriverConfig):
 
 def validate_infrastructure(config, normalized_changed):
     if "infrastructure.yaml" not in normalized_changed:
-        return
+        return None
     
     infrastructure_path = config.sandbox_root_dir / "infrastructure.yaml"
     validation_error = None
@@ -1205,19 +1207,14 @@ def validate_plan(config: SelfDriverConfig, planning_data):
     return planning_data
 
 
-def bootstrap_selfdriving_agent(task_id, reset: False) -> SelfDrivingTask:
+def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
     
     Task.objects.filter(id=task.id).update(
         status=TaskStatus.IN_PROGRESS
     )
     
-    self_driving_task: SelfDrivingTask = task.create_self_driving_env(
-        reset_code_dir=reset
-    )
-    
-    if reset:
-        self_driving_task.selfdrivingtaskiteration_set.all().delete()
+    self_driving_task: SelfDrivingTask = task.create_self_driving_env()
     
     config = SelfDriverConfig(self_driving_task)
     is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
@@ -1810,6 +1807,9 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
 
 
 def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
+    config.current_iteration.evaluation_json = None
+    config.current_iteration.save()
+    
     start_epoch = int(time.time())
     try:
         docker_env = build_env(config)
@@ -1843,8 +1843,8 @@ def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
         if config.self_driving_task.cloudformation_stack_name:
             local_logs = config.get_log_content() or ""
             
-            time.sleep(30)  # pause to let logging catch up
-            failure_details = aws_utils.read_cloudformation_failures(
+            # time.sleep(30)  # pause to let logging catch up
+            failure_details = cloudformation_log_reader.read_cloudformation_failures(
                 config.aws_env.get_aws_region(),
                 config.self_driving_task.cloudformation_stack_name,
                 start_epoch,
@@ -2178,7 +2178,7 @@ def assert_tests_green(config: SelfDriverConfig):
 
 def evaluate_iteration(
         config: SelfDriverConfig,
-        exception: Exception
+        exception: Exception = None
 ):
     config.set_phase(SdaPhase.EVALUATE)
     
@@ -2188,9 +2188,9 @@ def evaluate_iteration(
         raise exception
     
     if isinstance(exception, NeedPlan):
-        return
+        return None
     
-    log_output = config.log_path.read_text()
+    log_output = config.current_iteration.get_all_log_content() or config.log_path.read_text()
     
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
@@ -2275,6 +2275,7 @@ def evaluate_iteration(
             # Attach to test_errors array
             test_error_entry = {
                 "summary": "ExecutionException during test run",
+                "file_name": "not applicable",
                 "logs": str(exception)
             }
             existing = eval_data.get("test_errors") or []
@@ -2404,13 +2405,13 @@ def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
         
         try:
             status = matching_stack["StackStatus"]
-            need_rotate = (
-                # status.endswith("FAILED")
-                # or ("ROLLBACK" in status or status.startswith("DELETE")) and not status.endswith("COMPLETE")
-                    status.startswith("DELETE") and not status.endswith("COMPLETE")
-            )
             
-            if need_rotate:
+            if status not in [
+                "CREATE_COMPLETE",
+                "UPDATE_COMPLETE",
+                "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
+                "DELETE_COMPLETE"
+            ]:
                 try:
                     new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
                         config.aws_env,
@@ -2424,10 +2425,10 @@ def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
                     raise CloudFormationException(
                         f"Stack {stack_name} reported status {status} and cannot be rotated"
                     ) from exc
-
+                
                 config.refresh_domain_metadata()
                 sync_stack_identity(config, docker_env)
-
+                
                 config.log(
                     f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} before deployment.\n"
                 )
@@ -2525,7 +2526,7 @@ def cloudformation_wait(
                     raise CloudFormationException(
                         f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
                     ) from exc
-
+                
                 config.refresh_domain_metadata()
                 config.log(
                     f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name} and exiting wait."
@@ -2547,7 +2548,7 @@ def cloudformation_wait(
                     raise CloudFormationException(
                         f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
                     ) from exc
-
+                
                 config.refresh_domain_metadata()
                 config.log(
                     f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
@@ -2596,313 +2597,106 @@ def extract_cloudformation_params(cfn_file: Path):
     return required_params, param_metadata
 
 
-def _load_cloudformation_template(template_body: str) -> dict:
-    class _CloudFormationLoader(yaml.SafeLoader):
-        """Lightweight loader that treats CloudFormation intrinsics as plain mappings."""
-    
-    def _construct_cfn_tag(loader, tag_suffix, node):
-        if isinstance(node, yaml.ScalarNode):
-            value = loader.construct_scalar(node)
-        elif isinstance(node, yaml.SequenceNode):
-            value = loader.construct_sequence(node)
-        elif isinstance(node, yaml.MappingNode):
-            value = loader.construct_mapping(node)
-        else:
-            value = None
-        return {tag_suffix: value}
-    
-    _CloudFormationLoader.add_multi_constructor('!', _construct_cfn_tag)
-    
-    try:
-        loaded = yaml.load(template_body, Loader=_CloudFormationLoader)
-    except yaml.YAMLError as exc:
-        logging.warning("Unable to parse CloudFormation template for Route53 guardrail validation: %s", exc)
-        return {}
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        logging.warning("Unexpected error while parsing CloudFormation template for guardrail validation: %s", exc)
-        return {}
-    
-    if isinstance(loaded, dict):
-        return loaded
-    return {}
-
-
-def _flatten_cfn_expr(expr) -> str | None:
-    if isinstance(expr, str):
-        return expr
-    if isinstance(expr, (int, float)):
-        return str(expr)
-    if isinstance(expr, dict) and len(expr) == 1:
-        tag, value = next(iter(expr.items()))
-        normalized_tag = tag.replace("Fn::", "")
-        if normalized_tag == "Ref" and isinstance(value, str):
-            return f"${{{value}}}"
-        if normalized_tag == "Sub":
-            if isinstance(value, str):
-                return value
-            if isinstance(value, list) and value:
-                return _flatten_cfn_expr(value[0])
-        if normalized_tag == "Join" and isinstance(value, list) and len(value) == 2:
-            delimiter = _flatten_cfn_expr(value[0]) or ""
-            sequence = []
-            for item in value[1] or []:
-                flattened = _flatten_cfn_expr(item)
-                if flattened is None:
-                    return None
-                sequence.append(flattened)
-            return delimiter.join(sequence)
-        if normalized_tag == "GetAtt":
-            if isinstance(value, list):
-                parts = []
-                for part in value:
-                    flattened = _flatten_cfn_expr(part)
-                    parts.append(flattened if flattened is not None else str(part))
-                return ".".join(parts)
-            if isinstance(value, str):
-                return value
-        return None
-    if isinstance(expr, list):
-        pieces = []
-        for item in expr:
-            flattened = _flatten_cfn_expr(item)
-            if flattened is None:
-                return None
-            pieces.append(flattened)
-        return "".join(pieces)
-    return None
-
-
-def _summarize_cfn_expr(expr) -> str:
-    flattened = _flatten_cfn_expr(expr)
-    if flattened is not None:
-        return flattened
-    if isinstance(expr, (dict, list)):
-        try:
-            return json.dumps(expr, default=str)
-        except TypeError:
-            return str(expr)
-    return str(expr)
-
-
-def _summarize_record_target(record_props: dict) -> str:
-    alias_target = record_props.get("AliasTarget")
-    if isinstance(alias_target, dict):
-        dns_name = _summarize_cfn_expr(alias_target.get("DNSName"))
-        hosted_zone = _summarize_cfn_expr(alias_target.get("HostedZoneId"))
-        return f"AliasTarget(DNSName={dns_name}, HostedZoneId={hosted_zone})"
-    
-    resource_records = record_props.get("ResourceRecords")
-    if isinstance(resource_records, list) and resource_records:
-        values = [
-            _summarize_cfn_expr(record)
-            for record in resource_records
-        ]
-        return f"ResourceRecords[{', '.join(values)}]"
-    
-    return "no target"
-
-
-def _is_domainname_apex(name_expr) -> bool:
-    flattened = _flatten_cfn_expr(name_expr)
-    if not flattened:
-        return False
-    
-    normalized = flattened.strip()
-    apex_candidates = {"${DomainName}", "${DomainName}.", "DomainName", "DomainName."}
-    return normalized in apex_candidates
-
-
-def _inspect_route53_record(identifier: str, record_props: dict, issues: list[str], alias_records: list[tuple[str, str, dict]]) -> bool:
-    if not isinstance(record_props, dict):
-        return False
-    
-    name_expr = record_props.get("Name")
-    if not _is_domainname_apex(name_expr):
-        return False
-    
-    record_type = str(record_props.get("Type", "")).upper()
-    target_summary = _summarize_record_target(record_props)
-    
-    if record_type == "CNAME":
-        issues.append(
-            f"{identifier} creates a CNAME for {_summarize_cfn_expr(name_expr)} ({target_summary})."
-        )
-        return True
-    
-    if record_type in {"A", "AAAA"}:
-        alias_target = record_props.get("AliasTarget")
-        if not isinstance(alias_target, dict):
-            issues.append(
-                f"{identifier} sets {record_type} for {_summarize_cfn_expr(name_expr)} without an AliasTarget ({target_summary})."
-            )
-            return True
-        
-        alias_records.append((identifier, record_type, alias_target))
-        
-        dns_name = _summarize_cfn_expr(alias_target.get("DNSName"))
-        hosted_zone = _summarize_cfn_expr(alias_target.get("HostedZoneId"))
-        
-        if dns_name and "DomainName" in dns_name:
-            issues.append(
-                f"{identifier} alias DNSName resolves to {dns_name}; point it at the Application Load Balancer DNS attribute instead."
-            )
-        
-        if hosted_zone and hosted_zone in {"${DomainHostedZoneId}", "DomainHostedZoneId"}:
-            issues.append(
-                f"{identifier} alias HostedZoneId is {hosted_zone}; use the ALB CanonicalHostedZoneID attribute."
-            )
-        
-        return True
-    
-    # Other record types (e.g., MX, TXT) for DomainName are allowed and do not require alias enforcement.
-    return True
-
-
-def _enforce_route53_alias_guardrail(template_body: str) -> None:
-    template = _load_cloudformation_template(template_body)
-    resources = template.get("Resources") if isinstance(template, dict) else None
-    if not isinstance(resources, dict) or not resources:
-        return
-    
-    issues: list[str] = []
-    alias_records: list[tuple[str, str, dict]] = []
-    domainname_records_present = False
-    
-    for logical_id, resource in resources.items():
-        if not isinstance(resource, dict):
-            continue
-        
-        resource_type = resource.get("Type")
-        properties = resource.get("Properties") or {}
-        
-        if resource_type == "AWS::Route53::RecordSet":
-            domainname_records_present |= _inspect_route53_record(logical_id, properties, issues, alias_records)
-        elif resource_type == "AWS::Route53::RecordSetGroup":
-            record_sets = properties.get("RecordSets") or []
-            if isinstance(record_sets, list):
-                for idx, record in enumerate(record_sets):
-                    identifier = f"{logical_id}[{idx}]"
-                    domainname_records_present |= _inspect_route53_record(identifier, record, issues, alias_records)
-    
-    if domainname_records_present and not any(record_type == "A" for _, record_type, _ in alias_records):
-        issues.append("No `Type: A` alias record for `!Ref DomainName` was found. Create an AliasTarget entry pointing to the Application Load Balancer.")
-    
-    if issues:
-        message_lines = [
-            "Route53 guardrail violation: `DomainName` must use alias A/AAAA records that target the Application Load Balancer.",
-            "Detected issues:",
-            *[f" - {issue}" for issue in issues],
-            "Update `infrastructure.yaml` so the Route53 records use `Type: A` (and optionally `AAAA`) with `AliasTarget.DNSName` and `AliasTarget.HostedZoneId` wired to the ALB attributes."
-        ]
-        raise BadPlan("\n".join(message_lines))
-
-
-def _record_is_ses_mx(record_props: dict) -> bool:
-    if not isinstance(record_props, dict):
-        return False
-    
-    record_type = str(record_props.get("Type", "")).upper()
-    if record_type != "MX":
-        return False
-    
-    name_expr = record_props.get("Name")
-    flattened_name = _flatten_cfn_expr(name_expr) or ""
-    normalized_name = flattened_name.rstrip(".")
-    if normalized_name not in {"${DomainName}", "DomainName"}:
-        return False
-    
-    resource_records = record_props.get("ResourceRecords")
-    if not isinstance(resource_records, list):
-        return False
-    
-    for record in resource_records:
-        flattened_record = _flatten_cfn_expr(record) or ""
-        if "inbound-smtp." in flattened_record and ".amazonaws.com" in flattened_record:
-            return True
-    
-    return False
-
-
-def _template_defines_ses_mx(template_body: str) -> bool:
-    template = _load_cloudformation_template(template_body)
-    resources = template.get("Resources") if isinstance(template, dict) else None
-    if not isinstance(resources, dict):
-        return False
-    
-    for resource in resources.values():
-        if not isinstance(resource, dict):
-            continue
-        
-        resource_type = resource.get("Type")
-        properties = resource.get("Properties") or {}
-        
-        if resource_type == "AWS::Route53::RecordSet" and _record_is_ses_mx(properties):
-            return True
-        
-        if resource_type == "AWS::Route53::RecordSetGroup":
-            record_sets = properties.get("RecordSets") or []
-            if isinstance(record_sets, list):
-                for record in record_sets:
-                    if _record_is_ses_mx(record):
-                        return True
-    
-    return False
-
-
 def _wait_for_ses_dkim_success(
         config: SelfDriverConfig,
         domain_name: str,
         poll_interval_seconds: int = 30,
         max_wait_minutes: int = 15
 ) -> None:
-    poll_interval_seconds = max(poll_interval_seconds, 5)
-    region = config.aws_env.get_aws_region()
-    ses_client = boto3.client("sesv2", region_name=region)
-    
+    """
+    Wait for SES DKIM verification to reach SUCCESS for the given domain.
+
+    This is robust to:
+    - Region mismatches (defaults to us-west-2 if the config has no region)
+    - SES API flavor mismatch (tries SESv2, then falls back to SESv1)
+    - Transient API errors
+
+    SUCCESS conditions (short-circuits the wait):
+    - SESv2: DkimAttributes.Status == 'SUCCESS'
+    - SESv1: GetIdentityDkimAttributes.DkimVerificationStatus == 'SUCCESS'
+             OR GetIdentityVerificationAttributes.VerificationStatus == 'SUCCESS' (fallback)
+
+    Raises AgentBlocked with context on timeout or terminal DKIM failure.
+    """
+    poll_interval_seconds = max(int(poll_interval_seconds or 5), 5)
+    region = (config.aws_env.get_aws_region() or "us-west-2").strip()
+
     config.log(
-        f"SES MX record detected; waiting for DKIM verification SUCCESS for {domain_name} in region {region}."
+        f"Waiting for SES DKIM SUCCESS for {domain_name} in region {region} "
+        f"(poll={poll_interval_seconds}s, timeout={max_wait_minutes}m)."
     )
-    
-    deadline = time.time() + max_wait_minutes * 60
+
+    deadline = time.time() + (max_wait_minutes * 60)
     last_status = None
-    
+
     while True:
         if time.time() > deadline:
             raise AgentBlocked({
                 "desc": f"Timed out waiting for SES DKIM verification to reach SUCCESS for {domain_name}",
-                "dkim_status": last_status,
+                "dkim_status": last_status or "UNKNOWN",
                 "domain": domain_name,
                 "region": region
             })
-        
+
+        status = None
+        signing_enabled = None
+        tokens = []
+
+        # ---- Try SESv2 first
         try:
-            response = ses_client.get_email_identity(EmailIdentity=domain_name)
-        except ses_client.exceptions.NotFoundException:
-            status = "NOT_FOUND"
-            tokens = []
-            signing_enabled = None
-        except Exception as exc:
-            config.log(f"Error fetching SES DKIM status for {domain_name}: {exc}")
-            time.sleep(poll_interval_seconds)
-            continue
-        else:
-            dkim_attrs = response.get("DkimAttributes") or {}
+            sesv2 = boto3.client("sesv2", region_name=region)
+            v2_resp = sesv2.get_email_identity(EmailIdentity=domain_name)
+            dkim_attrs = v2_resp.get("DkimAttributes") or {}
             status = (dkim_attrs.get("Status") or "").upper()
             tokens = dkim_attrs.get("Tokens") or []
             signing_enabled = dkim_attrs.get("SigningEnabled")
-        
+        except Exception as exc:
+            # Normalize NotFound across possible client shapes; fall through to v1.
+            msg = str(exc)
+            if "NotFound" in msg or "NotFoundException" in msg:
+                status = "NOT_FOUND_V2"
+            else:
+                config.log(f"SESv2 get_email_identity error for {domain_name} in {region}: {exc}")
+
+        # ---- Fall back to SESv1 if v2 could not confirm a SUCCESS
+        if status in (None, "", "NOT_FOUND_V2"):
+            try:
+                sesv1 = boto3.client("ses", region_name=region)
+
+                # Identity existence and basic verification status
+                v1_ver = sesv1.get_identity_verification_attributes(
+                    Identities=[domain_name]
+                ).get("VerificationAttributes", {})
+                ver_status = ((v1_ver.get(domain_name) or {}).get("VerificationStatus") or "").upper()
+
+                # DKIM-specific status and tokens
+                v1_dkim = sesv1.get_identity_dkim_attributes(
+                    Identities=[domain_name]
+                ).get("DkimAttributes", {})
+                dkim_attrs = (v1_dkim.get(domain_name) or {})
+                dkim_status = (dkim_attrs.get("DkimVerificationStatus") or "").upper()
+                tokens = dkim_attrs.get("DkimTokens") or tokens
+
+                # Prefer DKIM status; fall back to verification status if DKIM is unavailable
+                status = dkim_status or ver_status or "NOT_FOUND"
+            except Exception as exc:
+                config.log(f"SESv1 fallback error for {domain_name} in {region}: {exc}")
+                # Keep status as-is; we'll loop again.
+
+        # Log on status change
         if status != last_status:
             token_preview = ", ".join(tokens) if tokens else "<no tokens>"
             config.log(
-                f"Waiting for SES DKIM SUCCESS for {domain_name}; current status: {status or 'UNKNOWN'}; "
+                f"SES DKIM wait status for {domain_name}: {status or 'UNKNOWN'}; "
                 f"SigningEnabled={signing_enabled}; Tokens={token_preview}"
             )
             last_status = status
-        
-        if status == "SUCCESS":
-            config.log(f"SES DKIM verification succeeded for {domain_name}.")
+
+        # Terminal conditions
+        if status in {"SUCCESS", "VERIFIED"}:
+            config.log(f"SES DKIM verification succeeded for {domain_name} in {region}.")
             return
-        
+
         if status in {"FAILED", "TEMPORARY_FAILURE"}:
             raise AgentBlocked({
                 "desc": f"SES DKIM verification {status.lower()} for {domain_name}",
@@ -2911,7 +2705,7 @@ def _wait_for_ses_dkim_success(
                 "region": region,
                 "dkim_tokens": tokens
             })
-        
+
         time.sleep(poll_interval_seconds)
 
 
@@ -2932,7 +2726,7 @@ def validate_cloudformation_template(
             f"CloudFormation template validation encountered an unexpected error: {exc}"
         ) from exc
     
-    _enforce_route53_alias_guardrail(template_body)
+    cloudformation_utils.enforce_route53_alias_guardrail(template_body)
 
 
 def push_cloudformation(
@@ -2948,7 +2742,9 @@ def push_cloudformation(
         config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file}")
         template_body = template_body or cfn_file.read_text()
         
-        if get_stack(stack_name, cf_client):
+        stack_status = get_stack_status(config)
+        
+        if stack_status not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
             config.log(f"Updating existing stack: {stack_name}\n")
             try:
                 cf_client.update_stack(
@@ -3347,7 +3143,7 @@ def get_lessons_msg(
         skip=False
 ) -> list[LlmMessage]:
     if skip:
-        return
+        return []
     
     return LlmMessage.user_from_data(
         title,
@@ -4438,6 +4234,8 @@ def write_code_file(
                     code,
                     code_compilation_error
                 )
+    
+    return Exception("failed to write validated code")
 
 
 def get_requirementstxt_msg(requirements_txt, header="The python environment has the following packages installed.  The code you write may only import from packages listed here") -> list[LlmMessage]:
@@ -4672,10 +4470,6 @@ def get_dependencies_msg(config: SelfDriverConfig, for_planning: bool) -> list[L
 
 
 def get_docs_msg(config) -> list[LlmMessage]:
-    def _load_markdown_doc(path: Path) -> Optional[LlmMessage]:
-        if path.exists() and path.is_file():
-            return None
-    
     files = []
     readme_path = config.sandbox_root_dir / "README.md"
     if readme_path.exists():
@@ -4739,7 +4533,12 @@ def get_goal_msg(config, description):
     
     if test_errors:
         d["failing_tests"] = test_errors
-    
+        d["domain_name"] = textwrap.dedent(f"""
+            Note:  the domain name is dynamic and may change between test runs.  
+            - the current domain name is `{config.domain_name}`
+            - previous test failures might reference a different domain. As the domain name is dynamic, this is expected and not a cause for concern
+        """)
+
     return LlmMessage.user_from_data(description, d)
 
 
@@ -4985,7 +4784,6 @@ def deploy_cloudformation_stacks(
         ecr_arn: str,
         lambda_datas: dict
 ):
-    import logging
     import boto3
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     
@@ -5035,37 +4833,49 @@ def deploy_cloudformation_stacks(
         template_body=template_body
     )
     
-    if _template_defines_ses_mx(template_body):
-        domain_name_param = next(
-            (
-                param.get("ParameterValue")
-                for param in cloudformation_params
-                if isinstance(param, dict) and param.get("ParameterKey") == "DomainName"
-            ),
-            None
-        )
-        
-        domain_name_value = (domain_name_param or "").strip()
-        if domain_name_value:
-            _wait_for_ses_dkim_success(config, domain_name_value)
-        else:
-            config.log(
-                "Detected SES MX record in CloudFormation template, but no DomainName parameter value was provided; skipping DKIM wait."
-            )
+    manage_ses_domain_settings(
+        config,
+        cloudformation_params
+    )
     
     config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
     
     return stack_name
 
 
-def disable_lambda_concurrency(config:SelfDriverConfig, stack_name: str):
+def manage_ses_domain_settings(config: SelfDriverConfig, cloudformation_params):
+    cfn_file = get_cloudformation_file(config)
+    template_body = cfn_file.read_text()
+    
+    if not cloudformation_utils.template_defines_ses_mx(template_body):
+        return
+    
+    domain_name_param = next(
+        (
+            param.get("ParameterValue")
+            for param in cloudformation_params
+            if isinstance(param, dict) and param.get("ParameterKey") == "DomainName"
+        ),
+        None
+    )
+    
+    domain_name_value = (domain_name_param or "").strip()
+    if domain_name_value:
+        _wait_for_ses_dkim_success(config, domain_name_value)
+    else:
+        config.log(
+            "Detected SES MX record in CloudFormation template, but no DomainName parameter value was provided; skipping DKIM wait."
+        )
+
+
+def disable_lambda_concurrency(config: SelfDriverConfig, stack_name: str):
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     lambda_client = boto3.client("lambda", region_name=config.aws_env.get_aws_region())
     
     existing_stack = get_stack(stack_name, cf_client)
     if not existing_stack:
-        return 
-        
+        return
+    
     try:
         resources = cf_client.describe_stack_resources(StackName=stack_name).get('StackResources', [])
         for res in resources:
