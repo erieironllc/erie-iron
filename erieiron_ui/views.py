@@ -25,7 +25,7 @@ from erieiron_common import common, domain_manager
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
 LLM_SPEND_RANGE_DEFAULT = "15d"
 LLM_SPEND_RANGE_OPTIONS = [
@@ -716,6 +716,101 @@ def _tab_context_edit(business: Business) -> dict:
     }
 
 
+def _tab_available_codefiles(business: Business) -> bool:
+    return CodeVersion.objects.filter(
+        code_file__business=business
+    ).exists()
+
+
+def _tab_context_codefiles(business: Business) -> dict:
+    code_versions = list(
+        CodeVersion.objects
+        .filter(code_file__business=business)
+        .select_related("code_file", "task_iteration")
+        .order_by("code_file__file_path", "task_iteration__timestamp", "id")
+    )
+
+    if not code_versions:
+        return {"code_file_tree": []}
+
+    file_entries: dict[str, dict] = {}
+    for code_version in code_versions:
+        code_file = code_version.code_file
+        iteration = code_version.task_iteration
+        if not code_file or not iteration:
+            continue
+
+        file_entry = file_entries.setdefault(
+            code_file.file_path,
+            {
+                "path": code_file.file_path,
+                "codefile_id": code_file.id,
+                "iterations": OrderedDict(),
+            }
+        )
+
+        file_entry["iterations"][iteration.id] = {
+            "id": iteration.id,
+            "version_number": iteration.version_number,
+            "timestamp": iteration.timestamp,
+        }
+
+    if not file_entries:
+        return {"code_file_tree": []}
+
+    tree_root = {
+        "name": "",
+        "path": "",
+        "type": "dir",
+        "children": OrderedDict(),
+    }
+
+    for file_path, entry in sorted(file_entries.items()):
+        parts = [part for part in Path(file_path).parts if part]
+        if not parts:
+            continue
+
+        node = tree_root
+        ancestry: list[str] = []
+        for directory in parts[:-1]:
+            ancestry.append(directory)
+            children = node.setdefault("children", OrderedDict())
+            if directory not in children:
+                children[directory] = {
+                    "name": directory,
+                    "path": "/".join(ancestry),
+                    "type": "dir",
+                    "children": OrderedDict(),
+                }
+            node = children[directory]
+
+        iterations = list(entry["iterations"].values())
+        iterations.sort(key=lambda item: item["version_number"])
+
+        node.setdefault("children", OrderedDict())[parts[-1]] = {
+            "name": parts[-1],
+            "path": file_path,
+            "type": "file",
+            "codefile_id": entry["codefile_id"],
+            "iterations": iterations,
+        }
+
+    def _ordered_children(node: dict) -> dict:
+        children = node.get("children", OrderedDict())
+        ordered_children = []
+        for child_name, child_node in sorted(
+            children.items(),
+            key=lambda item: (0 if item[1]["type"] == "dir" else 1, item[0])
+        ):
+            ordered_children.append(_ordered_children(child_node))
+        node["children"] = ordered_children
+        return node
+
+    ordered_tree = _ordered_children(tree_root)
+
+    return {"code_file_tree": ordered_tree["children"]}
+
+
 def _build_business_tabs(business: Business) -> list[dict]:
     from erieiron_ui import tab_defitions
     
@@ -1092,6 +1187,7 @@ def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
             code_file.file_path,
             {
                 "path": code_file.file_path,
+                "codefile_id": code_file.id,
                 "iterations": OrderedDict(),
             }
         )
@@ -1138,6 +1234,7 @@ def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
             "name": parts[-1],
             "path": file_path,
             "type": "file",
+            "codefile_id": entry["codefile_id"],
             "iterations": iterations,
         }
 
@@ -1225,9 +1322,11 @@ def _task_tab_context_edit(task, business, self_driving_task) -> dict:
     
     cloudformation_stack_name = None
     cloudformation_stack_url = None
-    if self_driving_task and self_driving_task.cloudformation_stack_id:
-        cloudformation_stack_name = self_driving_task.cloudformation_stack_name or self_driving_task.cloudformation_stack_id
-        encoded_stack_id = quote(self_driving_task.cloudformation_stack_id, safe="")
+    iteration = self_driving_task.get_most_recent_iteration() if self_driving_task else None
+    stack_id = iteration.cloudformation_stack_id if iteration else None
+    if stack_id:
+        cloudformation_stack_name = iteration.cloudformation_stack_name or stack_id
+        encoded_stack_id = quote(stack_id, safe="")
         cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
     
     return {
@@ -2280,6 +2379,182 @@ def action_toggle_lesson_validity(request, lesson_id):
     except Exception as e:
         messages.error(request, f'Error updating lesson: {str(e)}')
         return redirect(reverse('view_businesses_tab', args=['lessons']))
+
+
+def view_codefile(request, codefile_id):
+    code_file = get_object_or_404(CodeFile, pk=codefile_id)
+    business = code_file.business
+    
+    # Get all versions of this file in chronological order (newest first)
+    code_versions = list(
+        CodeVersion.objects
+        .filter(code_file=code_file)
+        .select_related("task_iteration", "task_iteration__self_driving_task", "task_iteration__self_driving_task__task")
+        .order_by("-created_at")
+    )
+    
+    # Use business view context with tabs
+    tabs = _build_business_tabs(business)
+    
+    context = {
+        "business": business,
+        "tabs": tabs,
+        "active_tab": "codefiles",  # Create a virtual tab for codefiles
+        "tab_template": "codefile.html",
+        "code_file": code_file,
+        "code_versions": code_versions,
+    }
+    
+    # Build breadcrumbs 
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse('view_business', args=[business.id]), business.name),
+        (reverse('view_codefile', args=[codefile_id]), code_file.file_path)
+    ]
+    
+    if code_versions:
+        most_recent_version = code_versions[0]
+        if most_recent_version.task_iteration:
+            task_iteration = most_recent_version.task_iteration
+            self_driving_task = task_iteration.self_driving_task
+            if self_driving_task and self_driving_task.task:
+                task = self_driving_task.task
+                initiative = task.initiative
+    
+    return send_response(
+        request,
+        "business/business_base.html",
+        context,
+        breadcrumbs=breadcrumbs
+    )
+
+
+@json_endpoint
+def api_codefile_content(request, codefile_id):
+    """API endpoint for rendering codefile content based on selected versions."""
+    code_file = get_object_or_404(CodeFile, pk=codefile_id)
+    
+    # Get selected version IDs from request
+    version_ids = rget_list(request,  'versions')
+    version_ids = common.filter_empty(version_ids)
+    
+    # Convert to integers and filter valid versions
+    try:
+        code_versions = list(
+            CodeVersion.objects
+            .filter(code_file=code_file, id__in=version_ids)
+            .select_related("task_iteration")
+            .order_by("-created_at")
+        )
+    except (ValueError, TypeError):
+        return {"error": "Invalid version IDs provided"}
+    
+    if not version_ids:
+        # No versions selected - show latest version
+        latest_version = (
+            CodeVersion.objects
+            .filter(code_file=code_file)
+            .select_related("task_iteration")
+            .order_by("-created_at")
+            .first()
+        )
+        if latest_version:
+            return {
+                "title": "Latest Version", 
+                "content": latest_version.code,
+                "content_type": "code"
+            }
+        else:
+            return {"title": "No Versions", "content": "No code versions found.", "content_type": "message"}
+    
+    elif len(version_ids) == 1:
+        # Single version selected - show that version's code
+        version = code_versions[0] if code_versions else None
+        if version:
+            title = f"Version {version.task_iteration.version_number if version.task_iteration else version.id}"
+            return {
+                "title": title,
+                "content": version.code,
+                "content_type": "code"
+            }
+        else:
+            return {"error": "Selected version not found"}
+    
+    elif len(version_ids) == 2:
+        # Two versions - show diff between them
+        if len(code_versions) == 2:
+            # Sort by iteration number for proper diff order
+            sorted_versions = sorted(code_versions, key=lambda v: v.task_iteration.version_number if v.task_iteration else 0)
+            old_version, new_version = sorted_versions
+            
+            diff_html = _generate_diff_html(old_version, new_version)
+            title = f"Diff: v{old_version.task_iteration.version_number if old_version.task_iteration else old_version.id} → v{new_version.task_iteration.version_number if new_version.task_iteration else new_version.id}"
+            
+            return {
+                "title": title,
+                "content": diff_html,
+                "content_type": "diff"
+            }
+        else:
+            return {"error": "Could not find both selected versions"}
+    
+    else:
+        # Multiple versions - show sequential diffs
+        if len(code_versions) >= 2:
+            # Sort by iteration number
+            sorted_versions = sorted(code_versions, key=lambda v: v.task_iteration.version_number if v.task_iteration else 0)
+            
+            diffs_html = []
+            for i in range(len(sorted_versions) - 1):
+                old_version = sorted_versions[i]
+                new_version = sorted_versions[i + 1]
+                
+                diff_title = f"v{old_version.task_iteration.version_number if old_version.task_iteration else old_version.id} → v{new_version.task_iteration.version_number if new_version.task_iteration else new_version.id}"
+                diff_html = _generate_diff_html(old_version, new_version)
+                
+                diffs_html.append(f'<div class="sequential-diff"><h6 class="diff-title">{diff_title}</h6>{diff_html}</div>')
+            
+            title = f"Sequential Diffs ({len(sorted_versions)} versions)"
+            return {
+                "title": title,
+                "content": ''.join(reversed(diffs_html)),
+                "content_type": "diff"
+            }
+        else:
+            return {"error": "Not enough versions found for comparison"}
+
+
+def _generate_diff_html(old_version, new_version):
+    """Generate HTML diff between two code versions."""
+    old_lines = old_version.code.splitlines(keepends=True)
+    new_lines = new_version.code.splitlines(keepends=True)
+    
+    # Generate unified diff
+    diff = difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile=f"Version {old_version.task_iteration.version_number if old_version.task_iteration else old_version.id}",
+        tofile=f"Version {new_version.task_iteration.version_number if new_version.task_iteration else new_version.id}",
+        lineterm='',
+        n=3
+    )
+    
+    # Convert to HTML with syntax highlighting
+    diff_lines = []
+    for line in diff:
+        escaped_line = escape(line.rstrip('\n'))
+        if line.startswith('+++') or line.startswith('---'):
+            diff_lines.append(f'<div class="diff-header">{escaped_line[3:]}</div>')
+        elif line.startswith('@@'):
+            diff_lines.append(f'<div class="diff-hunk-header">{escaped_line[2:]}</div>')
+        elif line.startswith('+'):
+            diff_lines.append(f'<div class="diff-added">{escaped_line[1:]}</div>')
+        elif line.startswith('-'):
+            diff_lines.append(f'<div class="diff-removed">{escaped_line[1:]}</div>')
+        else:
+            diff_lines.append(f'<div class="diff-context">{escaped_line}</div>')
+    
+    return ''.join(diff_lines)
 
 
 @json_endpoint

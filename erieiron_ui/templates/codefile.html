@@ -1,0 +1,85 @@
+{% load erieiron_common_tags %}
+
+<div id="codefile-view"
+     class="tab-pane-content codefile-view" 
+     action="{% url 'api_codefile_content' code_file.id %}"
+     data-codefile-id="{{ code_file.id }}"
+     data-code-versions="{% for version in code_versions %}{{ version.id }}:{{ version.task_iteration.version_number|default:0 }}:{% if version.task_iteration %}{{ version.task_iteration.id }}{% else %}null{% endif %}:{{ version.created_at|date:'M d, Y H:i' }}{% if not forloop.last %};{% endif %}{% endfor %}">
+    <div class="row g-0 code-file-versions-pane">
+        <!-- Left Pane: Iterations List -->
+        <div class="col-4 left-pane">
+            <div class="p-3 pb-0">
+                <h5 class="mb-3">File Versions</h5>
+                <div class="mb-2">
+                    <small class="text-muted">Select versions to compare</small>
+                </div>
+                <div class="list-group list-group-flush">
+                    {% for version in code_versions %}
+                        <div class="list-group-item p-2 version-list-item">
+                            <div class="form-check">
+                                <input class="form-check-input version-checkbox"
+                                       type="checkbox"
+                                       value="{{ version.id }}"
+                                       id="version-{{ version.id }}"
+                                       data-version-number="{{ version.task_iteration.version_number|default:0 }}">
+                                <label class="form-check-label w-100"
+                                       for="version-{{ version.id }}">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div class="flex-grow-1 version-meta">
+                                            <div class="version-title">
+                                                {% if version.task_iteration %}
+                                                    Iteration {{ version.task_iteration.version_number }}
+                                                {% else %}
+                                                    Version {{ version.id }}
+                                                {% endif %}
+                                            </div>
+                                            <small class="version-date d-block">
+                                                {{ version.created_at|date:"M d, Y H:i" }}
+                                            </small>
+                                            {% if version.task_iteration %}
+                                                <small>
+                                                    <a href="{% url 'view_self_driver_iteration' version.task_iteration.id %}"
+                                                       class="iteration-link"
+                                                       onclick="event.stopPropagation();">
+                                                        View Iteration
+                                                    </a>
+                                                </small>
+                                            {% endif %}
+{#                                            {% if version.code_instructions %}#}
+{#                                                <small class="code-instructions d-block">#}
+{#                                                    {{ version.code_instructions|truncatechars:80 }}#}
+{#                                                </small>#}
+{#                                            {% endif %}#}
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Pane: Code/Diff Display -->
+        <div class="col-8 right-pane">
+            <div class="p-3 pb-0 h-100 d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="mb-0" id="right-pane-title">Latest Version</h5>
+                    {% include "_copy_clipboard_btn.html" with target_el="#code-content" %}
+                </div>
+                <div class="flex-grow-1 overflow-auto">
+                    <pre id="code-display" class="mb-0 code-container"><code id="code-content"></code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Initialize the backbone view
+    $(document).ready(function () {
+        if (typeof CodeFileView !== 'undefined') {
+            window.codeFileView = new CodeFileView();
+        }
+    });
+</script>

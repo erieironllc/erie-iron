@@ -364,6 +364,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "availability_fn": views._tab_available_product_initiatives,
         "context_fn": views._tab_context_product_initiatives,
     },
+    {
+        "slug": "codefiles",
+        "label": "Code Files",
+        "template": "business/tabs/codefiles.html",
+        "availability_fn": views._tab_available_codefiles,
+        "context_fn": views._tab_context_codefiles,
+    },
     TAB_DIVIDER,
     # {
     #     "slug": "tasks",

@@ -651,120 +651,6 @@ class Task(BaseErieIronModel):
         from erieiron_common.aws_utils import sanitize_aws_name
         return sanitize_aws_name([str(self.id)], max_length=63).lower()
     
-    def get_domain_and_cert(self, aws_env: AwsEnv) -> tuple[str, Optional[str], Optional[str]]:
-        from erieiron_common import aws_utils, domain_manager
-        
-        business = self.initiative.business
-        
-        try:
-            self_driving_task = self.selfdrivingtask
-        except SelfDrivingTask.DoesNotExist:  # pragma: no cover - defensive
-            self_driving_task = self.create_self_driving_env()
-        
-        normalized_business_domain = (business.domain or "").rstrip('.').lower() or None
-        fallback_root_domain = "erieironllc.com"
-        fallback_root_domain = fallback_root_domain.rstrip('.').lower()
-        
-        def _candidate_roots() -> list[str]:
-            roots: list[str] = []
-            if normalized_business_domain:
-                roots.append(normalized_business_domain)
-            if fallback_root_domain not in roots:
-                roots.append(fallback_root_domain)
-            return roots
-        
-        def _build_domain(root: str) -> str:
-            if AwsEnv.PRODUCTION.eq(aws_env):
-                return root
-            stack_identifier = self_driving_task.get_cloudformation_key_prefix(aws_env)
-            if not stack_identifier:
-                return root
-            return f"{stack_identifier}.{root}"
-        
-        route53_client = aws_utils.client("route53")
-        aws_region = aws_env.get_aws_region()
-        
-        attempted_domain_management = False
-        selected_domain: Optional[str] = None
-        selected_hosted_zone_id: Optional[str] = None
-        selected_certificate_arn: Optional[str] = None
-        
-        candidate_roots = _candidate_roots()
-        
-        for root_domain in candidate_roots:
-            domain_candidate = _build_domain(root_domain).rstrip('.').lower()
-            selected_domain = domain_candidate
-            
-            stored_zone_id = getattr(business, "route53_hosted_zone_id", None)
-            stored_domain = (business.domain or "").rstrip('.').lower()
-            if stored_zone_id and stored_domain == root_domain:
-                hosted_zone_id = stored_zone_id
-            else:
-                hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
-            certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
-            
-            needs_domain_management = (
-                    root_domain == normalized_business_domain
-                    and business.needs_domain
-                    and not (hosted_zone_id and certificate_arn)
-                    and not attempted_domain_management
-            )
-            
-            if needs_domain_management:
-                attempted_domain_management = True
-                try:
-                    domain_manager.manage_domain(business)
-                except Exception:
-                    logging.info("Failed to manage root domain for %s.  will try other candidates", business.service_token)
-                else:
-                    hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
-                    certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
-            
-            if hosted_zone_id:
-                selected_hosted_zone_id = hosted_zone_id
-            if certificate_arn:
-                selected_certificate_arn = certificate_arn
-            
-            if selected_hosted_zone_id and selected_certificate_arn:
-                break
-        
-        if not selected_domain and candidate_roots:
-            selected_domain = _build_domain(candidate_roots[-1]).rstrip('.').lower()
-        
-        if selected_domain:
-            if not selected_hosted_zone_id:
-                selected_hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, selected_domain)
-                if not selected_hosted_zone_id:
-                    logging.warning("No Route53 hosted zone found for %s", selected_domain)
-            if not selected_certificate_arn:
-                selected_certificate_arn = domain_manager.find_certificate_arn(selected_domain, aws_region)
-                if not selected_certificate_arn:
-                    logging.warning("No ACM certificate found for %s in %s", selected_domain, aws_region)
-            
-            if self_driving_task.domain != selected_domain:
-                self_driving_task.domain = selected_domain
-                self_driving_task.save(update_fields=["domain"])
-            
-            if selected_hosted_zone_id:
-                current_zone_id = getattr(business, "route53_hosted_zone_id", None)
-                if current_zone_id != selected_hosted_zone_id:
-                    setattr(business, "route53_hosted_zone_id", selected_hosted_zone_id)
-                    if hasattr(business, "save"):
-                        try:
-                            business.save(update_fields=["route53_hosted_zone_id"])
-                        except TypeError:
-                            business.save()
-        
-        return selected_domain or "", selected_hosted_zone_id, selected_certificate_arn
-    
-    def get_preferred_domain(self):
-        if self.selfdrivingtask:
-            preferred_domain = (self.selfdrivingtask.domain or "").rstrip('.') or None
-        else:
-            preferred_domain = None
-        if preferred_domain:
-            preferred_domain = preferred_domain.lower()
-        return preferred_domain
     
     def get_name(self):
         root_str = str(self.id)
@@ -823,9 +709,6 @@ class SelfDrivingTask(BaseErieIronModel):
     main_name = models.TextField(null=False)
     test_file_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
-    domain = models.TextField(null=True)
-    cloudformation_stack_name = models.TextField(null=True)
-    cloudformation_stack_id = models.TextField(null=True)
     goal = models.TextField(null=False)
     task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     config_path = models.TextField(null=True, db_index=True)
@@ -857,6 +740,38 @@ class SelfDrivingTask(BaseErieIronModel):
     
     def get_most_recent_iteration(self) -> 'SelfDrivingTaskIteration':
         return self.selfdrivingtaskiteration_set.order_by("timestamp").last()
+
+    def get_active_iteration(self, *, create_if_missing: bool = True) -> Optional['SelfDrivingTaskIteration']:
+        iteration = self.get_most_recent_iteration()
+        if iteration or not create_if_missing:
+            return iteration
+
+        with transaction.atomic():
+            iteration = self.get_most_recent_iteration()
+            if iteration:
+                return iteration
+            iteration = SelfDrivingTaskIteration.objects.create(
+                self_driving_task=self,
+                version_number=1,
+                planning_model="",
+                coding_model=""
+            )
+        return iteration
+
+    @property
+    def domain(self) -> Optional[str]:
+        iteration = self.get_active_iteration(create_if_missing=False)
+        return iteration.domain if iteration else None
+
+    @property
+    def cloudformation_stack_name(self) -> Optional[str]:
+        iteration = self.get_active_iteration(create_if_missing=False)
+        return iteration.cloudformation_stack_name if iteration else None
+
+    @property
+    def cloudformation_stack_id(self) -> Optional[str]:
+        iteration = self.get_active_iteration(create_if_missing=False)
+        return iteration.cloudformation_stack_id if iteration else None
     
     def get_most_recent_code_version(self) -> Optional['CodeVersion']:
         last_iteration = self.get_most_recent_iteration()
@@ -882,7 +797,7 @@ class SelfDrivingTask(BaseErieIronModel):
         )
         return result["total"] or 0.0
     
-    def iterate(self) -> Tuple['SelfDrivingTaskIteration', Optional['SelfDrivingTaskIteration'], Optional['SelfDrivingTaskIteration']]:
+    def iterate(self) -> 'SelfDrivingTaskIteration':
         iteration_to_modify = None
         most_recent_iteration = self.get_most_recent_iteration()
         
@@ -894,7 +809,7 @@ class SelfDrivingTask(BaseErieIronModel):
             ...
         
         if not iteration_to_modify:
-            iteration_to_modify = self.get_most_recent_iteration()
+            iteration_to_modify = most_recent_iteration
         
         max_version = SelfDrivingTaskIteration.objects.filter(
             self_driving_task=self
@@ -904,6 +819,9 @@ class SelfDrivingTask(BaseErieIronModel):
         
         with transaction.atomic():
             current_iteration = SelfDrivingTaskIteration.objects.create(
+                cloudformation_stack_id=iteration_to_modify.cloudformation_stack_id if iteration_to_modify else None,
+                cloudformation_stack_name=iteration_to_modify.cloudformation_stack_name if iteration_to_modify else None,
+                domain=iteration_to_modify.domain if iteration_to_modify else None,
                 self_driving_task=self,
                 version_number=max_version + 1
             )
@@ -915,7 +833,7 @@ class SelfDrivingTask(BaseErieIronModel):
             start_iteration=iteration_to_modify if iteration_to_modify.id != current_iteration.id else None
         )
         
-        return current_iteration, most_recent_iteration, iteration_to_modify
+        return current_iteration
     
     DEV_STACK_TOKEN_LENGTH = 6
     
@@ -948,36 +866,7 @@ class SelfDrivingTask(BaseErieIronModel):
         else:
             components = [stack_name]
         return sanitize_aws_name(components, max_length=40)
-
-    def namespace_domain_with_stack_identifier(self, domain_name: str | None, environment: AwsEnv) -> str | None:
-        """Adjust the provided domain so its leading label reflects the current StackIdentifier."""
-        if not domain_name:
-            return domain_name
-
-        normalized_domain = domain_name.rstrip('.').lower()
-        stack_identifier = self.get_cloudformation_key_prefix(environment)
-        if not stack_identifier:
-            return normalized_domain
-
-        from erieiron_common.aws_utils import sanitize_aws_name
-        namespaced_label = sanitize_aws_name(stack_identifier, max_length=63)
-
-        if AwsEnv.PRODUCTION.eq(environment):
-            parts = normalized_domain.split('.')
-            if parts and parts[0] == namespaced_label:
-                return normalized_domain
-            return '.'.join([namespaced_label, normalized_domain])
-
-        parts = normalized_domain.split('.')
-        if not parts:
-            return namespaced_label
-
-        if parts[0] == namespaced_label:
-            return normalized_domain
-
-        parts[0] = namespaced_label
-        return '.'.join(parts)
-
+    
     def get_cloudformation_stack_name(self, environment: AwsEnv):
         if AwsEnv.PRODUCTION.eq(environment):
             return self._build_production_stack_name()
@@ -985,16 +874,17 @@ class SelfDrivingTask(BaseErieIronModel):
         if not AwsEnv.DEV.eq(environment):
             raise ValueError(f"Unsupported AWS environment: {environment}")
         
-        stack_name = self.cloudformation_stack_name
+        iteration = self.get_active_iteration()
+        stack_name = iteration.cloudformation_stack_name
         if stack_name:
             return stack_name
         
-        new_name = self._generate_unique_cloudformation_stack_name(environment)
+        new_name = self._generate_unique_cloudformation_stack_name(environment, iteration=iteration)
         with transaction.atomic():
-            SelfDrivingTask.objects.filter(id=self.id).update(
+            SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
                 cloudformation_stack_name=new_name
             )
-        self.refresh_from_db(fields=["cloudformation_stack_name"])
+        iteration.refresh_from_db(fields=["cloudformation_stack_name"])
         return new_name
     
     def get_sandbox(self) -> Path:
@@ -1011,7 +901,8 @@ class SelfDrivingTask(BaseErieIronModel):
         if not AwsEnv.DEV.eq(environment):
             raise ValueError("Stack name rotation is only supported for DEV environment")
         
-        current_name = self.cloudformation_stack_name
+        iteration = self.get_active_iteration()
+        current_name = iteration.cloudformation_stack_name
         if current_name:
             try:
                 import boto3
@@ -1039,14 +930,18 @@ class SelfDrivingTask(BaseErieIronModel):
             )
         
         exclude = {current_name} if current_name else set()
-        new_name = self._generate_unique_cloudformation_stack_name(environment, exclude=exclude)
+        new_name = self._generate_unique_cloudformation_stack_name(
+            environment,
+            exclude=exclude,
+            iteration=iteration
+        )
         
         with transaction.atomic():
-            SelfDrivingTask.objects.filter(id=self.id).update(
+            SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
                 cloudformation_stack_name=new_name,
                 cloudformation_stack_id=None
             )
-        self.refresh_from_db(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
+        iteration.refresh_from_db(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
         
         logging.info(
             "Rotated CloudFormation stack name for task %s: %s -> %s", self.id, current_name, new_name
@@ -1065,7 +960,7 @@ class SelfDrivingTask(BaseErieIronModel):
         if self.task:
             try:
                 # Refresh the cached domain so tombstoned stacks update subdomain labels.
-                self.task.get_domain_and_cert(environment)
+                iteration.get_domain_and_cert(environment)
             except Exception:
                 logging.exception(
                     "Failed to refresh task domain for %s after rotating stack to %s",
@@ -1078,7 +973,8 @@ class SelfDrivingTask(BaseErieIronModel):
             self,
             environment: AwsEnv,
             *,
-            exclude: set[str] | None = None
+            exclude: set[str] | None = None,
+            iteration: Optional['SelfDrivingTaskIteration'] = None
     ) -> str:
         if not AwsEnv.DEV.eq(environment):
             raise ValueError("Unique stack name generation is only supported for DEV environment")
@@ -1094,8 +990,9 @@ class SelfDrivingTask(BaseErieIronModel):
         exclude.update(filter(None, tombstoned_names))
         
         # Always avoid the current persisted name
-        if self.cloudformation_stack_name:
-            exclude.add(self.cloudformation_stack_name)
+        iteration = iteration or self.get_active_iteration(create_if_missing=False)
+        if iteration and iteration.cloudformation_stack_name:
+            exclude.add(iteration.cloudformation_stack_name)
         
         for attempt in range(20):
             token = self._generate_dev_stack_token()
@@ -1170,8 +1067,117 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     evaluation_json = models.JSONField(null=True)
     slowest_cloudformation_resources = models.JSONField(null=True)
     routing_json = models.JSONField(null=True)
+    domain = models.TextField(null=True)
+    cloudformation_stack_name = models.TextField(null=True)
+    cloudformation_stack_id = models.TextField(null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     
+    def get_domain_and_cert(self, aws_env: AwsEnv) -> tuple[str, Optional[str], Optional[str]]:
+        from erieiron_common import aws_utils, domain_manager
+
+        if not self.self_driving_task:
+            raise ValueError("Cannot resolve domain metadata without an associated self-driving task")
+
+        self_driving_task = self.self_driving_task
+        business = self_driving_task.business
+
+        normalized_business_domain = (business.domain or "").rstrip('.').lower() or None
+        fallback_root_domain = "erieironllc.com"
+        fallback_root_domain = fallback_root_domain.rstrip('.').lower()
+
+        def _candidate_roots() -> list[str]:
+            roots: list[str] = []
+            if normalized_business_domain:
+                roots.append(normalized_business_domain)
+            if fallback_root_domain not in roots:
+                roots.append(fallback_root_domain)
+            return roots
+
+        def _build_domain(root: str) -> str:
+            if AwsEnv.PRODUCTION.eq(aws_env):
+                return root
+            stack_identifier = self_driving_task.get_cloudformation_key_prefix(aws_env)
+            if not stack_identifier:
+                return root
+            return f"{stack_identifier}.{root}"
+
+        route53_client = aws_utils.client("route53")
+        aws_region = aws_env.get_aws_region()
+
+        attempted_domain_management = False
+        selected_domain: Optional[str] = None
+        selected_hosted_zone_id: Optional[str] = None
+        selected_certificate_arn: Optional[str] = None
+
+        candidate_roots = _candidate_roots()
+
+        for root_domain in candidate_roots:
+            domain_candidate = _build_domain(root_domain).rstrip('.').lower()
+            selected_domain = domain_candidate
+
+            stored_zone_id = getattr(business, "route53_hosted_zone_id", None)
+            stored_domain = (business.domain or "").rstrip('.').lower()
+            if stored_zone_id and stored_domain == root_domain:
+                hosted_zone_id = stored_zone_id
+            else:
+                hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
+            certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
+
+            needs_domain_management = (
+                root_domain == normalized_business_domain
+                and business.needs_domain
+                and not (hosted_zone_id and certificate_arn)
+                and not attempted_domain_management
+            )
+
+            if needs_domain_management:
+                attempted_domain_management = True
+                try:
+                    domain_manager.manage_domain(business)
+                except Exception:
+                    logging.info("Failed to manage root domain for %s.  will try other candidates", business.service_token)
+                else:
+                    hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, domain_candidate)
+                    certificate_arn = domain_manager.find_certificate_arn(domain_candidate, aws_region)
+
+            if hosted_zone_id:
+                selected_hosted_zone_id = hosted_zone_id
+            if certificate_arn:
+                selected_certificate_arn = certificate_arn
+
+            if selected_hosted_zone_id and selected_certificate_arn:
+                break
+
+        if not selected_domain and candidate_roots:
+            selected_domain = _build_domain(candidate_roots[-1]).rstrip('.').lower()
+
+        if selected_domain:
+            if not selected_hosted_zone_id:
+                selected_hosted_zone_id = domain_manager.find_hosted_zone_id(route53_client, selected_domain)
+                if not selected_hosted_zone_id:
+                    logging.warning("No Route53 hosted zone found for %s", selected_domain)
+            if not selected_certificate_arn:
+                selected_certificate_arn = domain_manager.find_certificate_arn(selected_domain, aws_region)
+                if not selected_certificate_arn:
+                    logging.warning("No ACM certificate found for %s in %s", selected_domain, aws_region)
+
+            if self.domain != selected_domain:
+                self.domain = selected_domain
+                if self.pk:
+                    self.save(update_fields=["domain"])
+
+            if selected_hosted_zone_id:
+                current_zone_id = getattr(business, "route53_hosted_zone_id", None)
+                if current_zone_id != selected_hosted_zone_id:
+                    setattr(business, "route53_hosted_zone_id", selected_hosted_zone_id)
+                    if hasattr(business, "save"):
+                        try:
+                            business.save(update_fields=["route53_hosted_zone_id"])
+                        except TypeError:
+                            business.save()
+
+        return selected_domain or "", selected_hosted_zone_id, selected_certificate_arn
+
     def get_all_log_content(self):
         return "\n\n".join(common.filter_none([
             self.log_content_init,

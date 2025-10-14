@@ -1,0 +1,13 @@
+<div class="tab-pane-content">
+    {% if code_file_tree %}
+        <div class="code-file-tree">
+            <ul class="code-file-tree__list">
+                {% for node in code_file_tree %}
+                    {% include "task/tabs/_codefile_node.html" with node=node %}
+                {% endfor %}
+            </ul>
+        </div>
+    {% else %}
+        <em class="text-muted">No code files have been modified for this task yet.</em>
+    {% endif %}
+</div>

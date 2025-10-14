@@ -4,82 +4,86 @@ from unittest import mock
 
 from botocore.exceptions import ClientError, OperationNotPageableError
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import prepare_stack_for_update
-from erieiron_autonomous_agent.models import SelfDrivingTask, Task
+from erieiron_autonomous_agent.models import SelfDrivingTask, SelfDrivingTaskIteration
 from erieiron_common import domain_manager
 from erieiron_common.enums import AwsEnv
 
 
 class DummySelfDrivingTask:
-    def __init__(self, stack_identifier: str, domain: str | None = None):
+    def __init__(self, stack_identifier: str, business: SimpleNamespace):
         self._stack_identifier = stack_identifier
-        self.domain = domain
-        self.saved_fields = None
+        self.business = business
 
     def get_cloudformation_key_prefix(self, _aws_env: AwsEnv) -> str:
         return self._stack_identifier
+
+
+class DummyIteration:
+    def __init__(self, self_driving_task: DummySelfDrivingTask, domain: str | None = None):
+        self.self_driving_task = self_driving_task
+        self.domain = domain
+        self.pk = True
+        self.saved_fields = None
 
     def save(self, update_fields=None):  # pragma: no cover - trivial setter
         self.saved_fields = update_fields
 
 
-def _build_task(stack_identifier: str, business_domain: str | None = "example.com", *, needs_domain: bool = False):
+def _build_iteration(stack_identifier: str, business_domain: str | None = "example.com", *, needs_domain: bool = False):
     business = SimpleNamespace(
         domain=business_domain,
         needs_domain=needs_domain,
         service_token="svc-token",
     )
-    initiative = SimpleNamespace(business=business)
-
-    return SimpleNamespace(
-        id="task_123",
-        initiative=initiative,
-        selfdrivingtask=DummySelfDrivingTask(stack_identifier),
-    )
+    self_driving_task = DummySelfDrivingTask(stack_identifier, business)
+    return DummyIteration(self_driving_task), business
 
 
 def test_get_domain_and_cert_production_prefers_business_domain():
-    task = _build_task(stack_identifier="stackid", business_domain="Example.COM")
+    iteration, business = _build_iteration(stack_identifier="stackid", business_domain="Example.COM")
 
     with mock.patch("erieiron_autonomous_agent.models.aws_utils.client", return_value=object()), \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.find_hosted_zone_id", return_value="HZ123") as mock_find_zone, \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.find_certificate_arn", return_value="arn:example") as mock_find_cert, \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.manage_domain") as mock_manage_domain:
-        domain, hosted_zone_id, certificate_arn = Task.get_domain_and_cert(task, AwsEnv.PRODUCTION)
+        domain, hosted_zone_id, certificate_arn = SelfDrivingTaskIteration.get_domain_and_cert(iteration, AwsEnv.PRODUCTION)
 
     assert domain == "example.com"
     assert hosted_zone_id == "HZ123"
     assert certificate_arn == "arn:example"
-    assert task.selfdrivingtask.domain == "example.com"
-    assert task.selfdrivingtask.saved_fields == ["domain"]
+    assert iteration.domain == "example.com"
+    assert iteration.saved_fields == ["domain"]
     mock_manage_domain.assert_not_called()
     mock_find_zone.assert_called_with(mock.ANY, "example.com")
     mock_find_cert.assert_called_with("example.com", AwsEnv.PRODUCTION.get_aws_region())
 
 
 def test_get_domain_and_cert_dev_uses_stack_identifier():
-    task = _build_task(stack_identifier="stacktoken", business_domain="example.com")
+    iteration, _ = _build_iteration(stack_identifier="stacktoken", business_domain="example.com")
 
     with mock.patch("erieiron_autonomous_agent.models.aws_utils.client", return_value=object()), \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.find_hosted_zone_id", return_value="HZ456"), \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.find_certificate_arn", return_value="arn:dev"):
-        domain, hosted_zone_id, certificate_arn = Task.get_domain_and_cert(task, AwsEnv.DEV)
+        domain, hosted_zone_id, certificate_arn = SelfDrivingTaskIteration.get_domain_and_cert(iteration, AwsEnv.DEV)
 
     assert domain == "stacktoken.example.com"
     assert hosted_zone_id == "HZ456"
     assert certificate_arn == "arn:dev"
-    assert task.selfdrivingtask.domain == "stacktoken.example.com"
+    assert iteration.domain == "stacktoken.example.com"
 
 
 def test_rotate_cloudformation_stack_name_refreshes_domain():
     task_mock = mock.Mock()
-    task_mock.get_domain_and_cert.return_value = ("stacktoken.example.com", "HZ", "arn")
-
     business = SimpleNamespace(service_token="svc-token")
     self_driving_task = SelfDrivingTask()
     self_driving_task.id = "task-id"
     self_driving_task.business = business
     self_driving_task.task = task_mock
-    self_driving_task.cloudformation_stack_name = "old-stack"
+    iteration = mock.Mock()
+    iteration.id = "iter-id"
+    iteration.cloudformation_stack_name = "old-stack"
+    iteration.cloudformation_stack_id = "stack-id"
+    iteration.get_domain_and_cert.return_value = ("stacktoken.example.com", "HZ", "arn")
 
     dummy_manager = mock.Mock()
     dummy_manager.filter.return_value = dummy_manager
@@ -87,16 +91,18 @@ def test_rotate_cloudformation_stack_name_refreshes_domain():
     with mock.patch("erieiron_autonomous_agent.models.boto3.client") as mock_boto_client, \
             mock.patch("erieiron_autonomous_agent.models.AgentTombstone.objects.update_or_create", return_value=(None, True)), \
             mock.patch.object(SelfDrivingTask, "_generate_unique_cloudformation_stack_name", return_value="new-stack"), \
-            mock.patch.object(SelfDrivingTask, "objects", dummy_manager), \
-            mock.patch("erieiron_autonomous_agent.models.transaction.atomic", return_value=nullcontext()) as mock_atomic, \
-            mock.patch.object(self_driving_task, "refresh_from_db", autospec=True) as mock_refresh:
+            mock.patch.object(SelfDrivingTask, "get_active_iteration", return_value=iteration), \
+            mock.patch("erieiron_autonomous_agent.models.SelfDrivingTaskIteration.objects", dummy_manager), \
+            mock.patch("erieiron_autonomous_agent.models.transaction.atomic", return_value=nullcontext()) as mock_atomic:
+        iteration.refresh_from_db = mock.Mock()
         mock_boto_client.return_value = mock.Mock(delete_stack=mock.Mock())
         result = self_driving_task.rotate_cloudformation_stack_name(AwsEnv.DEV)
 
     assert result == "new-stack"
-    task_mock.get_domain_and_cert.assert_called_once_with(AwsEnv.DEV)
-    mock_refresh.assert_called_with(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
-    dummy_manager.filter.assert_called_with(id="task-id")
+    iteration.get_domain_and_cert.assert_called_once_with(AwsEnv.DEV)
+    task_mock.get_domain_and_cert.assert_not_called()
+    iteration.refresh_from_db.assert_called_with(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
+    dummy_manager.filter.assert_called_with(id="iter-id")
     dummy_manager.update.assert_called_with(
         cloudformation_stack_name="new-stack",
         cloudformation_stack_id=None

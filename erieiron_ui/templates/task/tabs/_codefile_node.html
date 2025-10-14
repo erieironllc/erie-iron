@@ -1,0 +1,37 @@
+<li class="code-file-tree__item code-file-tree__item--{{ node.type }}">
+    {% if node.type == "dir" %}
+        <details open>
+            <summary class="code-file-tree__summary" title="/{{ node.path }}">
+                <span class="code-file-tree__name">{{ node.name }}</span>
+            </summary>
+            {% if node.children %}
+                <ul class="code-file-tree__list">
+                    {% for child in node.children %}
+                        {% include "task/tabs/_codefile_node.html" with node=child %}
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </details>
+    {% else %}
+        <details class="code-file-tree__file"  title="/{{ node.path }}">
+            <summary class="code-file-tree__iterations-summary">
+                    <span class="text-muted">
+                                    <a href="{% url 'view_codefile' node.codefile_id %}"
+                                       class="code-file-tree__name text-decoration-none">
+                                        {{ node.name }}
+                                    </a>
+                    </span>
+            </summary>
+            <ul class="code-file-tree__iterations">
+                {% for iteration in node.iterations %}
+                    <li class="code-file-tree__iteration">
+                        <a href="{% url 'view_self_driver_iteration_tab' 'coding' iteration.id %}">
+                            Iteration {{ iteration.version_number }}
+                        </a>
+                        <span class="text-muted">{{ iteration.timestamp|date:"SHORT_DATETIME_FORMAT" }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </details>
+    {% endif %}
+</li>

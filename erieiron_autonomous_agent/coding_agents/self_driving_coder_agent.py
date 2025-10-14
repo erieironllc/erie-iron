@@ -1221,9 +1221,9 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     config.set_phase(SdaPhase.INIT)
     self_driving_task.get_git().pull()
     
-    create_task_subdomain(self_driving_task)
     config.iterate_if_necessary()
-    
+    create_task_subdomain(config)
+
     if not config.business.codefile_set.exists():
         config.git.mk_venv()
         config.business.snapshot_code(
@@ -1256,14 +1256,17 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
 
 
 @transaction.atomic
-def create_task_subdomain(self_driving_task: SelfDrivingTask):
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(self_driving_task.task.task_type):
+def create_task_subdomain(config: SelfDriverConfig):
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
         return
     
-    previous_domain = (self_driving_task.domain or "").rstrip('.').lower()
+    iteration = config.current_iteration
+    self_driving_task = config.self_driving_task
+    
+    previous_domain = (iteration.domain or "").rstrip('.').lower()
     
     try:
-        desired_domain, _, _ = self_driving_task.task.get_domain_and_cert(AwsEnv.DEV)
+        desired_domain, _, _ = iteration.get_domain_and_cert(AwsEnv.DEV)
         desired_domain = (desired_domain or "").rstrip('.').lower()
     except Exception as exc:
         logging.exception("Failed to determine task domain for %s: %s", self_driving_task.task_id, exc)
@@ -1276,9 +1279,9 @@ def create_task_subdomain(self_driving_task: SelfDrivingTask):
     if previous_domain and previous_domain != normalized_desired:
         domain_manager.delete_subdomain(previous_domain)
     
-    if self_driving_task.domain != normalized_desired:
-        self_driving_task.domain = normalized_desired
-        self_driving_task.save(update_fields=["domain"])
+    if iteration.domain != normalized_desired:
+        iteration.domain = normalized_desired
+        iteration.save(update_fields=["domain"])
 
 
 def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
@@ -2397,6 +2400,7 @@ def get_previous_iteration_summaries_msg(config):
 def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     initial_stack_name = stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    iteration = config.current_iteration 
     
     for i in range(5):
         matching_stack = get_stack(stack_name, cf_client)
@@ -2457,10 +2461,10 @@ def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
         )
     
     with transaction.atomic():
-        SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             cloudformation_stack_name=stack_name
         )
-    config.self_driving_task.refresh_from_db(fields=["cloudformation_stack_name"])
+    iteration.refresh_from_db(fields=["cloudformation_stack_name"])
     return stack_name
 
 
@@ -2738,6 +2742,7 @@ def push_cloudformation(
 ):
     start_time = time.time()
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
+    iteration = config.current_iteration 
     try:
         config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file}")
         template_body = template_body or cfn_file.read_text()
@@ -2767,13 +2772,13 @@ def push_cloudformation(
         
         # pprint.pprint(get_stack(stack_name, cf_client))
         
-        # Update SelfDrivingTask.cloudformation_stack_id with the deployed stack's physical ID
+        # Update SelfDrivingTaskIteration.cloudformation_stack_id with the deployed stack's physical ID
         try:
             stack_desc = get_stack(stack_name, cf_client)
             stack_id = stack_desc.get("StackId") if stack_desc else None
             if stack_id:
                 with transaction.atomic():
-                    SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+                    SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
                         cloudformation_stack_id=stack_id
                     )
             else:

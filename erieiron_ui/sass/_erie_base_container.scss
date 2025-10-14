@@ -42,6 +42,11 @@ body {
   .code-container {
     padding: 1rem;
     background-color: $gray-100 !important;
+    color: $dark important;
+    
+    code{
+      color: $dark !important;
+    }
 
     * {
       background-color: $gray-100 !important;

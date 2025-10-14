@@ -17,7 +17,7 @@
             <ol class="breadcrumb pt-3 align-items-center gap-2">
                 {% for item in breadcrumb_dropdowns %}
                     {% with toggle_id="breadcrumbDropdown"|add:forloop.counter %}
-                        {% with crumb_label=item.label|title %}
+                        {% with crumb_label=item.label %}
                             {% if item.tabs %}
                             <li class="breadcrumb-item dropdown">
                                 <a class="dropdown-toggle text-decoration-none"

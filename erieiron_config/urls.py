@@ -49,4 +49,7 @@ urlpatterns = [
     path("iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
 
     path("lesson/toggle/<uuid:lesson_id>", views.action_toggle_lesson_validity, name="action_toggle_lesson_validity"),
+    
+    path("codefile/<uuid:codefile_id>", views.view_codefile, name="view_codefile"),
+    path("api/codefile/<uuid:codefile_id>/content", views.api_codefile_content, name="api_codefile_content"),
 ]
