@@ -4,8 +4,8 @@ You are developing code in the **Test-Driven-Development style**.  The automated
 
 ## Constraints
 
-- When tests need to send emails, always construct the "FROM" address from the task's DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}`) so the sender belongs to the verified SES domain.
-- Tests must only send emails to recipients within the task's DomainName (for example, `alerts@{os.getenv("DOMAIN_NAME")}`) and must never target other domains.
+- When tests need to send emails, always construct the "FROM" address from the task's DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}`) and ensure that identity is verified in SES before the test runs.
+- Automated SES smoke or integration tests must target the SES Mailbox Simulator (e.g., `success@simulator.amazonses.com` for happy-path delivery, or other simulator addresses when validating bounces/complaints). Never point tests at real recipients or DomainName inboxes.
 - When implementing or modifying tests **Only modify <test_file_path>.** You may not create additional test files under any circumstances.
 - If repeated iterations show the test itself is faulty or lacks the logging needed to diagnose failures, update it to correct the issue or add focused diagnostics while keeping the test’s spirit intact.
 - You may modify or add tests inside `<test_file_path>`, if doing so is necessary to bring the implementation closer to the GOAL or to fix a failing assertion.

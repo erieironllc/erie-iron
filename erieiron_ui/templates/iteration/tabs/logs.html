@@ -4,7 +4,7 @@
 <div class="pre" id="div_logs"
      data-iteration-id="{{ iteration.id }}"
      data-logs-url="{% url 'view_iteration_logs' iteration.id %}">
-    {{ iteration.log_content_coding|default_if_none:"" }}{{ iteration.log_content_execution|default_if_none:"" }}
+    {{ iteration.get_all_log_content|default_if_none:"" }}
 </div>
 <script>
     (function () {

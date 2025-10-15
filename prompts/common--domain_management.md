@@ -30,7 +30,9 @@ The system passes the task-specific subdomain
 - Domain is hosted in Route53 in the same AWS account, and DNS records must be created by CloudFormation.
 
 ### Email Usage
-- SES resources (such as receipt rules, MX/TXT/DKIM records, S3 actions, Lambda forwarders, etc.) **must** use the `DomainName` parameter for all SES-related DNS records and for constructing email addresses (e.g., `info@!Ref DomainName`). Automated tests must build both sender and recipient addresses from the same DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}` to `alerts@{os.getenv("DOMAIN_NAME")}`) so SES verification and DKIM checks pass across environments.
+- SES resources (such as receipt rules, MX/TXT/DKIM records, S3 actions, Lambda forwarders, etc.) **must** use the `DomainName` parameter for all SES-related DNS records and for constructing email addresses (e.g., `info@!Ref DomainName`).
+- Automated SES smoke or integration tests must send from an address built off the task DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}`) and **must** target the SES Mailbox Simulator (`success@simulator.amazonses.com` for a happy-path delivery, with `bounce@simulator.amazonses.com`, `complaint@simulator.amazonses.com`, `ooto@simulator.amazonses.com`, or `suppressionlist@simulator.amazonses.com` when specifically validating those flows). Never send test traffic to real recipients or to DomainName mailboxes.
+- The self-driving deployment agent handles SES domain verification, DKIM, and MX automation. Do not add manual verification steps or custom automation—assume the helper keeps the identity verified and surface a clear failure only if AWS still reports it unverified.
 - Stacks **must not** introduce or depend on the parent business domain for SES configurations.
 - S3 buckets used for inbound email storage **must** be tied to the `DomainName` context (for example, by prefixing objects with the domain or a task identifier).
 - CloudFormation will create all SES-required DNS records via Route53 record sets.

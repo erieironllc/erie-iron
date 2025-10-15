@@ -65,6 +65,7 @@ def on_task_blocked(payload, msg):
             "eng_lead--unblocker.md",
             "eng_lead.md",
             "common--general_coding_rules.md",
+            "common--agent_provided_functionality.md",
             "common--llm_chat.md",
             "common--iam_role.md",
             "common--forbidden_actions.md",
@@ -115,6 +116,7 @@ def define_tasks_for_initiative(initiative_id):
         [
             "eng_lead.md",
             "common--general_coding_rules.md",
+            "common--agent_provided_functionality.md",
             "common--llm_chat.md",
             "common--iam_role.md",
             "common--forbidden_actions.md",
@@ -434,6 +436,7 @@ def write_business_architecture(business):
                 [
                     "system_architect.md",
                     "common--general_coding_rules.md",
+                    "common--agent_provided_functionality.md",
                     "common--llm_chat.md",
                     "common--iam_role.md",
                     "common--domain_management.md",
@@ -476,6 +479,7 @@ def write_initiative_architecture(initiative: Initiative):
                 [
                     "system_architect.md",
                     "common--general_coding_rules.md",
+                    "common--agent_provided_functionality.md",
                     "common--llm_chat.md",
                     "common--iam_role.md",
                     "common--domain_management.md",
@@ -518,6 +522,7 @@ def identify_required_credentials(business: Business):
                     "codeplanner--initial_credentials.md",
                     "codeplanner--common.md",
                     "common--general_coding_rules.md",
+                    "common--agent_provided_functionality.md",
                     "common--llm_chat.md",
                     "common--iam_role.md",
                     "common--forbidden_actions.md",

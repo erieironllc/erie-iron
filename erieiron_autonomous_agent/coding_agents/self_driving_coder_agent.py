@@ -377,6 +377,7 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         
         reference_prompts = [
             "prompts/common--general_coding_rules.md",
+            "prompts/common--agent_provided_functionality.md",
             "prompts/common--infrastructure_rules.md",
             "prompts/common--credentials_architecture.md",
             "prompts/codewriter--common.md",
@@ -2183,7 +2184,7 @@ def evaluate_iteration(
         config: SelfDriverConfig,
         exception: Exception = None
 ):
-    config.set_phase(SdaPhase.EVALUATE)
+    log_output = config.set_phase(SdaPhase.EVALUATE)
     
     iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
     
@@ -2193,7 +2194,6 @@ def evaluate_iteration(
     if isinstance(exception, NeedPlan):
         return None
     
-    log_output = config.current_iteration.get_all_log_content() or config.log_path.read_text()
     
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
@@ -2217,6 +2217,7 @@ def evaluate_iteration(
         get_sys_prompt([
             "iteration_summarizer.md",
             "common--iam_role.md",
+            "common--agent_provided_functionality.md",
             "common--domain_management.md",
             "common--forbidden_actions.md",
             "common--environment_variables.md"
@@ -2322,6 +2323,7 @@ def evaluate_iteration(
             get_sys_prompt([
                 "iteration_selector.md",
                 "common--iam_role.md",
+                "common--agent_provided_functionality.md",
                 "common--domain_management.md",
                 "common--forbidden_actions.md",
                 "common--environment_variables.md"
@@ -3578,6 +3580,7 @@ def write_test(
                     "codewriter--common.md",
                     "codewriter--lambda_coder.md",
                     "common--iam_role.md",
+                    "common--agent_provided_functionality.md",
                     "common--domain_management.md",
                     "common--llm_chat.md",
                     "common--credentials_architecture.md",
@@ -3693,6 +3696,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                     [
                         "failure_router.md",
                         "common--iam_role.md",
+                        "common--agent_provided_functionality.md",
                         "common--domain_management.md",
                         "common--forbidden_actions.md",
                         "common--credentials_architecture.md",
@@ -3762,9 +3766,11 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 [
                     "codeplanner--aws_provisioning.md",
                     "common--general_coding_rules.md",
+                    "common--agent_provided_functionality.md",
                     "codeplanner--common.md",
                     "common--llm_chat.md",
                     "common--iam_role.md",
+                    "common--agent_provided_functionality.md",
                     "common--domain_management.md",
                     "common--forbidden_actions.md",
                     "common--environment_variables.md",
@@ -3865,9 +3871,11 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             get_sys_prompt([
                 "codeplanner--quick_fix.md",
                 "common--general_coding_rules.md",
+                "common--agent_provided_functionality.md",
                 "codeplanner--common.md",
                 "common--llm_chat.md",
                 "common--iam_role.md",
+                "common--agent_provided_functionality.md",
                 "common--domain_management.md",
                 "common--forbidden_actions.md",
                 "common--environment_variables.md",
@@ -3946,9 +3954,11 @@ def plan_full_code_changes(config: SelfDriverConfig):
         MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
         "codeplanner--full_plan_base.md",
         "common--general_coding_rules.md",
+        "common--agent_provided_functionality.md",
         "codeplanner--common.md",
         "common--llm_chat.md",
         "common--iam_role.md",
+        "common--agent_provided_functionality.md",
         "common--domain_management.md",
         "common--forbidden_actions.md",
         "common--credentials_architecture.md",
@@ -4070,6 +4080,7 @@ def write_code_file(
                 *get_codewriter_system_prompt(code_file_path),
                 "codewriter--common.md",
                 "common--iam_role.md",
+                "common--agent_provided_functionality.md",
                 "common--domain_management.md",
                 "common--credentials_architecture.md",
                 "common--forbidden_actions.md"
@@ -4791,7 +4802,7 @@ def deploy_cloudformation_stacks(
 ):
     import boto3
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    
+   
     self_driving_task = config.self_driving_task
     aws_env = config.aws_env
     
@@ -4848,12 +4859,30 @@ def deploy_cloudformation_stacks(
     return stack_name
 
 
+def check_ses_quota(config: SelfDriverConfig):
+    # Check SES send quota before proceeding
+    import boto3
+    ses_client = boto3.client("ses", region_name=config.aws_env.get_aws_region())
+    quota = ses_client.get_send_quota()
+    sent = float(quota.get("SentLast24Hours", 0))
+    max_send = float(quota.get("Max24HourSend", 0))
+    if max_send > 0 and sent >= max_send:
+        raise AgentBlocked(
+            f"SES send quota exhausted: SentLast24Hours={sent}, Max24HourSend={max_send}. "
+            "Remediation: Request SES production access or switch to SES simulator addresses to continue sending email."
+        )
+
+
 def manage_ses_domain_settings(config: SelfDriverConfig, cloudformation_params):
     cfn_file = get_cloudformation_file(config)
     template_body = cfn_file.read_text()
     
     if not cloudformation_utils.template_defines_ses_mx(template_body):
         return
+    
+    check_ses_quota(
+        config
+    )
     
     domain_name_param = next(
         (

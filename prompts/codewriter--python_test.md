@@ -128,6 +128,7 @@ The test code must:
 - Prefer configuration discovery via environment variables (e.g., ERIE_STACK_NAME, TASK_NAMESPACE, DATABASE_URL) over hard-coded constants.
 - If live credentials for external providers (e.g., LLMs) are required but not present, fail the test with a clear remediation message rather than stubbing or mocking.
 - Use realistic input examples, not placeholders, when possible.
+- Assume the self-driving deployment agent already builds stack parameters, toggles Lambda reserved concurrency, manages SES domain automation, and performs stack cleanup. Do not write tests that assert this helper logic or attempt to reimplement it—focus on observable application behavior.
 - Tests must exercise the full system path (e.g., database, message bus, LLM calls). In acceptance tests, mocks and stubs are not allowed except for narrowly scoped, pre-approved cases (e.g., FakeClock, InMemoryEmailSink).
 - When asserting AWS Lambda behavior, never import the Lambda module or call `lambda_handler` directly. Trigger the workflow that causes AWS to invoke the Lambda (e.g., enqueue the event, drop the object in S3) and assert the externally observable results instead.
 - Unless the task explicitly calls for validating AWS infrastructure provisioning, do not assert CloudFormation templates, stack outputs, IAM policies, or other AWS configuration details. Focus on end-to-end behavior and observable outcomes; asserting infrastructure settings is too brittle.
@@ -139,8 +140,8 @@ The test code must:
 
 ### Email Guidelines
 
-- When tests need to send emails, **always** derive the "FROM" address from the task's DomainName (e.g., `noreply@{os.getenv("DOMAIN_NAME")}`) so the sender is part of the verified SES domain.
-- Tests must only send emails to recipients whose addresses belong to the task's DomainName (e.g., `alerts@{os.getenv("DOMAIN_NAME")}`) and must never target other domains.
+- When tests need to send emails, **always** derive the "FROM" address from the task's DomainName (e.g., `noreply@{os.getenv("DOMAIN_NAME")}`) and rely on the deployment automation to keep the SES identity verified. **Never** add manual verification logic—fail fast with guidance if AWS still reports the identity as unverified.
+- Automated SES smoke or integration tests must target SES Mailbox Simulator addresses—`success@simulator.amazonses.com` for successful delivery and the other simulator addresses (`bounce@…`, `complaint@…`, `ooto@…`, `suppressionlist@…`) when exercising those flows. Never send test traffic to real recipients or DomainName inboxes.
 
 ---
 

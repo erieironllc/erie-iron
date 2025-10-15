@@ -150,6 +150,8 @@ class SelfDriverConfig:
             self.current_iteration.refresh_from_db(fields=[log_field])
         else:
             self.log(f"Phase: {phase}")
+        
+        return log_content
     
     def set_iteration(self, *args):
         args = common.flatten(args)
@@ -212,7 +214,7 @@ class SelfDriverConfig:
         # Start a background thread to tail the logfile contents to logging.info()
         import threading
         stop_tailing = threading.Event()
-        iteration_version = self.current_iteration.version_number
+        iteration_version = self.current_iteration.version_number if self.current_iteration else "0"
         
         def tail_logfile():
             """Tail the logfile and stream new content to logging.info()"""

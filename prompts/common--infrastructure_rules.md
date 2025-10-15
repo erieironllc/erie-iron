@@ -19,7 +19,7 @@
     - **All resources must set both `DeletionPolicy` and `UpdateReplacePolicy` to `!Ref DeletePolicy`.**
     - **For any SSM parameter (`AWS::SSM::Parameter`) that references other resources (such as referencing Lambda ARNs, Role ARNs, Bucket names, etc.), add a `DependsOn` relationship to those referenced resources so SSM parameters are deleted after the resources they reference.**
     - **For Lambda functions (`AWS::Lambda::Function`), add a `DependsOn` to ensure the function is deleted before any IAM roles it uses. This ensures IAM roles are not deleted while the Lambda function still exists.**
-    - **S3 buckets must always set `DeletionPolicy: !Ref DeletePolicy` and, if `DeletePolicy` is `Delete`, must be emptied automatically (using a lifecycle rule or a cleanup Lambda) so CloudFormation can delete the bucket without manual intervention.**
+    - **S3 buckets must always set `DeletionPolicy: !Ref DeletePolicy`. The self-driving deployment agent empties stack buckets before deletion, so do not introduce additional cleanup Lambdas or lifecycle rules unless specifically required by a task.**
     - **For IAM roles, ensure that no inline policies or external policy attachments prevent deletion. All policies must be removed (or detached) before the role can be deleted.**
     - **CloudFormation stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
 - Erie Iron deploys every stack inside the shared VPC `erie-iron-shared-vpc`. Plans and templates must rely on `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr` parameters and must not create or modify VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints.
