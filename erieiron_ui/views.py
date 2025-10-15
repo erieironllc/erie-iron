@@ -1668,8 +1668,19 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         llm_requests=llm_requests,
     )
     
+    stack_id = iteration.cloudformation_stack_id if iteration else None
+    if stack_id:
+        cloudformation_stack_name = iteration.cloudformation_stack_name or stack_id
+        encoded_stack_id = quote(stack_id, safe="")
+        cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/events?stackId={encoded_stack_id}"
+    else:
+        cloudformation_stack_url = None
+
     context = {
         "iteration": iteration,
+        "cloudformation_stack_name": iteration.cloudformation_stack_name,
+        "cloudformation_stack_url": cloudformation_stack_url,
+        "logs_prefix": iteration.cloudformation_stack_name.split("-")[0] if iteration.cloudformation_stack_name else None,
         "previous_iteration": previous_iteration,
         "iteration_to_modify": iteration_to_modify,
         "next_iteration": next_iteration,

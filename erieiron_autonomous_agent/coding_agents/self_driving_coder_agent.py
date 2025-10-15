@@ -78,7 +78,7 @@ def execute(
         
         if not SdaInitialAction.EVAL.eq(one_off_action):
             build_deploy_exec_iteration(
-                SelfDriverConfig(self_driving_task)
+                config
             )
         
         evaluate_iteration(config)
@@ -1658,7 +1658,7 @@ def get_stack_lambdas(config) -> list[dict]:
             continue
         
         if not isinstance(s3_key_ref, dict) or "Ref" not in s3_key_ref:
-            raise Exception(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
+            raise BadPlan(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
         
         if not (config.sandbox_root_dir / candidate_path).exists():
             raise BadPlan(f"Bad Lambda {resource_name} definition: file not found — expected at {candidate_path}")

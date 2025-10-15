@@ -10,7 +10,18 @@
     {% endif %}
 </h2>
 
-<hr>
+{% if logs_prefix %}
+    <div style="margin-top: -3rem; margin-bottom: 2rem">
+            <div class="d-flex justify-content-end">
+                <a class="me-3" target="_blank" href="{{ cloudformation_stack_url }}">Stack ({{ logs_prefix }})</a>
+                <a target=_blank
+                   href="https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#logsV2:log-groups$3FlogGroupNameFilter$3D{{ logs_prefix }}">
+                    Cloudwatch
+                </a>
+            </div>
+    </div>
+{% endif %}
+
 
 
 {% if iteration.evaluation_json %}
@@ -39,7 +50,7 @@
         {% endfor %}
     </div>
 
-    <div class="pre mt-5" 
+    <div class="pre mt-5"
          id="div_logs"
          data-iteration-id="{{ iteration.id }}"
          data-logs-url="{% url 'view_iteration_logs' iteration.id %}">

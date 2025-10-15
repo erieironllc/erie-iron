@@ -125,19 +125,29 @@ class SelfDriverConfig:
         previous_phase = self.phase
         self.phase = phase
         log_content = self.log_path.read_text() if self.log_path else None
+        self.reset_log()
+        
         self.log(f"\n\n\n======Phase Change ============")
         if self.current_iteration:
             self.log(f"Phase: {phase}; iteration_id: {self.current_iteration.id} (v{self.current_iteration.version_number})")
             if previous_phase in [SdaPhase.INIT]:
-                self.current_iteration.log_content_init = log_content
+                log_field = "log_content_init"
             elif previous_phase in [SdaPhase.PLANNING, SdaPhase.CODING]:
-                self.current_iteration.log_content_coding = log_content
+                log_field = "log_content_coding"
             elif previous_phase in [SdaPhase.BUILD, SdaPhase.DEPLOY, SdaPhase.EXECUTION]:
-                self.current_iteration.log_content_execution = log_content
+                log_field = "log_content_execution"
             elif previous_phase in [SdaPhase.EVALUATE]:
-                self.current_iteration.log_content_evaluation = log_content
+                log_field = "log_content_evaluation"
             else:
                 raise Exception(f"unhandled phase {previous_phase}")
+            
+            self.current_iteration.refresh_from_db(fields=[log_field])
+            current_log = getattr(self.current_iteration, log_field)
+            with transaction.atomic():
+                SelfDrivingTaskIteration.objects.filter(id=self.current_iteration.id).update(
+                    **{log_field: "\n".join(common.filter_none([current_log, log_content]))}
+                )
+            self.current_iteration.refresh_from_db(fields=[log_field])
         else:
             self.log(f"Phase: {phase}")
     

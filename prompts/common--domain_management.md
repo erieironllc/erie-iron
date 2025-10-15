@@ -30,7 +30,7 @@ The system passes the task-specific subdomain
 - Domain is hosted in Route53 in the same AWS account, and DNS records must be created by CloudFormation.
 
 ### Email Usage
-- SES resources (such as receipt rules, MX/TXT/DKIM records, S3 actions, Lambda forwarders, etc.) **must** use the `DomainName` parameter for all SES-related DNS records and for constructing email addresses (e.g., `info@!Ref DomainName`).
+- SES resources (such as receipt rules, MX/TXT/DKIM records, S3 actions, Lambda forwarders, etc.) **must** use the `DomainName` parameter for all SES-related DNS records and for constructing email addresses (e.g., `info@!Ref DomainName`). Automated tests must build both sender and recipient addresses from the same DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}` to `alerts@{os.getenv("DOMAIN_NAME")}`) so SES verification and DKIM checks pass across environments.
 - Stacks **must not** introduce or depend on the parent business domain for SES configurations.
 - S3 buckets used for inbound email storage **must** be tied to the `DomainName` context (for example, by prefixing objects with the domain or a task identifier).
 - CloudFormation will create all SES-required DNS records via Route53 record sets.

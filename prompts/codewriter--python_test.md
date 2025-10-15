@@ -139,8 +139,8 @@ The test code must:
 
 ### Email Guidelines
 
-- When tests need to send emails, **always** use "erieironllc@gmail.com" as the "FROM" address.
-- Tests should only send emails to internal domains (e.g., *@erieiron.com or the application's business domain) and must never send emails externally.
+- When tests need to send emails, **always** derive the "FROM" address from the task's DomainName (e.g., `noreply@{os.getenv("DOMAIN_NAME")}`) so the sender is part of the verified SES domain.
+- Tests must only send emails to recipients whose addresses belong to the task's DomainName (e.g., `alerts@{os.getenv("DOMAIN_NAME")}`) and must never target other domains.
 
 ---
 

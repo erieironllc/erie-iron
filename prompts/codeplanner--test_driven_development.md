@@ -4,8 +4,8 @@ You are developing code in the **Test-Driven-Development style**.  The automated
 
 ## Constraints
 
-- When tests need to send emails, always use "erieironllc@gmail.com" as the "FROM" address.
-- Tests should only send emails to internal domains (e.g., *@erieiron.com or the application's business domain) and must never send emails externally.
+- When tests need to send emails, always construct the "FROM" address from the task's DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}`) so the sender belongs to the verified SES domain.
+- Tests must only send emails to recipients within the task's DomainName (for example, `alerts@{os.getenv("DOMAIN_NAME")}`) and must never target other domains.
 - When implementing or modifying tests **Only modify <test_file_path>.** You may not create additional test files under any circumstances.
 - If repeated iterations show the test itself is faulty or lacks the logging needed to diagnose failures, update it to correct the issue or add focused diagnostics while keeping the test’s spirit intact.
 - You may modify or add tests inside `<test_file_path>`, if doing so is necessary to bring the implementation closer to the GOAL or to fix a failing assertion.
@@ -43,4 +43,3 @@ Violating these constraints may result in invalid task execution or untrustworth
 - Mocking or stubbing of AWS services is **not allowed**; tests must run against real or stack-provisioned resources that mirror production conditions.
 - When instability or eventual consistency may cause flakiness, tests should include bounded retries with jitter and clear diagnostics rather than disabling validation.
 - Logging and diagnostics should focus on visibility of functional flow (what succeeded or failed), not on enforcing static configuration expectations.
-
