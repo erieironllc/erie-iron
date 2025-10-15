@@ -37,7 +37,11 @@
             <div class="card mb-4 iteration_card">
                 <div class="card-header d-flex justify-content-start">
                     <small class="text-muted">
-                        {{ code_version.code_file.file_path }}
+                        {% if previous_iteration %}
+                            <a href="{% url "view_codefile" code_version.code_file_id %}?v={{ previous_iteration.version_number }},{{ iteration.version_number }}">{{ code_version.code_file.file_path }}</a>
+                        {% else %}
+                            <a href="{% url "view_codefile" code_version.code_file_id %}?v={{ iteration.version_number }}">{{ code_version.code_file.file_path }}</a>
+                        {% endif %}
                     </small>
                 </div>
                 <div class="card-body">

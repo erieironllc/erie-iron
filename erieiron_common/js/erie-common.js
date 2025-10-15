@@ -1281,3 +1281,10 @@ async function local_db_get(db_name, key) {
 function log(...data) {
     console.log(...data);
 }
+
+function get_querystring_params() {
+
+    const urlParams = new URLSearchParams(window.location.search);
+    return Object.fromEntries(urlParams);
+
+}

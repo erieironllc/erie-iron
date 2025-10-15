@@ -10,6 +10,13 @@ CodeFileView = ErieView.extend({
         this.codefileId = $container.data('codefile-id');
         this.codeVersions = this.parseCodeVersionsData($container.data('code-versions'));
         this.initializeView();
+        
+        (get_querystring_params()["v"] || "").split(",").forEach((v)=>{
+            const value = String(v).trim();
+            if (!value) return;
+
+            $(`.version-checkbox[data-version-number="${CSS.escape ? CSS.escape(value) : value}"]`).click();
+        });
     },
 
     parseCodeVersionsData: function (dataString) {
