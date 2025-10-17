@@ -22,26 +22,22 @@ from django.db.models import Func
 from django.db.models import Q
 from django.db.models.expressions import RawSQL
 from erieiron_public import agent_tools
-from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, CloudFormationException, CloudFormationStackDeleting, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction, sentence_transformer_model
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative, LlmRequest
+from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, Initiative, LlmRequest, Business
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, cloudformation_log_reader, cloudformation_utils
-from erieiron_common.aws_utils import sanitize_aws_name, STACK_STATUS_NO_STACK
+from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket
+from erieiron_common.cloudformation_utils import get_foundation_stack_outputs, get_stack_outputs, CloudFormationStackObsolete, CloudFormationException, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, rotate_cloudformation_stack_name, CloudformationTemplate, cancel_stack_push
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-
-sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 
 
 def execute(
@@ -80,9 +76,9 @@ def execute(
             build_deploy_exec_iteration(
                 config
             )
-        
+            
         evaluate_iteration(config)
-        
+
         return
     
     for i in range(10):
@@ -119,6 +115,8 @@ def execute(
                     config.iteration_to_modify.write_to_disk()
                 
                 plan_and_implement_code_changes(config)
+                
+                asdf = 1
             
             execution_exception = None
             try:
@@ -186,6 +184,7 @@ full logs:
             handle_goal_achieved(config)
             logging.info(f"Stopping - Goal Achieved")
             break
+        
         except Exception as e:
             logging.exception(e)
             config.log(e)
@@ -639,7 +638,9 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
                 str(validation_error)
             )
         else:
-            raise ExecutionException("Codex CLI reached maximum validation attempts without resolving infrastructure.yaml errors.")
+            raise ExecutionException(
+                "Codex CLI reached maximum validation attempts without resolving CloudFormation template errors."
+            )
         
         persisted_code_files = _persist_codex_code_versions(
             config,
@@ -672,30 +673,38 @@ def get_guidance_msg(config: SelfDriverConfig):
 
 
 def validate_infrastructure(config, normalized_changed):
-    if "infrastructure.yaml" not in normalized_changed:
+    templates_to_check = [
+        filename for filename in (
+            CloudformationTemplate.FOUNDATION.value,
+            CloudformationTemplate.APPLICATION.value
+        )
+        if filename in normalized_changed
+    ]
+    
+    if not templates_to_check:
         return None
     
-    infrastructure_path = config.sandbox_root_dir / "infrastructure.yaml"
-    validation_error = None
-    try:
-        template_body = infrastructure_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        validation_error = BadPlan(
-            "`infrastructure.yaml` is missing after Codex execution; restore the file and ensure it is valid."
-        )
-    except OSError as read_exc:
-        validation_error = BadPlan(
-            f"Unable to read `infrastructure.yaml` after Codex execution: {read_exc}"
-        )
-    else:
+    for filename in templates_to_check:
+        template_path = config.sandbox_root_dir / filename
+        try:
+            template_body = template_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return BadPlan(
+                f"`{filename}` is missing after Codex execution; restore the file and ensure it is valid."
+            )
+        except OSError as read_exc:
+            return BadPlan(
+                f"Unable to read `{filename}` after Codex execution: {read_exc}"
+            )
+        
         try:
             validate_cloudformation_template(
                 config,
                 template_body
             )
         except BadPlan as exc:
-            validation_error = exc
-    return validation_error
+            return exc
+    return None
 
 
 def validate_all_changed_files(config, normalized_changed, planning_data):
@@ -1216,15 +1225,14 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     )
     
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
-    
     config = SelfDriverConfig(self_driving_task)
+    
     is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
     config.set_phase(SdaPhase.INIT)
-    self_driving_task.get_git().pull()
     
+    self_driving_task.get_git().pull()
     config.iterate_if_necessary()
-    create_task_subdomain(config)
-
+    
     if not config.business.codefile_set.exists():
         config.git.mk_venv()
         config.business.snapshot_code(
@@ -1256,35 +1264,6 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     return self_driving_task
 
 
-@transaction.atomic
-def create_task_subdomain(config: SelfDriverConfig):
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
-        return
-    
-    iteration = config.current_iteration
-    self_driving_task = config.self_driving_task
-    
-    previous_domain = (iteration.domain or "").rstrip('.').lower()
-    
-    try:
-        desired_domain, _, _ = iteration.get_domain_and_cert(AwsEnv.DEV)
-        desired_domain = (desired_domain or "").rstrip('.').lower()
-    except Exception as exc:
-        logging.exception("Failed to determine task domain for %s: %s", self_driving_task.task_id, exc)
-        raise AgentBlocked(f"unable to determine a valid domain for task {self_driving_task.task_id}")
-    
-    normalized_desired = (desired_domain or "").rstrip('.').lower()
-    if not normalized_desired:
-        raise AgentBlocked(f"unable to compute a domain for task {self_driving_task.task_id}")
-    
-    if previous_domain and previous_domain != normalized_desired:
-        domain_manager.delete_subdomain(previous_domain)
-    
-    if iteration.domain != normalized_desired:
-        iteration.domain = normalized_desired
-        iteration.save(update_fields=["domain"])
-
-
 def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
     domain_name = (config.domain_name or "").rstrip('.')
     hosted_zone_id = config.hosted_zone_id
@@ -1293,7 +1272,7 @@ def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
         config.log(f"Skipping DNS alias update; missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
         return
     
-    stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
+    stack_name = config.stack_name_foundation
     region = config.aws_env.get_aws_region()
     cf_client = boto3.client("cloudformation", region_name=region)
     
@@ -1435,29 +1414,16 @@ def exec_docker_prune():
 
 def update_rds_env_vars(
         config: SelfDriverConfig,
-        docker_env: dict
+        docker_env: dict,
+        foundation_outputs: dict | None = None
 ):
-    stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
-    if not stack_name:
-        raise AgentBlocked("unable to determine stack name")
+    cloudformation_output_vars = foundation_outputs or get_foundation_stack_outputs(
+        config.initiative,
+        config.aws_env
+    )
     
-    region = get_aws_region()
-    if not region:
-        raise AgentBlocked("unable to determine regions")
-    
-    cf_client = aws_utils.client("cloudformation")
-    try:
-        stack_descriptions = cf_client.describe_stacks(StackName=stack_name).get("Stacks")
-    except Exception as e:
-        raise AgentBlocked(f"unable to describe stack {stack_name}: {e}")
-    
-    if not stack_descriptions:
-        raise AgentBlocked(f"no stack descriptions found for {stack_name}")
-    
-    cloudformation_output_vars = {
-        o.get("OutputKey"): o.get("OutputValue")
-        for o in common.ensure_list(common.first(stack_descriptions).get("Outputs"))
-    }
+    if not cloudformation_output_vars:
+        raise BadPlan("Foundation stack lacks RDS outputs required for environment configuration")
     
     rds_secret_arn = cloudformation_output_vars.get("RdsMasterSecretArn")
     if not rds_secret_arn:
@@ -1505,9 +1471,15 @@ def build_env(config: SelfDriverConfig) -> dict:
         "AWS_SECRET_ACCESS_KEY": aws_credentials.secret_key,
         "AWS_SESSION_TOKEN": aws_credentials.token,
         "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
-        "STACK_IDENTIFIER": config.self_driving_task.get_cloudformation_key_prefix(aws_env),
-        "TASK_NAMESPACE": config.self_driving_task.get_cloudformation_stack_name(aws_env),
-        "CLOUDFORMATION_STACK_NAME": config.self_driving_task.get_cloudformation_stack_name(aws_env),
+        
+        "TASK_NAMESPACE": config.stack_identifier_application,
+        
+        "STACK_NAME": config.stack_name_application,
+        "FOUNDATION_STACK_NAME": config.stack_name_foundation,
+        
+        "STACK_IDENTIFIER": config.stack_identifier_application,
+        "FOUNDATION_STACK_IDENTIFIER": config.stack_identifier_foundation,
+        
         "DOCKER_BUILDKIT": "1",
         "PATH": os.getenv("PATH")
     }
@@ -1550,6 +1522,8 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     s3 = aws_utils.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
+    if not lambda_datas:
+        return []
     
     # Pre-pull the ARM64 Lambda Python image before building dependencies
     subprocess.run(
@@ -1636,9 +1610,12 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
 
 
 def get_stack_lambdas(config) -> list[dict]:
-    lambdas = []
+    resources = {
+        **get_infrastructure_yaml_data(config, CloudformationTemplate.FOUNDATION).get("Resources", {}),
+        **get_infrastructure_yaml_data(config, CloudformationTemplate.APPLICATION).get("Resources", {}),
+    }
     
-    resources = get_infrastructure_yaml_data(config).get("Resources", {})
+    lambdas = []
     for resource_name, resource_config in resources.items():
         if resource_config.get("Type") != "AWS::Lambda::Function":
             continue
@@ -1684,22 +1661,58 @@ def get_stack_lambdas(config) -> list[dict]:
     return lambdas
 
 
-def get_infrastructure_yaml_data(config: SelfDriverConfig) -> dict:
+def get_stack_buckets(config) -> list[dict]:
+    resources = {
+        **get_infrastructure_yaml_data(config, CloudformationTemplate.FOUNDATION).get("Resources", {}),
+        **get_infrastructure_yaml_data(config, CloudformationTemplate.APPLICATION).get("Resources", {}),
+    }
+    
+    buckets = []
+    for resource_name, resource_config in resources.items():
+        if resource_config.get("Type") != "AWS::S3::Bucket":
+            continue
+        
+        properties = resource_config.get("Properties", {}) or {}
+        bucket_name_expr = properties.get("BucketName")
+        
+        if isinstance(bucket_name_expr, str):
+            bucket_physical_name = bucket_name_expr
+            bucket_name_param = None
+        elif isinstance(bucket_name_expr, dict) and "Ref" in bucket_name_expr and isinstance(bucket_name_expr["Ref"], str):
+            bucket_physical_name = None
+            bucket_name_param = bucket_name_expr["Ref"]
+        else:
+            bucket_physical_name = None
+            bucket_name_param = None
+        
+        buckets.append({
+            "bucket_name": resource_name,
+            "bucket_physical_name": bucket_physical_name,
+            "bucket_name_param": bucket_name_param,
+            "properties": properties,
+            "metadata": resource_config.get("Metadata", {}) or {},
+        })
+    
+    return buckets
+
+
+def get_infrastructure_yaml_data(config: SelfDriverConfig, cf_template: CloudformationTemplate) -> dict:
     return agent_tools.parse_cloudformation_yaml(
-        get_infrastructure_yaml_code(config)
+        get_infrastructure_yaml_code(config, cf_template)
     )
 
 
-def get_infrastructure_yaml_codeversion(config):
+def get_infrastructure_yaml_codeversion(config, cf_template: CloudformationTemplate):
     return CodeFile.get(
-        config.business, "infrastructure.yaml"
+        config.business,
+        cf_template.value
     ).get_latest_version(
         config.self_driving_task
     )
 
 
-def get_infrastructure_yaml_code(config):
-    infrastructure_code_version = get_infrastructure_yaml_codeversion(config)
+def get_infrastructure_yaml_code(config, cf_template: CloudformationTemplate):
+    infrastructure_code_version = get_infrastructure_yaml_codeversion(config, cf_template)
     
     return infrastructure_code_version.code if infrastructure_code_version else None
 
@@ -1810,7 +1823,7 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
     ).text
 
 
-def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
+def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     config.current_iteration.evaluation_json = None
     config.current_iteration.save()
     
@@ -1844,13 +1857,14 @@ def build_deploy_exec_iteration(config: SelfDriverConfig) -> str:
         if not isinstance(e, CloudFormationException):
             config.log(common.get_stack_trace_as_string(e))
         
-        if config.self_driving_task.cloudformation_stack_name:
+        stack_name = config.self_driving_task.cloudformation_stack_name
+        if stack_name:
             local_logs = config.get_log_content() or ""
             
             # time.sleep(30)  # pause to let logging catch up
             failure_details = cloudformation_log_reader.read_cloudformation_failures(
                 config.aws_env.get_aws_region(),
-                config.self_driving_task.cloudformation_stack_name,
+                config.stack_names,
                 start_epoch,
                 local_logs=local_logs
             )
@@ -1953,32 +1967,54 @@ def deploy_iteration(
         raise BadPlan(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
     
     try:
-        empty_stack_buckets(config, delete=False)
+        empty_stack_buckets(
+            config,
+            delete_bucket=False
+        )
     except Exception as e:
         config.log(e)
         raise AgentBlocked(f"unable to empty buckets for stack {config.self_driving_task.cloudformation_stack_name}")
     
-    stack_name = prepare_stack_for_update(
-        config,
-        docker_env
-    )
+    foundation_template = get_cloudformation_file(config, CloudformationTemplate.FOUNDATION)
+    application_template = get_cloudformation_file(config, CloudformationTemplate.APPLICATION)
+    cloudformation_utils.enforce_route53_alias_guardrail(application_template)
     
-    deploy_cloudformation_stacks(
-        config,
-        stack_name,
+    foundation_stack_id, foundation_outputs = deploy_cloudformation_stack(
+        config=config,
+        stack_name=config.stack_name_foundation,
+        template_path=foundation_template,
+        docker_env=docker_env
+    )
+    Initiative.objects.filter(id=config.initiative.id).update(cloudformation_stack_id=foundation_stack_id)
+    config.initiative.refresh_from_db(fields=["cloudformation_stack_id"])
+    
+    add_rds_vals_to_env(
+        config.business,
         docker_env,
-        full_image_uri,
-        ecr_arn,
-        lambda_datas
+        foundation_outputs
     )
     
+    app_stack_id, app_outputs = deploy_cloudformation_stack(
+        config=config,
+        stack_name=config.stack_name_application,
+        template_path=application_template,
+        docker_env=docker_env,
+        web_container_image=full_image_uri,
+        ecr_arn=ecr_arn,
+        lambda_datas=lambda_datas,
+        previous_stack_outputs=foundation_outputs
+    )
+    SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(cloudformation_stack_id=app_stack_id)
+    config.self_driving_task.refresh_from_db(fields=["cloudformation_stack_id"])
+
     ensure_alb_alias_record(config)
     
     if CredentialService.RDS.value in config.business.required_credentials:
         # special handling for RDS
         update_rds_env_vars(
             config,
-            docker_env
+            docker_env,
+            foundation_outputs.get("outputs") if foundation_outputs else None
         )
     
     manage_db(
@@ -1986,8 +2022,28 @@ def deploy_iteration(
         docker_env,
         docker_image_tag
     )
+
+
+def add_rds_vals_to_env(business: Business, docker_env: dict, foundation_outputs: dict):
+    rds_credential_def = (
+        (business.required_credentials or {}).get(CredentialService.RDS.value)
+        if business.required_credentials else None
+    )
     
-    return full_image_uri, stack_name
+    if rds_credential_def:
+        secret_env = rds_credential_def.get("secret_arn_env_var")
+        secret_arn = foundation_outputs.get("RdsMasterSecretArn")
+        if secret_env and secret_arn:
+            docker_env[secret_env] = secret_arn
+    
+    for output_key, env_key in (
+            ("RdsInstanceDBName", "ERIEIRON_DB_NAME"),
+            ("RdsInstancePort", "ERIEIRON_DB_PORT"),
+            ("RdsInstanceEndpoint", "ERIEIRON_DB_HOST"),
+    ):
+        value = foundation_outputs.get(output_key)
+        if value:
+            docker_env[env_key] = value
 
 
 def build_iteration(config, docker_env):
@@ -2016,92 +2072,40 @@ def build_iteration(config, docker_env):
     return docker_image_tag
 
 
-def infrastructure_yaml_modified_this_iteration(
+def template_modified_this_iteration(
         config: SelfDriverConfig,
-        infrastructure_code_file: Optional[CodeFile] = None
+        cloudformation_template: CloudformationTemplate
 ) -> bool:
-    infrastructure_code_file = infrastructure_code_file or config.business.codefile_set.filter(
-        file_path="infrastructure.yaml"
+    code_file = config.business.codefile_set.filter(
+        file_path=cloudformation_template.name
     ).first()
-    if not infrastructure_code_file:
+    iteration = config.current_iteration
+    if not code_file or not iteration:
         return False
     
-    iteration = config.current_iteration
-    infrastructure_code_version = iteration.codeversion_set.filter(
-        code_file=infrastructure_code_file
+    code_version = iteration.codeversion_set.filter(
+        code_file=code_file
     ).order_by("created_at").last()
     
-    return bool(infrastructure_code_version and infrastructure_code_version.get_diff())
+    return bool(code_version and code_version.get_diff())
 
 
-def is_stack_modified(
-        config: SelfDriverConfig,
-        infrastructure_modified: Optional[bool] = None
-):
-    infrastructure_code_file = config.business.codefile_set.filter(file_path="infrastructure.yaml").first()
-    if not infrastructure_code_file:
-        # no infrastructure
+def is_lambdas_modified(config: SelfDriverConfig):
+    iteration = config.current_iteration
+    
+    lambda_source_files = [
+        lambda_data['code_file_path']
+        for lambda_data in get_stack_lambdas(config)
+    ]
+    
+    if not lambda_source_files:
         return False
     
-    if infrastructure_modified is None:
-        infrastructure_modified = infrastructure_yaml_modified_this_iteration(
-            config,
-            infrastructure_code_file
+    return any(
+        cv.get_diff() for cv in iteration.codeversion_set.filter(
+            code_file__file_path__in=lambda_source_files
         )
-    
-    if infrastructure_modified:
-        # infrastructure.yaml modified in this iteration, need to push
-        return True
-    
-    iteration = config.current_iteration
-    infrastructure_code_version = iteration.get_code_version(infrastructure_code_file)
-    
-    lambda_modified = False
-    try:
-        infra_data = get_infrastructure_yaml_data(config)
-        resources = infra_data.get("Resources", {})
-        
-        lambda_source_files = set()
-        for resource_name, resource_config in resources.items():
-            if resource_config.get("Type") == "AWS::Lambda::Function":
-                properties = resource_config.get("Properties", {})
-                code_config = properties.get("Code", {})
-                
-                if "ZipFile" in code_config:
-                    continue
-                
-                s3_bucket = code_config.get("S3Bucket")
-                s3_key = code_config.get("S3Key")
-                
-                if s3_key and isinstance(s3_key, str):
-                    if s3_key.endswith(".py"):
-                        lambda_source_files.add(s3_key)
-                    elif s3_key.endswith(".zip"):
-                        lambda_source_files.add(s3_key.replace(".zip", ".py"))
-        
-        if lambda_source_files:
-            lambda_modified = any(
-                cv.get_diff() for cv in iteration.codeversion_set.filter(
-                    code_file__file_path__in=lambda_source_files
-                )
-            )
-    except Exception as e:
-        config.log(f"Failed to parse infrastructure.yaml for lambda detection: {e}")
-        lambda_modified = any(
-            cv.get_diff() for cv in iteration.codeversion_set.filter(
-                code_file__file_path__icontains="lambda"
-            )
-        )
-    return lambda_modified
-
-
-def is_stack_exists(config: SelfDriverConfig) -> bool:
-    return get_stack_status(config) != STACK_STATUS_NO_STACK
-
-
-def is_stack_operational(config: SelfDriverConfig) -> bool:
-    stack_status = get_stack_status(config)
-    return stack_status in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]
+    )
 
 
 def manage_db(
@@ -2194,7 +2198,6 @@ def evaluate_iteration(
     if isinstance(exception, NeedPlan):
         return None
     
-    
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
@@ -2229,13 +2232,13 @@ def evaluate_iteration(
     ])
     
     aws_env = config.aws_env
-    stack_status = get_stack_status(config)
+    stack_operational = is_stack_operational(config.stack_names, config.aws_env)
     
     messages += LlmMessage.user_from_data(
         "Cloudformation Status",
         {
-            "stack_status": stack_status,
-            "allow_goal_achieved": "True" if stack_status in ["CREATE_COMPLETE", "UPDATE_COMPLETE", "DEPLOY_COMPLETE"] else "False - the cloudformation stack is not deployed.  You may not declare goal complete under any circumstances"
+            "stack_status": get_stack_statuses(config.stack_names, config.aws_env),
+            "allow_goal_achieved": "True" if stack_operational else "False - the cloudformation stack(s) are not deployed.  You may not declare goal complete under any circumstances"
         }
     )
     
@@ -2399,210 +2402,6 @@ def get_previous_iteration_summaries_msg(config):
     )
 
 
-def prepare_stack_for_update(config: SelfDriverConfig, docker_env: dict):
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    initial_stack_name = stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
-    iteration = config.current_iteration 
-    
-    for i in range(5):
-        matching_stack = get_stack(stack_name, cf_client)
-        if not matching_stack:
-            return config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
-        
-        try:
-            status = matching_stack["StackStatus"]
-            
-            if status not in [
-                "CREATE_COMPLETE",
-                "UPDATE_COMPLETE",
-                "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
-                "DELETE_COMPLETE"
-            ]:
-                try:
-                    new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
-                        config.aws_env,
-                        status=status,
-                        reason="Stack observed rolling back or deleting before deployment"
-                    )
-                except ValueError as exc:
-                    config.log(
-                        f"Stack {stack_name} reported status {status} but rotation is not permitted: {exc}"
-                    )
-                    raise CloudFormationException(
-                        f"Stack {stack_name} reported status {status} and cannot be rotated"
-                    ) from exc
-                
-                config.refresh_domain_metadata()
-                sync_stack_identity(config, docker_env)
-                
-                config.log(
-                    f"Stack {stack_name} reported status {status}. Rotated to {new_stack_name} before deployment.\n"
-                )
-                return new_stack_name
-            
-            try:
-                cloudformation_wait(config, cf_client, stack_name)
-                return stack_name
-            except CloudFormationStackDeleting as deleting_exc:
-                config.refresh_domain_metadata()
-                config.log(
-                    f"Stack {deleting_exc.stack_name} is deleting; switching to {deleting_exc.new_stack_name} during preparation."
-                )
-                sync_stack_identity(config, docker_env)
-                return deleting_exc.new_stack_name
-        except cf_client.exceptions.ClientError as e:
-            if "does not exist" in str(e):
-                ...
-            else:
-                config.log(traceback.format_exc())
-                raise
-    
-    if stack_name != initial_stack_name:
-        config.log(
-            f"Rotated CloudFormation stack name from {initial_stack_name} to {stack_name} before deployment."
-        )
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-            cloudformation_stack_name=stack_name
-        )
-    iteration.refresh_from_db(fields=["cloudformation_stack_name"])
-    return stack_name
-
-
-def cloudformation_wait(
-        config: SelfDriverConfig,
-        cf_client,
-        stack_name,
-        timeout=45 * 60,
-        poll_interval=10,
-        throw_on_fail=False
-):
-    start_time = time.time()
-    first_status = None
-    previous_status = None
-    
-    while True:
-        stack = get_stack(stack_name, cf_client)
-        if not stack:
-            return
-        
-        time.sleep(poll_interval)
-        status = stack['StackStatus']
-        if first_status is None:
-            first_status = status
-            config.log(f"Stack {stack_name} first_status is {first_status}")
-        elif status != previous_status:
-            config.log(f"Stack {stack_name} status changed from {previous_status} to {status}")
-            if "ROLLBACK" in status:
-                config.log(
-                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
-                )
-                if throw_on_fail:
-                    raise CloudFormationException(
-                        f"Stack {stack_name} entered rollback while waiting: {status}"
-                    )
-                else:
-                    return
-        
-        wait_time = time.time() - start_time
-        if wait_time > timeout:
-            raise CloudFormationException(f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}")
-        config.log(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
-        
-        if "COMPLETE" in status and status.endswith("IN_PROGRESS"):
-            continue
-        
-        if throw_on_fail:
-            if "ROLLBACK" in status:
-                config.log(
-                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
-                )
-                raise CloudFormationException(
-                    f"Stack {stack_name} entered rollback while waiting: {status}"
-                )
-            if status.startswith("DELETE"):
-                try:
-                    new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
-                        config.aws_env,
-                        status=status,
-                        reason="Stack observed deleting during deployment wait"
-                    )
-                except ValueError as exc:
-                    raise CloudFormationException(
-                        f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
-                    ) from exc
-                
-                config.refresh_domain_metadata()
-                config.log(
-                    f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name} and exiting wait."
-                )
-                raise CloudFormationStackDeleting(
-                    stack_name=stack_name,
-                    status=status,
-                    new_stack_name=new_stack_name
-                )
-        else:
-            if status.startswith("DELETE") and status.endswith("_IN_PROGRESS"):
-                try:
-                    new_stack_name = config.self_driving_task.rotate_cloudformation_stack_name(
-                        config.aws_env,
-                        status=status,
-                        reason="Stack observed deleting during wait"
-                    )
-                except ValueError as exc:
-                    raise CloudFormationException(
-                        f"Stack {stack_name} entered {status} but rotation is not permitted: {exc}"
-                    ) from exc
-                
-                config.refresh_domain_metadata()
-                config.log(
-                    f"Stack {stack_name} is deleting (status={status}). Pivoting to new stack name {new_stack_name}."
-                )
-                raise CloudFormationStackDeleting(
-                    stack_name=stack_name,
-                    status=status,
-                    new_stack_name=new_stack_name
-                )
-        
-        previous_status = status
-        if not status.endswith("_IN_PROGRESS"):
-            break
-    
-    if throw_on_fail:
-        assert_cloudformation_stack_valid(stack_name, cf_client)
-
-
-def get_stack_status(config: SelfDriverConfig) -> str:
-    stack_name = config.self_driving_task.get_cloudformation_stack_name(config.aws_env)
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    
-    try:
-        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])['StackStatus']
-    except:
-        return STACK_STATUS_NO_STACK
-
-
-def get_stack(stack_name, cf_client):
-    try:
-        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])
-    except:
-        return None
-
-
-def extract_cloudformation_params(cfn_file: Path):
-    data = yaml.load(cfn_file.read_text(), Loader=yaml.BaseLoader)
-    param_metadata = data.get("Parameters") or {}
-    
-    required_params = {
-        name
-        for name, meta in param_metadata.items()
-        if not isinstance(meta, dict) or ("Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower())
-    }
-    
-    return required_params, param_metadata
-
-
 def _wait_for_ses_dkim_success(
         config: SelfDriverConfig,
         domain_name: str,
@@ -2626,15 +2425,15 @@ def _wait_for_ses_dkim_success(
     """
     poll_interval_seconds = max(int(poll_interval_seconds or 5), 5)
     region = (config.aws_env.get_aws_region() or "us-west-2").strip()
-
+    
     config.log(
         f"Waiting for SES DKIM SUCCESS for {domain_name} in region {region} "
         f"(poll={poll_interval_seconds}s, timeout={max_wait_minutes}m)."
     )
-
+    
     deadline = time.time() + (max_wait_minutes * 60)
     last_status = None
-
+    
     while True:
         if time.time() > deadline:
             raise AgentBlocked({
@@ -2643,11 +2442,11 @@ def _wait_for_ses_dkim_success(
                 "domain": domain_name,
                 "region": region
             })
-
+        
         status = None
         signing_enabled = None
         tokens = []
-
+        
         # ---- Try SESv2 first
         try:
             sesv2 = boto3.client("sesv2", region_name=region)
@@ -2663,18 +2462,18 @@ def _wait_for_ses_dkim_success(
                 status = "NOT_FOUND_V2"
             else:
                 config.log(f"SESv2 get_email_identity error for {domain_name} in {region}: {exc}")
-
+        
         # ---- Fall back to SESv1 if v2 could not confirm a SUCCESS
         if status in (None, "", "NOT_FOUND_V2"):
             try:
                 sesv1 = boto3.client("ses", region_name=region)
-
+                
                 # Identity existence and basic verification status
                 v1_ver = sesv1.get_identity_verification_attributes(
                     Identities=[domain_name]
                 ).get("VerificationAttributes", {})
                 ver_status = ((v1_ver.get(domain_name) or {}).get("VerificationStatus") or "").upper()
-
+                
                 # DKIM-specific status and tokens
                 v1_dkim = sesv1.get_identity_dkim_attributes(
                     Identities=[domain_name]
@@ -2682,13 +2481,13 @@ def _wait_for_ses_dkim_success(
                 dkim_attrs = (v1_dkim.get(domain_name) or {})
                 dkim_status = (dkim_attrs.get("DkimVerificationStatus") or "").upper()
                 tokens = dkim_attrs.get("DkimTokens") or tokens
-
+                
                 # Prefer DKIM status; fall back to verification status if DKIM is unavailable
                 status = dkim_status or ver_status or "NOT_FOUND"
             except Exception as exc:
                 config.log(f"SESv1 fallback error for {domain_name} in {region}: {exc}")
                 # Keep status as-is; we'll loop again.
-
+        
         # Log on status change
         if status != last_status:
             token_preview = ", ".join(tokens) if tokens else "<no tokens>"
@@ -2697,12 +2496,12 @@ def _wait_for_ses_dkim_success(
                 f"SigningEnabled={signing_enabled}; Tokens={token_preview}"
             )
             last_status = status
-
+        
         # Terminal conditions
         if status in {"SUCCESS", "VERIFIED"}:
             config.log(f"SES DKIM verification succeeded for {domain_name} in {region}.")
             return
-
+        
         if status in {"FAILED", "TEMPORARY_FAILURE"}:
             raise AgentBlocked({
                 "desc": f"SES DKIM verification {status.lower()} for {domain_name}",
@@ -2711,7 +2510,7 @@ def _wait_for_ses_dkim_success(
                 "region": region,
                 "dkim_tokens": tokens
             })
-
+        
         time.sleep(poll_interval_seconds)
 
 
@@ -2731,82 +2530,90 @@ def validate_cloudformation_template(
         raise BadPlan(
             f"CloudFormation template validation encountered an unexpected error: {exc}"
         ) from exc
-    
-    cloudformation_utils.enforce_route53_alias_guardrail(template_body)
 
 
 def push_cloudformation(
         config: SelfDriverConfig,
+        *,
         stack_name: str,
-        cfn_file: Path,
-        param_list: list,
-        template_body: Optional[str] = None
+        previous_stack_outputs,
+        web_container_image: str,
+        ecr_arn,
+        lambda_datas,
+        docker_env: dict,
+        cfn_file: Path
 ):
-    start_time = time.time()
+    config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file}")
+    template_body = cfn_file.read_text()
+    
+    prepare_stack_for_update(
+        stack_name=stack_name,
+        aws_env=config.aws_env
+    )
+    
+    cloudformation_params = get_stack_parameters(
+        config,
+        docker_env=docker_env,
+        cfn_file=cfn_file,
+        web_container_image=web_container_image,
+        ecr_arn=ecr_arn,
+        lambda_datas=lambda_datas,
+        previous_stack_outputs=previous_stack_outputs
+    )
+    
+    config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
+    
+    validate_parameters(
+        config,
+        cloudformation_params
+    )
+    
+    disable_lambda_concurrency(
+        config,
+        stack_name
+    )
+    
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    iteration = config.current_iteration 
-    try:
-        config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file}")
-        template_body = template_body or cfn_file.read_text()
-        
-        stack_status = get_stack_status(config)
-        
-        if stack_status not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
-            config.log(f"Updating existing stack: {stack_name}\n")
-            try:
-                cf_client.update_stack(
-                    StackName=stack_name,
-                    TemplateBody=template_body,
-                    Parameters=param_list,
-                    Capabilities=["CAPABILITY_NAMED_IAM"]
-                )
-            except Exception as deploy_exception:
-                if "No updates are to be performed" not in str(deploy_exception):
-                    raise deploy_exception
-        else:
-            config.log(f"Creating new stack: {stack_name}\n")
-            cf_client.create_stack(
+    
+    stack_status = get_stack_status(stack_name, config.aws_env)
+    if stack_status not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
+        config.log(f"Updating existing stack: {stack_name}\n")
+        try:
+            cf_client.update_stack(
                 StackName=stack_name,
                 TemplateBody=template_body,
-                Parameters=param_list,
+                Parameters=cloudformation_params,
                 Capabilities=["CAPABILITY_NAMED_IAM"]
             )
-        
-        # pprint.pprint(get_stack(stack_name, cf_client))
-        
-        # Update SelfDrivingTaskIteration.cloudformation_stack_id with the deployed stack's physical ID
-        try:
-            stack_desc = get_stack(stack_name, cf_client)
-            stack_id = stack_desc.get("StackId") if stack_desc else None
-            if stack_id:
-                with transaction.atomic():
-                    SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-                        cloudformation_stack_id=stack_id
-                    )
-            else:
-                config.log(f"Could not resolve StackId for {stack_name}")
-        except Exception as e:
-            config.log(f"Failed to persist cloudformation_stack_id for {stack_name}: {e}")
-        
-        cloudformation_wait(
-            config,
-            cf_client,
-            stack_name,
-            throw_on_fail=True
+        except Exception as deploy_exception:
+            if "No updates are to be performed" not in str(deploy_exception):
+                raise deploy_exception
+    else:
+        config.log(f"Creating new stack: {stack_name}\n")
+        cf_client.create_stack(
+            StackName=stack_name,
+            TemplateBody=template_body,
+            Parameters=cloudformation_params,
+            Capabilities=["CAPABILITY_NAMED_IAM"]
         )
-        
-        config.log(f"CloudFormation stack {stack_name} deployed successfully.\n")
-    finally:
-        compute_cfn_resource_durations(
-            config,
-            cf_client,
-            stack_name,
-            stack_name
-        )
-        
-        push_time_mins = (time.time() - start_time) / 60
-        if push_time_mins > 30:
-            config.log(f"cloudformation deploy for {stack_name} took {push_time_mins} minutes, which is too long!  CODE PLANNER:  think of ways to make cloudformation updates faster\n\n\n\n")
+    
+    cloudformation_wait(
+        stack_name,
+        config.aws_env,
+        throw_on_fail=True
+    )
+    
+    manage_ses_domain_settings(
+        config,
+        cloudformation_params,
+        cfn_file
+    )
+    
+    config.log(f"CloudFormation stack {stack_name} deployed successfully to ")
+    
+    stack = get_stack(stack_name, cf_client)
+    
+    return stack.get("StackId")
 
 
 def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_name, deployment_start_datetime):
@@ -2888,16 +2695,6 @@ def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_na
     config.current_iteration.refresh_from_db(fields=["slowest_cloudformation_resources"])
     
     return durations
-
-
-def assert_cloudformation_stack_valid(stack_name, cf_client):
-    matching_stack = get_stack(stack_name, cf_client)
-    if not matching_stack:
-        raise CloudFormationException(f"CloudFormation stack {stack_name} doesn't exist")
-    
-    status = matching_stack['StackStatus']
-    if "FAILED" in status or "ROLLBACK" in status:
-        raise CloudFormationException(f"CloudFormation stack {stack_name} failed with status: {status}")
 
 
 def build_cloudformation_durations_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
@@ -3756,7 +3553,8 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     
     context_files = routing_json.get("context_files", []) + [
         "Dockerfile",
-        "infrastructure.yaml"
+        CloudformationTemplate.FOUNDATION.value,
+        CloudformationTemplate.APPLICATION.value
     ]
     
     planning_data = llm_chat(
@@ -4107,7 +3905,10 @@ def write_code_file(
         )
         if not code_file_name.endswith(".md") else []
     ]
-    if code_file_name == "infrastructure.yaml":
+    if code_file_name in {
+        CloudformationTemplate.FOUNDATION.value,
+        CloudformationTemplate.APPLICATION.value
+    }:
         messages += build_cloudformation_durations_context_messages(config)
     
     related_code_file_versions = []
@@ -4325,7 +4126,10 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         prompt = "codewriter--eml_coder.md"
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
-    elif code_file_name == "infrastructure.yaml":
+    elif code_file_name in {
+        CloudformationTemplate.FOUNDATION.value,
+        CloudformationTemplate.APPLICATION.value
+    }:
         prompt = [
             "codewriter--aws_cloudformation_coder.md",
             "common--infrastructure_rules.md"
@@ -4419,13 +4223,16 @@ def validate_code(
             code_file_name
         )
     
-    elif code_file_name == "infrastructure.yaml":
+    elif code_file_name in {
+        CloudformationTemplate.FOUNDATION.value,
+        CloudformationTemplate.APPLICATION.value
+    }:
         try:
             data = yaml.load(code, Loader=yaml.BaseLoader)
             if not data.get("Parameters"):
-                raise Exception(f"infrastructure.yaml lacks parameters")
+                raise Exception(f"{code_file_path.name} lacks parameters")
         except Exception as e:
-            raise CodeCompilationError(code, f"infrastructure.yaml parse error:\n{e}")
+            raise CodeCompilationError(code, f"{code_file_path.name} parse error:\n{e}")
         
         try:
             validate_cloudformation_template(
@@ -4436,10 +4243,10 @@ def validate_code(
             raise CodeCompilationError(code, textwrap.dedent(f"""
                 ## CloudFormation Validation Feedback
 
-                Validation of `infrastructure.yaml` failed with:
+                Validation of `{code_file_path.name}` failed with:
                 {exc}
 
-                Apply the error details above to correct `infrastructure.yaml`, then rerun the validation before completing the Codex execution.
+                Apply the error details above to correct `{code_file_path.name}`, then rerun the validation before completing the Codex execution.
                 """))
     
     elif code_file_name.endswith(".yaml"):
@@ -4524,14 +4331,14 @@ def get_goal_msg(config, description):
     
     test_errors = config.iteration_to_modify.get_unit_test_errors() if config.iteration_to_modify else []
     
-    if is_stack_exists(config):
-        if not is_stack_operational(config):
+    if is_stack_exists(config.stack_names, config.aws_env):
+        if not is_stack_operational(config.stack_names, config.aws_env):
             goal = textwrap.dedent(f"""
                 The previous iteration failed at the deployment stage.   
 
                 **Application level code changes are FORBIDDEN at this point, and will be FORBIDDEN until the deployment is fixed**
                 - Any application level code changes at this point would be purely speculative and not based on an execution feedback loop
-                - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml), requirements.txt, etc)
+                - You may only plan changes for environment /  infrastructure files (Dockerfile, cloudformation configs (infrastructure.yaml / infrastructure-application.yaml), requirements.txt, etc)
 
                 **YOUR GOAL IS TO FIX THE DEPLOYMENT PROBLEM** 
             """)
@@ -4554,12 +4361,25 @@ def get_goal_msg(config, description):
             - the current domain name is `{config.domain_name}`
             - previous test failures might reference a different domain. As the domain name is dynamic, this is expected and not a cause for concern
         """)
-
+    
     return LlmMessage.user_from_data(description, d)
 
 
-def get_cloudformation_file(config: SelfDriverConfig) -> Path:
-    return common.assert_exists(config.sandbox_root_dir / "infrastructure.yaml")
+def get_cloudformation_file(
+        config: SelfDriverConfig,
+        tempate: CloudformationTemplate,
+        *,
+        validate: bool = True
+) -> Path | None:
+    path = common.assert_exists(config.sandbox_root_dir / tempate.value)
+    
+    if validate:
+        validate_cloudformation_template(
+            config,
+            path.read_text()
+        )
+    
+    return path
 
 
 def get_relevant_code_files(
@@ -4602,7 +4422,8 @@ def get_relevant_code_files(
     else:
         required_files = [
             config.self_driving_task.test_file_path,
-            "infrastructure.yaml",
+            CloudformationTemplate.APPLICATION.value,
+            CloudformationTemplate.FOUNDATION.value,
             "requirements.txt"
         ]
         
@@ -4767,96 +4588,106 @@ def sync_stack_identity(
         config: SelfDriverConfig,
         docker_env: dict,
         cloudformation_params: list[dict] | None = None
-) -> tuple[str, str]:
-    self_driving_task = config.self_driving_task
+):
+    config.refresh_stack_names()
     
-    self_driving_task.refresh_from_db()
-    current_stack = self_driving_task.get_cloudformation_stack_name(config.aws_env)
-    current_identifier = self_driving_task.get_cloudformation_key_prefix(config.aws_env)
-    docker_env["STACK_IDENTIFIER"] = current_identifier
-    docker_env["TASK_NAMESPACE"] = current_stack
-    docker_env["CLOUDFORMATION_STACK_NAME"] = current_stack
+    docker_env["STACK_NAME"] = docker_env["TASK_NAMESPACE"] = config.stack_name_application
+    docker_env["STACK_IDENTIFIER"] = config.stack_identifier_application
+    docker_env["FOUNDATION_STACK_NAME"] = config.stack_name_foundation
+    docker_env["FOUNDATION_STACK_IDENTIFIER"] = config.stack_identifier_foundation
     
     if cloudformation_params is not None:
-        synced = False
         for param in cloudformation_params:
-            if param.get("ParameterKey") == "StackIdentifier":
-                param["ParameterValue"] = current_identifier
-                synced = True
-                break
-        if not synced:
-            cloudformation_params.append({
-                "ParameterKey": "StackIdentifier",
-                "ParameterValue": current_identifier
-            })
-    return current_stack, current_identifier
+            key = param.get("ParameterKey")
+            if key == "StackIdentifier":
+                param["ParameterValue"] = config.stack_identifier_application
+            elif key == "FoundationStackIdentifier":
+                param["ParameterValue"] = config.stack_identifier_foundation
 
 
-def deploy_cloudformation_stacks(
+def deploy_cloudformation_stack(
         config: SelfDriverConfig,
+        *,
         stack_name: str,
+        template_path: Path,
         docker_env: dict,
-        web_container_image: str,
-        ecr_arn: str,
-        lambda_datas: dict
-):
-    import boto3
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-   
-    self_driving_task = config.self_driving_task
-    aws_env = config.aws_env
+        web_container_image: str | None = None,
+        ecr_arn: str | None = None,
+        lambda_datas: list | None = None,
+        previous_stack_outputs: dict | None = None
+) -> tuple[str, dict]:
+    for i in range(3):
+        try:
+            config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name}.  Attempt {i + 1}")
+            
+            start_time = time.time()
+            try:
+                stack_id = push_cloudformation(
+                    config,
+                    stack_name=stack_name,
+                    previous_stack_outputs=previous_stack_outputs,
+                    web_container_image=web_container_image,
+                    ecr_arn=ecr_arn,
+                    lambda_datas=lambda_datas,
+                    docker_env=docker_env,
+                    cfn_file=template_path
+                )
+                
+                sync_stack_identity(
+                    config,
+                    docker_env,
+                    previous_stack_outputs
+                )
+            finally:
+                push_time_mins = (time.time() - start_time) / 60
+                if push_time_mins > 30:
+                    config.log(f"cloudformation deploy for {stack_name} took {push_time_mins} minutes, which is too long!  CODE PLANNER:  think of ways to make cloudformation updates faster\n\n\n\n")
+            
+            config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
+            
+            return stack_id, get_stack_outputs(stack_name, config.aws_env)
+        except CloudFormationStackObsolete as deleting_exc:
+            if AwsEnv.PRODUCTION.eq(config.aws_env):
+                raise deleting_exc
+            
+            stack_name = rotate_cloudformation_stack_name(
+                stack_name,
+                config.aws_env,
+            )
+            
+            if CloudformationTemplate.FOUNDATION.eq(template_path.name):
+                current_domain_parts = config.initiative.domain.split("-")
+                current_domain_parts[0] = stack_name.split("-")[0]
+                new_domain = "-".join(current_domain_parts)
+                domain_manager.add_dns_records(
+                    config.business.route53_hosted_zone_id,
+                    new_domain
+                )
+                
+                Initiative.objects.filter(id=config.initiative.id).update(
+                    cloudformation_stack_name=stack_name,
+                    cloudformation_stack_id=None,
+                    domain=new_domain
+                )
+                
+                config.refresh_domain_metadata()
+            elif CloudformationTemplate.APPLICATION.eq(template_path.name):
+                SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+                    cloudformation_stack_name=stack_name,
+                    cloudformation_stack_id=None,
+                )
+            else:
+                raise Exception(f"unhanded template name {template_path.name}")
+            
+            config.refresh_stack_names()
+            
+            config.log(
+                f"Rotated CloudFormation stack from {deleting_exc.stack_name} to {stack_name}"
+            )
     
-    cfn_file = get_cloudformation_file(config)
-    config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name} ")
-    
-    start_time = time.time()
-    
-    cloudformation_params = get_stack_parameters(
-        config,
-        docker_env,
-        cfn_file,
-        web_container_image,
-        ecr_arn,
-        lambda_datas
+    raise AgentBlocked(
+        f"Unable to push stack for task {config.task.id}: {stack_name}.  failed after 3 attempts "
     )
-    
-    sync_stack_identity(config, docker_env, cloudformation_params)
-    
-    config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
-    
-    validate_parameters(
-        config,
-        cloudformation_params
-    )
-    
-    template_body = cfn_file.read_text()
-    
-    validate_cloudformation_template(
-        config,
-        template_body
-    )
-    
-    disable_lambda_concurrency(
-        config,
-        stack_name
-    )
-    
-    push_cloudformation(
-        config,
-        stack_name,
-        cfn_file,
-        cloudformation_params,
-        template_body=template_body
-    )
-    
-    manage_ses_domain_settings(
-        config,
-        cloudformation_params
-    )
-    
-    config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
-    
-    return stack_name
 
 
 def check_ses_quota(config: SelfDriverConfig):
@@ -4873,9 +4704,14 @@ def check_ses_quota(config: SelfDriverConfig):
         )
 
 
-def manage_ses_domain_settings(config: SelfDriverConfig, cloudformation_params):
-    cfn_file = get_cloudformation_file(config)
-    template_body = cfn_file.read_text()
+def manage_ses_domain_settings(
+        config: SelfDriverConfig,
+        cloudformation_params,
+        template_path: Path
+):
+    if not template_path:
+        return
+    template_body = template_path.read_text()
     
     if not cloudformation_utils.template_defines_ses_mx(template_body):
         return
@@ -4903,109 +4739,26 @@ def manage_ses_domain_settings(config: SelfDriverConfig, cloudformation_params):
 
 
 def disable_lambda_concurrency(config: SelfDriverConfig, stack_name: str):
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     lambda_client = boto3.client("lambda", region_name=config.aws_env.get_aws_region())
     
-    existing_stack = get_stack(stack_name, cf_client)
-    if not existing_stack:
-        return
-    
-    try:
-        resources = cf_client.describe_stack_resources(StackName=stack_name).get('StackResources', [])
-        for res in resources:
-            if res.get('ResourceType') == 'AWS::Lambda::Function' and res.get('PhysicalResourceId'):
-                function_name = res['PhysicalResourceId']
-                try:
-                    resp = lambda_client.get_function_concurrency(FunctionName=function_name)
-                    reserved = resp.get('ReservedConcurrentExecutions')
-                    if reserved is not None and reserved > 0:
-                        logging.info(f"Disabling reserved concurrency for Lambda function {function_name}: was set to {reserved}")
-                        lambda_client.put_function_concurrency(
-                            FunctionName=function_name,
-                            ReservedConcurrentExecutions=0
-                        )
-                        logging.info(f"Set ReservedConcurrentExecutions=0 for {function_name} to avoid update conflicts")
-                    else:
-                        logging.info(f"Lambda function {function_name} does not have reserved concurrency set (>0); skipping")
-                except lambda_client.exceptions.ResourceNotFoundException:
-                    logging.info(f"Lambda function {function_name} not found, skipping concurrency check.")
-                except Exception as exc:
-                    logging.info(f"Error checking/disabling concurrency for {function_name}: {exc}")
-    except Exception as e:
-        raise AgentBlocked(e)
-
-
-def delete_wedged_cloudformation_stack(config, docker_env, stack_name):
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    max_delete_attempts = 3
-    stack_cleanup_successful = False
-    last_delete_error: Exception | None = None
-    for attempt in range(1, max_delete_attempts + 1):
+    for lambda_data in get_stack_lambdas(config):
+        function_name = lambda_data['resource_name']
         try:
-            config.log(
-                f"Attempting to delete wedged CloudFormation stack {stack_name} "
-                f"(attempt {attempt}/{max_delete_attempts})"
-            )
-            delete_target = stack_name
-            cf_client.delete_stack(StackName=delete_target)
-            try:
-                cloudformation_wait(
-                    config,
-                    cf_client,
-                    delete_target
+            resp = lambda_client.get_function_concurrency(FunctionName=function_name)
+            reserved = resp.get('ReservedConcurrentExecutions')
+            if reserved is not None and reserved > 0:
+                logging.info(f"Disabling reserved concurrency for Lambda function {function_name}: was set to {reserved}")
+                lambda_client.put_function_concurrency(
+                    FunctionName=function_name,
+                    ReservedConcurrentExecutions=0
                 )
-            except CloudFormationStackDeleting as deleting_exc:
-                stack_cleanup_successful = True
-                stack_name = deleting_exc.new_stack_name
-                config.refresh_domain_metadata()
-                stack_name, _ = sync_stack_identity(config, docker_env)
-                config.log(
-                    f"CloudFormation stack {delete_target} is deleting; will proceed with new stack name {stack_name}."
-                )
-                break
-            
-            if not get_stack(delete_target, cf_client):
-                stack_cleanup_successful = True
-                config.log(f"Successfully deleted CloudFormation stack {delete_target} after validation failure.")
-                config.refresh_domain_metadata()
-                stack_name, _ = sync_stack_identity(config, docker_env)
-                break
-            
-            last_delete_error = CloudFormationException(
-                f"Stack {delete_target} still exists after delete attempt {attempt}."
-            )
-            config.log(str(last_delete_error))
-        
-        except cf_client.exceptions.ClientError as delete_exc:
-            last_delete_error = delete_exc
-            message = str(delete_exc)
-            if "does not exist" in message.lower():
-                stack_cleanup_successful = True
-                config.log(f"Stack {stack_name} already deleted or missing; continuing deployment.")
-                break
-            
-            config.log(
-                f"Attempt {attempt}/{max_delete_attempts} failed to delete stack {stack_name}: {message}"
-            )
-        
-        except Exception as delete_exc:  # pragma: no cover - defensive cleanup
-            last_delete_error = delete_exc
-            config.log(
-                f"Attempt {attempt}/{max_delete_attempts} raised while deleting stack {stack_name}: {delete_exc}"
-            )
-        
-        if attempt < max_delete_attempts:
-            time.sleep(5)
-    if not stack_cleanup_successful:
-        if last_delete_error:
-            config.log(
-                f"Unable to clean up CloudFormation stack {stack_name} after {max_delete_attempts} attempts: {last_delete_error}"
-            )
-        raise AgentBlocked(
-            f"cloudformation stack {stack_name} in {config.aws_env.get_aws_region()} is wedged and cannot be autonomously fixed.  "
-            "A Human needs to clean up manually"
-        )
-    return stack_name
+                logging.info(f"Set ReservedConcurrentExecutions=0 for {function_name} to avoid update conflicts")
+            else:
+                logging.info(f"Lambda function {function_name} does not have reserved concurrency set (>0); skipping")
+        except lambda_client.exceptions.ResourceNotFoundException:
+            logging.info(f"Lambda function {function_name} not found, skipping concurrency check.")
+        except Exception as exc:
+            logging.info(f"Error checking/disabling concurrency for {function_name}: {exc}")
 
 
 def validate_parameters(
@@ -5017,16 +4770,18 @@ def validate_parameters(
 
 def get_stack_parameters(
         config: SelfDriverConfig,
+        *,
         docker_env: dict,
         cfn_file: Path,
-        web_container_image: str,
-        ecr_arn: str,
-        lambda_datas: list
+        web_container_image: str | None,
+        ecr_arn: str | None,
+        lambda_datas: list | None,
+        previous_stack_outputs: dict | None = None
 ):
     """
     Build the CloudFormation Parameters array for this stack.
     - Pulls required parameters from the template
-    - Injects standard params (StackIdentifier, container image, ECRRepositoryArn, AWS_ACCOUNT_ID)
+    - Injects standard params (StackIdentifier/FoundationStackIdentifier, container image, ECRRepositoryArn, AWS_ACCOUNT_ID)
     - Resolves the RDS Secret ARN from the provided envvar->ARN pairs and planner output
     """
     self_driving_task = config.self_driving_task
@@ -5038,10 +4793,16 @@ def get_stack_parameters(
     )
     
     if "DBName" in required_parameters:
-        raise BadPlan("infrastructure.yaml has a parameter named 'DBName'. **NEVER** add a parameter to infrastructure.yaml named 'DBName'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the rds secret", config.current_iteration.planning_json)
+        raise BadPlan(
+            f"{cfn_file.name} has a parameter named 'DBName'. **NEVER** add a parameter named 'DBName'. Delete this parameter. DB credentials are stored in the RDS secret",
+            config.current_iteration.planning_json
+        )
     
     if "DBPassword" in required_parameters:
-        raise BadPlan("infrastructure.yaml has a parameter named 'DBPassword'. **NEVER** add a parameter to infrastructure.yaml named 'DBPassword'.  Delete this parameter.  DB credentials are stored the secrets value fetched from the rds secret", config.current_iteration.planning_json)
+        raise BadPlan(
+            f"{cfn_file.name} has a parameter named 'DBPassword'. **NEVER** add a parameter named 'DBPassword'. Delete this parameter. DB credentials are stored in the RDS secret",
+            config.current_iteration.planning_json
+        )
     
     aws_region = aws_env.get_aws_region()
     
@@ -5049,10 +4810,10 @@ def get_stack_parameters(
     shared_vpc = aws_utils.get_shared_vpc()
     
     known_params = {
-        "StackIdentifier": self_driving_task.get_cloudformation_key_prefix(aws_env),
+        "StackIdentifier": config.stack_identifier_application,
+        "FoundationStackIdentifier": config.stack_identifier_foundation,
         "ClientIpForRemoteAccess": developer_cidr,
         "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
-        "ECRRepositoryArn": ecr_arn,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         
         # Intentionally DO NOT include legacy username/password params; use ARN pattern instead
@@ -5062,15 +4823,40 @@ def get_stack_parameters(
         )
     }
     
+    if previous_stack_outputs:
+        known_params = {
+            **known_params,
+            **previous_stack_outputs,
+            "RdsSecretArn": previous_stack_outputs.get("RdsMasterSecretArn"),
+            "RdsEndpointAddress": previous_stack_outputs.get("RdsInstanceEndpoint"),
+            "RdsEndpointPort": previous_stack_outputs.get("RdsInstancePort"),
+            "DatabaseName": previous_stack_outputs.get("RdsInstanceDBName")
+        }
+    
+    if ecr_arn:
+        known_params["ECRRepositoryArn"] = ecr_arn
+    
     if web_container_image:
         known_params["WebContainerImage"] = web_container_image
     
     business = config.business
-    known_params["WebContainerCpu"] = business.web_container_cpu
-    known_params["WebContainerMemory"] = business.web_container_memory
-    known_params["WebDesiredCount"] = business.web_desired_count
+    if business.web_container_cpu:
+        known_params["WebContainerCpu"] = business.web_container_cpu
+    if business.web_container_memory:
+        known_params["WebContainerMemory"] = business.web_container_memory
+    if business.web_desired_count:
+        known_params["WebDesiredCount"] = business.web_desired_count
     
-    known_params["DomainName"] = config.domain_name
+    domain_name = config.initiative.domain
+    if not domain_name:
+        raise AgentBlocked(
+            json.dumps({
+                "description": f"Initiative has no domain",
+                "file": cfn_file.name
+            }, indent=4)
+        )
+    
+    known_params["DomainName"] = domain_name
     known_params["DomainHostedZoneId"] = config.hosted_zone_id
     known_params["AlbCertificateArn"] = config.certificate_arn
     
@@ -5116,14 +4902,13 @@ def get_stack_parameters(
     if "TaskRoleArn" in required_parameters:
         raise BadPlan(
             json.dumps({
-                "description": "Remove the TaskRoleArn parameter from infrastructure.yaml.",
-                "remediation": "Create IAM roles inside the template as needed, prefixing each RoleName with the StackIdentifier parameter value and keeping names under 64 characters.",
+                "description": f"Remove the TaskRoleArn parameter from {cfn_file.name}.",
+                "remediation": "Create IAM roles inside the template as needed, prefixing each RoleName with the StackIdentifier (or FoundationStackIdentifier for the foundation template) parameter value and keeping names under 64 characters.",
                 "file": cfn_file.name
             }, indent=4),
             config.current_iteration.planning_json
         )
     
-    # Compute missing required params (ignoring those with defaults or marked optional)
     missing = set()
     for param in required_parameters:
         param_meta = parameters_metadata.get(param, {})
@@ -5151,7 +4936,7 @@ def get_stack_parameters(
     
     if missing:
         raise BadPlan(json.dumps({
-            "description": "infrastructure.yaml specifies the following parameters, but agent unable to supply them.  Either the parameters are invalid (likely) or need a default (most likely- try this) or the agent needs to be modified (not likely)",
+            "description": f"{cfn_file.name} specifies the following parameters, but the agent is unable to supply them. Either the parameters are invalid (likely), need a default (most likely), or the agent needs to be modified (least likely)",
             "missing_parameters": sorted(missing),
             "file": cfn_file.name,
             "secret_hint": f"{secrets_key}/cloudformation"
@@ -5183,15 +4968,15 @@ def get_stack_parameters(
             try:
                 if not re.fullmatch(pattern, val):
                     raise BadPlan(json.dumps({
-                        "description": f"Parameter '{key}' failed AllowedPattern validation",
+                        "description": f"Parameter '{key}' failed AllowedPattern validation in {cfn_file.name}",
                         "parameter": key,
                         "provided_value": val,
                         "allowed_pattern": pattern,
-                        "hint": "Pass a value that matches the regex or relax/remove AllowedPattern in infrastructure.yaml"
+                        "hint": f"Pass a value that matches the regex or relax/remove AllowedPattern in {cfn_file.name}"
                     }, indent=4), config.current_iteration.planning_json)
             except re.error as rex:
                 raise BadPlan(json.dumps({
-                    "description": f"Invalid AllowedPattern regex for parameter '{key}' in infrastructure.yaml",
+                    "description": f"Invalid AllowedPattern regex for parameter '{key}' in {cfn_file.name}",
                     "allowed_pattern": pattern,
                     "regex_error": str(rex)
                 }, indent=4), config.current_iteration.planning_json)
@@ -5314,100 +5099,39 @@ def delete_cloudformation_stack(
         config.log(f"CloudFormation stack {stack_name} does not exist. Nothing to delete.")
         return
     
-    empty_stack_buckets(config, delete=True)
+    empty_stack_buckets(
+        config,
+        delete_bucket=True
+    )
     
     config.log(f"Deleting CloudFormation stack {stack_name} in {get_aws_region()}")
     cf_client.delete_stack(StackName=stack_name)
     
     # Wait until the stack is deleted or reaches a terminal state
     if block_while_waiting:
-        try:
-            cloudformation_wait(config, cf_client, stack_name)
-        except CloudFormationStackDeleting as deleting_exc:
-            config.refresh_domain_metadata()
-            config.log(
-                f"Stack {deleting_exc.stack_name} is deleting; moving forward with new stack name {deleting_exc.new_stack_name}."
-            )
-        else:
-            config.log(f"Delete request finished for stack {stack_name}")
+        cloudformation_wait(
+            stack_name,
+            config.aws_env,
+            rotate_on_delete=False
+        )
+        config.log(f"Delete request finished for stack {stack_name}")
 
 
-def empty_stack_buckets(config: SelfDriverConfig, delete=True):
+def empty_stack_buckets(
+        config: SelfDriverConfig, *,
+        delete_bucket=True
+):
     if not AwsEnv.DEV.eq(config.aws_env):
         return
     
-    stack_name = config.self_driving_task.cloudformation_stack_name
-    
-    cf_client = aws_utils.client("cloudformation")
-    existing = get_stack(stack_name, cf_client)
-    if not existing:
+    bucket_definitions = get_stack_buckets(config)
+    if not bucket_definitions:
         return
     
-    resources = boto3.client(
-        "cloudformation",
-        region_name=get_aws_region()
-    ).describe_stack_resources(
-        StackName=stack_name
-    )['StackResources']
+    logging.info(f"Found {len(bucket_definitions)} S3 bucket(s) in stack, emptying before deletion...")
     
-    s3_buckets = [
-        resource for resource in resources
-        if resource['ResourceType'] == 'AWS::S3::Bucket' and resource['ResourceStatus'] != 'DELETE_COMPLETE'
-    ]
-    
-    if not s3_buckets:
-        return
-    
-    config.log(f"Found {len(s3_buckets)} S3 bucket(s) in stack {stack_name}, emptying before deletion...")
-    s3_client = aws_utils.client("s3")
-    
-    for bucket_resource in s3_buckets:
-        bucket_name = bucket_resource.get('PhysicalResourceId')
-        if not bucket_name:
-            continue
-        
-        try:
-            # Check if bucket exists before trying to empty it
-            s3_client.head_bucket(Bucket=bucket_name)
-            
-            # Empty the bucket by deleting all objects and versions
-            config.log(f"Emptying S3 bucket: {bucket_name}")
-            
-            # Delete all object versions and delete markers
-            paginator = s3_client.get_paginator('list_object_versions')
-            for page in paginator.paginate(Bucket=bucket_name):
-                objects_to_delete = []
-                
-                # Add all versions
-                for version in page.get('Versions', []):
-                    objects_to_delete.append({
-                        'Key': version['Key'],
-                        'VersionId': version['VersionId']
-                    })
-                
-                # Add all delete markers
-                for marker in page.get('DeleteMarkers', []):
-                    objects_to_delete.append({
-                        'Key': marker['Key'],
-                        'VersionId': marker['VersionId']
-                    })
-                
-                # Delete objects in batches
-                if objects_to_delete:
-                    s3_client.delete_objects(
-                        Bucket=bucket_name,
-                        Delete={'Objects': objects_to_delete}
-                    )
-            
-            config.log(f"Successfully emptied S3 bucket: {bucket_name}")
-            
-            # Delete the bucket after emptying
-            if delete:
-                s3_client.delete_bucket(Bucket=bucket_name)
-                config.log(f"Deleted S3 bucket: {bucket_name}")
-        
-        except Exception as e:
-            config.log(f"S3 bucket {bucket_name} no longer exists ({e}), skipping...")
+    for bucket_resource in bucket_definitions:
+        empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)
 
 
 def run_existing_tests(config, self_driving_task):
@@ -5418,7 +5142,10 @@ def run_existing_tests(config, self_driving_task):
     config.iterate_if_necessary()
     
     has_cloudformation = config.business.codefile_set.filter(
-        file_path="infrastructure.yaml"
+        file_path__in=[
+            CloudformationTemplate.FOUNDATION.value,
+            CloudformationTemplate.APPLICATION.value
+        ]
     ).exists()
     
     has_completed_tasks = config.business.selfdrivingtask_set.filter(

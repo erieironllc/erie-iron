@@ -16,6 +16,14 @@ All planning logic and file instructions must explicitly support resolving the d
 
 ---
 
+### Stack Layout
+- Erie Iron manages two CloudFormation stacks. Make your plan explicit about which template each edit touches:
+    - `infrastructure.yaml` (foundation) contains persistent, slow-to-create resources such as RDS instances, SES identities, Route53 verification records, and long-lived SSM parameters. In DEV it is namespaced to the initiative; in PROD it is namespaced to the business. This stack must never be scheduled for autonomous cleanup.
+    - `infrastructure-application.yaml` (delivery) carries the fast-iteration resources—ALB, listeners, target group, ECS cluster/service, task roles, Lambdas, log groups, and DNS aliases. In DEV it remains task-scoped and can be cleaned up when the task completes.
+- Persistent resources stay in `infrastructure.yaml`; deployment-tier resources stay in `infrastructure-application.yaml`. Call out the target template for each planned edit.
+- The foundation stack should keep a stable name and rotate only when deletes/updates wedge; document any rotation as a recovery step. Delivery stacks likewise reuse their existing name and rotate solely to escape terminal rollback states.
+- Treat the foundation `DomainName` as the initiative-level root that powers SES verification. Delivery stacks should derive their ALB aliases from that root using the task namespace (e.g., `${StackIdentifier}.${foundation_domain}`).
+
 
 # Inputs
 - A document illustrating the high level architecture of the system
@@ -139,8 +147,8 @@ If there’s a likely cascade (e.g., adding a new parameter affects CLI usage, s
 ### Service Naming
 
 The name of all of the AWS service instances will be unique based on environment and other factors.  The unique name prefix is defined at deploy time and passed to cloudformation as a parameter named 'StackIdentifier'.  as such:
-- The full name of a service **must never** be hardcoded in the infrastructure.yaml file.  
-- The service name **must** always be prefixed using the StackIdentifier in infrastructure.yaml
+- The full name of a service **must never** be hardcoded in these stack templates.  
+- The service name **must** always be prefixed using the StackIdentifier in the relevant template.
 
 ---
 

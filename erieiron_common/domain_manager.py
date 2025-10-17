@@ -24,29 +24,29 @@ def manage_domain(business: Business):
             business.domain = locked_business.domain
             business.route53_hosted_zone_id = getattr(locked_business, "route53_hosted_zone_id", None)
             return
-
+    
     _manage_domain_core(business)
 
 
 def _manage_domain_core(business: Business):
     if not business.needs_domain:
         return
-
+    
     if not business.domain:
         chosen_domain = find_domain(business)
         register_domain(chosen_domain)
-
+        
         business.domain = chosen_domain
         _persist_business_domain(business)
-
+    
     normalized_domain = _normalize_domain_name(business.domain)
     if getattr(business, "domain", None) != normalized_domain:
         business.domain = normalized_domain
         _persist_business_domain(business)
-
+    
     hosted_zone_id = _ensure_business_hosted_zone(business, normalized_domain)
     ensure_wildcard_certificate(normalized_domain, hosted_zone_id)
-    update_dns(normalized_domain, hosted_zone_id)
+    add_dns_records(hosted_zone_id, normalized_domain)
 
 
 def register_domain(chosen_domain):
@@ -129,7 +129,7 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
         return
     
     route53 = aws_utils.client("route53")
-
+    
     change_lookup: dict[tuple[str, str], dict] = {}
     for record in validation_records:
         key = (record["Name"], record["Type"])
@@ -142,12 +142,12 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
                 "ResourceRecords": [{"Value": record["Value"]}]
             }
         }
-
+    
     changes = list(change_lookup.values())
-
+    
     if not changes:
         return
-
+    
     try:
         route53.change_resource_record_sets(
             HostedZoneId=hosted_zone_id,
@@ -159,7 +159,7 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") != "InvalidChangeBatch":
             raise
-
+        
         if _validation_records_already_exist(route53, hosted_zone_id, changes):
             logging.info(
                 "ACM validation records already exist for %s; continuing without changes",
@@ -172,13 +172,13 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
 def create_hosted_zone(chosen_domain):
     normalized_domain = _normalize_domain_name(chosen_domain)
     route53 = aws_utils.client("route53")
-
+    
     # Reuse an existing hosted zone if one already exists; repeated stack rotations or
     # fallback domain handling should not create duplicate hosted zones in Route53.
     existing_hosted_zone_id = find_hosted_zone_id(route53, normalized_domain)
     if existing_hosted_zone_id:
         return existing_hosted_zone_id
-
+    
     try:
         hz_resp = route53.create_hosted_zone(
             Name=_ensure_fqdn(normalized_domain),
@@ -192,16 +192,19 @@ def create_hosted_zone(chosen_domain):
             hosted_zone_id = _resolve_existing_hosted_zone(route53, normalized_domain)
         else:
             raise e
-
+    
     return hosted_zone_id
 
 
-def update_dns(chosen_domain, hosted_zone_id):
-    if not chosen_domain or not hosted_zone_id:
-        return
-
+def add_dns_records(hosted_zone_id, chosen_domain):
+    if not chosen_domain:
+        raise Exception(f"chosen_domain is required")
+    
+    if not hosted_zone_id:
+        raise Exception(f"hosted_zone_id is required")
+    
     route53 = aws_utils.client("route53")
-
+    
     def upsert_record(record):
         try:
             route53.change_resource_record_sets(
@@ -210,11 +213,11 @@ def update_dns(chosen_domain, hosted_zone_id):
             )
         except ClientError as exc:
             logging.warning("Unable to upsert Route53 record for %s: %s", chosen_domain, exc)
-
+    
     apex = chosen_domain.rstrip('.')
     if not apex:
         return
-
+    
     apex_name = f"{apex}."
     upsert_record({
         "Action": "UPSERT",
@@ -225,7 +228,7 @@ def update_dns(chosen_domain, hosted_zone_id):
             "ResourceRecords": [{"Value": "127.0.0.1"}]
         }
     })
-
+    
     upsert_record({
         "Action": "UPSERT",
         "ResourceRecordSet": {
@@ -300,12 +303,12 @@ def find_domain(business: Business):
 
 def execute_subdomain_action(business_domain: str, sub_domain: str, action: str, comment: str):
     r53 = aws_utils.client("route53")
-
+    
     hz_resp = r53.list_hosted_zones_by_name(DNSName=business_domain.rstrip('.') + ".", MaxItems="1")
     hosted_zones = hz_resp.get("HostedZones", [])
     if not hosted_zones or hosted_zones[0].get("Name", "").rstrip('.') != business_domain.rstrip('.'):
         raise Exception(f"Hosted zone for {business_domain} not found; cannot delete subdomain {sub_domain}")
-
+    
     hosted_zone_id = hosted_zones[0]["Id"]
     cname_target = business_domain.rstrip('.') + "."
     r53.change_resource_record_sets(
@@ -344,17 +347,17 @@ def _delete_record_if_exists(route53_client, hosted_zone_id: str, record_name: s
             exc
         )
         return
-
+    
     records = response.get("ResourceRecordSets", []) or []
     if not records:
         return
-
+    
     candidate = records[0]
     if candidate.get("Type") != record_type:
         return
     if candidate.get("Name", "").rstrip('.').lower() != record_name.rstrip('.').lower():
         return
-
+    
     try:
         route53_client.change_resource_record_sets(
             HostedZoneId=hosted_zone_id,
@@ -392,15 +395,15 @@ def upsert_subdomain_alias(
     normalized_zone_id = _normalize_hosted_zone_id(hosted_zone_id)
     if not normalized_zone_id:
         raise ValueError("hosted_zone_id is required to create alias records")
-
+    
     fqdn = _ensure_fqdn(record_name)
     alias_dns = _ensure_fqdn(target_dns_name)
-
+    
     route53_client = aws_utils.client("route53")
-
+    
     cleanup_comment = comment or f"Cleanup prior records for {fqdn}"
     _delete_record_if_exists(route53_client, normalized_zone_id, fqdn, "CNAME", cleanup_comment)
-
+    
     changes = [
         {
             "Action": "UPSERT",
@@ -415,7 +418,7 @@ def upsert_subdomain_alias(
             }
         }
     ]
-
+    
     if dual_stack:
         changes.append({
             "Action": "UPSERT",
@@ -429,7 +432,7 @@ def upsert_subdomain_alias(
                 }
             }
         })
-
+    
     route53_client.change_resource_record_sets(
         HostedZoneId=normalized_zone_id,
         ChangeBatch={
@@ -455,7 +458,7 @@ def _hosted_zone_id_path(hosted_zone_id: str | None) -> Optional[str]:
 def _validation_records_already_exist(route53_client, hosted_zone_id: str, changes: list[dict]) -> bool:
     if not changes:
         return True
-
+    
     desired = {
         (
             change["ResourceRecordSet"].get("Name"),
@@ -463,26 +466,26 @@ def _validation_records_already_exist(route53_client, hosted_zone_id: str, chang
         ): change
         for change in changes
     }
-
+    
     paginator = route53_client.get_paginator("list_resource_record_sets")
     for page in paginator.paginate(HostedZoneId=hosted_zone_id):
         for record_set in page.get("ResourceRecordSets", []) or []:
             key = (record_set.get("Name"), record_set.get("Type"))
             if key not in desired:
                 continue
-
+            
             desired_records = desired[key]["ResourceRecordSet"].get("ResourceRecords", []) or []
             existing_records = record_set.get("ResourceRecords", []) or []
-
+            
             desired_values = sorted(record.get("Value") for record in desired_records)
             existing_values = sorted(record.get("Value") for record in existing_records)
-
+            
             if desired_values == existing_values:
                 desired.pop(key)
-
+            
             if not desired:
                 return True
-
+    
     return False
 
 
@@ -540,9 +543,9 @@ def find_hosted_zone_id(route53_client, domain: str) -> Optional[str]:
     normalized_domain = _normalize_domain_name(domain)
     if not normalized_domain:
         return None
-
+    
     caller_ref = _deterministic_caller_reference(normalized_domain)
-
+    
     try:
         response = route53_client.list_hosted_zones_by_name(
             DNSName=_ensure_fqdn(normalized_domain),
@@ -557,7 +560,7 @@ def find_hosted_zone_id(route53_client, domain: str) -> Optional[str]:
             return hosted_zone_id
     except Exception:
         ...
-
+    
     zones_snapshot = list(_list_all_hosted_zones(route53_client))
     hosted_zone_id = _match_hosted_zone_id(
         zones_snapshot,
@@ -566,7 +569,7 @@ def find_hosted_zone_id(route53_client, domain: str) -> Optional[str]:
     )
     if hosted_zone_id:
         return hosted_zone_id
-
+    
     return None
 
 
@@ -574,12 +577,12 @@ def _wait_for_hosted_zone_visible(route53_client, hosted_zone_id: str, domain: s
     normalized_id = _normalize_hosted_zone_id(hosted_zone_id)
     if not normalized_id:
         return
-
+    
     for attempt in range(max_attempts):
         if _hosted_zone_matches(route53_client, normalized_id, domain):
             return
         time.sleep(delay_seconds)
-
+    
     logging.warning(
         "Hosted zone %s for %s was not visible after %s attempts",
         normalized_id,
@@ -606,7 +609,7 @@ def _resolve_existing_hosted_zone(
             last_error = exc
         time.sleep(delay_seconds)
         delay_seconds = min(delay_seconds * 1.5, max_delay_seconds)
-
+    
     if last_error:
         raise last_error
     raise RuntimeError(f"Existing hosted zone for {domain} not found after {max_attempts} attempts")
@@ -615,10 +618,10 @@ def _resolve_existing_hosted_zone(
 def _ensure_business_hosted_zone(business: Business, domain: str) -> str:
     route53_client = aws_utils.client("route53")
     stored_id = _normalize_hosted_zone_id(getattr(business, "route53_hosted_zone_id", None))
-
+    
     if stored_id and not _hosted_zone_matches(route53_client, stored_id, domain):
         stored_id = None
-
+    
     if not stored_id:
         stored_id = create_hosted_zone(domain)
         _persist_business_hosted_zone_id(business, stored_id)
@@ -632,7 +635,7 @@ def _hosted_zone_matches(route53_client, hosted_zone_id: str, domain: str) -> bo
         response = route53_client.get_hosted_zone(Id=_hosted_zone_id_path(hosted_zone_id))
     except ClientError:
         return False
-
+    
     zone_name = _normalize_domain_name(response.get("HostedZone", {}).get("Name"))
     return zone_name == _normalize_domain_name(domain)
 
@@ -641,11 +644,11 @@ def _persist_business_hosted_zone_id(business: Business, hosted_zone_id: str, on
     normalized_id = _normalize_hosted_zone_id(hosted_zone_id)
     if not normalized_id:
         return
-
+    
     current = _normalize_hosted_zone_id(getattr(business, "route53_hosted_zone_id", None))
     if only_if_changed and current == normalized_id:
         return
-
+    
     setattr(business, "route53_hosted_zone_id", normalized_id)
     if hasattr(business, "save"):
         try:
@@ -661,7 +664,6 @@ def _persist_business_domain(business: Business) -> None:
         business.save(update_fields=["domain"])
     except TypeError:
         business.save()
-
 
 
 def find_certificate_arn(domain: str, region: str) -> Optional[str]:

@@ -28,7 +28,6 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
-STACK_STATUS_NO_STACK = "NO_STACK"
 SHARED_VPC_NAME = "erie-iron-shared-vpc"
 SHARED_VPC_CIDR = "10.90.0.0/16"
 SHARED_VPC_ID = "vpc-0069eeaf60f597540"
@@ -56,7 +55,7 @@ class SharedVpcContext:
     private_subnet_ids: list[str]
 
 
-def client(client_name) -> boto3.session.Session.client:
+def client(client_name) -> 'boto3.session.Session.client':
     return boto3.client(client_name, region_name=get_aws_region())
 
 
@@ -1284,3 +1283,50 @@ def get_shared_vpc() -> SharedVpcContext:
         public_subnet_ids=public_subnet_ids,
         private_subnet_ids=private_subnet_ids,
     )
+
+
+def empty_s3_bucket(bucket_name: str, *, delete_bucket: bool = False):
+    s3_client = boto3.client("s3")
+    
+    try:
+        # Check if bucket exists before trying to empty it
+        s3_client.head_bucket(Bucket=bucket_name)
+    except Exception as e:
+        logging.info(f"S3 bucket {bucket_name} does not exists ({e}), skipping...")
+        return
+    
+    # Empty the bucket by deleting all objects and versions
+    logging.info(f"Emptying S3 bucket: {bucket_name}")
+    
+    # Delete all object versions and delete markers
+    paginator = s3_client.get_paginator('list_object_versions')
+    for page in paginator.paginate(Bucket=bucket_name):
+        objects_to_delete = []
+        
+        # Add all versions
+        for version in page.get('Versions', []):
+            objects_to_delete.append({
+                'Key': version['Key'],
+                'VersionId': version['VersionId']
+            })
+        
+        # Add all delete markers
+        for marker in page.get('DeleteMarkers', []):
+            objects_to_delete.append({
+                'Key': marker['Key'],
+                'VersionId': marker['VersionId']
+            })
+        
+        # Delete objects in batches
+        if objects_to_delete:
+            s3_client.delete_objects(
+                Bucket=bucket_name,
+                Delete={'Objects': objects_to_delete}
+            )
+    
+    logging.info(f"Successfully emptied S3 bucket {bucket_name}")
+    
+    # Delete the bucket after emptying
+    if delete_bucket:
+        s3_client.delete_bucket(Bucket=bucket_name)
+        logging.info(f"Deleted S3 bucket {bucket_name}")

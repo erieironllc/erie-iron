@@ -15,7 +15,7 @@ from erieiron_common.date_utils import to_utc
 
 def read_cloudformation_failures(
         aws_region: str,
-        stack_name: str,
+        stack_names: list[str],
         start_time: float,
         local_logs: str | None = None
 ) -> str:
@@ -89,136 +89,134 @@ def read_cloudformation_failures(
 
         return recent, local_errors
 
-    try:
-        recent_events, collection_errors = _collect_recent_events(stack_name, set())
-        recent_events.sort(key=lambda x: (x.get('Timestamp'), x.get('StackName', '')))  # type: ignore[arg-type]
+    for stack_name in common.ensure_list(stack_names):
+        try:
+            recent_events, collection_errors = _collect_recent_events(stack_name, set())
+            recent_events.sort(key=lambda x: (x.get('Timestamp'), x.get('StackName', '')))  # type: ignore[arg-type]
 
-        failed_events: list[str] = []
-        failed_logical_ids: list[str] = []
-        seen_failed_ids: set[str] = set()
+            failed_events: list[str] = []
+            failed_logical_ids: list[str] = []
+            seen_failed_ids: set[str] = set()
 
-        for event in recent_events:
-            status = event.get("ResourceStatus")
-            if not (isinstance(status, str) and "FAILED" in status):
-                continue
+            for event in recent_events:
+                status = event.get("ResourceStatus")
+                if not (isinstance(status, str) and "FAILED" in status):
+                    continue
 
-            failed_events.append(
-                f"{event['Timestamp']} | Stack: {event.get('StackName')} | {event.get('LogicalResourceId')} "
-                f"({event.get('ResourceType')}) | Status: {status} | Reason: {event.get('ResourceStatusReason', '')} | "
-                f"PhysicalId: {event.get('PhysicalResourceId', '')} | Token: {event.get('ClientRequestToken', '')}"
-            )
-
-            logical_id = event.get("LogicalResourceId")
-            if logical_id and logical_id not in seen_failed_ids:
-                failed_logical_ids.append(logical_id)
-                seen_failed_ids.add(logical_id)
-
-        error_lines.append("CloudFormation failure events:")
-        if failed_events:
-            error_lines.append("\n".join(failed_events))
-        else:
-            error_lines.append("No CloudFormation failure events found for the specified time window.")
-
-        error_lines.append("\nDetailed resource descriptions for top failures:")
-        for logical_id in failed_logical_ids[:3]:
-            owning_stack = next(
-                (
-                    evt.get("StackId") or evt.get("StackName")
-                    for evt in recent_events
-                    if evt.get("LogicalResourceId") == logical_id
-                    and isinstance(evt.get("ResourceStatus"), str)
-                    and "FAILED" in evt["ResourceStatus"]
-                ),
-                stack_name
-            )
-            try:
-                resource_details = cf_client.describe_stack_resource(
-                    StackName=owning_stack,
-                    LogicalResourceId=logical_id  # type: ignore[arg-type]
+                failed_events.append(
+                    f"{event['Timestamp']} | Stack: {event.get('StackName')} | {event.get('LogicalResourceId')} "
+                    f"({event.get('ResourceType')}) | Status: {status} | Reason: {event.get('ResourceStatusReason', '')} | "
+                    f"PhysicalId: {event.get('PhysicalResourceId', '')} | Token: {event.get('ClientRequestToken', '')}"
                 )
-                error_lines.append(json.dumps(resource_details, indent=2, default=str))
-            except Exception as ex:  # pragma: no cover - AWS failures should not crash aggregation
-                error_lines.append(f"Failed to describe resource {logical_id}: {ex}")
 
-        if collection_errors:
-            error_lines.append("\nIssues encountered while collecting stack events:")
-            error_lines.extend(collection_errors)
-    except Exception as event_ex:
-        error_lines.append(f"Failed to fetch stack events: {event_ex}")
+                logical_id = event.get("LogicalResourceId")
+                if logical_id and logical_id not in seen_failed_ids:
+                    failed_logical_ids.append(logical_id)
+                    seen_failed_ids.add(logical_id)
 
-    error_lines.append("\nRecent CloudTrail events in this region (last 15 min):")
-    try:
-        ct_client = boto3.client("cloudtrail", region_name=aws_region)
-        now = common.get_now()
-        ct_query_start_time = now - datetime.timedelta(minutes=15)
+            error_lines.append("CloudFormation failure events:")
+            if failed_events:
+                error_lines.append("\n".join(failed_events))
 
-        ct_events = ct_client.lookup_events(
-            StartTime=ct_query_start_time,
-            EndTime=now,
-            MaxResults=100
-        )
+            error_lines.append("\nDetailed resource descriptions for top failures:")
+            for logical_id in failed_logical_ids[:3]:
+                owning_stack = next(
+                    (
+                        evt.get("StackId") or evt.get("StackName")
+                        for evt in recent_events
+                        if evt.get("LogicalResourceId") == logical_id
+                        and isinstance(evt.get("ResourceStatus"), str)
+                        and "FAILED" in evt["ResourceStatus"]
+                    ),
+                    stack_name
+                )
+                try:
+                    resource_details = cf_client.describe_stack_resource(
+                        StackName=owning_stack,
+                        LogicalResourceId=logical_id  # type: ignore[arg-type]
+                    )
+                    error_lines.append(json.dumps(resource_details, indent=2, default=str))
+                except Exception as ex:  # pragma: no cover - AWS failures should not crash aggregation
+                    error_lines.append(f"Failed to describe resource {logical_id}: {ex}")
 
-        deployment_start_datetime = to_utc(start_time)
-        recent_ct_events = [
-            event for event in ct_events.get("Events", [])
-            if event['EventTime'] >= deployment_start_datetime
-        ]
-        recent_ct_events.sort(key=lambda x: x['EventTime'])
+            if collection_errors:
+                error_lines.append("\nIssues encountered while collecting stack events:")
+                error_lines.extend(collection_errors)
+        except Exception as event_ex:
+            error_lines.append(f"Failed to fetch stack events for {stack_name}: {event_ex}")
 
-        for ct_event in recent_ct_events:
-            cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
-            error_message: str = cloudtrain_event_data.get("errorMessage")
-            if error_message:
-                if "No updates are to be performed" in error_message:
-                    continue
-                if error_message.lower().startswith("stack with id") and error_message.lower().endswith("does not exist"):
-                    continue
-                error_lines.append(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
-                error_lines.append(json.dumps(cloudtrain_event_data, indent=4))
-    except Exception as ct_ex:
-        error_lines.append(f"Failed to fetch CloudTrail events: {ct_ex}")
+        error_lines.append("\nRecent CloudTrail events in this region (last 15 min):")
+        try:
+            ct_client = boto3.client("cloudtrail", region_name=aws_region)
+            now = common.get_now()
+            ct_query_start_time = now - datetime.timedelta(minutes=15)
 
-    effective_end_time = time.time()
-    try:
-        start_epoch = max(0, int(start_time) - 60)
-        end_epoch = int(effective_end_time) + 60
-        error_lines.append("\nCloudWatch logs for stack resources since deployment start:")
-        stack_logs = extract_cloudwatch_stack_logs_for_window(
-            stack_name=stack_name,
-            start_time=start_epoch,
-            end_time=end_epoch
-        )
-        if stack_logs:
-            error_lines.append(stack_logs)
-        else:
-            error_lines.append("No CloudWatch log entries found for stack resources in this window.")
-        # Attempt to collect ECS task logs if relevant (for ECS service startup failures)
-        ecs_task_logs = extract_cloudwatch_ecs_task_logs(
-            stack_name=stack_name,
-            start_time=start_epoch,
-            end_time=end_epoch
-        )
-        if ecs_task_logs:
-            error_lines.append("\nECS task startup logs (potential cause of failed service launch):")
-            error_lines.append(ecs_task_logs)
+            ct_events = ct_client.lookup_events(
+                StartTime=ct_query_start_time,
+                EndTime=now,
+                MaxResults=100
+            )
 
-        ecs_task_stop_reasons = extract_ecs_task_stop_reasons(stack_name)
-        if ecs_task_stop_reasons:
-            error_lines.append("\nECS task stop reasons:")
-            error_lines.append(ecs_task_stop_reasons)
+            deployment_start_datetime = to_utc(start_time)
+            recent_ct_events = [
+                event for event in ct_events.get("Events", [])
+                if event['EventTime'] >= deployment_start_datetime
+            ]
+            recent_ct_events.sort(key=lambda x: x['EventTime'])
 
-        cloudwatch_alarms = extract_cloudwatch_alarms_for_stack(stack_name)
-        if cloudwatch_alarms:
-            error_lines.append("\nCloudWatch alarms in ALARM state:")
-            error_lines.append(cloudwatch_alarms)
+            for ct_event in recent_ct_events:
+                cloudtrain_event_data = json.loads(ct_event["CloudTrailEvent"])
+                error_message: str = cloudtrain_event_data.get("errorMessage")
+                if error_message:
+                    if "No updates are to be performed" in error_message:
+                        continue
+                    if error_message.lower().startswith("stack with id") and error_message.lower().endswith("does not exist"):
+                        continue
+                    error_lines.append(f'\n\n\nCloudTrail Event: {ct_event.get("EventName")} at {ct_event.get("EventTime")}\n')
+                    error_lines.append(json.dumps(cloudtrain_event_data, indent=4))
+        except Exception as ct_ex:
+            error_lines.append(f"Failed to fetch CloudTrail events: {ct_ex}")
 
-        alb_error_logs = extract_alb_error_logs(stack_name, start_epoch, end_epoch)
-        if alb_error_logs:
-            error_lines.append("\nALB error logs:")
-            error_lines.append(alb_error_logs)
+        effective_end_time = time.time()
+        try:
+            start_epoch = max(0, int(start_time) - 60)
+            end_epoch = int(effective_end_time) + 60
+            error_lines.append("\nCloudWatch logs for stack resources since deployment start:")
+            stack_logs = extract_cloudwatch_stack_logs_for_window(
+                stack_name=stack_name,
+                start_time=start_epoch,
+                end_time=end_epoch
+            )
+            if stack_logs:
+                error_lines.append(stack_logs)
+            
+            # Attempt to collect ECS task logs if relevant (for ECS service startup failures)
+            ecs_task_logs = extract_cloudwatch_ecs_task_logs(
+                stack_name=stack_name,
+                start_time=start_epoch,
+                end_time=end_epoch
+            )
+            if ecs_task_logs:
+                error_lines.append("\nECS task startup logs (potential cause of failed service launch):")
+                error_lines.append(ecs_task_logs)
 
-    except Exception as stack_log_ex:
-        error_lines.append(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}")
+            ecs_task_stop_reasons = extract_ecs_task_stop_reasons(stack_name)
+            if ecs_task_stop_reasons:
+                error_lines.append("\nECS task stop reasons:")
+                error_lines.append(ecs_task_stop_reasons)
+
+            cloudwatch_alarms = extract_cloudwatch_alarms_for_stack(stack_name)
+            if cloudwatch_alarms:
+                error_lines.append("\nCloudWatch alarms in ALARM state:")
+                error_lines.append(cloudwatch_alarms)
+
+            alb_error_logs = extract_alb_error_logs(stack_name, start_epoch, end_epoch)
+            if alb_error_logs:
+                error_lines.append("\nALB error logs:")
+                error_lines.append(alb_error_logs)
+
+        except Exception as stack_log_ex:
+            error_lines.append(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}")
 
     if local_logs:
         try:
@@ -453,7 +451,8 @@ def extract_cloudwatch_ecs_task_logs(
                 for service_arn in page.get("serviceArns", []):
                     # Get the service name from ARN (last part after '/')
                     svc_name = service_arn.split("/")[-1]
-                    if stack_name in svc_name:
+                    # Broaden discovery: include all ECS services, not just those with stack_name
+                    if stack_name in svc_name or svc_name.startswith("ecs") or True:
                         found_service_arns.append(service_arn)
                         found_service_names.append(svc_name)
                         cluster_for_service[service_arn] = cluster_arn
@@ -514,6 +513,26 @@ def extract_cloudwatch_ecs_task_logs(
             logging.info(f"Failed to describe ECS task {task_arn}: {e}")
             continue
 
+    # Broaden ECS log group discovery: also include all log groups starting with /ecs/ (even if not related to stack_name)
+    try:
+        next_token = None
+        while True:
+            kwargs = {"logGroupNamePrefix": "/ecs/"}
+            if next_token:
+                kwargs["nextToken"] = next_token
+            resp = logs.describe_log_groups(**kwargs)
+            for lg in resp.get("logGroups", []):
+                name = lg.get("logGroupName")
+                if name and (stack_name in name or name.startswith("/ecs/")):
+                    log_group_names.add(name)
+                    if len(log_group_names) >= max_log_groups:
+                        break
+            if len(log_group_names) >= max_log_groups or not resp.get("nextToken"):
+                break
+            next_token = resp.get("nextToken")
+    except Exception as e:
+        logging.info(f"Failed to list ECS log groups: {e}")
+
     if not log_group_names:
         return ""
 
@@ -529,8 +548,8 @@ def extract_cloudwatch_ecs_task_logs(
         try:
             q = logs.start_query(
                 logGroupNames=batch,
-                startTime=int(start_time),
-                endTime=int(end_time),
+                startTime=int(start_time) - 3600,
+                endTime=int(time.time()) + 3600,
                 queryString=query_str
             )
             query_id = q["queryId"]

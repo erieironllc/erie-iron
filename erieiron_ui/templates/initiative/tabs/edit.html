@@ -20,6 +20,13 @@
                   placeholder="Describe the technical architecture, components, and implementation approach...">{{ initiative.architecture|default:"" }}</textarea>
     </div>
 
+    <div class="mb-3">
+        <label for="cloudformation_stack_name" class="form-label">CloudFormation Stack Name</label>
+        <input type="text" name="cloudformation_stack_name" id="cloudformation_stack_name" class="form-control"
+               value="{{ initiative.cloudformation_stack_name|default:"" }}"
+               placeholder="Optional override for the AWS CloudFormation stack">
+    </div>
+
     <div class="mb-3 form-check">
         <input type="checkbox" name="requires_unit_tests" id="requires_unit_tests"
                class="form-check-input" {% if initiative.requires_unit_tests %}checked{% endif %}>

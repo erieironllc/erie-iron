@@ -7,15 +7,22 @@
   - For test environments, prefer options like `db.t4g.micro`, `t4g.nano`, or similarly low-cost configurations.
   - Avoid overprovisioning or selecting higher tiers by default.
   - IAM roles must follow the **principle of least privilege**—grant only the permissions required to perform the specific task.
-- All other infrastructure changes (e.g., VPC, App Runner, RDS, Cognito) must be defined in `infrastructure.yaml`.
-- All infrastructure must be defined in `infrastructure.yaml` to ensure coherent, atomic stack deployment and teardown.
- - ECS/Fargate task definitions must always:
-    - Set `RuntimePlatform` with `CpuArchitecture: X86_64` and `OperatingSystemFamily: LINUX` so the deployed containers run on compatible hosts.
-    - Configure `DeploymentConfiguration.DeploymentCircuitBreaker` with `Enable: true` and `Rollback: true` so that tasks fail fast and the stack update fails immediately if a task cannot start.
-    - Configure a `CreationPolicy` with a `ResourceSignal` timeout (e.g., `PT10M`) on ECS services so that CloudFormation stack updates fail fast if the service cannot stabilize, instead of hanging indefinitely.
+- Erie Iron maintains **two** CloudFormation templates:
+  - `infrastructure.yaml` (foundation stack) holds persistent, slow-to-create resources such as RDS, SES identities, Route53 verification records, and long-lived SSM parameters. This stack survives task iterations. In DEV it is namespaced to the initiative; in PROD it is namespaced to the business. Never add autonomous cleanup logic for this stack.
+  - `infrastructure-application.yaml` (application delivery stack) contains fast-redeploy components—ALBs, listeners, target groups, ECS services, task roles, Lambdas, log groups, DNS aliases, etc. This stack remains namespaced to the active task in DEV and can be cleaned up when the task finishes.
+- Place each resource in the correct template; do **not** mix persistent assets into the application stack or vice versa.
+- Keep foundation stack names stable; only trigger stack rotation as a recovery fallback when deletes or updates wedge in a terminal rollback state. Application stacks likewise reuse a consistent name and rotate only when stuck.
+- ECS/Fargate task definitions must always:
+    - Configure `DeploymentConfiguration` with:
+        - `MaximumPercent: 100`
+        - `MinimumHealthyPercent: 100`
+        - `DeploymentCircuitBreaker` set to `Enable: true` and `Rollback: true`
+      This combination ensures ECS fails fast and rolls back immediately if any task fails to start or becomes unhealthy.
+    - Add a `CreationPolicy` with a `ResourceSignal` timeout (e.g., `PT10M`) on ECS services so that CloudFormation stack updates fail quickly if the service cannot stabilize.
+    - (Optional but recommended) Include a `WaitCondition` that requires the container to signal success upon startup using a CloudFormation WaitConditionHandle URL; omit it only for non-long-running worker tasks.
 - If deployment or infrastructure provisioning fails, it must be fixed before proposing any other code changes.
 - If a parameter becomes required, but its CloudFormation description still includes '(optional)', remove the '(optional)' label to reflect its new required status.
-- All resources must specify deletion policies that ensure clean, autonomous stack deletion. Do not use `Retain` policies or any configuration that prevents full stack teardown.
+- All resources must specify deletion policies that ensure clean, autonomous stack lifecycle management. Do not hardcode `Retain` or `Delete`; always wire the stack's `DeletePolicy` parameter so orchestration can control retention per environment.
     - **All resources must set both `DeletionPolicy` and `UpdateReplacePolicy` to `!Ref DeletePolicy`.**
     - **For any SSM parameter (`AWS::SSM::Parameter`) that references other resources (such as referencing Lambda ARNs, Role ARNs, Bucket names, etc.), add a `DependsOn` relationship to those referenced resources so SSM parameters are deleted after the resources they reference.**
     - **For Lambda functions (`AWS::Lambda::Function`), add a `DependsOn` to ensure the function is deleted before any IAM roles it uses. This ensures IAM roles are not deleted while the Lambda function still exists.**
@@ -24,7 +31,7 @@
     - **CloudFormation stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
 - Erie Iron deploys every stack inside the shared VPC `erie-iron-shared-vpc`. Plans and templates must rely on `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr` parameters and must not create or modify VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints.
 
-- When writing or updating any `infrastructure.yaml` file, **always** include an ingress rule that allows the ALB to reach ECS tasks from within the shared VPC. This rule must look exactly like this:
+- When writing or updating `infrastructure-application.yaml`, **always** include an ingress rule that allows the ALB to reach ECS tasks from within the shared VPC. This rule must look exactly like this:
 
   ```yaml
   EcsIngressFromVpc:
@@ -41,13 +48,14 @@
   This ensures every web service can respond to ALB health checks and traffic within the shared network. Do **not** hardcode any source CIDRs or security group IDs for this rule—always use `!Ref VpcCidr`.
 - ECS/Fargate web services must run inside this shared VPC using the provided private subnets. Configure `AwsvpcConfiguration.Subnets` with `!Ref PrivateSubnet1Id` and `!Ref PrivateSubnet2Id` (keeping `AssignPublicIp: DISABLED`) so tasks stay on the internal network.
 - Proposals should scope networking changes to stack-owned resources such as security groups, ECS services, and ALB listeners. Route53 subdomain routing supplies tenant isolation for tenants sharing the same VPC.
-    - **Only manage DNS for the provided `DomainName` value inside the stack. Do not invent additional subdomains such as `${StackIdentifier}.${DomainName}`—application aliases must target the ALB, and other subdomain hierarchy remains external.**
+    - `infrastructure.yaml` owns the initiative-level root domain used for SES verification. Preserve its `DomainName` parameter as the bare domain (e.g., `initiative.example.com`).
+    - `infrastructure-application.yaml` must publish ALB aliases on task-scoped subdomains derived from the foundation domain (e.g., `!Sub "${StackIdentifier}.${FoundationDomain}"`). Do **not** register unrelated subdomains or hardcode alternate roots.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the CloudFormation configuration must pass these in from the `${AWS::Region}` variable.
 
 ### SES
-- If `DomainName` is managed in Route53 in the same AWS account, publish the SES verification TXT, DKIM CNAME, MX, and application-facing records from `infrastructure.yaml`. All DNS automation for the value provided in `DomainName` must live in the stack—no manual zone edits.
+- If `DomainName` is managed in Route53 in the same AWS account, publish SES verification TXT/DKIM/MX records from `infrastructure.yaml` and place the ALB-facing alias records in `infrastructure-application.yaml` using the task subdomain described above. All DNS automation for the provided `DomainName` must live in the stacks—no manual zone edits.
 - If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
 - When deleting SES ReceiptRuleSets, you must call `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` via a custom resource (e.g., `Custom::ActivateSesRuleSet`) before attempting deletion so CloudFormation can cleanly remove the rule set. Always add a `DependsOn` from the ReceiptRuleSet to the deactivation resource.
 - If a ReceiptRuleSet resource is observed in DELETE_FAILED with "Cannot delete active rule set", ensure the stack configuration includes a `Custom::ActivateSesRuleSet` resource that calls `ses:SetActiveReceiptRuleSet` with `"RuleSetName": ""` before deletion, and add `DependsOn` from the ReceiptRuleSet to this deactivation resource.
@@ -55,14 +63,15 @@
 - Forbidden: Deleting an SES rule set while it is still active.
 
 ### CloudFormation File Enforcement
-- All infrastructure definitions must go in `infrastructure.yaml` only.
-- Inline IAM policy attachments (e.g., `AWS::IAM::Policy` targeting stack-defined roles) belong in `infrastructure.yaml`; runtime code must not create or modify IAM.
+- Keep CloudFormation definitions inside the two stack templates—persistent resources in `infrastructure.yaml`, application delivery resources in `infrastructure-application.yaml`.
+- Inline IAM policy attachments (e.g., `AWS::IAM::Policy` targeting stack-defined roles) belong next to the role in whichever template owns it; runtime code must not create or modify IAM.
 - **When attaching IAM policies:**  
     - Prefer `Roles: [!Ref <RoleLogicalId>]` when the role is defined in this template and assigns a concrete `RoleName`.  
     - Use `RoleArns` only when you must reference an external ARN (avoid this path unless explicitly required).  
     - **Mixing `Roles` and `RoleArns` is strictly forbidden** and will cause deployment failures. Always choose the property that matches the value you provide.
 - Creating or modifying any other CloudFormation YAML file is a violation.
-- If a plan attempts to edit a different file, correct the plan to use `infrastructure.yaml` — do **not** return `blocked`.
+- Creating or modifying any other CloudFormation YAML file is a violation.
+- If a plan attempts to edit a different file, redirect it to the correct stack template—do **not** return `blocked`.
 
 - **IAM roles or permissions related Tasks**
     - Follow the principle of least privilege: include only permissions essential to accomplish the task.
@@ -228,13 +237,13 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 ## Resource Name Namespacing
 
 - All AWS resource names (S3, SQS, etc.) must be namespaced with the StackIdentifier, for example: `!Sub "${StackIdentifier}-<resource_name>"`.
-    - If you discover resource names in the infrastructure.yaml that are not namespaced, you **must** fix them by namespacing them.
+    - If you discover resource names in either stack template that are not namespaced, you **must** fix them by namespacing them.
     - The only exception is `RDS DBName`, which must always be hardcoded to `appdb`.
 
 ---
 
 ## Required Parameters
-- The following parameters are required in every `infrastructure.yaml` file. 
+- The following parameters are required in both stack templates. 
 - This section **must** be written **exactly** as follows with **no modifications**
 - IAM roles are created within the stack
 ```yaml
@@ -335,5 +344,5 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
     - If no suitable default can be provided, you must raise `agent blocked` instead of generating the parameter.  
 - **Never** hardcode resource names (like S3 bucket names, SQS queue names, etc. - this applies to **any and all** named aws service or resources - the only exception is RDS DBName, which is always `appdb`)  
     - all resource names **must** be namespaced with the StackIdentifier - eg `!Sub "${StackIdentifier}-<resource_name>"`
-    - if you discover hardcoded resource names in the infrastructure.yaml, you **must** fix them by namespacing them with `!Sub "${StackIdentifier}-<resource_name>"`
+    - if you discover hardcoded resource names in either stack template, you **must** fix them by namespacing them with `!Sub "${StackIdentifier}-<resource_name>"`
 - **Never create Route53 subdomain or alias records (e.g., `${StackIdentifier}.${DomainName}`) in infrastructure templates. Subdomain management occurs outside the stack.**

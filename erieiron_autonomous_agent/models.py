@@ -711,8 +711,48 @@ class SelfDrivingTask(BaseErieIronModel):
     sandbox_path = models.TextField(null=False)
     goal = models.TextField(null=False)
     task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
+    cloudformation_stack_name = models.TextField(null=True)
+    cloudformation_stack_id = models.TextField(null=True)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    def get_stack_identifier(self, aws_env: AwsEnv):
+        from erieiron_common.aws_utils import sanitize_aws_name
+        return sanitize_aws_name(
+            self.get_cloudformation_stack_name(aws_env),
+            max_length=40
+        )
+    
+    def get_cloudformation_stack_name(self, environment: AwsEnv):
+        from erieiron_common.aws_utils import sanitize_aws_name
+        from erieiron_common.cloudformation_utils import generate_stack_name_token
+        
+        if AwsEnv.PRODUCTION.eq(environment):
+            return sanitize_aws_name([
+                self.business.service_token,
+                "app"
+            ])
+        
+        if not AwsEnv.DEV.eq(environment):
+            raise ValueError(f"Unsupported AWS environment: {environment}")
+        
+        if self.cloudformation_stack_name:
+            return self.cloudformation_stack_name
+        
+        new_name = sanitize_aws_name([
+            generate_stack_name_token(),
+            self.task_id,
+            "app"
+        ])
+        
+        with transaction.atomic():
+            SelfDrivingTask.objects.filter(id=self.id).update(
+                cloudformation_stack_name=new_name,
+                cloudformation_stack_id=None
+            )
+        self.refresh_from_db(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
+        
+        return new_name
     
     def get_git(self) -> GitWrapper:
         return GitWrapper(self.sandbox_path)
@@ -819,9 +859,6 @@ class SelfDrivingTask(BaseErieIronModel):
         
         with transaction.atomic():
             current_iteration = SelfDrivingTaskIteration.objects.create(
-                cloudformation_stack_id=iteration_to_modify.cloudformation_stack_id if iteration_to_modify else None,
-                cloudformation_stack_name=iteration_to_modify.cloudformation_stack_name if iteration_to_modify else None,
-                domain=iteration_to_modify.domain if iteration_to_modify else None,
                 self_driving_task=self,
                 version_number=max_version + 1
             )

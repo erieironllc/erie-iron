@@ -35,11 +35,11 @@ When planning Lambda-based functionality, follow these rules:
 - You are responsible for planning the **Lambda application code only** — including its file path, handler implementation, and required PyPI dependencies.
 - The deploy manager agent will handle packaging and uploading the Lambda to S3. **Do not** plan any packaging or deployment logic.
 - When planning infrastructure edits related to Lambda deployment:
-  - Do **not** embed code using `ZipFile`, `InlineCode`, or `CodeUri` in `infrastructure.yaml`.
+  - Do **not** embed code using `ZipFile`, `InlineCode`, or `CodeUri` in the CloudFormation templates. Lambdas live in `infrastructure-application.yaml`.
   - Each Lambda must be defined using the `Code.S3Bucket` and `Code.S3Key` fields.
   - The `S3Bucket` must be hardcoded (`erieiron-lambda-packages`).
   - The `S3Key` must be passed in via a CloudFormation `Parameter`.  **never** hardcode S3 keys.
-- Each Lambda resource in `infrastructure.yaml` **must** include a `Metadata` section with the field `SourceFile` set to the full relative path of the Lambda `.py` file (e.g., `lambda/my_handler.py`). 
+- Each Lambda resource in `infrastructure-application.yaml` **must** include a `Metadata` section with the field `SourceFile` set to the full relative path of the Lambda `.py` file (e.g., `lambda/my_handler.py`). 
     - This is used during deployment to associate Lambda resources with their source files.
 - For every Lambda, you must emit a `dependencies` list that includes **only** the PyPI packages required by that file.
 - Treat Lambda deployment as a deployment concern, not an application concern.
@@ -66,6 +66,7 @@ If the required file type does not match one of the codewriters listed below, yo
 - `*.eml` → `eml code writer`
 - `*.md` → `documentation writer`
 - `infrastructure.yaml` → `aws cloudformation code writer`
+- `infrastructure-application.yaml` → `aws cloudformation code writer`
 - `Dockerfile*` → `dockerfile code writer`
 - `*.sql` → `sql code writer`
 - `*.js` → `javascript code writer`

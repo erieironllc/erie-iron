@@ -729,17 +729,17 @@ def _tab_context_codefiles(business: Business) -> dict:
         .select_related("code_file", "task_iteration")
         .order_by("code_file__file_path", "task_iteration__timestamp", "id")
     )
-
+    
     if not code_versions:
         return {"code_file_tree": []}
-
+    
     file_entries: dict[str, dict] = {}
     for code_version in code_versions:
         code_file = code_version.code_file
         iteration = code_version.task_iteration
         if not code_file or not iteration:
             continue
-
+        
         file_entry = file_entries.setdefault(
             code_file.file_path,
             {
@@ -748,28 +748,28 @@ def _tab_context_codefiles(business: Business) -> dict:
                 "iterations": OrderedDict(),
             }
         )
-
+        
         file_entry["iterations"][iteration.id] = {
             "id": iteration.id,
             "version_number": iteration.version_number,
             "timestamp": iteration.timestamp,
         }
-
+    
     if not file_entries:
         return {"code_file_tree": []}
-
+    
     tree_root = {
         "name": "",
         "path": "",
         "type": "dir",
         "children": OrderedDict(),
     }
-
+    
     for file_path, entry in sorted(file_entries.items()):
         parts = [part for part in Path(file_path).parts if part]
         if not parts:
             continue
-
+        
         node = tree_root
         ancestry: list[str] = []
         for directory in parts[:-1]:
@@ -783,10 +783,10 @@ def _tab_context_codefiles(business: Business) -> dict:
                     "children": OrderedDict(),
                 }
             node = children[directory]
-
+        
         iterations = list(entry["iterations"].values())
         iterations.sort(key=lambda item: item["version_number"])
-
+        
         node.setdefault("children", OrderedDict())[parts[-1]] = {
             "name": parts[-1],
             "path": file_path,
@@ -794,20 +794,20 @@ def _tab_context_codefiles(business: Business) -> dict:
             "codefile_id": entry["codefile_id"],
             "iterations": iterations,
         }
-
+    
     def _ordered_children(node: dict) -> dict:
         children = node.get("children", OrderedDict())
         ordered_children = []
         for child_name, child_node in sorted(
-            children.items(),
-            key=lambda item: (0 if item[1]["type"] == "dir" else 1, item[0])
+                children.items(),
+                key=lambda item: (0 if item[1]["type"] == "dir" else 1, item[0])
         ):
             ordered_children.append(_ordered_children(child_node))
         node["children"] = ordered_children
         return node
-
+    
     ordered_tree = _ordered_children(tree_root)
-
+    
     return {"code_file_tree": ordered_tree["children"]}
 
 
@@ -1134,7 +1134,7 @@ def _task_tab_context_latest_iteration_logs(task, business, self_driving_task) -
 def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
     if not self_driving_task:
         return {"iterations": []}
-
+    
     iterations = list(self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp"))
     if not iterations:
         return {"iterations": []}
@@ -1156,7 +1156,7 @@ def _task_tab_context_iterations(task, business, self_driving_task) -> dict:
 def _task_tab_available_codefiles(task, business, self_driving_task) -> bool:
     if not self_driving_task:
         return False
-
+    
     return CodeVersion.objects.filter(
         task_iteration__self_driving_task=self_driving_task
     ).exists()
@@ -1165,24 +1165,24 @@ def _task_tab_available_codefiles(task, business, self_driving_task) -> bool:
 def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
     if not self_driving_task:
         return {"code_file_tree": []}
-
+    
     code_versions = list(
         CodeVersion.objects
         .filter(task_iteration__self_driving_task=self_driving_task)
         .select_related("code_file", "task_iteration")
         .order_by("code_file__file_path", "task_iteration__timestamp", "id")
     )
-
+    
     if not code_versions:
         return {"code_file_tree": []}
-
+    
     file_entries: dict[str, dict] = {}
     for code_version in code_versions:
         code_file = code_version.code_file
         iteration = code_version.task_iteration
         if not code_file or not iteration:
             continue
-
+        
         file_entry = file_entries.setdefault(
             code_file.file_path,
             {
@@ -1191,28 +1191,28 @@ def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
                 "iterations": OrderedDict(),
             }
         )
-
+        
         file_entry["iterations"][iteration.id] = {
             "id": iteration.id,
             "version_number": iteration.version_number,
             "timestamp": iteration.timestamp,
         }
-
+    
     if not file_entries:
         return {"code_file_tree": []}
-
+    
     tree_root = {
         "name": "",
         "path": "",
         "type": "dir",
         "children": OrderedDict(),
     }
-
+    
     for file_path, entry in sorted(file_entries.items()):
         parts = [part for part in Path(file_path).parts if part]
         if not parts:
             continue
-
+        
         node = tree_root
         ancestry: list[str] = []
         for directory in parts[:-1]:
@@ -1226,10 +1226,10 @@ def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
                     "children": OrderedDict(),
                 }
             node = children[directory]
-
+        
         iterations = list(entry["iterations"].values())
         iterations.sort(key=lambda item: item["version_number"])
-
+        
         node.setdefault("children", OrderedDict())[parts[-1]] = {
             "name": parts[-1],
             "path": file_path,
@@ -1237,20 +1237,20 @@ def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
             "codefile_id": entry["codefile_id"],
             "iterations": iterations,
         }
-
+    
     def _ordered_children(node: dict) -> dict:
         children = node.get("children", OrderedDict())
         ordered_children = []
         for child_name, child_node in sorted(
-            children.items(),
-            key=lambda item: (0 if item[1]["type"] == "dir" else 1, item[0])
+                children.items(),
+                key=lambda item: (0 if item[1]["type"] == "dir" else 1, item[0])
         ):
             ordered_children.append(_ordered_children(child_node))
         node["children"] = ordered_children
         return node
-
+    
     ordered_tree = _ordered_children(tree_root)
-
+    
     return {"code_file_tree": ordered_tree["children"]}
 
 
@@ -1322,18 +1322,23 @@ def _task_tab_context_edit(task, business, self_driving_task) -> dict:
     
     cloudformation_stack_name = None
     cloudformation_stack_url = None
-    iteration = self_driving_task.get_most_recent_iteration() if self_driving_task else None
-    stack_id = iteration.cloudformation_stack_id if iteration else None
+    cloudformation_stack_edit_value = ""
+    stack_id = self_driving_task.cloudformation_stack_id
     if stack_id:
-        cloudformation_stack_name = iteration.cloudformation_stack_name or stack_id
+        cloudformation_stack_name = self_driving_task.cloudformation_stack_name or stack_id
         encoded_stack_id = quote(stack_id, safe="")
         cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
+    
+    if self_driving_task:
+        cloudformation_stack_edit_value = self_driving_task.cloudformation_stack_name or ""
+        cloudformation_stack_edit_value = cloudformation_stack_edit_value.strip()
     
     return {
         "sandbox_path": sandbox_path,
         "cloudformation_stack_name": cloudformation_stack_name,
         "cloudformation_stack_url": cloudformation_stack_url,
         "logs_prefix": cloudformation_stack_name.split("-")[0] if cloudformation_stack_name else None,
+        "cloudformation_stack_edit_value": cloudformation_stack_edit_value,
         "task_status_choices": TaskStatus.choices(),
         "task_execution_schedule_choices": TaskExecutionSchedule.choices(),
         "task_type_choices": TaskType.choices(),
@@ -1611,6 +1616,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
     iteration = get_object_or_404(SelfDrivingTaskIteration, pk=iteration_id)
     
     self_driving_task = iteration.self_driving_task
+    self_driving_task = self_driving_task
     task = self_driving_task.task
     initiative = task.initiative
     business = initiative.business
@@ -1668,19 +1674,19 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         llm_requests=llm_requests,
     )
     
-    stack_id = iteration.cloudformation_stack_id if iteration else None
+    stack_id = self_driving_task.cloudformation_stack_id if iteration else None
     if stack_id:
-        cloudformation_stack_name = iteration.cloudformation_stack_name or stack_id
+        cloudformation_stack_name = self_driving_task.cloudformation_stack_name or stack_id
         encoded_stack_id = quote(stack_id, safe="")
         cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/events?stackId={encoded_stack_id}"
     else:
         cloudformation_stack_url = None
-
+    
     context = {
         "iteration": iteration,
-        "cloudformation_stack_name": iteration.cloudformation_stack_name,
+        "cloudformation_stack_name": self_driving_task.cloudformation_stack_name,
         "cloudformation_stack_url": cloudformation_stack_url,
-        "logs_prefix": iteration.cloudformation_stack_name.split("-")[0] if iteration.cloudformation_stack_name else None,
+        "logs_prefix": self_driving_task.cloudformation_stack_name.split("-")[0] if self_driving_task.cloudformation_stack_name else None,
         "previous_iteration": previous_iteration,
         "iteration_to_modify": iteration_to_modify,
         "next_iteration": next_iteration,
@@ -1926,7 +1932,7 @@ def action_initiative_regenerate_architecture(request, initiative_id):
 
 
 def action_initiative_regenerate_tasks(request, initiative_id):
-    initiative = get_object_or_404(Initiative, pk=initiative_id)
+    initiative: Initiative = get_object_or_404(Initiative, pk=initiative_id)
     
     initiative.tasks.all().delete()
     eng_lead.define_tasks_for_initiative(initiative_id)
@@ -2023,6 +2029,7 @@ def action_update_initiative(request, initiative_id):
         title = rget(request, 'title', '').strip()
         description = rget(request, 'description', '').strip()
         architecture = rget(request, 'architecture', '').strip()
+        cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
         requires_unit_tests = request.POST.get('requires_unit_tests') == 'on'
         
         # Prepare update data
@@ -2030,8 +2037,12 @@ def action_update_initiative(request, initiative_id):
             'title': title,
             'description': description,
             'architecture': architecture or None,
+            'cloudformation_stack_name': cloudformation_stack_name or None,
             'requires_unit_tests': requires_unit_tests
         }
+        
+        if initiative.cloudformation_stack_name != cloudformation_stack_name:
+            update_data["cloudformation_stack_id"] = None
         
         # Update the initiative
         Initiative.objects.filter(id=initiative_id).update(**update_data)
@@ -2118,6 +2129,7 @@ def action_update_task(request, task_id):
         task_type = rget(request, 'task_type', '').strip()
         execution_schedule = rget(request, 'execution_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
+        cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
         requires_test = request.POST.get('requires_test') == 'on'
         
         # Prepare update data
@@ -2165,6 +2177,15 @@ def action_update_task(request, task_id):
                 return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['execution_start_time'] = None
+        
+        self_driving_task = getattr(task, 'selfdrivingtask', None)
+        if self_driving_task:
+            new_stack_name = cloudformation_stack_name or None
+            if self_driving_task.cloudformation_stack_name != new_stack_name:
+                SelfDrivingTask.objects.filter(id=self_driving_task.id).update(
+                    cloudformation_stack_name=new_stack_name,
+                    cloudformation_stack_id=None
+                )
         
         # Update the task
         Task.objects.filter(id=task_id).update(**update_data)
@@ -2446,7 +2467,7 @@ def api_codefile_content(request, codefile_id):
     code_file = get_object_or_404(CodeFile, pk=codefile_id)
     
     # Get selected version IDs from request
-    version_ids = rget_list(request,  'versions')
+    version_ids = rget_list(request, 'versions')
     version_ids = common.filter_empty(version_ids)
     
     # Convert to integers and filter valid versions
@@ -2471,7 +2492,7 @@ def api_codefile_content(request, codefile_id):
         )
         if latest_version:
             return {
-                "title": "Latest Version", 
+                "title": "Latest Version",
                 "content": latest_version.code,
                 "content_type": "code"
             }

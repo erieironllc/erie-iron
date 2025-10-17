@@ -23,7 +23,7 @@
               },
               "secret_arn_cfn_parameter": {
                 "type": "string",
-                "description": "Name of the CloudFormation parameter that should receive this secret's ARN during stack deployment. If present, the plan must include infrastructure.yaml edits to add this parameter, wire it into resources using dynamic references, and attach the secret if applicable."
+                "description": "Name of the CloudFormation parameter that should receive this secret's ARN during stack deployment. If present, the plan must include edits to the correct stack template (infrastructure.yaml vs infrastructure-application.yaml) to add this parameter, wire it into resources using dynamic references, and attach the secret if applicable."
               },
               "schema": {
                 "type": "array",

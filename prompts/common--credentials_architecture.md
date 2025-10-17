@@ -5,7 +5,7 @@ This contract defines how credentials are passed and handled across the system, 
 ### Planner Requirements:
   - Credentials **must not** be hardcoded or passed as plain parameters such as "DBPassword".
   - Any credential-related parameters must be clearly documented and justified in comments.
-  - The codeplanner **must** define all credentials by specifying a Secrets Manager ARN parameter in `infrastructure.yaml`
+- The codeplanner **must** define all credentials by specifying a Secrets Manager ARN parameter in the correct stack template (foundation secrets stay in `infrastructure.yaml`; application-facing secrets belong in `infrastructure-application.yaml`).
   - The codeplanner **must** ensure that the database name is constructed using the `StackIdentifier` prefix plus a meaningful suffix; it must **not** be passed as a parameter named "DBName".
   - if editing settings.py, you may **must always** set the "DATABASES" variable with this line of code:  "DATABASES = agent_tools.get_django_settings_databases_conf()".  You may **never** delete this line of code
 
@@ -40,6 +40,6 @@ This section is authoritative. All other sections must not restate these rules.
 
 ### Examples:
   **Stripe API Key:**
-  - Parameter in `infrastructure.yaml`: `StripeSecretsArn`
+  - Parameter in `infrastructure-application.yaml`: `StripeSecretsArn`
   - CloudFormation grants access to the secret ARN for the relevant Lambda functions
   - Runtime code fetches the Stripe API key at invocation time securely by fetching the Strip API key secret via the key defined in StripeSecretsArn 

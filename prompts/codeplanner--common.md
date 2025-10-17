@@ -119,7 +119,7 @@ When you recieve a chat request:
 ### Tripwires - STOP and emit blocked (Escalation Gate):
 
 - Adding a new container or service that is not explicitly required
-- Any change to Dockerfile, Dockerfile.*, .github/, k8s/, infra/, or infrastructure.yaml that is not explicitly required
+- Any change to Dockerfile, Dockerfile.*, .github/, k8s/, infra/, `infrastructure.yaml`, or `infrastructure-application.yaml` that is not explicitly required
   by evaluator diagnostics
 - Installing OS packages (apt, yum, brew, apk) to resolve Python-level issues
 - Changing more than 50% of the lines in requirements.txt
@@ -260,8 +260,9 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
         - `secret_arn_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets
           Manager secret ARN for this service at runtime. This ARN is provisioned and set externally.
         - `secret_arn_cfn_parameter`: (string, optional) Name of the CloudFormation parameter that should receive this
-          secret's ARN during stack deployment. If present, the plan must include infrastructure.yaml edits to add this
-          parameter, wire it into resources using dynamic references, and attach the secret if applicable.
+          secret's ARN during stack deployment. If present, the plan must include edits to the correct stack template
+          (foundation vs application) to add this parameter, wire it into resources using dynamic references, and attach
+          the secret if applicable.
         - `schema`: (array, required) List of objects, each describing a required key in the secret. See Credentials
           Management above for full guidance; this section repeats the required output format for convenience.
             - `key`: (string, required) Name of the credential field.
@@ -540,7 +541,7 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
       ]
     },
     {
-      "code_file_path": "infrastructure.yaml",
+      "code_file_path": "infrastructure-application.yaml",
       "guidance": "The evaluator shows that the Lambda failed to initialize due to a missing AWS region...",
       "code_writing_model": "gpt-5-mini",
       "dependencies": [],
@@ -759,7 +760,7 @@ Failing to heed prior lessons is treated as a regression and must be avoided.
 - Focus on errors and regressions, not warnings.
 - All integration and smoke tests run against real AWS in an isolated CloudFormation stack. Do not plan for emulators,
   endpoint overrides, or local AWS surrogates.
-- Infrastructure changes go in `infrastructure.yaml` only.
+- Infrastructure changes belong in the designated stack templates: persistent resources in `infrastructure.yaml`, delivery resources in `infrastructure-application.yaml`.
 
 ### IAM Policy Planning Pattern
 

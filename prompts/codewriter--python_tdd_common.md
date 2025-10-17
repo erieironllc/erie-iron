@@ -36,7 +36,7 @@ You work in support of test-driven development
 - Never use LocalStack, moto, botocore Stubber, or any AWS emulator for acceptance or smoke tests.
   - If a previous version of the test uses LocalStack, moto, botocore Stubber, or any AWS emulator, you **must** remove these stubs and use actual AWS resources
 - Do not set `endpoint_url` on boto3 clients to non-AWS hosts. Clients must call real AWS endpoints in the region from `AWS_DEFAULT_REGION`.
-- IAM permissions must be satisfied by stack-defined roles in `infrastructure.yaml`. Create or update roles whose `RoleName` begins with `!Ref StackIdentifier`, remains under 64 characters, and carries the permissions the tests require.
+- IAM permissions must be satisfied by stack-defined roles in the relevant CloudFormation template (`infrastructure.yaml` for foundation resources, `infrastructure-application.yaml` for delivery resources). Create or update roles whose `RoleName` begins with `!Ref StackIdentifier`, remains under 64 characters, and carries the permissions the tests require.
 - Prefer long-lived infrastructure defined in the stack. Create only ephemeral data-plane resources during tests when explicitly allowed by evaluator guidance.
 - Add idempotency, bounded retries with jitter, and short timeouts to accommodate eventual consistency without flakiness.
 

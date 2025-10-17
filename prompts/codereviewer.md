@@ -97,7 +97,7 @@ Respond with **valid JSON** in the following format:
   ],
   "non_blocking_warnings": [
     {
-      "file": "infrastructure.yaml",
+      "file": "infrastructure-application.yaml",
       "line_hint": "201",
       "issue": "EC2 instance type is `g4dn.xlarge`, which may incur GPU charges",
       "recommendation": "Double-check if GPU is needed"

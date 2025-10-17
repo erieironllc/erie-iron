@@ -1,7 +1,40 @@
+import datetime
 import json
 import logging
+import time
+import threading
+import traceback
+from pathlib import Path
 
+import boto3
 import yaml
+
+from erieiron_autonomous_agent.models import Initiative
+from erieiron_common import common, ErieEnum
+from erieiron_common.enums import AwsEnv
+
+STACK_STATUS_NO_STACK = "NO_STACK"
+DEV_STACK_TOKEN_LENGTH = 6
+
+
+class CloudformationTemplate(ErieEnum):
+    FOUNDATION = "infrastructure.yaml"
+    APPLICATION = "infrastructure-application.yaml"
+
+
+class CloudFormationException(Exception):
+    def __init__(self, extracted_exception: str):
+        super().__init__(extracted_exception)
+
+
+class CloudFormationStackObsolete(Exception):
+    """Signal raised when a stack enters a delete workflow."""
+    
+    def __init__(self, stack_name: str, status: str):
+        self.stack_name = stack_name
+        self.status = status
+        message = f"CloudFormation stack {stack_name} entered {status}"
+        super().__init__(message)
 
 
 class CloudFormationLoader(yaml.SafeLoader):
@@ -258,3 +291,400 @@ def enforce_route53_alias_guardrail(template_body: str) -> None:
             "Update `infrastructure.yaml` so the Route53 records use `Type: A` (and optionally `AAAA`) with `AliasTarget.DNSName` and `AliasTarget.HostedZoneId` wired to the ALB attributes."
         ]
         raise Exception("\n".join(message_lines))
+
+
+def get_foundation_stack_outputs(initiative: Initiative, aws_env: AwsEnv) -> dict:
+    stack_name, _ = initiative.get_cloudformation_stack_name(aws_env)
+    return get_stack_outputs(stack_name, aws_env)
+
+
+def derive_foundation_domain_from_cf_ouputs(outputs: dict) -> str | None:
+    for candidate_key in ("RootDomainName", "FoundationDomain", "DomainName"):
+        candidate = (outputs.get(candidate_key) or "").strip().lower()
+        if candidate:
+            return candidate.rstrip('.')
+    
+    raise Exception(f'unable to fetch domain from outputs {outputs}')
+
+
+def get_stack_outputs(stack_name, aws_env: AwsEnv) -> dict:
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    
+    try:
+        stack_descriptions = cf_client.describe_stacks(StackName=stack_name).get("Stacks")
+    except cf_client.exceptions.ClientError:
+        return {}
+    except Exception:
+        return {}
+    if not stack_descriptions:
+        return {}
+    outputs = common.ensure_list(common.first(stack_descriptions).get("Outputs"))
+    return {
+        output.get("OutputKey"): output.get("OutputValue")
+        for output in outputs
+        if isinstance(output, dict)
+    }
+
+
+def cloudformation_wait(
+        stack_names: list[str],
+        aws_env: AwsEnv,
+        *,
+        timeout=45 * 60,
+        poll_interval=10,
+        throw_on_fail=False,
+        rotate_on_delete=True
+):
+    for stack_name in common.ensure_list(stack_names):
+        _wait_for_single_stack(
+            stack_name,
+            aws_env=aws_env,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            throw_on_fail=throw_on_fail,
+            rotate_on_delete=False
+        )
+
+
+def _wait_for_single_stack(
+        stack_name: str,
+        aws_env: AwsEnv,
+        *,
+        timeout: int,
+        poll_interval: int,
+        throw_on_fail: bool,
+        rotate_on_delete: bool = True
+) -> None:
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    ecs_client = boto3.client("ecs", region_name=aws_env.get_aws_region())
+    
+    # Determine CloudFormation update start time
+    stack_update_start = get_cloudformation_update_starttime(cf_client, stack_name)
+    
+    start_time = time.time()
+    first_status = None
+    previous_status = None
+    
+    while True:
+        stack = get_stack(stack_name, cf_client)
+        if not stack:
+            return
+        
+        time.sleep(poll_interval)
+        status = stack['StackStatus']
+        if first_status is None:
+            first_status = status
+            logging.info(f"Stack {stack_name} first_status is {first_status}")
+        elif status != previous_status:
+            logging.info(f"Stack {stack_name} status changed from {previous_status} to {status}")
+            if "ROLLBACK" in status:
+                logging.info(
+                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
+                )
+                if throw_on_fail:
+                    raise CloudFormationException(
+                        f"Stack {stack_name} entered rollback while waiting: {status}"
+                    )
+                else:
+                    return
+        
+        wait_time = time.time() - start_time
+        if wait_time > timeout:
+            raise CloudFormationStackObsolete(
+                f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}",
+                status=status
+            )
+        
+        # Check for ECS service task failures during CloudFormation operations
+        for service in get_ecs_services(ecs_client, stack_name, active_only=True):
+            service_name = service['serviceName']
+            
+            failures = [d for d in service.get("deployments", []) if d.get("rolloutState") == "FAILED"]
+            if failures:
+                logging.error(f"ECS deployment failed for {service_name}: {failures}.  canceling the update")
+                cancel_stack_push(stack_name, aws_env, wait_time=60)
+                if throw_on_fail:
+                    raise CloudFormationException(f"ECS service {service_name} deployment failed")
+                else:
+                    return
+            
+            for task in get_new_tasks(ecs_client, service, stack_update_start, failed_tasks=True):
+                last_status = task.get("lastStatus")
+                stopped_reason = task.get("stoppedReason", "")
+                
+                if last_status in ("STOPPED", "DEPROVISIONING"):
+                    logging.error(f"ECS task failure detected (started after stack update): {stopped_reason}.  canceling the update")
+                    cancel_stack_push(stack_name, aws_env, wait_time=60)
+                    if throw_on_fail:
+                        raise CloudFormationException(f"ECS task failed after stack update: {stopped_reason}")
+                    else:
+                        return
+        
+        logging.info(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
+        
+        if "COMPLETE" in status and status.endswith("IN_PROGRESS"):
+            continue
+        
+        if throw_on_fail:
+            if "ROLLBACK" in status:
+                logging.info(
+                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
+                )
+                raise CloudFormationException(
+                    f"Stack {stack_name} entered rollback while waiting: {status}"
+                )
+            if rotate_on_delete and status.startswith("DELETE"):
+                logging.info(
+                    f"Stack {stack_name} entered {status}; signaling rotation to caller."
+                )
+                raise CloudFormationStackObsolete(
+                    stack_name=stack_name,
+                    status=status
+                )
+        else:
+            if rotate_on_delete and status.startswith("DELETE") and status.endswith("_IN_PROGRESS"):
+                logging.info(
+                    f"Stack {stack_name} is deleting (status={status}); signaling rotation to caller."
+                )
+                raise CloudFormationStackObsolete(
+                    stack_name=stack_name,
+                    status=status
+                )
+        
+        previous_status = status
+        if not status.endswith("_IN_PROGRESS"):
+            break
+    
+    if throw_on_fail:
+        assert_cloudformation_stack_valid(stack_name, cf_client)
+
+
+def cancel_stack_push(stack_name: str, aws_env: AwsEnv, wait_time=0):
+    def _cancel_or_delete():
+        time.sleep(wait_time)
+        cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+        try:
+            stack = cf_client.describe_stacks(StackName=stack_name)['Stacks'][0]
+            status = stack.get("StackStatus", "")
+            if status.startswith("UPDATE_"):
+                logging.info(f"Cancelling update for {stack_name} (status: {status})")
+                cf_client.cancel_update_stack(StackName=stack_name)
+            else:
+                logging.info(f"Deleting stack {stack_name} (status: {status})")
+                cf_client.delete_stack(StackName=stack_name)
+        except Exception as e:
+            logging.warning(f"Failed to cancel or delete stack {stack_name}: {e}")
+
+    threading.Thread(target=_cancel_or_delete, daemon=True).start()
+
+
+def get_new_tasks(ecs_client, service, stack_update_start, *, failed_tasks=False) -> list:
+    cluster = service['clusterArn']
+    
+    if failed_tasks:
+        task_arns = ecs_client.list_tasks(
+            cluster=cluster,
+            serviceName=service["serviceName"],
+            desiredStatus="STOPPED"
+        ).get("taskArns", [])
+    else:
+        task_arns = ecs_client.list_tasks(
+            cluster=cluster,
+            serviceName=service["serviceName"],
+        ).get("taskArns", [])
+    
+    tasks = []
+    if task_arns:
+        task_desc = ecs_client.describe_tasks(cluster=cluster, tasks=task_arns)
+        for task in task_desc.get("tasks", []):
+            started_at = task.get('createdAt')
+            if started_at and started_at >= stack_update_start:
+                tasks.append(task)
+    return tasks
+
+
+def get_cloudformation_update_starttime(cf_client, stack_name: str):
+    try:
+        events = cf_client.describe_stack_events(StackName=stack_name).get("StackEvents", [])
+        stack_update_start = max((e["Timestamp"] for e in events if "IN_PROGRESS" in e["ResourceStatus"]), default=time.time())
+        if isinstance(stack_update_start, float):
+            stack_update_start = datetime.datetime.fromtimestamp(stack_update_start)
+    except Exception:
+        stack_update_start = datetime.datetime.utcnow()
+    return stack_update_start
+
+
+def get_ecs_services(ecs_client, stack_name: str, active_only=False ) -> list:
+    try:
+        services = []
+        for cluster_arn in ecs_client.list_clusters().get("clusterArns", []):
+            service_arns = ecs_client.list_services(cluster=cluster_arn).get("serviceArns", [])
+            if service_arns:
+                desc = ecs_client.describe_services(cluster=cluster_arn, services=service_arns)
+                services.extend(desc.get("services", []))
+
+        if active_only:
+            services = [
+                s for s in services
+                if s.get("status") == "ACTIVE"
+            ]
+
+        if stack_name:
+            services = [
+                s for s in services
+                if stack_name in s.get("serviceName", "")
+            ]
+
+        return services
+    except:
+        return []
+
+
+def get_stack(stack_name, cf_client):
+    try:
+        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])
+    except:
+        return None
+
+
+def assert_cloudformation_stack_valid(stack_name, cf_client):
+    matching_stack = get_stack(stack_name, cf_client)
+    if not matching_stack:
+        raise CloudFormationException(f"CloudFormation stack {stack_name} doesn't exist")
+    
+    status = matching_stack['StackStatus']
+    if "FAILED" in status or "ROLLBACK" in status:
+        raise CloudFormationException(f"CloudFormation stack {stack_name} failed with status: {status}")
+
+
+def get_stack_status(
+        stack_name: str,
+        aws_env: AwsEnv
+) -> str:
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    
+    try:
+        return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])['StackStatus']
+    except:
+        return STACK_STATUS_NO_STACK
+
+
+def is_stack_exists(stack_names, aws_env: AwsEnv) -> bool:
+    for stack_name in common.ensure_list(stack_names):
+        if get_stack_status(stack_name, aws_env) == STACK_STATUS_NO_STACK:
+            return False
+    
+    return True
+
+
+def is_stack_operational(stack_names, aws_env: AwsEnv) -> bool:
+    for stack_name in common.ensure_list(stack_names):
+        if get_stack_status(stack_name, aws_env) not in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]:
+            return False
+    
+    return True
+
+
+def get_stack_statuses(stack_names, aws_env: AwsEnv):
+    return {
+        stack_name: get_stack_status(stack_name, aws_env)
+        for stack_name in common.ensure_list(stack_names)
+    }
+
+
+def prepare_stack_for_update(*, stack_name, aws_env: AwsEnv):
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    
+    if not is_stack_exists(stack_name, aws_env):
+        return stack_name
+    
+    for i in range(3):
+        try:
+            status = get_stack_status(stack_name, aws_env)
+            if status not in [
+                "CREATE_COMPLETE",
+                "UPDATE_COMPLETE",
+                "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS",
+                "DELETE_COMPLETE"
+            ]:
+                raise CloudFormationStackObsolete(
+                    stack_name=stack_name,
+                    status=status
+                )
+            
+            cloudformation_wait(stack_name, aws_env)
+            return stack_name
+        except cf_client.exceptions.ClientError as e:
+            if "does not exist" in str(e):
+                return stack_name
+            else:
+                logging.info(traceback.format_exc())
+                raise
+    
+    raise CloudFormationStackObsolete(
+        stack_name=stack_name,
+        status=f"failed after three attempts to deploy {stack_name}"
+    )
+
+
+def extract_cloudformation_params(cfn_file: Path):
+    data = yaml.load(cfn_file.read_text(), Loader=yaml.BaseLoader)
+    param_metadata = data.get("Parameters") or {}
+    
+    required_params = {
+        name
+        for name, meta in param_metadata.items()
+        if not isinstance(meta, dict) or ("Default" not in meta and "(optional)" not in str(meta.get("Description", "")).lower())
+    }
+    
+    return required_params, param_metadata
+
+
+def rotate_cloudformation_stack_name(stack_name, aws_env: AwsEnv, ) -> str:
+    if not AwsEnv.DEV.eq(aws_env):
+        raise ValueError("Stack name rotation is only supported for DEV environment")
+    
+    try:
+        import boto3
+        logging.info(f"Deleting tombstoned stack {stack_name}")
+        cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+        cf_client.delete_stack(StackName=stack_name)
+    except Exception as e:
+        logging.exception(e)
+    
+    return generate_new_dev_stack_name(stack_name)
+
+
+def extract_dev_stack_token(stack_name: str) -> str | None:
+    if not stack_name:
+        return None
+    
+    token = stack_name.split('-', 1)[0]
+    if len(token) == DEV_STACK_TOKEN_LENGTH and token.isalnum():
+        return token
+    
+    return None
+
+
+def generate_stack_name_token() -> str:
+    new_token = None
+    for _ in range(32):
+        token = common.random_string(DEV_STACK_TOKEN_LENGTH).lower()
+        if token and token[0].isalpha():
+            new_token = token
+    
+    if not new_token:
+        new_token = f"a{common.random_string(DEV_STACK_TOKEN_LENGTH - 1).lower()}"
+    
+    return new_token
+
+
+def generate_new_dev_stack_name(current_stack_name: str) -> str:
+    current_stack_name_parts = current_stack_name.split("-")
+    current_stack_name_parts[0] = generate_stack_name_token()
+    new_name = "-".join(current_stack_name_parts)
+    
+    if new_name != current_stack_name:
+        return new_name
+    else:
+        return generate_new_dev_stack_name(current_stack_name)

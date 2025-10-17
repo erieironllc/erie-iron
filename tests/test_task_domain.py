@@ -9,19 +9,28 @@ from erieiron_common import domain_manager
 from erieiron_common.enums import AwsEnv
 
 
+class DummyInitiative(SimpleNamespace):
+    def __init__(self, domain: str | None = None):
+        super().__init__(domain=domain)
+        self.saved_fields = None
+
+    def save(self, update_fields=None):  # pragma: no cover - simple state capture
+        self.saved_fields = update_fields
+
+
 class DummySelfDrivingTask:
-    def __init__(self, stack_identifier: str, business: SimpleNamespace):
+    def __init__(self, stack_identifier: str, business: SimpleNamespace, initiative: DummyInitiative):
         self._stack_identifier = stack_identifier
         self.business = business
+        self.task = SimpleNamespace(initiative=initiative)
 
     def get_cloudformation_key_prefix(self, _aws_env: AwsEnv) -> str:
         return self._stack_identifier
 
 
 class DummyIteration:
-    def __init__(self, self_driving_task: DummySelfDrivingTask, domain: str | None = None):
+    def __init__(self, self_driving_task: DummySelfDrivingTask):
         self.self_driving_task = self_driving_task
-        self.domain = domain
         self.pk = True
         self.saved_fields = None
 
@@ -35,12 +44,13 @@ def _build_iteration(stack_identifier: str, business_domain: str | None = "examp
         needs_domain=needs_domain,
         service_token="svc-token",
     )
-    self_driving_task = DummySelfDrivingTask(stack_identifier, business)
-    return DummyIteration(self_driving_task), business
+    initiative = DummyInitiative()
+    self_driving_task = DummySelfDrivingTask(stack_identifier, business, initiative)
+    return DummyIteration(self_driving_task), business, initiative
 
 
 def test_get_domain_and_cert_production_prefers_business_domain():
-    iteration, business = _build_iteration(stack_identifier="stackid", business_domain="Example.COM")
+    iteration, business, initiative = _build_iteration(stack_identifier="stackid", business_domain="Example.COM")
 
     with mock.patch("erieiron_autonomous_agent.models.aws_utils.client", return_value=object()), \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.find_hosted_zone_id", return_value="HZ123") as mock_find_zone, \
@@ -51,15 +61,15 @@ def test_get_domain_and_cert_production_prefers_business_domain():
     assert domain == "example.com"
     assert hosted_zone_id == "HZ123"
     assert certificate_arn == "arn:example"
-    assert iteration.domain == "example.com"
-    assert iteration.saved_fields == ["domain"]
+    assert initiative.domain == "example.com"
+    assert initiative.saved_fields == ["domain"]
     mock_manage_domain.assert_not_called()
     mock_find_zone.assert_called_with(mock.ANY, "example.com")
     mock_find_cert.assert_called_with("example.com", AwsEnv.PRODUCTION.get_aws_region())
 
 
 def test_get_domain_and_cert_dev_uses_stack_identifier():
-    iteration, _ = _build_iteration(stack_identifier="stacktoken", business_domain="example.com")
+    iteration, _, initiative = _build_iteration(stack_identifier="stacktoken", business_domain="example.com")
 
     with mock.patch("erieiron_autonomous_agent.models.aws_utils.client", return_value=object()), \
             mock.patch("erieiron_autonomous_agent.models.domain_manager.find_hosted_zone_id", return_value="HZ456"), \
@@ -69,7 +79,7 @@ def test_get_domain_and_cert_dev_uses_stack_identifier():
     assert domain == "stacktoken.example.com"
     assert hosted_zone_id == "HZ456"
     assert certificate_arn == "arn:dev"
-    assert iteration.domain == "stacktoken.example.com"
+    assert initiative.domain == "stacktoken.example.com"
 
 
 def test_rotate_cloudformation_stack_name_refreshes_domain():

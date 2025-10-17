@@ -112,7 +112,7 @@ class SelfDriverConfig:
         self.model_code_planning = LlmModel.OPENAI_GPT_5
         
         self.refresh_domain_metadata()
-        # self.model_code_planning = LlmModel.OPENAI_GPT_4_1_MINI
+        self.refresh_stack_names()
     
     def refresh_domain_metadata(self) -> None:
         iteration = self.current_iteration or self.self_driving_task.get_active_iteration()

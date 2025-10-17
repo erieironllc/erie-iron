@@ -115,7 +115,7 @@ Each task **must** include the following fields
 -   **Vertical slices**\
     Always pair code and infrastructure in the same task. Example: when
     adding a new Lambda, the task must both write the Lambda code and
-    update `infrastructure.yaml` to declare and wire it.
+    update `infrastructure-application.yaml` to declare and wire it.
 
 -   **Atomic infra changes**\
     Make the smallest safe change to infrastructure per task. Avoid
@@ -128,15 +128,14 @@ Each task **must** include the following fields
     task or an earlier one.
 
 -   **Deployment truth-source**\
-    CloudFormation (`infrastructure.yaml`) remains the source of truth.
-    Tasks must update it so stack updates alone can deploy the new code.
+    CloudFormation (`infrastructure.yaml` for foundation resources and `infrastructure-application.yaml` for delivery resources) remains the source of truth. Tasks must update the relevant template so stack updates alone can deploy the new code.
 
 ## Example
 
 Good:\
 **task_implement_email_ingestion_lambda**\
 - Writes `lambdas/email_ingestion/main.py`\
-- Updates `infrastructure.yaml` to declare the Lambda and connect it to
+- Updates `infrastructure-application.yaml` to declare the Lambda and connect it to
 SES rule\
 - Adds IAM permissions and environment variables\
 - Includes test plan (unit + stack update dry-run)

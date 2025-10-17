@@ -61,4 +61,4 @@ Treat every IAM warning or error emitted by CloudFormation or CodeBuild as a lik
 - Pay special attention to IAM diffs—role replacements can trigger service disruptions if trust or attached policies change.
 
 ### Governance Decision Gate (optional)
-If organizational policy forbids certain IAM changes, emit `blocked` with `category: "permissions"` and include the exact policy JSON so it can be applied out of band. Otherwise, follow this contract and keep IAM changes inside `infrastructure.yaml`.
+If organizational policy forbids certain IAM changes, emit `blocked` with `category: "permissions"` and include the exact policy JSON so it can be applied out of band. Otherwise, follow this contract and keep IAM changes inside the appropriate CloudFormation stack (`infrastructure.yaml` for foundation roles, `infrastructure-application.yaml` for delivery roles).
