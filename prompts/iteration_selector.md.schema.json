@@ -7,8 +7,7 @@
   "required": [
     "best_iteration_id",
     "iteration_id_to_modify",
-    "previous_iteration_count",
-    "status_report"
+    "previous_iteration_count"
   ],
   "properties": {
     "best_iteration_id": {
@@ -31,10 +30,6 @@
     "rollback_reason": {
       "type": "string",
       "description": "(optional) A detailed justification explaining why this iteration was chosen as the one to modify next."
-    },
-    "status_report": {
-      "type": "string",
-      "description": "Standup-style summary of what the system currently does, what is partially working, and what is not yet functioning, based on logs from this iteration."
     }
   },
   "additionalProperties": false

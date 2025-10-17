@@ -1,16 +1,20 @@
 import json
 import logging
+import os
 import pprint
 import time
 import traceback
+import weakref
 from collections import defaultdict
 from enum import auto
 from pathlib import Path
 
 from django.db import transaction
+from sentence_transformers import SentenceTransformer
 
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative
 from erieiron_common import common, ErieIronJSONEncoder
+from erieiron_common.cloudformation_utils import CloudformationTemplate
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
@@ -67,8 +71,19 @@ class CodeReviewException(Exception):
 
 
 class SelfDriverConfig:
-    def __init__(self, self_driving_task: SelfDrivingTask):
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            self.close_log()
+        except:
+            ...
+    
+    def __init__(self, self_driving_task: SelfDrivingTask, one_off_action=None):
+        self._finalizer = weakref.finalize(self, self.close_log)
         self.debug = True
+        self.one_off_action = True
         self.self_driving_task: SelfDrivingTask = self_driving_task
         self.task: Task = self_driving_task.task
         self.initiative: Initiative = self.task.initiative
@@ -84,6 +99,11 @@ class SelfDriverConfig:
         self.log_f = None
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
+        
+        self.cloudformation_configs:list[Path] = common.filter_exists([
+            self.sandbox_root_dir / CloudformationTemplate.FOUNDATION,
+            self.sandbox_root_dir / CloudformationTemplate.APPLICATION
+        ])
         
         if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
             self.aws_env = AwsEnv.PRODUCTION

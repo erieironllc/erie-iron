@@ -32,9 +32,9 @@ from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_s
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, cloudformation_log_reader, cloudformation_utils
-from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket
-from erieiron_common.cloudformation_utils import get_foundation_stack_outputs, get_stack_outputs, CloudFormationStackObsolete, CloudFormationException, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, rotate_cloudformation_stack_name, CloudformationTemplate, cancel_stack_push
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType
+from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket 
+from erieiron_common.cloudformation_utils import get_stack_outputs, CloudFormationStackObsolete, CloudFormationException, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, rotate_cloudformation_stack_name, CloudformationTemplate, get_resource_configs, CloudformationResourceType, get_physical_resources
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, DockerPlatform
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -47,160 +47,157 @@ def execute(
     self_driving_task = bootstrap_selfdriving_agent(task_id)
     
     if one_off_action:
-        config = SelfDriverConfig(self_driving_task)
-        config.init_log()
-        
-        config.set_iteration(
-            SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
-        )
-        
-        if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
-            config.current_iteration.log_content_coding = None
-            config.current_iteration.save()
-        
-        if not SdaInitialAction.EVAL.eq(one_off_action):
-            config.current_iteration.log_content_execution = None
-            config.current_iteration.save()
-        
-        if SdaInitialAction.CODE.eq(one_off_action):
-            codex_exec(
-                config,
-                config.current_iteration.planning_json
-            )
-        elif SdaInitialAction.PLAN.eq(one_off_action):
-            plan_and_implement_code_changes(
-                config
-            )
-        
-        if not SdaInitialAction.EVAL.eq(one_off_action):
-            build_deploy_exec_iteration(
-                config
+        with SelfDriverConfig(self_driving_task, one_off_action) as config:
+            config.init_log()
+            
+            config.set_iteration(
+                SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
             )
             
-        evaluate_iteration(config)
-
+            if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
+                config.current_iteration.log_content_coding = None
+                config.current_iteration.save()
+            
+            if not SdaInitialAction.EVAL.eq(one_off_action):
+                config.current_iteration.log_content_execution = None
+                config.current_iteration.save()
+            
+            if SdaInitialAction.CODE.eq(one_off_action):
+                codex_exec(
+                    config,
+                    config.current_iteration.planning_json
+                )
+            elif SdaInitialAction.PLAN.eq(one_off_action):
+                plan_and_implement_code_changes(
+                    config
+                )
+            
+            if not SdaInitialAction.EVAL.eq(one_off_action):
+                build_deploy_exec_iteration(
+                    config
+                )
+            
+            evaluate_iteration(config)
+        
         return
     
     for i in range(10):
-        config = SelfDriverConfig(self_driving_task)
-        
-        try:
-            if config.budget and config.self_driving_task.get_cost() > config.budget:
-                logging.info(f"Stopping - hit the max budget ${config.budget :.2f}")
+        with SelfDriverConfig(self_driving_task) as config:
+            try:
+                if config.budget and config.self_driving_task.get_cost() > config.budget:
+                    logging.info(f"Stopping - hit the max budget ${config.budget :.2f}")
+                    break
+                
+                if i == 0:
+                    config.iterate_if_necessary()
+                    most_recent_iteration = self_driving_task.get_most_recent_iteration()
+                    
+                    if most_recent_iteration:
+                        # we've re-started an self driving task - just execute on the first time around
+                        config.set_iteration(most_recent_iteration)
+                    else:
+                        # we've started an self driving task - this is the first iteration
+                        config.set_iteration(self_driving_task.iterate())
+                    
+                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                        log_content_execution="",
+                        evaluation_json=None
+                    )
+                    
+                    config.current_iteration.refresh_from_db(
+                        fields=["log_content_execution", "evaluation_json"]
+                    )
+                else:
+                    config.set_iteration(self_driving_task.iterate())
+                    
+                    if config.iteration_to_modify and i > 0:
+                        config.iteration_to_modify.write_to_disk()
+                    
+                    plan_and_implement_code_changes(config)
+                
+                execution_exception = None
+                try:
+                    build_deploy_exec_iteration(config)
+                except BadPlan as bpe:
+                    config.log(bpe)
+                    execution_exception = bpe
+                    raise bpe
+                except AgentBlocked as abe:
+                    execution_exception = abe
+                    raise abe
+                except NeedPlan as npe:
+                    execution_exception = npe
+                    raise npe
+                except Exception as e:
+                    execution_exception = e
+                    config.log(e)
+                finally:
+                    evaluate_iteration(
+                        config,
+                        execution_exception
+                    )
+            except NeedPlan as npe:
+                logging.info(f'NeedPlan - {npe}')
+            except RetryableException as retryable_execution_exception:
+                config.log(retryable_execution_exception)
+                with transaction.atomic():
+                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                        log_content_execution=f"""
+    Execution Failed with 
+    {retryable_execution_exception}
+    {traceback.format_exc()}
+            
+    planning data:
+    We should just try again - should be fixed next time around
+
+    full logs:
+    {config.get_log_content()}
+                        """
+                    )
+                config.current_iteration.refresh_from_db(fields=["log_content_execution"])
+            except BadPlan as bad_plan_exception:
+                config.log(bad_plan_exception)
+                with transaction.atomic():
+                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+                        log_content_execution=f"""
+    Planning agent produced a bad plan:
+    {bad_plan_exception}
+    {traceback.format_exc()}
+
+    planning data:
+    {json.dumps(bad_plan_exception.plan_data, indent=4)}
+
+    full logs:
+    {config.get_log_content()}
+                        """
+                    )
+                config.current_iteration.refresh_from_db(fields=["log_content_execution"])
+            except AgentBlocked as agent_blocked:
+                config.log(agent_blocked)
+                handle_agent_blocked(config, agent_blocked)
+                logging.info(f"Stopping - Agent Blocked")
+                break
+            except GoalAchieved as goal_achieved:
+                handle_goal_achieved(config)
+                logging.info(f"Stopping - Goal Achieved")
                 break
             
-            if i == 0:
-                config.iterate_if_necessary()
-                most_recent_iteration = self_driving_task.get_most_recent_iteration()
-                
-                if most_recent_iteration:
-                    # we've re-started an self driving task - just execute on the first time around
-                    config.set_iteration(most_recent_iteration)
-                else:
-                    # we've started an self driving task - this is the first iteration
-                    config.set_iteration(self_driving_task.iterate())
-                
-                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                    log_content_execution="",
-                    evaluation_json=None
-                )
-                
-                config.current_iteration.refresh_from_db(
-                    fields=["log_content_execution", "evaluation_json"]
-                )
-            else:
-                config.set_iteration(self_driving_task.iterate())
-                
-                if config.iteration_to_modify and i > 0:
-                    config.iteration_to_modify.write_to_disk()
-                
-                plan_and_implement_code_changes(config)
-                
-                asdf = 1
-            
-            execution_exception = None
-            try:
-                build_deploy_exec_iteration(config)
-            except BadPlan as bpe:
-                config.log(bpe)
-                execution_exception = bpe
-                raise bpe
-            except AgentBlocked as abe:
-                execution_exception = abe
-                raise abe
-            except NeedPlan as npe:
-                execution_exception = npe
-                raise npe
             except Exception as e:
-                execution_exception = e
+                logging.exception(e)
                 config.log(e)
+                if config.self_driving_task.task_id:
+                    PubSubManager.publish(
+                        PubSubMessageType.TASK_FAILED,
+                        payload={
+                            "task_id": config.self_driving_task.task_id,
+                            "error": traceback.format_exc()
+                        }
+                    )
+                
+                logging.info(f"Stopping - Unhandled Exception")
+                break
             finally:
-                evaluate_iteration(
-                    config,
-                    execution_exception
-                )
-        except NeedPlan as npe:
-            logging.info(f'NeedPlan - {npe}')
-        except RetryableException as retryable_execution_exception:
-            config.log(retryable_execution_exception)
-            with transaction.atomic():
-                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                    log_content_execution=f"""
-Execution Failed with 
-{retryable_execution_exception}
-{traceback.format_exc()}
-        
-planning data:
-We should just try again - should be fixed next time around
-
-full logs:
-{config.get_log_content()}
-                    """
-                )
-            config.current_iteration.refresh_from_db(fields=["log_content_execution"])
-        except BadPlan as bad_plan_exception:
-            config.log(bad_plan_exception)
-            with transaction.atomic():
-                SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                    log_content_execution=f"""
-Planning agent produced a bad plan:
-{bad_plan_exception}
-{traceback.format_exc()}
-
-planning data:
-{json.dumps(bad_plan_exception.plan_data, indent=4)}
-
-full logs:
-{config.get_log_content()}
-                    """
-                )
-            config.current_iteration.refresh_from_db(fields=["log_content_execution"])
-        except AgentBlocked as agent_blocked:
-            config.log(agent_blocked)
-            handle_agent_blocked(config, agent_blocked)
-            logging.info(f"Stopping - Agent Blocked")
-            break
-        except GoalAchieved as goal_achieved:
-            handle_goal_achieved(config)
-            logging.info(f"Stopping - Goal Achieved")
-            break
-        
-        except Exception as e:
-            logging.exception(e)
-            config.log(e)
-            if config.self_driving_task.task_id:
-                PubSubManager.publish(
-                    PubSubMessageType.TASK_FAILED,
-                    payload={
-                        "task_id": config.self_driving_task.task_id,
-                        "error": traceback.format_exc()
-                    }
-                )
-            
-            logging.info(f"Stopping - Unhandled Exception")
-            break
-        finally:
-            config.cleanup_iteration()
+                config.cleanup_iteration()
 
 
 def plan_and_implement_code_changes(config):
@@ -1225,46 +1222,46 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     )
     
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
-    config = SelfDriverConfig(self_driving_task)
     
-    is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
-    config.set_phase(SdaPhase.INIT)
-    
-    self_driving_task.get_git().pull()
-    config.iterate_if_necessary()
-    
-    if not config.business.codefile_set.exists():
-        config.git.mk_venv()
-        config.business.snapshot_code(
-            config.current_iteration,
-            include_erie_common=True
-        )
-    
-    if not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
-        if not is_production_deployment:
-            run_existing_tests(config, self_driving_task)
+    with SelfDriverConfig(self_driving_task) as config:
+        is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
+        config.set_phase(SdaPhase.INIT)
         
-        config.business.snapshot_code(
-            config.current_iteration,
-            include_erie_common=False
-        )
-    
-    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.sandbox_root_dir, config.initiative.test_file_path):
-        config.set_phase(SdaPhase.CODING)
-        write_initiative_tdd_test(config)
-    
-    elif (
-            config.task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]
-            and not is_production_deployment
-            and common.invalid_file(config.sandbox_root_dir, self_driving_task.test_file_path)
-    ):
-        config.set_phase(SdaPhase.CODING)
-        write_task_tdd_test(config)
+        self_driving_task.get_git().pull()
+        config.iterate_if_necessary()
+        
+        if not config.business.codefile_set.exists():
+            config.git.mk_venv()
+            config.business.snapshot_code(
+                config.current_iteration,
+                include_erie_common=True
+            )
+        
+        if not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
+            if not is_production_deployment:
+                run_existing_tests(config, self_driving_task)
+            
+            config.business.snapshot_code(
+                config.current_iteration,
+                include_erie_common=False
+            )
+        
+        if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.sandbox_root_dir, config.initiative.test_file_path):
+            config.set_phase(SdaPhase.CODING)
+            write_initiative_tdd_test(config)
+        
+        elif (
+                config.task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]
+                and not is_production_deployment
+                and common.invalid_file(config.sandbox_root_dir, self_driving_task.test_file_path)
+        ):
+            config.set_phase(SdaPhase.CODING)
+            write_task_tdd_test(config)
     
     return self_driving_task
 
 
-def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
+def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     domain_name = (config.domain_name or "").rstrip('.')
     hosted_zone_id = config.hosted_zone_id
     
@@ -1272,34 +1269,20 @@ def ensure_alb_alias_record(config: SelfDriverConfig) -> None:
         config.log(f"Skipping DNS alias update; missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
         return
     
-    stack_name = config.stack_name_foundation
-    region = config.aws_env.get_aws_region()
-    cf_client = boto3.client("cloudformation", region_name=region)
-    
     load_balancer_arn = None
-    try:
-        paginator = cf_client.get_paginator("list_stack_resources")
-        for page in paginator.paginate(StackName=stack_name):
-            for resource in page.get("StackResourceSummaries", []) or []:
-                if resource.get("ResourceType") != "AWS::ElasticLoadBalancingV2::LoadBalancer":
-                    continue
-                status = resource.get("ResourceStatus", "")
-                if status and status.endswith("DELETE_COMPLETE"):
-                    continue
-                load_balancer_arn = resource.get("PhysicalResourceId")
-                if load_balancer_arn:
-                    break
-            if load_balancer_arn:
-                break
-    except Exception as exc:
-        logging.warning("Failed to enumerate load balancers for stack %s: %s", stack_name, exc)
-        return
-    
+    for lb_arn, resource in get_physical_resources(config.stack_names, config.aws_env, CloudformationResourceType.ELB_LOADBALANCER).items():
+        if resource.get("ResourceStatus", "").endswith("DELETE_COMPLETE"):
+            continue
+            
+        load_balancer_arn = lb_arn
+        if load_balancer_arn:
+            break
+                    
     if not load_balancer_arn:
-        config.log(f"No Application Load Balancer found in stack {stack_name}; skipping DNS alias update")
+        config.log(f"No Application Load Balancer found in stacks {config.stack_names}; skipping DNS alias update")
         return
     
-    elbv2_client = boto3.client("elbv2", region_name=region)
+    elbv2_client = boto3.client("elbv2", region_name=config.aws_env.get_aws_region())
     try:
         lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
         load_balancers = lb_resp.get("LoadBalancers", []) or []
@@ -1352,18 +1335,19 @@ def build_docker_image(
         current_iteration.version_number
     ]
     
-    if config.current_iteration.evaluation_json:
-        # we already deployed this iteration, force a new docker image tag to make sure cloudformation updates
-        docker_image_tag_parts.append(str(time.time())[-5:])
+    # force a new docker image tag to make sure cloudformation updates
+    # if config.one_off_action or config.current_iteration.evaluation_json:
+    #     docker_image_tag_parts.append(str(time.time())[-5:])
     
     docker_image_tag = sanitize_aws_name(docker_image_tag_parts, max_length=128)
     
     config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
     
+    config.log(f"Building docker image for platform: {DockerPlatform.FARGATE}")
     docker_build_cmd = common.strings([
         "docker",
         "build",
-        "--platform", "linux/arm64",
+        "--platform", DockerPlatform.FARGATE,
         "--build-arg", f"ERIEIRON_PUBLIC_COMMON_SHA={ERIEIRON_PUBLIC_COMMON_VERSION}",
         "-t", docker_image_tag,
         "-f", docker_file,
@@ -1391,7 +1375,7 @@ def build_docker_image(
 if you want to debug the docker container, run this 
 
 docker run --rm -it \
-  --platform linux/arm64 \
+  --platform {DockerPlatform.FARGATE} \
   -v {config.sandbox_root_dir}:/app \
   -w /app \
   {env_flags} \
@@ -1410,40 +1394,6 @@ def exec_docker_prune():
     except Exception as e:
         logging.exception(e)
         raise AgentBlocked("unable to run docker prune - is docker running?")
-
-
-def update_rds_env_vars(
-        config: SelfDriverConfig,
-        docker_env: dict,
-        foundation_outputs: dict | None = None
-):
-    cloudformation_output_vars = foundation_outputs or get_foundation_stack_outputs(
-        config.initiative,
-        config.aws_env
-    )
-    
-    if not cloudformation_output_vars:
-        raise BadPlan("Foundation stack lacks RDS outputs required for environment configuration")
-    
-    rds_secret_arn = cloudformation_output_vars.get("RdsMasterSecretArn")
-    if not rds_secret_arn:
-        raise BadPlan(f"Cloudformation stack lacks an output variable named RdsMasterSecretArn")
-    
-    rds_credential_def = config.business.required_credentials.get(CredentialService.RDS.value)
-    secret_arn_env_var = rds_credential_def.get("secret_arn_env_var")
-    docker_env[secret_arn_env_var] = rds_secret_arn
-    
-    output_varname_to_envname = {
-        "RdsInstanceDBName": "ERIEIRON_DB_NAME",
-        "RdsInstancePort": "ERIEIRON_DB_PORT",
-        "RdsInstanceEndpoint": "ERIEIRON_DB_HOST"
-    }
-    
-    for output_var_name, env_name in output_varname_to_envname.items():
-        output_var_value = cloudformation_output_vars.get(output_var_name)
-        if not output_var_value:
-            raise BadPlan(f"Cloudformation stack lacks an output variable value for the required output variable named '{output_var_name}'")
-        docker_env[env_name] = output_var_value
 
 
 def get_aws_region():
@@ -1528,7 +1478,7 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     # Pre-pull the ARM64 Lambda Python image before building dependencies
     subprocess.run(
         [
-            "docker", "pull", "--platform", "linux/arm64",
+            "docker", "pull", "--platform", DockerPlatform.LAMBDA,
             "public.ecr.aws/lambda/python:3.11"
         ],
         check=True,
@@ -1565,7 +1515,7 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
                     subprocess.run(
                         [
                             "docker", "run", "--rm",
-                            "--platform", "linux/arm64",
+                            "--platform", DockerPlatform.LAMBDA,
                             "--entrypoint", "/bin/bash",
                             "-v", f"{temp_dir_path}:/var/task",
                             "public.ecr.aws/lambda/python:3.11",
@@ -1610,16 +1560,11 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
 
 
 def get_stack_lambdas(config) -> list[dict]:
-    resources = {
-        **get_infrastructure_yaml_data(config, CloudformationTemplate.FOUNDATION).get("Resources", {}),
-        **get_infrastructure_yaml_data(config, CloudformationTemplate.APPLICATION).get("Resources", {}),
-    }
-    
     lambdas = []
-    for resource_name, resource_config in resources.items():
-        if resource_config.get("Type") != "AWS::Lambda::Function":
-            continue
-        
+    for resource_name, resource_config in get_resource_configs(
+            config.cloudformation_configs, 
+            CloudformationResourceType.LAMBDA_FUNCTION
+    ).items():
         metadata = resource_config.get("Metadata", {})
         source_file = metadata.get("SourceFile")
         if not source_file:
@@ -1662,16 +1607,8 @@ def get_stack_lambdas(config) -> list[dict]:
 
 
 def get_stack_buckets(config) -> list[dict]:
-    resources = {
-        **get_infrastructure_yaml_data(config, CloudformationTemplate.FOUNDATION).get("Resources", {}),
-        **get_infrastructure_yaml_data(config, CloudformationTemplate.APPLICATION).get("Resources", {}),
-    }
-    
     buckets = []
-    for resource_name, resource_config in resources.items():
-        if resource_config.get("Type") != "AWS::S3::Bucket":
-            continue
-        
+    for resource_name, resource_config in get_resource_configs(config.cloudformation_configs, CloudformationResourceType.S3_BUCKET).items():
         properties = resource_config.get("Properties", {}) or {}
         bucket_name_expr = properties.get("BucketName")
         
@@ -1775,7 +1712,7 @@ def run_docker_command(
     
     cmd = [
         "docker", "run", "--rm",
-        "--platform", "linux/arm64",
+        "--platform", DockerPlatform.FARGATE,
         "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
         *build_env_flags(docker_env),
@@ -2006,16 +1943,8 @@ def deploy_iteration(
     )
     SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(cloudformation_stack_id=app_stack_id)
     config.self_driving_task.refresh_from_db(fields=["cloudformation_stack_id"])
-
-    ensure_alb_alias_record(config)
     
-    if CredentialService.RDS.value in config.business.required_credentials:
-        # special handling for RDS
-        update_rds_env_vars(
-            config,
-            docker_env,
-            foundation_outputs.get("outputs") if foundation_outputs else None
-        )
+    ensure_lb_alias_record(config)
     
     manage_db(
         config,
@@ -2025,25 +1954,33 @@ def deploy_iteration(
 
 
 def add_rds_vals_to_env(business: Business, docker_env: dict, foundation_outputs: dict):
-    rds_credential_def = (
-        (business.required_credentials or {}).get(CredentialService.RDS.value)
-        if business.required_credentials else None
-    )
+    if not foundation_outputs:
+        raise BadPlan("Foundation stack lacks RDS outputs required for environment configuration")
     
-    if rds_credential_def:
-        secret_env = rds_credential_def.get("secret_arn_env_var")
-        secret_arn = foundation_outputs.get("RdsMasterSecretArn")
-        if secret_env and secret_arn:
-            docker_env[secret_env] = secret_arn
+    rds_secret_arn = foundation_outputs.get("RdsMasterSecretArn")
+    if not rds_secret_arn:
+        raise BadPlan("Cloudformation stack lacks an output variable named RdsMasterSecretArn")
     
-    for output_key, env_key in (
-            ("RdsInstanceDBName", "ERIEIRON_DB_NAME"),
-            ("RdsInstancePort", "ERIEIRON_DB_PORT"),
-            ("RdsInstanceEndpoint", "ERIEIRON_DB_HOST"),
-    ):
-        value = foundation_outputs.get(output_key)
-        if value:
-            docker_env[env_key] = value
+    if not business.required_credentials:
+        raise BadPlan(f"Business missing required_credentials: {business.service_token}")
+    
+    rds_credential_def = business.required_credentials.get(CredentialService.RDS.value) or {}
+    secret_arn_env_var = rds_credential_def.get("secret_arn_env_var")
+    if not secret_arn_env_var:
+        raise BadPlan("Business is missing required RDS credential definition or secret_arn_env_var")
+    
+    docker_env[secret_arn_env_var] = rds_secret_arn
+    
+    output_varname_to_envname = {
+        "RdsInstanceDBName": "ERIEIRON_DB_NAME",
+        "RdsInstancePort": "ERIEIRON_DB_PORT",
+        "RdsInstanceEndpoint": "ERIEIRON_DB_HOST"
+    }
+    for output_var_name, env_name in output_varname_to_envname.items():
+        output_var_value = foundation_outputs.get(output_var_name)
+        if not output_var_value:
+            raise BadPlan(f"Cloudformation stack lacks an output variable value for the required output variable named '{output_var_name}'")
+        docker_env[env_name] = output_var_value
 
 
 def build_iteration(config, docker_env):
@@ -2543,13 +2480,7 @@ def push_cloudformation(
         docker_env: dict,
         cfn_file: Path
 ):
-    config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file}")
-    template_body = cfn_file.read_text()
-    
-    prepare_stack_for_update(
-        stack_name=stack_name,
-        aws_env=config.aws_env
-    )
+    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     
     cloudformation_params = get_stack_parameters(
         config,
@@ -2561,11 +2492,15 @@ def push_cloudformation(
         previous_stack_outputs=previous_stack_outputs
     )
     
-    config.log(f"creating cloudformatin stack with params:  {json.dumps(cloudformation_params, indent=4)}")
-    
     validate_parameters(
         config,
         cloudformation_params
+    )
+    
+    config.log(f"preparing {stack_name} for push to {config.aws_env.get_aws_region()} with {cfn_file.name}")
+    prepare_stack_for_update(
+        stack_name=stack_name,
+        aws_env=config.aws_env
     )
     
     disable_lambda_concurrency(
@@ -2573,15 +2508,13 @@ def push_cloudformation(
         stack_name
     )
     
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
-    
-    stack_status = get_stack_status(stack_name, config.aws_env)
-    if stack_status not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
+    config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file.name} with params:\n{json.dumps(cloudformation_params, indent=4)}")
+    if get_stack_status(stack_name, config.aws_env) not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
         config.log(f"Updating existing stack: {stack_name}\n")
         try:
             cf_client.update_stack(
                 StackName=stack_name,
-                TemplateBody=template_body,
+                TemplateBody=cfn_file.read_text(),
                 Parameters=cloudformation_params,
                 Capabilities=["CAPABILITY_NAMED_IAM"]
             )
@@ -2592,7 +2525,7 @@ def push_cloudformation(
         config.log(f"Creating new stack: {stack_name}\n")
         cf_client.create_stack(
             StackName=stack_name,
-            TemplateBody=template_body,
+            TemplateBody=cfn_file.read_text(),
             Parameters=cloudformation_params,
             Capabilities=["CAPABILITY_NAMED_IAM"]
         )
@@ -2609,11 +2542,9 @@ def push_cloudformation(
         cfn_file
     )
     
-    config.log(f"CloudFormation stack {stack_name} deployed successfully to ")
+    config.log(f"CloudFormation stack {stack_name} deployed successfully to {config.aws_env}")
     
-    stack = get_stack(stack_name, cf_client)
-    
-    return stack.get("StackId")
+    return get_stack(stack_name, cf_client).get("StackId")
 
 
 def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_name, deployment_start_datetime):
@@ -4587,7 +4518,7 @@ def get_relevant_code_files(
 def sync_stack_identity(
         config: SelfDriverConfig,
         docker_env: dict,
-        cloudformation_params: list[dict] | None = None
+        cloudformation_params: dict = None
 ):
     config.refresh_stack_names()
     
@@ -4596,13 +4527,9 @@ def sync_stack_identity(
     docker_env["FOUNDATION_STACK_NAME"] = config.stack_name_foundation
     docker_env["FOUNDATION_STACK_IDENTIFIER"] = config.stack_identifier_foundation
     
-    if cloudformation_params is not None:
-        for param in cloudformation_params:
-            key = param.get("ParameterKey")
-            if key == "StackIdentifier":
-                param["ParameterValue"] = config.stack_identifier_application
-            elif key == "FoundationStackIdentifier":
-                param["ParameterValue"] = config.stack_identifier_foundation
+    if cloudformation_params:
+        cloudformation_params["FoundationStackIdentifier"] = config.stack_identifier_foundation
+        cloudformation_params["StackIdentifier"] = config.stack_identifier_application
 
 
 def deploy_cloudformation_stack(
@@ -4622,6 +4549,7 @@ def deploy_cloudformation_stack(
             
             start_time = time.time()
             try:
+                
                 stack_id = push_cloudformation(
                     config,
                     stack_name=stack_name,
@@ -4633,11 +4561,8 @@ def deploy_cloudformation_stack(
                     cfn_file=template_path
                 )
                 
-                sync_stack_identity(
-                    config,
-                    docker_env,
-                    previous_stack_outputs
-                )
+                stack_outputs = get_stack_outputs(stack_name, config.aws_env)
+            
             finally:
                 push_time_mins = (time.time() - start_time) / 60
                 if push_time_mins > 30:
@@ -4645,7 +4570,7 @@ def deploy_cloudformation_stack(
             
             config.log(f"======== COMPLETED cloudformation deploy for {stack_name}\n\n\n\n")
             
-            return stack_id, get_stack_outputs(stack_name, config.aws_env)
+            return stack_id, stack_outputs
         except CloudFormationStackObsolete as deleting_exc:
             if AwsEnv.PRODUCTION.eq(config.aws_env):
                 raise deleting_exc
@@ -4680,6 +4605,12 @@ def deploy_cloudformation_stack(
                 raise Exception(f"unhanded template name {template_path.name}")
             
             config.refresh_stack_names()
+            
+            sync_stack_identity(
+                config,
+                docker_env,
+                previous_stack_outputs
+            )
             
             config.log(
                 f"Rotated CloudFormation stack from {deleting_exc.stack_name} to {stack_name}"

@@ -493,3 +493,9 @@ class CredentialService(ErieEnum):
         else:
             return self.title()
 
+
+class DockerPlatform(ErieEnum):
+    FARGATE = "linux/amd64"
+    LAMBDA = "linux/arm64"
+
+

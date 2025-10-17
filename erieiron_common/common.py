@@ -487,6 +487,15 @@ def print_working_dir_files():
                 log_info(levels_deep * '---', file)
 
 
+def filter_exists(data_list: list[Path]) -> list[Path]:
+    if data_list is None:
+        return []
+    
+    data_list = [Path(p) for p in ensure_list(data_list)]
+    
+    return [p for p in data_list if p.exists()]
+
+
 def filter_empty(data_list, to_none=False):
     if data_list is None:
         return None

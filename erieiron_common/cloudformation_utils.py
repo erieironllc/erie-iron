@@ -1,20 +1,25 @@
 import datetime
 import json
 import logging
-import time
 import threading
+import time
 import traceback
 from pathlib import Path
 
 import boto3
 import yaml
 
-from erieiron_autonomous_agent.models import Initiative
 from erieiron_common import common, ErieEnum
 from erieiron_common.enums import AwsEnv
 
 STACK_STATUS_NO_STACK = "NO_STACK"
 DEV_STACK_TOKEN_LENGTH = 6
+
+
+class CloudformationResourceType(ErieEnum):
+    S3_BUCKET = "AWS::S3::Bucket"
+    LAMBDA_FUNCTION = "AWS::Lambda::Function"
+    ELB_LOADBALANCER = "AWS::ElasticLoadBalancingV2::LoadBalancer"
 
 
 class CloudformationTemplate(ErieEnum):
@@ -293,11 +298,6 @@ def enforce_route53_alias_guardrail(template_body: str) -> None:
         raise Exception("\n".join(message_lines))
 
 
-def get_foundation_stack_outputs(initiative: Initiative, aws_env: AwsEnv) -> dict:
-    stack_name, _ = initiative.get_cloudformation_stack_name(aws_env)
-    return get_stack_outputs(stack_name, aws_env)
-
-
 def derive_foundation_domain_from_cf_ouputs(outputs: dict) -> str | None:
     for candidate_key in ("RootDomainName", "FoundationDomain", "DomainName"):
         candidate = (outputs.get(candidate_key) or "").strip().lower()
@@ -474,7 +474,7 @@ def cancel_stack_push(stack_name: str, aws_env: AwsEnv, wait_time=0):
                 cf_client.delete_stack(StackName=stack_name)
         except Exception as e:
             logging.warning(f"Failed to cancel or delete stack {stack_name}: {e}")
-
+    
     threading.Thread(target=_cancel_or_delete, daemon=True).start()
 
 
@@ -514,7 +514,7 @@ def get_cloudformation_update_starttime(cf_client, stack_name: str):
     return stack_update_start
 
 
-def get_ecs_services(ecs_client, stack_name: str, active_only=False ) -> list:
+def get_ecs_services(ecs_client, stack_name: str, active_only=False) -> list:
     try:
         services = []
         for cluster_arn in ecs_client.list_clusters().get("clusterArns", []):
@@ -522,19 +522,19 @@ def get_ecs_services(ecs_client, stack_name: str, active_only=False ) -> list:
             if service_arns:
                 desc = ecs_client.describe_services(cluster=cluster_arn, services=service_arns)
                 services.extend(desc.get("services", []))
-
+        
         if active_only:
             services = [
                 s for s in services
                 if s.get("status") == "ACTIVE"
             ]
-
+        
         if stack_name:
             services = [
                 s for s in services
                 if stack_name in s.get("serviceName", "")
             ]
-
+        
         return services
     except:
         return []
@@ -688,3 +688,64 @@ def generate_new_dev_stack_name(current_stack_name: str) -> str:
         return new_name
     else:
         return generate_new_dev_stack_name(current_stack_name)
+
+
+def parse_cloudformation_yaml(cloudformation_yaml) -> dict:
+    class CloudFormationLoader(yaml.SafeLoader):
+        pass
+    
+    for tag in ["!Select", "!Ref", "!Sub", "!GetAtt", "!Join", "!If", "!Equals", "!And", "!Or", "!Not", "!FindInMap", "!ImportValue"]:
+        CloudFormationLoader.add_constructor(tag, lambda loader, node: node.value)
+    
+    if isinstance(cloudformation_yaml, Path):
+        cloudformation_yaml = cloudformation_yaml.read_text()
+    
+    return yaml.load(
+        cloudformation_yaml,
+        Loader=CloudFormationLoader
+    )
+
+
+def get_resource_configs(
+        cloudformation_config_files: list[Path], 
+        resource_type: CloudformationResourceType
+) -> dict:
+    parsed_template_data = {}
+    for cloudformation_config_file in common.ensure_list(cloudformation_config_files):
+        parsed_cf = None
+        if isinstance(cloudformation_config_file, dict):
+            parsed_cf = cloudformation_config_file
+        elif isinstance(cloudformation_config_file, Path):
+            parsed_cf = parse_cloudformation_yaml(cloudformation_config_file.read_text())
+        else:
+            parsed_cf = parse_cloudformation_yaml(cloudformation_config_file)
+        
+        parsed_template_data = {
+            **parsed_template_data,
+            **parsed_cf
+        }
+    
+    return {
+        resource_name: resource_config
+        for resource_name, resource_config in parsed_template_data.get("Resources").items()
+        if resource_type.eq(resource_config.get("Type"))
+    }
+
+
+def get_physical_resources(
+        stack_names: list[str],
+        aws_env: AwsEnv,
+        resource_type: CloudformationResourceType
+) -> dict:
+    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    
+    resources = {}
+    
+    for stack_name in common.ensure_list(stack_names):
+        paginator = cf_client.get_paginator("list_stack_resources")
+        for page in paginator.paginate(StackName=stack_name):
+            for resource in page.get("StackResourceSummaries", []) or []:
+                if resource_type.eq(resource.get("ResourceType")):
+                    resources[resource.get('PhysicalResourceId')] = resource
+                    
+    return resources

@@ -67,14 +67,6 @@ You will be given:
      }
      ```
 
-5. **Summarize Current Code Status**
-   - **Field**: `status_report`
-   - In a few sentences, describe the current state of the system from the perspective of an engineering team.
-   - This is like a daily standup report. Summarize what is implemented, what is partially working, and what is clearly not yet functioning.
-   - Use concrete language like: “X is wired up,” “Y is failing to run,” “Z has no tests yet.”
-   - Be pragmatic, not theoretical—focus on observable progress from the current logs.
-   - Think of `"status_report"` as the daily standup update you'd give if you were a human engineer on this codebase. It should reflect observable system state based on logs—not speculative planning.
-
 ---
 
 ## Missing‑Infra Routing
@@ -88,7 +80,6 @@ If evaluations show failures like “Missing required configuration … EMAIL_IN
 
 ```json
 {
-  "status_report": "Parser logic present and invoked during test run. Email handler Lambda created but not invoked. CI/CD pipeline deployed infrastructure, but SES rule and ECS service did not fully start.",
   "best_iteration_id": "abc123",
   "iteration_id_to_modify": "latest",
   "rollback_reason": "The latest iteration improved stability and fixed 2/3 major bugs identified in the prior version, so continuing from it is most efficient.",

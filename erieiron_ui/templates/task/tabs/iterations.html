@@ -41,7 +41,7 @@
                     <dl class="row">
                         {% if iteration.evaluation_json %}
                             <dt class="mt-2 col-sm-12">Evaluation</dt>
-                            <dd class="col-sm-12">{{ iteration.evaluation_json.status_report }}</dd>
+                            <dd class="col-sm-12">{{ iteration.evaluation_json.summary }}</dd>
                         {% elif iteration.routing_json %}
                             <dt class="mt-2 col-sm-12">Routing</dt>
                             <dd class="col-sm-12">{{ iteration.routing_json.recovery_path }}</dd>
