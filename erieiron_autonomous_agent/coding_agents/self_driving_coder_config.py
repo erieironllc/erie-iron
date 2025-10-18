@@ -14,8 +14,7 @@ from sentence_transformers import SentenceTransformer
 
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative
 from erieiron_common import common, ErieIronJSONEncoder
-from erieiron_common.cloudformation_utils import CloudformationTemplate
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv, CloudformationTemplate
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.18"
@@ -100,7 +99,7 @@ class SelfDriverConfig:
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
         
-        self.cloudformation_configs:list[Path] = common.filter_exists([
+        self.cloudformation_configs: list[Path] = common.filter_exists([
             self.sandbox_root_dir / CloudformationTemplate.FOUNDATION,
             self.sandbox_root_dir / CloudformationTemplate.APPLICATION
         ])

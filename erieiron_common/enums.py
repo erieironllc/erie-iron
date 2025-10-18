@@ -499,3 +499,15 @@ class DockerPlatform(ErieEnum):
     LAMBDA = "linux/arm64"
 
 
+
+
+class CloudformationResourceType(ErieEnum):
+    S3_BUCKET = "AWS::S3::Bucket"
+    LAMBDA_FUNCTION = "AWS::Lambda::Function"
+    ELB_LOADBALANCER = "AWS::ElasticLoadBalancingV2::LoadBalancer"
+
+
+class CloudformationTemplate(ErieEnum):
+    FOUNDATION = "infrastructure.yaml"
+    APPLICATION = "infrastructure-application.yaml"
+

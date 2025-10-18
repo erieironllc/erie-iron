@@ -9,22 +9,11 @@ from pathlib import Path
 import boto3
 import yaml
 
-from erieiron_common import common, ErieEnum
-from erieiron_common.enums import AwsEnv
+from erieiron_common import common
+from erieiron_common.enums import AwsEnv, CloudformationResourceType
 
 STACK_STATUS_NO_STACK = "NO_STACK"
 DEV_STACK_TOKEN_LENGTH = 6
-
-
-class CloudformationResourceType(ErieEnum):
-    S3_BUCKET = "AWS::S3::Bucket"
-    LAMBDA_FUNCTION = "AWS::Lambda::Function"
-    ELB_LOADBALANCER = "AWS::ElasticLoadBalancingV2::LoadBalancer"
-
-
-class CloudformationTemplate(ErieEnum):
-    FOUNDATION = "infrastructure.yaml"
-    APPLICATION = "infrastructure-application.yaml"
 
 
 class CloudFormationException(Exception):
