@@ -676,8 +676,8 @@ def get_guidance_msg(config: SelfDriverConfig):
 def validate_infrastructure(config, normalized_changed):
     templates_to_check = [
         filename for filename in (
-            InfrastructureStackType.FOUNDATION.value,
-            InfrastructureStackType.APPLICATION.value
+            InfrastructureStackType.FOUNDATION.get_template_name(),
+            InfrastructureStackType.APPLICATION.get_template_name()
         )
         if filename in normalized_changed
     ]
@@ -1761,7 +1761,7 @@ def run_docker_command(
     return_code = process.returncode
     
     if return_code == 0:
-        config.log(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
+        logging.info(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
     else:
         raise ExecutionException(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
 
@@ -1867,34 +1867,38 @@ def execute_iteration(
         )
         config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
     elif task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
-        config.log("Skipping automated test run for production deployment task")
-    else:
+        logging.info("Skipping automated test run for production deployment task")
+    elif TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
+        task_io_dir = Path(config.sandbox_root_dir) / "task_io"
+        task_io_dir.mkdir(parents=True, exist_ok=True)
+        
+        input_file = task_io_dir / f"{task.id}-input.json"
+        common.write_json(input_file, task.get_upstream_outputs())
+        
+        output_file = task_io_dir / f"{task.id}-output.json"
+        
         run_docker_command(
             config=config,
             docker_env=docker_env,
-            command_args=["test", "--keepdb", "--noinput"],
+            command_args=[
+                self_driving_task.main_name,
+                "--input_file", input_file,
+                "--output_file", output_file
+            ],
             docker_image=docker_image_tag
         )
-        
-        if TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
-            task_io_dir = Path(config.sandbox_root_dir) / "task_io"
-            task_io_dir.mkdir(parents=True, exist_ok=True)
-            
-            input_file = task_io_dir / f"{task.id}-input.json"
-            common.write_json(input_file, task.get_upstream_outputs())
-            
-            output_file = task_io_dir / f"{task.id}-output.json"
-            
+    elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]:
+        try:
             run_docker_command(
                 config=config,
                 docker_env=docker_env,
-                command_args=[
-                    self_driving_task.main_name,
-                    "--input_file", input_file,
-                    "--output_file", output_file
-                ],
+                command_args=["test", "--keepdb", "--noinput"],
                 docker_image=docker_image_tag
             )
+        except ExecutionException:
+            config.log(f"AT LEAST ONE TEST FAILED.  see previous logs for details")
+    else:
+        logging.info(f"nothing to execute for task type {task_type}")
 
 
 def deploy_iteration(
@@ -2544,9 +2548,9 @@ def push_cloudformation(
             Capabilities=["CAPABILITY_NAMED_IAM"]
         )
         stack_arn = stack_data.get("StackId")
-        
+    
     InfrastructureStack.objects.filter(id=stack.id).update(
-        stack_arn = stack_arn
+        stack_arn=stack_arn
     )
     stack.refresh_from_db(fields=["stack_arn"])
     
@@ -3504,8 +3508,8 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     
     context_files = routing_json.get("context_files", []) + [
         "Dockerfile",
-        InfrastructureStackType.FOUNDATION.value,
-        InfrastructureStackType.APPLICATION.value
+        InfrastructureStackType.FOUNDATION.get_template_name(),
+        InfrastructureStackType.APPLICATION.get_template_name()
     ]
     
     planning_data = llm_chat(
@@ -3855,8 +3859,8 @@ def write_code_file(
         if not code_file_name.endswith(".md") else []
     ]
     if code_file_name in {
-        InfrastructureStackType.FOUNDATION.value,
-        InfrastructureStackType.APPLICATION.value
+        InfrastructureStackType.FOUNDATION.get_template_name(),
+        InfrastructureStackType.APPLICATION.get_template_name()
     }:
         messages += build_cloudformation_durations_context_messages(config)
     
@@ -4076,8 +4080,8 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
     elif code_file_name in {
-        InfrastructureStackType.FOUNDATION.value,
-        InfrastructureStackType.APPLICATION.value
+        InfrastructureStackType.FOUNDATION.get_template_name(),
+        InfrastructureStackType.APPLICATION.get_template_name()
     }:
         prompt = [
             "codewriter--aws_cloudformation_coder.md",
@@ -4173,8 +4177,8 @@ def validate_code(
         )
     
     elif code_file_name in {
-        InfrastructureStackType.FOUNDATION.value,
-        InfrastructureStackType.APPLICATION.value
+        InfrastructureStackType.FOUNDATION.get_template_name(),
+        InfrastructureStackType.APPLICATION.get_template_name()
     }:
         try:
             data = yaml.load(code, Loader=yaml.BaseLoader)
@@ -4371,8 +4375,8 @@ def get_relevant_code_files(
     else:
         required_files = [
             config.self_driving_task.test_file_path,
-            InfrastructureStackType.APPLICATION.value,
-            InfrastructureStackType.FOUNDATION.value,
+            InfrastructureStackType.APPLICATION.get_template_name(),
+            InfrastructureStackType.FOUNDATION.get_template_name(),
             "requirements.txt"
         ]
         
@@ -5017,42 +5021,6 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
     )
 
 
-def delete_cloudformation_stack(
-        config,
-        aws_env: AwsEnv,
-        block_while_waiting=True
-):
-    if not AwsEnv.DEV.eq(aws_env):
-        raise Exception(f"cannot delete a non DEV stack")
-    
-    stack_name = config.infrastucture_stacks[InfrastructureStackType.APPLICATION].stack_name
-    if not stack_name:
-        return
-    
-    cf_client = aws_utils.client("cloudformation")
-    existing = get_stack(stack_name, cf_client)
-    if not existing:
-        config.log(f"CloudFormation stack {stack_name} does not exist. Nothing to delete.")
-        return
-    
-    empty_stack_buckets(
-        config,
-        delete_bucket=True
-    )
-    
-    config.log(f"Deleting CloudFormation stack {stack_name} in {get_aws_region()}")
-    cf_client.delete_stack(StackName=stack_name)
-    
-    # Wait until the stack is deleted or reaches a terminal state
-    if block_while_waiting:
-        cloudformation_wait(
-            stack_name,
-            config.aws_env,
-            rotate_on_delete=False
-        )
-        config.log(f"Delete request finished for stack {stack_name}")
-
-
 def empty_stack_buckets(
         config: SelfDriverConfig, *,
         delete_bucket=True
@@ -5079,8 +5047,8 @@ def run_existing_tests(config, self_driving_task):
     
     has_cloudformation = config.business.codefile_set.filter(
         file_path__in=[
-            InfrastructureStackType.FOUNDATION.value,
-            InfrastructureStackType.APPLICATION.value
+            InfrastructureStackType.FOUNDATION.get_template_name(),
+            InfrastructureStackType.APPLICATION.get_template_name()
         ]
     ).exists()
     
@@ -5094,7 +5062,6 @@ def run_existing_tests(config, self_driving_task):
         return
     
     # make sure the tests run
-    delete_cloudformation_stack(config, AwsEnv.DEV, block_while_waiting=False)
     build_deploy_exec_iteration(config)
     
     assert_tests_green(config)

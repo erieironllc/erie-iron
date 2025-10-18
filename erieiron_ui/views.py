@@ -18,11 +18,11 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
-from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile, CodeVersion
+from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
@@ -1317,19 +1317,21 @@ def _task_tab_available_edit(task, business, self_driving_task) -> bool:
     return True
 
 
-def _task_tab_context_edit(task, business, self_driving_task) -> dict:
+def _task_tab_context_edit(task, business, self_driving_task:SelfDrivingTask) -> dict:
     sandbox_path = self_driving_task.sandbox_path if self_driving_task else ""
     
     cloudformation_stack_name = None
     cloudformation_stack_url = None
     cloudformation_stack_edit_value = ""
-    stack_id = self_driving_task.cloudformation_stack_id
-    if stack_id:
-        cloudformation_stack_name = self_driving_task.cloudformation_stack_name or stack_id
-        encoded_stack_id = quote(stack_id, safe="")
-        cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
     
     if self_driving_task:
+        initiative = self_driving_task.task.initiative
+        stack = initiative.cloudformation_stacks.filter(aws_env=AwsEnv.DEV, stack_type=InfrastructureStackType.APPLICATION).first()
+        if stack:
+            cloudformation_stack_name = stack.stack_name
+            encoded_stack_id = quote(stack.stack_arn, safe="")
+            cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
+    
         cloudformation_stack_edit_value = self_driving_task.cloudformation_stack_name or ""
         cloudformation_stack_edit_value = cloudformation_stack_edit_value.strip()
     
@@ -2130,11 +2132,13 @@ def action_update_task(request, task_id):
         execution_schedule = rget(request, 'execution_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
+        completion_criteria = json.loads(rget(request, 'completion_criteria', '').strip())
         requires_test = request.POST.get('requires_test') == 'on'
         
         # Prepare update data
         update_data = {
             'description': description,
+            'completion_criteria': completion_criteria,
             'risk_notes': risk_notes,
             'status': status,
             'task_type': task_type,
@@ -2723,7 +2727,7 @@ def view_llm_request(request, llm_request_id):
             "tabs": _build_iteration_tabs(iteration, task, previous_iteration, next_iteration, None, None, llm_requests),
             "llm_request": llm_request,
             "model_choices": model_choices,
-            "model_choice_value": f"{LlmModel.OPENAI_GPT_5.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MINIMAL}"
+            "model_choice_value": f"{LlmModel.OPENAI_GPT_5_MINI.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
         },
         breadcrumbs=breadcrumbs
     )

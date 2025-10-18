@@ -576,16 +576,14 @@ class InfrastructureStack(BaseErieIronModel):
                 initiative.id,
                 stack_type
             ])
-
+        
         stack = InfrastructureStack.objects.create(
             business=initiative.business,
             initiative=initiative if not AwsEnv.PRODUCTION.eq(aws_env) else None,
             stack_type=stack_type,
-            defaults={
-                "stack_name": stack_name,
-                "stack_namespace_token": stack_namespace_token,
-                "aws_env": aws_env
-            }
+            stack_name=stack_name,
+            stack_namespace_token=stack_namespace_token,
+            aws_env=aws_env
         )
         
         if (
@@ -609,13 +607,17 @@ class InfrastructureStack(BaseErieIronModel):
     
     @transaction.atomic
     def tombstone(self) -> 'InfrastructureStack':
-        if AwsEnv.PRODUCTION.eq(self.aws_env):
+        aws_env = self.aws_env
+        initiative = self.initiative
+        stack_type = self.stack_type
+        
+        if AwsEnv.PRODUCTION.eq(aws_env):
             raise Exception(f"cannot tombstone a production stack")
         
         try:
             import boto3
             logging.info(f"Deleting tombstoned stack {self.stack_name}")
-            cf_client = boto3.client("cloudformation", region_name=AwsEnv(self.aws_env).get_aws_region())
+            cf_client = boto3.client("cloudformation", region_name=AwsEnv(aws_env).get_aws_region())
             cf_client.delete_stack(StackName=self.stack_name)
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
@@ -625,9 +627,9 @@ class InfrastructureStack(BaseErieIronModel):
         ).delete()
         
         return InfrastructureStack.get(
-            self.initiative,
-            self.stack_type,
-            self.aws_env,
+            initiative=initiative,
+            stack_type=stack_type,
+            aws_env=aws_env,
             assert_create=True
         )
     

@@ -172,6 +172,16 @@ Special rule for provisioning-related errors: If the error involves missing AWS 
 Example indicators: AccessDenied for arn:aws:iam, ResourceNotFound, ValidationError, or messages referencing missing S3 buckets or default VPCs.
 
 
+### Missing or Misconfigured Domain Records (A, AAAA, DKIM, etc)
+
+if the eror message contains patterns like
+```Missing Route53 AAAA record for```
+or similar
+
+**You must** excalate to hum by setting `recovery_path` to `ESCALATE_TO_HUMAN`
+**Never** send it to AWS_PROVISIONING_PLANNER if you see these types of errors
+
+
 ### Missing Cloud Resource Env Vars
 
 If the error message contains patterns like:

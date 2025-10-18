@@ -1,7 +1,7 @@
+import concurrent.futures
 import datetime
 import json
 import logging
-import threading
 import time
 import traceback
 from pathlib import Path
@@ -310,7 +310,7 @@ def cloudformation_wait(
         stack_names: list[str],
         aws_env: AwsEnv,
         *,
-        timeout=45 * 60,
+        timeout=20 * 60,
         poll_interval=10,
         throw_on_fail=False,
         rotate_on_delete=True
@@ -352,7 +352,7 @@ def _wait_for_single_stack(
         
         if first_status is not None:
             time.sleep(poll_interval)
-            
+        
         status = stack['StackStatus']
         if first_status is None:
             first_status = status
@@ -382,7 +382,7 @@ def _wait_for_single_stack(
             
             failures = [d for d in service.get("deployments", []) if d.get("rolloutState") == "FAILED"]
             if failures:
-                logging.error(f"ECS deployment failed for {service_name}: {failures}.  canceling the update")
+                logging.error(f"ECS deployment failed for {service_name}: {failures}.  canceling the update (takes a minute to cancel)")
                 cancel_stack_push(stack_name, aws_env, wait_time=60)
                 if throw_on_fail:
                     raise CloudFormationException(f"ECS service {service_name} deployment failed")
@@ -394,7 +394,7 @@ def _wait_for_single_stack(
                 stopped_reason = task.get("stoppedReason", "")
                 
                 if last_status in ("STOPPED", "DEPROVISIONING"):
-                    logging.error(f"ECS task failure detected (started after stack update): {stopped_reason}.  canceling the update")
+                    logging.error(f"ECS task failure detected (started after stack update): {stopped_reason}.  canceling the update (takes a minute to cancel)")
                     cancel_stack_push(stack_name, aws_env, wait_time=60)
                     if throw_on_fail:
                         raise CloudFormationException(f"ECS task failed after stack update: {stopped_reason}")
@@ -442,10 +442,10 @@ def _wait_for_single_stack(
 
 def cancel_stack_push(stack_name: str, aws_env: AwsEnv, wait_time=0):
     def _cancel_or_delete():
-        time.sleep(wait_time)
-        cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
         try:
-            stack = cf_client.describe_stacks(StackName=stack_name)['Stacks'][0]
+            time.sleep(wait_time)
+            cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+            stack = cf_client.describe_stacks(StackName=stack_name)["Stacks"][0]
             status = stack.get("StackStatus", "")
             if status.startswith("UPDATE_"):
                 logging.info(f"Cancelling update for {stack_name} (status: {status})")
@@ -456,7 +456,9 @@ def cancel_stack_push(stack_name: str, aws_env: AwsEnv, wait_time=0):
         except Exception as e:
             logging.warning(f"Failed to cancel or delete stack {stack_name}: {e}")
     
-    threading.Thread(target=_cancel_or_delete, daemon=True).start()
+    logging.info(f"scheduling {stack_name} cancel.  wait_time={wait_time}")
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    executor.submit(_cancel_or_delete)
 
 
 def get_new_tasks(ecs_client, service, stack_update_start, *, failed_tasks=False) -> list:

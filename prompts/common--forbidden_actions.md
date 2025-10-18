@@ -1,7 +1,23 @@
 ## Forbidden Actions
 
 ### Testing Practices
-- **never** modify, relax, skip, xfail, or delete test assertions solely to obtain a green test run. Tests are the oracle. Plan code changes to satisfy existing assertions.
+- **never** modify, relax, skip, xfail, or delete test assertions solely to obtain a green test run. 
+    - Tests are the oracle. 
+    - Plan code changes to satisfy existing assertions.
+- **never** write a test that asserts specific cloudformation configuration settings
+    - Automated tests must only assert end behavior
+    - For an example: never assert specific A or AAAA records in route53
+  
+### Specifically, **never** write tests that assert the following behavior
+- Git repository setup, syncing, committing, or pushing.
+- Automated test execution or containerized test runs.
+- Docker image builds, ECR pushes, or Lambda packaging.
+- CloudFormation deployment or rollback, including stack rotation and parameter validation.
+- Route53 alias records, SES domain/DKIM management, or domain teardown.
+- Database provisioning or migrations (`makemigrations`, `migrate`).
+- Code snapshotting, iteration evaluation, or internal iteration control logic.
+These responsibilities are handled automatically by the orchestration layer and should not be tested by a task's automated test
+
 
 ### Service and Container Management
 - **never** start new services or additional containers

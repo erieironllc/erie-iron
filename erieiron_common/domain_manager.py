@@ -447,9 +447,10 @@ def upsert_subdomain_alias(
 def wait_for_dns_propagation(
         domain_name: str,
         target_dns_name: str,
-        timeout=300,
+        timeout=20 * 60,
         interval=10
 ):
+    logging.info(f"start wait for dns propagation {domain_name} -> {target_dns_name}")
     deadline = time.time() + timeout
     last_err = None
     
@@ -462,7 +463,7 @@ def wait_for_dns_propagation(
                 return True
             logging.info(f"waiting for dns propagation {domain_name} -> {target_dns_name} ({target_ips}).  {int(time.time() - start_time)}s of max {timeout}s.  current {answers[2]}")
         except Exception as e:
-            last_err = e
+            logging.info(f"err for dns propagation {domain_name} -> {target_dns_name}: {e}")
         time.sleep(interval)
     
     raise TimeoutError(
@@ -602,7 +603,13 @@ def find_hosted_zone_id(route53_client, domain: str) -> Optional[str]:
     return None
 
 
-def _wait_for_hosted_zone_visible(route53_client, hosted_zone_id: str, domain: str, *, max_attempts: int = 10, delay_seconds: float = 1.0) -> None:
+def _wait_for_hosted_zone_visible(
+        route53_client, 
+        hosted_zone_id: str, 
+        domain: str, *, 
+        max_attempts: int = 10, 
+        delay_seconds: float = 1.0
+) -> None:
     normalized_id = _normalize_hosted_zone_id(hosted_zone_id)
     if not normalized_id:
         return

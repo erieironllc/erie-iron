@@ -5,11 +5,29 @@ LlmRequestView = ErieView.extend({
         'click #btn_ask': 'btn_ask_click',
         'click #btn_compare_response_diff': 'btn_compare_response_diff_click',
         'click #btn_compare': 'btn_compare_click',
+        'click #btn_problems': 'btn_problems_click',
         'click #btn_optimize': 'btn_optimize_click'
     },
 
     init_view: function (options) {
 
+    },
+
+    btn_problems_click: function (ev) {
+        $("#txt_problems_response").text("thinking...  this might take a bit ");
+
+        const t = setInterval(() => {
+            $("#txt_problems_response").text($("#txt_problems_response").text() + ".");
+        }, 1000);
+
+        erie_server().exec_server_post(
+            $("#frm_llm_problems"), null,
+            (resp) => {
+                clearInterval(t);
+                $("#txt_problems_response").empty().append(resp);
+                this.delegateEvents();
+            })
+        return last_stop(ev)
     },
 
     btn_optimize_click: function (ev) {
