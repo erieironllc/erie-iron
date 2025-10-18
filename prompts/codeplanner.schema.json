@@ -275,7 +275,7 @@
           "properties": {
             "category": {
               "type": "string",
-              "enum": ["task_def", "infra", "missing_context", "permissions", "unexpected_error"],
+              "enum": ["task_def", "infra", "infra_boundary", "missing_context", "permissions", "unexpected_error"],
               "description": "Reason category for blocking"
             },
             "reason": {

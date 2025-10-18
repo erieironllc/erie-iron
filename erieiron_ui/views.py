@@ -1513,7 +1513,13 @@ def _build_iteration_tabs(
     
     from erieiron_ui.tab_defitions import TAB_DIVIDER
     nav_links = [
-        TAB_DIVIDER
+        TAB_DIVIDER,
+        {
+            "slug": "latest-iteration-link",
+            "label": "Latest Iteration",
+            "url": reverse('view_self_driver_latest_iteration', args=[task.id]),
+            "available": True,
+        }
     ]
     
     if previous_iteration:
@@ -1530,12 +1536,6 @@ def _build_iteration_tabs(
             "url": reverse('view_self_driver_iteration', args=[next_iteration.id]),
             "available": True,
         })
-    nav_links.append({
-        "slug": "latest-iteration-link",
-        "label": "Latest Iteration",
-        "url": reverse('view_self_driver_latest_iteration', args=[task.id]),
-        "available": True,
-    })
     
     first_divider_index = next(
         (idx for idx, tab in enumerate(tabs) if tab.get("is_divider")),

@@ -63,6 +63,16 @@ def execute(
         with SelfDriverConfig(self_driving_task, one_off_action) as config:
             config.init_log()
             
+            print(textwrap.dedent(f"""
+            
+            
+            Running {one_off_action} for
+            {config.task.id}
+            {config.task.description}
+            
+            
+            """))
+            
             config.set_iteration(
                 SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
             )
@@ -1348,8 +1358,8 @@ def build_docker_image(
     ]
     
     # force a new docker image tag to make sure cloudformation updates
-    # if config.one_off_action or config.current_iteration.evaluation_json:
-    #     docker_image_tag_parts.append(str(time.time())[-5:])
+    if config.one_off_action:
+        docker_image_tag_parts.append(str(time.time())[-5:])
     
     docker_image_tag = sanitize_aws_name(docker_image_tag_parts, max_length=128)
     
@@ -1725,8 +1735,6 @@ def run_docker_command(
         docker_image: str
 ) -> None:
     command_args = common.ensure_list(command_args)
-    iteration = config.current_iteration
-    selfdriving_task = iteration.self_driving_task
     
     cmd = [
         "docker", "run", "--rm",
@@ -1752,7 +1760,7 @@ def run_docker_command(
         text=True
     )
     
-    config.log(f"Docker {command_args[-1]} execution started with PID {process.pid}, iteration_id: {iteration.id}")
+    config.log(f"Docker {command_args[-1]} execution started with PID {process.pid}")
     
     # Wait for completion
     while process.poll() is None:
@@ -1814,7 +1822,6 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         
         local_logs = config.get_log_content() or ""
         
-        # time.sleep(30)  # pause to let logging catch up
         failure_details = cloudformation_log_reader.read_cloudformation_failures(
             config.aws_env.get_aws_region(),
             config.get_stack_names(),
@@ -1946,6 +1953,18 @@ def deploy_iteration(
         foundation_outputs
     )
     
+    manage_db(
+        config,
+        docker_env,
+        docker_image_tag
+    )
+    
+    validate_web_container(
+        config,
+        docker_env,
+        docker_image_tag
+    )
+    
     app_outputs = deploy_cloudformation_stack(
         config=config,
         stack_type=InfrastructureStackType.APPLICATION,
@@ -1957,12 +1976,6 @@ def deploy_iteration(
     )
     
     ensure_lb_alias_record(config)
-    
-    manage_db(
-        config,
-        docker_env,
-        docker_image_tag
-    )
 
 
 def add_rds_vals_to_env(business: Business, docker_env: dict, foundation_outputs: dict):
@@ -2063,13 +2076,6 @@ def manage_db(
         docker_image_tag: str
 ):
     try:
-        aws_region_name = docker_env["AWS_DEFAULT_REGION"]
-        
-        rds_secret = agent_tools.get_secret_json(
-            docker_env["RDS_SECRET_ARN"],
-            aws_region_name
-        )
-        
         run_docker_command(
             config=config,
             docker_env=docker_env,
@@ -2088,6 +2094,75 @@ def manage_db(
             raise AgentBlocked(e.__dict__)
         else:
             raise e
+
+
+def validate_web_container(
+        config: SelfDriverConfig,
+        docker_env: dict,
+        docker_image_tag: str
+):
+    port = settings.VALIDATION_PORT
+    
+    process = None
+    config.log(f"==========  BEGIN Docker webcontainer validation ===============")
+    try:
+        process = subprocess.Popen(
+            [
+                "docker", "run", "--rm",
+                "--platform", DockerPlatform.FARGATE,
+                "-p", f"{port}:{port}",
+                "-v", f"{config.sandbox_root_dir}:/app",
+                "-w", "/app",
+                *build_env_flags(docker_env),
+                docker_image_tag
+            ],
+            stdout=config.log_f,
+            stderr=subprocess.STDOUT,
+            env=docker_env,
+            text=True
+        )
+        
+        config.log(f"Starting Docker webcontainer validation (PID={process.pid})")
+        start_time = time.time()
+        max_wait = 60  # seconds
+        healthy = False
+        for attempt in range(1, 13):  # 12 attempts × 5s = 60s
+            time.sleep(5)
+            config.log(f"Healthcheck attempt {attempt}: querying http://127.0.0.1:{port}/health/")
+            try:
+                res = subprocess.run(
+                    ["curl", "-fsSL", f"http://127.0.0.1:{port}/health/"],
+                    stdout=config.log_f,
+                    stderr=subprocess.STDOUT
+                )
+                if res.returncode == 0:
+                    config.log(f"Healthcheck succeeded on attempt {attempt}")
+                    healthy = True
+                    break
+                else:
+                    config.log(f"Healthcheck attempt {attempt} failed (curl exit {res.returncode})")
+            except Exception as e:
+                config.log(f"Healthcheck attempt {attempt} exception: {e}")
+            if time.time() - start_time > max_wait:
+                break
+        
+        if healthy:
+            config.log("Docker webcontainer validation completed successfully")
+        else:
+            raise BadPlan("Web container validation failed.  see error logs for details")
+    finally:
+        try:
+            config.log("terminating healthcheck container")
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        except Exception as e:
+            logging.exception(e)
+            logging.error("failed to kill the healthcheck container")
+        
+        config.log(f"========== END Docker webcontainer validation ===============")
 
 
 def init_task_execution(iteration):
@@ -2269,46 +2344,56 @@ def evaluate_iteration(
             "iteration_full_evaluation": prev_iter.evaluation_json,
         })
     
-    selection_data = llm_chat(
-        "Iteration Selector",
-        [
-            get_sys_prompt([
-                "iteration_selector.md",
-                "common--iam_role.md",
-                "common--agent_provided_functionality.md",
-                "common--domain_management.md",
-                "common--forbidden_actions.md",
-                "common--environment_variables.md"
-            ], replacements=[
-                ("<env_vars>", get_env_var_names(config)),
-            ]),
-            get_goal_msg(config, "Task Goal"),
-            get_previous_iteration_summaries_msg(
-                config
-            ),
-            LlmMessage.user_from_data(
-                f"**Recent Iteration Full Evaluations**",
-                previous_iteration_evals,
-                "iteration_full_evaluation"
-            )
-        ],
-        LlmModel.OPENAI_GPT_5_MINI,
-        tag_entity=config.current_iteration,
-        output_schema="iteration_selector.md.schema.json"
-    ).json()
-    
-    blocked_data = selection_data.get("blocked")
-    if blocked_data:
-        raise AgentBlocked(blocked_data)
-    
-    iteration_id_to_modify = selection_data.get("iteration_id_to_modify")
-    if iteration_id_to_modify != 'latest':
-        count_prevous_attempts = SelfDrivingTaskIteration.objects.filter(start_iteration_id=iteration_id_to_modify).count()
-        if count_prevous_attempts < 5:
-            selection_data['iteration_id_to_modify'] = iteration_id_to_modify
-        else:
-            # we've tried too many times.  go with the latest to see if this improves
-            selection_data['iteration_id_to_modify'] = 'latest'
+    if not TaskType.CODING_ML.eq(config.task_type):
+        # with non ML tasks, we always must move on from the latest
+        # the reason for this is with db schema changes - these do not rollback if the code rolls back
+        # so, in cases where we might upgrade the schema, always roll forward
+        selection_data = {
+            "iteration_id_to_modify": "latest",
+            "best_iteration_id": str(config.current_iteration.id),
+            "previous_iteration_count": 1
+        }
+    else:
+        selection_data = llm_chat(
+            "Iteration Selector",
+            [
+                get_sys_prompt([
+                    "iteration_selector.md",
+                    "common--iam_role.md",
+                    "common--agent_provided_functionality.md",
+                    "common--domain_management.md",
+                    "common--forbidden_actions.md",
+                    "common--environment_variables.md"
+                ], replacements=[
+                    ("<env_vars>", get_env_var_names(config)),
+                ]),
+                get_goal_msg(config, "Task Goal"),
+                get_previous_iteration_summaries_msg(
+                    config
+                ),
+                LlmMessage.user_from_data(
+                    f"**Recent Iteration Full Evaluations**",
+                    previous_iteration_evals,
+                    "iteration_full_evaluation"
+                )
+            ],
+            LlmModel.OPENAI_GPT_5_MINI,
+            tag_entity=config.current_iteration,
+            output_schema="iteration_selector.md.schema.json"
+        ).json()
+        
+        blocked_data = selection_data.get("blocked")
+        if blocked_data:
+            raise AgentBlocked(blocked_data)
+        
+        iteration_id_to_modify = selection_data.get("iteration_id_to_modify")
+        if iteration_id_to_modify != 'latest':
+            count_prevous_attempts = SelfDrivingTaskIteration.objects.filter(start_iteration_id=iteration_id_to_modify).count()
+            if count_prevous_attempts < 5:
+                selection_data['iteration_id_to_modify'] = iteration_id_to_modify
+            else:
+                # we've tried too many times.  go with the latest to see if this improves
+                selection_data['iteration_id_to_modify'] = 'latest'
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
@@ -2525,7 +2610,7 @@ def push_cloudformation(
         stack_name
     )
     
-    config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file.name} with params:\n{json.dumps(cloudformation_params, indent=4)}")
+    config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file.name} ")
     if get_stack_status(stack_name, config.aws_env) not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
         stack_arn = get_stack(stack_name, cf_client).get("StackId")
         config.log(f"Updating existing stack: {stack_name}\n")
@@ -4581,7 +4666,7 @@ def deploy_cloudformation_stack(
         previous_stack_outputs: dict | None = None
 ) -> dict:
     stack = None
-    for i in range(3):
+    for i in range(2):
         try:
             start_time = time.time()
             try:
@@ -4625,7 +4710,7 @@ def deploy_cloudformation_stack(
             )
     
     raise AgentBlocked(
-        f"Unable to push stack for task {config.task.id} {stack_type}.  failed after 3 attempts "
+        f"Unable to push stack for task {config.task.id} {stack_type}"
     )
 
 

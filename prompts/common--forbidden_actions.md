@@ -19,6 +19,16 @@
 These responsibilities are handled automatically by the orchestration layer and should not be tested by a task's automated test
 
 
+### Domain/DNS Policy
+DOMAIN_EDITS_FORBIDDEN = true. 
+- If a potential fix involves DNS/Route53/ACM/DomainName/SES identity changes, return the blocked JSON (category=infra_boundary) and do not propose file edits.
+- Do not create, modify, or delete any Route53::RecordSet, AWS::ACM::Certificate, AWS::SES::EmailIdentity, or change DomainName/DomainHostedZoneId parameters.
+- Before emitting code_files, scan all instructions and code_file_path text for tokens: 'Route53','RecordSet','DomainName','Alias','ACM','DKIM','SES','MX','CNAME','ARecord','AAAA'. If present, return blocked.
+- If the planner would need to change DNS/DomainName/Route53/ACM/SES domain aliasing, immediately return: { "blocked": { "category": "infra_boundary", "reason": "Domain/DNS/Route53/ACM edits are disallowed in this iteration per operator policy; orchestration layer must perform DNS changes." } }.
+- Use this exact blocked payload whenever domain changes would be required: { "blocked": { "category": "infra_boundary", "reason": "Domain/DNS edits are forbidden for this iteration. Any Route53/ACM/DomainName/SES domain aliasing changes must be handled by the orchestration layer." } }.
+- If logs show domain errors, do not attempt infra edits — return blocked with category infra_boundary.
+
+
 ### Service and Container Management
 - **never** start new services or additional containers
     - Do not use docker-compose

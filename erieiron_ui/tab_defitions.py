@@ -134,6 +134,13 @@ TASK_TAB_DEFINITIONS = [
         "context_fn": views._task_tab_context_overview,
     },
     {
+        "slug": "latest_iteration",
+        "label": "Latest Iteration",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": views._task_tab_available_iterations,
+        "context_fn": views._task_tab_context_latest_iteration,
+    },
+    {
         "slug": "testcode",
         "label": "Test Code",
         "template": "task/tabs/testcode.html",
@@ -169,13 +176,6 @@ TASK_TAB_DEFINITIONS = [
         "template": "task/tabs/iterations.html",
         "availability_fn": views._task_tab_available_iterations,
         "context_fn": views._task_tab_context_iterations,
-    },
-    {
-        "slug": "latest_iteration",
-        "label": "Latest Iteration",
-        "template": "task/tabs/iterations.html",
-        "availability_fn": views._task_tab_available_iterations,
-        "context_fn": views._task_tab_context_latest_iteration,
     },
     {
         "slug": "codefiles",

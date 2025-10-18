@@ -1,5 +1,7 @@
 ## Domain Usage Contract
 
+**Immediate policy reminder:** Domain/DNS/Route53/ACM/SES domain aliasing edits are forbidden for this iteration. If any requirement in this contract would require changing those resources, you must emit `{ "blocked": { "category": "infra_boundary", "reason": "Domain/DNS edits are forbidden for this iteration. Any Route53/ACM/DomainName/SES domain aliasing changes must be handled by the orchestration layer." } }` instead of planning a code edit.
+
 The system passes the task-specific subdomain 
 - into CloudFormation as the required parameter `DomainName`.
 - into the operating system environment under the environment variable name `DOMAIN_NAME`.
@@ -14,8 +16,8 @@ The system passes the task-specific subdomain
 - Never hardcode a specific domain (e.g., task-design-forward-digest-minimal-ui.articleparse.com) unless the evaluator explicitly requires a verbatim literal for a test, and include both forms if doing so.
 
 ### Required wiring
-- Any cloudformation service that needs a DNS name must reference `!Ref DomainName`.
-- When you publish DNS for the application, create `AWS::Route53::RecordSet` alias records (`Type: A` and optionally `AAAA`) that point to the ALB via `AliasTarget`. Do **not** create a `CNAME` for `!Ref DomainName`; alias records are required even when the value is a subdomain.
+- Any cloudformation service that needs a DNS name must reference `!Ref DomainName`. The orchestration layer is responsible for ensuring this reference already exists; do **not** plan edits that would alter DNS wiring.
+- When you publish DNS for the application, create `AWS::Route53::RecordSet` alias records (`Type: A` and optionally `AAAA`) that point to the ALB via `AliasTarget`. Operational automation outside this iteration maintains these records; if the stack is missing them, emit the `infra_boundary` blocked payload rather than proposing edits.
 - Any Python code (including automated tests) that needs a DNS name must retrieve it from os.getenv("DOMAIN_NAME").
 
 ### Prohibited
