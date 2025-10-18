@@ -20,7 +20,17 @@ from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRati
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
-from erieiron_common.enums import Level, LlcStructure, TaskExecutionSchedule, InitiativeType, GoalStatus, BusinessIdeaSource, TaskType, AwsEnv
+from erieiron_common.enums import (
+    Level,
+    LlcStructure,
+    TaskExecutionSchedule,
+    InitiativeType,
+    GoalStatus,
+    BusinessIdeaSource,
+    TaskType,
+    AwsEnv,
+    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH,
+)
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -55,6 +65,7 @@ class Business(BaseErieIronModel):
     web_desired_count = models.PositiveIntegerField(default=1)
     autonomy_level = models.TextField(null=True, choices=Level.choices())
     domain = models.TextField(null=True)
+    domain_certificate_arn = models.TextField(null=True)
     route53_hosted_zone_id = models.TextField(null=True, blank=True)
     github_repo_url = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -488,6 +499,7 @@ class Initiative(BaseErieIronModel):
     linked_goals = models.ManyToManyField("BusinessGoal", related_name="initiatives", blank=True)
     expected_kpi_lift = models.JSONField(default=dict)
     requires_unit_tests = models.BooleanField(default=True)
+    domain = models.TextField(null=True)
     
     def all_tasks_complete(self) -> bool:
         if self.tasks.count() == 0:
@@ -506,6 +518,131 @@ class Initiative(BaseErieIronModel):
                 "testable": req.testable
             } for req in self.requirements.order_by()]
         }
+
+
+class InfrastructureStack(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    initiative = models.ForeignKey(
+        Initiative,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="cloudformation_stacks",
+    )
+    stack_namespace_token = models.TextField(unique=True)
+    stack_name = models.TextField(unique=True)
+    stack_arn = models.TextField(null=True)
+    aws_env = models.TextField(choices=AwsEnv.choices())
+    stack_type = models.TextField(choices=InfrastructureStackType.choices())
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    
+    @staticmethod
+    def get(
+            initiative: Initiative,
+            stack_type: InfrastructureStackType,
+            aws_env: AwsEnv,
+            assert_create=False
+    ) -> 'InfrastructureStack':
+        from erieiron_common import domain_manager
+        from erieiron_common.aws_utils import sanitize_aws_name
+        
+        stack = InfrastructureStack.objects.filter(initiative=initiative, stack_type=stack_type, aws_env=aws_env).first()
+        if stack:
+            if assert_create:
+                raise Exception("was supposed to create new but did not")
+            else:
+                return stack
+        
+        # create a new stack
+        stack_namespace_token = None
+        for i in range(100):
+            stack_namespace_token_candidate = common.gen_random_token(DEV_STACK_TOKEN_LENGTH)
+            if not InfrastructureStack.objects.filter(stack_namespace_token=stack_namespace_token_candidate).exists():
+                stack_namespace_token = stack_namespace_token_candidate
+                break
+        
+        if not stack_namespace_token:
+            raise Exception(f"unable to find a unique stack_namespace_token")
+        
+        if AwsEnv.PRODUCTION.eq(aws_env):
+            stack_name = sanitize_aws_name([
+                stack_namespace_token,
+                initiative.business.service_token,
+                stack_type
+            ])
+        else:
+            stack_name = sanitize_aws_name([
+                stack_namespace_token,
+                initiative.id,
+                stack_type
+            ])
+
+        stack = InfrastructureStack.objects.create(
+            business=initiative.business,
+            initiative=initiative if not AwsEnv.PRODUCTION.eq(aws_env) else None,
+            stack_type=stack_type,
+            defaults={
+                "stack_name": stack_name,
+                "stack_namespace_token": stack_namespace_token,
+                "aws_env": aws_env
+            }
+        )
+        
+        if (
+                InfrastructureStackType.FOUNDATION.eq(stack_type)
+                and AwsEnv.DEV.eq(aws_env)
+        ):
+            new_sub_domain = sanitize_aws_name(stack_name, 63)
+            new_domain = f"{new_sub_domain}.{initiative.business.domain}"
+            
+            Initiative.objects.filter(id=initiative.id).update(
+                domain=new_domain
+            )
+            initiative.refresh_from_db(fields=["domain"])
+            
+            domain_manager.add_dns_records(
+                initiative.business.route53_hosted_zone_id,
+                new_domain
+            )
+        
+        return stack
+    
+    @transaction.atomic
+    def tombstone(self) -> 'InfrastructureStack':
+        if AwsEnv.PRODUCTION.eq(self.aws_env):
+            raise Exception(f"cannot tombstone a production stack")
+        
+        try:
+            import boto3
+            logging.info(f"Deleting tombstoned stack {self.stack_name}")
+            cf_client = boto3.client("cloudformation", region_name=AwsEnv(self.aws_env).get_aws_region())
+            cf_client.delete_stack(StackName=self.stack_name)
+        except Exception as e:
+            logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
+        
+        InfrastructureStack.objects.filter(
+            id=self.id
+        ).delete()
+        
+        return InfrastructureStack.get(
+            self.initiative,
+            self.stack_type,
+            self.aws_env,
+            assert_create=True
+        )
+    
+    def get_template_name(self) -> str:
+        return InfrastructureStackType(self.stack_type).get_template_name()
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=["business", "stack_type"]),
+            models.Index(fields=["initiative", "stack_type"]),
+        ]
+    
+    def __str__(self):
+        initiative_id = self.initiative_id or "no-initiative"
+        return f"{self.stack_type}::{initiative_id}::{self.stack_name}"
 
 
 class ProductRequirement(BaseErieIronModel):
@@ -651,7 +788,6 @@ class Task(BaseErieIronModel):
         from erieiron_common.aws_utils import sanitize_aws_name
         return sanitize_aws_name([str(self.id)], max_length=63).lower()
     
-    
     def get_name(self):
         root_str = str(self.id)
         
@@ -715,44 +851,6 @@ class SelfDrivingTask(BaseErieIronModel):
     cloudformation_stack_id = models.TextField(null=True)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
-    def get_stack_identifier(self, aws_env: AwsEnv):
-        from erieiron_common.aws_utils import sanitize_aws_name
-        return sanitize_aws_name(
-            self.get_cloudformation_stack_name(aws_env),
-            max_length=40
-        )
-    
-    def get_cloudformation_stack_name(self, environment: AwsEnv):
-        from erieiron_common.aws_utils import sanitize_aws_name
-        from erieiron_common.cloudformation_utils import generate_stack_name_token
-        
-        if AwsEnv.PRODUCTION.eq(environment):
-            return sanitize_aws_name([
-                self.business.service_token,
-                "app"
-            ])
-        
-        if not AwsEnv.DEV.eq(environment):
-            raise ValueError(f"Unsupported AWS environment: {environment}")
-        
-        if self.cloudformation_stack_name:
-            return self.cloudformation_stack_name
-        
-        new_name = sanitize_aws_name([
-            generate_stack_name_token(),
-            self.task_id,
-            "app"
-        ])
-        
-        with transaction.atomic():
-            SelfDrivingTask.objects.filter(id=self.id).update(
-                cloudformation_stack_name=new_name,
-                cloudformation_stack_id=None
-            )
-        self.refresh_from_db(fields=["cloudformation_stack_name", "cloudformation_stack_id"])
-        
-        return new_name
     
     def get_git(self) -> GitWrapper:
         return GitWrapper(self.sandbox_path)

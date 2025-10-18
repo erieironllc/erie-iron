@@ -287,15 +287,6 @@ def enforce_route53_alias_guardrail(template_body: str) -> None:
         raise Exception("\n".join(message_lines))
 
 
-def derive_foundation_domain_from_cf_ouputs(outputs: dict) -> str | None:
-    for candidate_key in ("RootDomainName", "FoundationDomain", "DomainName"):
-        candidate = (outputs.get(candidate_key) or "").strip().lower()
-        if candidate:
-            return candidate.rstrip('.')
-    
-    raise Exception(f'unable to fetch domain from outputs {outputs}')
-
-
 def get_stack_outputs(stack_name, aws_env: AwsEnv) -> dict:
     cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
     
@@ -359,11 +350,12 @@ def _wait_for_single_stack(
         if not stack:
             return
         
-        time.sleep(poll_interval)
+        if first_status is not None:
+            time.sleep(poll_interval)
+            
         status = stack['StackStatus']
         if first_status is None:
             first_status = status
-            logging.info(f"Stack {stack_name} first_status is {first_status}")
         elif status != previous_status:
             logging.info(f"Stack {stack_name} status changed from {previous_status} to {status}")
             if "ROLLBACK" in status:
@@ -499,7 +491,7 @@ def get_cloudformation_update_starttime(cf_client, stack_name: str):
         if isinstance(stack_update_start, float):
             stack_update_start = datetime.datetime.fromtimestamp(stack_update_start)
     except Exception:
-        stack_update_start = datetime.datetime.utcnow()
+        stack_update_start = common.get_now()
     return stack_update_start
 
 
@@ -629,56 +621,6 @@ def extract_cloudformation_params(cfn_file: Path):
     return required_params, param_metadata
 
 
-def rotate_cloudformation_stack_name(stack_name, aws_env: AwsEnv, ) -> str:
-    if not AwsEnv.DEV.eq(aws_env):
-        raise ValueError("Stack name rotation is only supported for DEV environment")
-    
-    try:
-        import boto3
-        logging.info(f"Deleting tombstoned stack {stack_name}")
-        cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
-        cf_client.delete_stack(StackName=stack_name)
-    except Exception as e:
-        logging.warning(f"Unable to delete stack {stack_name}:  {e}")
-    
-    return generate_new_dev_stack_name(stack_name)
-
-
-def extract_dev_stack_token(stack_name: str) -> str | None:
-    if not stack_name:
-        return None
-    
-    token = stack_name.split('-', 1)[0]
-    if len(token) == DEV_STACK_TOKEN_LENGTH and token.isalnum():
-        return token
-    
-    return None
-
-
-def generate_stack_name_token() -> str:
-    new_token = None
-    for _ in range(32):
-        token = common.random_string(DEV_STACK_TOKEN_LENGTH).lower()
-        if token and token[0].isalpha():
-            new_token = token
-    
-    if not new_token:
-        new_token = f"a{common.random_string(DEV_STACK_TOKEN_LENGTH - 1).lower()}"
-    
-    return new_token
-
-
-def generate_new_dev_stack_name(current_stack_name: str) -> str:
-    current_stack_name_parts = current_stack_name.split("-")
-    current_stack_name_parts[0] = generate_stack_name_token()
-    new_name = "-".join(current_stack_name_parts)
-    
-    if new_name != current_stack_name:
-        return new_name
-    else:
-        return generate_new_dev_stack_name(current_stack_name)
-
-
 def parse_cloudformation_yaml(cloudformation_yaml) -> dict:
     class CloudFormationLoader(yaml.SafeLoader):
         pass
@@ -696,7 +638,7 @@ def parse_cloudformation_yaml(cloudformation_yaml) -> dict:
 
 
 def get_resource_configs(
-        cloudformation_config_files: list[Path], 
+        cloudformation_config_files: list[Path],
         resource_type: CloudformationResourceType
 ) -> dict:
     parsed_template_data = {}
@@ -736,5 +678,5 @@ def get_physical_resources(
             for resource in page.get("StackResourceSummaries", []) or []:
                 if resource_type.eq(resource.get("ResourceType")):
                     resources[resource.get('PhysicalResourceId')] = resource
-                    
+    
     return resources

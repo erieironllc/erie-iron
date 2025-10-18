@@ -12,9 +12,15 @@ from pathlib import Path
 from django.db import transaction
 from sentence_transformers import SentenceTransformer
 
-from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative
+from erieiron_autonomous_agent.models import (
+    SelfDrivingTaskIteration,
+    Task,
+    SelfDrivingTask,
+    Business,
+    Initiative, InfrastructureStack,
+)
 from erieiron_common import common, ErieIronJSONEncoder
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv, CloudformationTemplate
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv, InfrastructureStackType
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.18"
@@ -23,6 +29,10 @@ LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 USE_CODEX = True
+
+sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 
 
 class SdaInitialAction(ErieEnum):
@@ -99,23 +109,15 @@ class SelfDriverConfig:
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
         
-        self.cloudformation_configs: list[Path] = common.filter_exists([
-            self.sandbox_root_dir / CloudformationTemplate.FOUNDATION,
-            self.sandbox_root_dir / CloudformationTemplate.APPLICATION
-        ])
+        self.cloudformation_configs: list[Path] = [
+            self.sandbox_root_dir / st.get_template_name()
+            for st in [InfrastructureStackType.FOUNDATION, InfrastructureStackType.APPLICATION]
+        ]
         
         if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
             self.aws_env = AwsEnv.PRODUCTION
         else:
             self.aws_env = AwsEnv.DEV
-        
-        raw_domain_name, hosted_zone_id, certificate_arn = self.task.get_domain_and_cert(self.aws_env)
-        self.domain_name = self.self_driving_task.namespace_domain_with_stack_identifier(
-            raw_domain_name,
-            self.aws_env
-        )
-        self.hosted_zone_id = hosted_zone_id
-        self.certificate_arn = certificate_arn
         
         self.current_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
         if self.current_iteration:
@@ -129,16 +131,14 @@ class SelfDriverConfig:
         self.git = self.self_driving_task.get_git()
         
         self.model_code_planning = LlmModel.OPENAI_GPT_5
-        
-        self.refresh_domain_metadata()
-        self.refresh_stack_names()
     
-    def refresh_domain_metadata(self) -> None:
-        iteration = self.current_iteration or self.self_driving_task.get_active_iteration()
-        domain_name, hosted_zone_id, certificate_arn = iteration.get_domain_and_cert(self.aws_env)
-        self.domain_name = (domain_name or "").rstrip('.').lower()
-        self.hosted_zone_id = hosted_zone_id
-        self.certificate_arn = certificate_arn
+    def get_stack_names(self) -> list[str]:
+        return [
+            s.stack_name
+            for s in InfrastructureStack.objects
+            .filter(initiative=self.initiative, aws_env=self.aws_env)
+            .order_by("created_timestamp")
+        ]
     
     def set_phase(self, phase: 'SdaPhase'):
         previous_phase = self.phase

@@ -3,6 +3,8 @@ import random
 from enum import StrEnum, auto
 from typing import List, Tuple
 
+DEV_STACK_TOKEN_LENGTH = 5
+
 
 class ErieEnum(StrEnum):
     # noinspection PyMethodParameters
@@ -499,15 +501,21 @@ class DockerPlatform(ErieEnum):
     LAMBDA = "linux/arm64"
 
 
-
-
 class CloudformationResourceType(ErieEnum):
     S3_BUCKET = "AWS::S3::Bucket"
     LAMBDA_FUNCTION = "AWS::Lambda::Function"
     ELB_LOADBALANCER = "AWS::ElasticLoadBalancingV2::LoadBalancer"
 
 
-class CloudformationTemplate(ErieEnum):
-    FOUNDATION = "infrastructure.yaml"
-    APPLICATION = "infrastructure-application.yaml"
+class InfrastructureStackType(ErieEnum):
+    FOUNDATION = auto()
+    APPLICATION = auto()
+    
+    def get_template_name(self) -> str:
+        if InfrastructureStackType.FOUNDATION.eq(self):
+            return "infrastructure.yaml"
+        elif InfrastructureStackType.APPLICATION.eq(self):
+            return "infrastructure-application.yaml"
+        else:
+            raise Exception(f"unhandled stack type {self}")
 

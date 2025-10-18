@@ -1850,3 +1850,16 @@ def safe_positive_int(value) -> int | None:
     except Exception:
         return None
     return None
+
+
+def gen_random_token(len) -> str:
+    new_token = None
+    for _ in range(32):
+        token = random_string(len).lower()
+        if token and token[0].isalpha():
+            new_token = token
+    
+    if not new_token:
+        new_token = f"a{random_string(len - 1).lower()}"
+    
+    return new_token
