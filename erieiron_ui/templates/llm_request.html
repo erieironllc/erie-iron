@@ -39,6 +39,16 @@
                     Ask a question
                 </a>
 
+                <a id="problems-tab"
+                   href="#problems"
+                   class="list-group-item list-group-item-action"
+                   role="tab"
+                   data-bs-toggle="list"
+                   aria-controls="problems"
+                >
+                    Look for problems
+                </a>
+
                 <a id="optimize-tab"
                    href="#optimize"
                    class="list-group-item list-group-item-action"
@@ -228,6 +238,33 @@
                         </div>
                     </form>
                 </div>
+            
+            
+                <div class="tab-pane " id="problems" role="tabpanel" aria-labelledby="problems-tab">
+                    <form id="frm_llm_problems" action="{% url 'action_llm_debug_ask' llm_request.id %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="prompt"
+                               value="Please review the system prompt and look for areas where the system prompt is unclear, confusing, or has directives in conflict"/>
+                        <input type="hidden" name="problems" value="True"/>
+                        <div class="mb-3">
+                            <label class="ms-1">Find Problems Using</label>
+                            <div class="mt-1 d-flex justify-content-end">
+                                <select name="llm_model" class="form-select">
+                                    {% for model_choice in model_choices %}
+                                        <option value="{{ model_choice.value }}"
+                                                {% if model_choice.value == model_choice_value %}selected{% endif %}>
+                                            {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <a id="btn_problems" class="ms-3 btn btn-secondary pull-right" href="#">problems</a>
+                            </div>
+                        </div>
+                        <div id="txt_problems_response">
+                        </div>
+                    </form>
+                </div>
+
 
                 <div class="tab-pane " id="compare" role="tabpanel" aria-labelledby="compare-tab">
                     <form id="frm_llm_compare" action="{% url 'action_llm_debug_compare' llm_request.id %}">

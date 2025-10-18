@@ -52,7 +52,7 @@ You will be provided
      - **Scope:** If both infra/runtime and test errors exist, mention both.  
      - **CloudFormation:** If deployment failed, say so and list all failure events.  Do not mention if deploy succeeded.  Avoid anchoring summary on specific StackStatus values - only matters if deploy failed or succeeded.
      - **Blocked Runs:** If execution never started, state that directly (e.g., “Execution blocked by infrastructure failure.”).  
-   - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers. Avoid verbosity or speculation; prefer clarity and brevity.
+   - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers`. Avoid verbosity or speculation; prefer clarity and brevity.
 
 3. ### Extract Errors  
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multple CloudFormation failures are found, include **all** cloudformation failure events
@@ -91,6 +91,16 @@ Specifically:
 6. Present this information in the `summary` field if relevant, and in the `error.logs` field when a CloudFormation or infra-level failure caused the iteration to fail. Focus the narrative on the failed create/update action rather than enumerating `StackStatus` strings.
 
 This ensures that the summarizer not only reports *what* failed, but also captures *why* it failed.
+
+---
+
+### Domain Name Error Handling
+
+If the logs show errors related to domain name creation, aliasing, validation, or propagation (e.g., Route53, ACM, or DNS resolution issues), these are **never caused by the application code**.  
+Such issues are managed by the **orchestration layer**, not the iteration under test.  
+Therefore, if a domain name problem occurs, the iteration should be marked as **blocked** rather than attempting to fix it at the code level.
+
+---
 
 ### DO NOT INVENT
 - do not infer or invent filenames or file paths. Only report filenames that appear verbatim in the provided logs (matching a stack-trace File \"...\" line). If none are present, set filename to null, mark provenance: 'none', and include the exact log excerpt used."

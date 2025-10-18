@@ -28,7 +28,6 @@ from erieiron_common.aws_s3_local_cache import S3LocalCache
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
-
 SHARED_VPC_NAME = "erie-iron-shared-vpc"
 SHARED_VPC_CIDR = "10.90.0.0/16"
 SHARED_VPC_ID = "vpc-0069eeaf60f597540"
@@ -1331,3 +1330,4 @@ def empty_s3_bucket(bucket_name: str, *, delete_bucket: bool = False):
     if delete_bucket:
         s3_client.delete_bucket(Bucket=bucket_name)
         logging.info(f"Deleted S3 bucket {bucket_name}")
+

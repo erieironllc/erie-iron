@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import socket
 import time
 import uuid
 from typing import Iterable, Optional
@@ -439,6 +440,34 @@ def upsert_subdomain_alias(
             "Comment": comment or f"Auto-configured by Erie Iron for {fqdn}",
             "Changes": changes
         }
+    )
+    """Wait until the Route53 alias resolves to the target DNS name."""
+
+
+def wait_for_dns_propagation(
+        domain_name: str,
+        target_dns_name: str,
+        timeout=300,
+        interval=10
+):
+    deadline = time.time() + timeout
+    last_err = None
+    
+    start_time = time.time()
+    while time.time() < deadline:
+        try:
+            answers = socket.gethostbyname_ex(domain_name)
+            target_ips = socket.gethostbyname_ex(target_dns_name)[2]
+            if any(ip in target_ips for ip in answers[2]):
+                return True
+            logging.info(f"waiting for dns propagation {domain_name} -> {target_dns_name} ({target_ips}).  {int(time.time() - start_time)}s of max {timeout}s.  current {answers[2]}")
+        except Exception as e:
+            last_err = e
+        time.sleep(interval)
+    
+    raise TimeoutError(
+        f"DNS alias {domain_name} did not resolve to {target_dns_name} "
+        f"within {timeout} seconds. Last error: {last_err}"
     )
 
 

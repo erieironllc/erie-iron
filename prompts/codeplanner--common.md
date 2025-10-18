@@ -378,184 +378,6 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 
             - This field is optional. If present, it will take priority over `instructions` for deterministic planning.
 
-### Output Example (**always** respond with parsable json)
-
-<!-- LEGEND: High-level structure of the output JSON (comments are outside the JSON to preserve validity) -->
-
-- **deprecation_plan**: List of tombstoned (deprecated) parameters with required migration steps.
-- **required_credentials**: Secrets schema by service; never include actual secret values.
-- **code_files**: Ordered list of file edit plans; order is binding for the code writer.
-
-```json
-{
-  "deprecation_plan": {
-    "tombstones": [
-      {
-        "name": "DBName",
-        "replace_with": "get from env",
-        "migration_steps": [
-          "remove:DBName",
-          "Migrate code to use the value from rds secret"
-        ]
-      },
-      {
-        "name": "DBPassword",
-        "replace_with": "value inferred from the rds secret",
-        "migration_steps": [
-          "remove:DBPassword",
-          "Migrate code to use the value from rds secret"
-        ]
-      }
-    ]
-  },
-  "required_credentials": {
-    "RDS": {
-      "secret_arn_env_var": "RDS_SECRET_ARN",
-      "schema": [
-        {
-          "key": "username",
-          "type": "string",
-          "required": true,
-          "description": "Database username for the application"
-        },
-        {
-          "key": "password",
-          "type": "string",
-          "required": true,
-          "description": "Database password for the application"
-        },
-        {
-          "key": "host",
-          "type": "string",
-          "required": true,
-          "description": "RDS instance endpoint"
-        },
-        {
-          "key": "port",
-          "type": "integer",
-          "required": true,
-          "description": "RDS instance port"
-        },
-        {
-          "key": "database",
-          "type": "string",
-          "required": true,
-          "description": "Database name"
-        }
-      ]
-    },
-    "stripe": {
-      "secret_arn_env_var": "SECRET_ARN_STRIPE",
-      "schema": [
-        {
-          "key": "api_key",
-          "type": "string",
-          "required": true,
-          "description": "Secret Stripe API key for live transactions"
-        }
-      ]
-    }
-  },
-  "code_files": [
-    {
-      "code_file_path": "email_template.txt",
-      "related_code_file_paths": [],
-      "code_writing_model": "gpt-5-nano",
-      "guidance": "Ensure that the Dockerfile exposes all required build arguments as environment variables for downstream consumption...",
-      "validator": "jinja",
-      "dependencies": [],
-      "dsl_instructions": [
-        {
-          "action": "add_env_variable",
-          "language": "dockerfile",
-          "variable": "MY_VAR",
-          "source": "build_arg",
-          "default": "dev",
-          "description": "Expose MY_VAR as build arg"
-        }
-      ],
-      "lessons_applied": [
-        "Do not create files that already exist",
-        "Always check required environment variables before execution"
-      ]
-    },
-    {
-      "code_file_path": "Dockerfile",
-      "related_code_file_paths": [
-        "settings.py"
-      ],
-      "code_writing_model": "gpt-5-nano",
-      "guidance": "Ensure that the Dockerfile exposes all required build arguments as environment variables for downstream consumption...",
-      "dependencies": [],
-      "dsl_instructions": [
-        {
-          "action": "add_env_variable",
-          "language": "dockerfile",
-          "variable": "MY_VAR",
-          "source": "build_arg",
-          "default": "dev",
-          "description": "Expose MY_VAR as build arg"
-        }
-      ],
-      "lessons_applied": [
-        "Do not create files that already exist",
-        "Always check required environment variables before execution"
-      ]
-    },
-    {
-      "code_file_path": "settings.py",
-      "related_code_file_paths": [
-        "Dockerfile"
-      ],
-      "code_writing_model": "gpt-5-mini",
-      "guidance": "Wire environment variables into Django settings using os.environ.get with a fallback...",
-      "dependencies": [],
-      "dsl_instructions": [
-        {
-          "action": "read_env_variable",
-          "language": "python",
-          "variable": "MY_VAR",
-          "assign_to": "MY_SETTING",
-          "fallback": "dev",
-          "description": "Wire MY_VAR into Django settings"
-        }
-      ]
-    },
-    {
-      "code_file_path": "lambdas/main.py",
-      "related_code_file_paths": [
-        "core/common.py"
-      ],
-      "guidance": "This file previously failed due to an IndexError when accessing a list...",
-      "code_writing_model": "gpt-5-nano",
-      "dependencies": [
-        "requests",
-        "boto3"
-      ],
-      "instructions": [
-        {
-          "step_number": 1,
-          "action": "modify function `execute`",
-          "details": "Add bounds check before accessing list element"
-        }
-      ]
-    },
-    {
-      "code_file_path": "infrastructure-application.yaml",
-      "guidance": "The evaluator shows that the Lambda failed to initialize due to a missing AWS region...",
-      "code_writing_model": "gpt-5-mini",
-      "dependencies": [],
-      "instructions": [
-        {
-          "step_number": 1,
-          "action": "modify Lambda environment variables",
-          "details": "Add 'AWS_DEFAULT_REGION' to the Lambda's environment variables block to resolve 'NoRegionError'."
-        }
-      ]
-    }
-  ]
-}
-```
 
 ### Optional Field: lessons_applied
 
@@ -770,8 +592,16 @@ Failing to heed prior lessons is treated as a regression and must be avoided.
 
 ---
 
+## Domain Name Error Handling
+
+If the logs show errors related to domain name creation, aliasing, validation, or propagation (e.g., Route53, ACM, or DNS resolution issues), these are **never caused by the application code**.  
+Such issues are managed by the **orchestration layer**, not the iteration under test.  
+Therefore, if a domain name problem occurs, the iteration should be marked as **blocked** rather than attempting to fix it at the code level.
+
+---
+
 ## Additional Forbidden Actions
 
 - **Never** rely on out-of-stack IAM roles. Always plan to create roles within the template using `!Ref StackIdentifier`-prefixed names and least-privilege policies with justification comments.
-- **Never** create new files when an existing file already covers the same functional scope, as determined by the
-  project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.
+- **Never** create DomainAliasRecord or related in the cloudformation configurations.  Domain management is handled by the orchestration layer
+- **Never** create new files when an existing file already covers the same functional scope, as determined by the project file structure. Instead, extend the existing file or explain why a new one is necessary in `guidance`.

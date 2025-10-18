@@ -335,6 +335,7 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
 
 --- 
 ## Additional Forbidden Actions
+- **Never** create DomainAliasRecord or related.  Domain management is handled by the orchestration layer
 - **Never** create IAM roles whose `RoleName` omits the `!Ref StackIdentifier` prefix or exceeds 64 characters. Inline `AWS::IAM::Policy` resources are allowed only when they target stack-defined roles, use least-privilege statements, and include justification comments.
 - **Never** generate or plan direct interactions with AWS services via the `boto3` client for infrastructure management.
 - **Never** define a Lambda function with an environment variable name beginning with `AWS_`.  

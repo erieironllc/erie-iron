@@ -10,6 +10,13 @@ All database schema changes are managed through the Django ORM. Make changes by 
 
 ---
 
+## Django Specific Rules
+- All Django view logic must reside in `./core/views.py`.  
+  **Never** create a subdirectory such as `./core/views/` to split view implementations into multiple files.  
+  All view functions and classes belong in the single `views.py` module unless there is a specific architectural contract requiring otherwise.
+
+---
+
 ## File and Module Naming
 - All python code files and tests **must** be written to dist as a child of the top level directory named "./core".  You may create sub-directories in "./core" for code organization
 - All python test files **must** live in the directory "./core/tests".  **Do not** put them anywhere else
@@ -49,6 +56,7 @@ When planning Lambda-based functionality, follow these rules:
 ## Read Only Files
 The following files are read-only.  You **must never** modify any of these files under any circumstances.  
 <read_only_files>
+
 
 ----
 

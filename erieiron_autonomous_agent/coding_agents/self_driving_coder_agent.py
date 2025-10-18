@@ -240,8 +240,6 @@ def handle_goal_achieved(config):
             f"task {config.task.id}: {config.task.description}"
         )
         
-        config.git.cleanup()
-        
         if not TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
             domain_manager.delete_subdomain(config.domain_name)
         
@@ -268,6 +266,8 @@ def handle_goal_achieved(config):
         Task.objects.filter(id=config.task.id).update(
             status=TaskStatus.FAILED
         )
+    finally:
+        config.git.cleanup()
 
 
 def do_coding(config, planning_data):
@@ -1311,6 +1311,11 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
             target_hosted_zone_id=canonical_zone_id,
             comment=f"Auto-configured by Erie Iron for task {config.self_driving_task.task_id}",
             dual_stack=dual_stack
+        )
+        
+        domain_manager.wait_for_dns_propagation(
+            domain_name,
+            dns_name
         )
     except Exception as exc:
         logging.exception("Failed to upsert Route53 alias for %s", domain_name)

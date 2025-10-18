@@ -650,7 +650,7 @@ def rotate_cloudformation_stack_name(stack_name, aws_env: AwsEnv, ) -> str:
         cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
         cf_client.delete_stack(StackName=stack_name)
     except Exception as e:
-        logging.exception(e)
+        logging.warning(f"Unable to delete stack {stack_name}:  {e}")
     
     return generate_new_dev_stack_name(stack_name)
 
