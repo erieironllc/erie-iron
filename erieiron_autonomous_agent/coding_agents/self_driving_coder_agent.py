@@ -2351,7 +2351,7 @@ def evaluate_iteration(
         selection_data = {
             "iteration_id_to_modify": "latest",
             "best_iteration_id": str(config.current_iteration.id),
-            "previous_iteration_count": 1
+            "previous_iteration_count": 5
         }
     else:
         selection_data = llm_chat(
@@ -2750,14 +2750,17 @@ def build_cloudformation_durations_context_messages(config: SelfDriverConfig, ti
     )
 
 
-def build_previous_iteration_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
+def build_previous_iteration_context_messages(
+        config: SelfDriverConfig,
+        title=None
+) -> list[LlmMessage]:
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
     
     eval_json = config.self_driving_task.get_most_recent_iteration().evaluation_json or {}
+    previous_iteration_count = eval_json.get("previous_iteration_count", 3)
     
-    previous_iteration_count = eval_json.get("previous_iteration_count", 1)
     all_iterations = list(
         config.self_driving_task.selfdrivingtaskiteration_set.exclude(
             id=current_iteration.id
@@ -2766,47 +2769,11 @@ def build_previous_iteration_context_messages(config: SelfDriverConfig, title=No
         ).order_by("timestamp")
     )
     
-    previous_iteration_summaries = [
-        {
-            "iteration_id": i.id,
-            "iteration_timestamp": i.timestamp,
-            "summary": i.evaluation_json.get("summary")
-        } for i in all_iterations if i.evaluation_json
-    ]
-    
-    previous_iterations = all_iterations[-previous_iteration_count:]
-    
-    if iteration_to_modify and iteration_to_modify not in previous_iterations:
-        previous_iterations.append(iteration_to_modify)
-    
-    if previous_iteration and previous_iteration not in previous_iterations:
-        previous_iterations.append(previous_iteration)
-    
-    messages = get_iteration_eval_llm_messages(
+    return get_iteration_eval_llm_messages(
         config,
-        previous_iterations,
+        all_iterations[-previous_iteration_count:],
         title=title
     )
-    
-    if iteration_to_modify and iteration_to_modify != previous_iteration:
-        # iteration_to_modify.id
-        previous_attempts = SelfDrivingTaskIteration.objects.filter(
-            start_iteration=iteration_to_modify
-        ).order_by("timestamp")
-        
-        messages += get_iteration_eval_llm_messages(
-            config,
-            previous_attempts,
-            title=f"You have made {previous_attempts.count()} attempt(s) to make progress on iteration {iteration_to_modify.id}.  Here are the results of these previous failed attempts at making progress.  Learn from historic failures and don't repeat these mistakes"
-        )
-    
-    messages += LlmMessage.user_from_data(
-        "Previous Iteration Summaries",
-        previous_iteration_summaries,
-        "previous_iteration_summary"
-    )
-    
-    return messages
 
 
 def get_iteration_eval_llm_messages(
@@ -2837,20 +2804,9 @@ def get_iteration_eval_llm_messages(
         else:
             description = "This is an evaluation previous iteration of the code.  It is not the previous iteration neither is it the iteration we are rolling back to"
         
-        iteration_data = {
-            "iteration_id": iteration.id,
-            "iteration_version_number": iteration.version_number,
-            "iteration_description": description,
-            "evaluation": iteration.evaluation_json
-        }
-        
-        if not iteration.has_error():
-            iteration_data = {
-                **iteration_data,
-                "error_summary": "None.  No errors detected.  The code executed without error.",
-            }
-        
-        messages.append(iteration_data)
+        messages.append(
+            iteration.get_llm_data(description)
+        )
     
     return LlmMessage.user_from_data(
         title,
@@ -2896,7 +2852,7 @@ def perform_code_review(
         get_file_structure_msg(
             config.sandbox_root_dir
         ) if not iteration_to_modify.has_error() else [],
-        get_prev_attemp_summaries(
+        get_previous_iteration_summaries_msg(
             config
         ),
         get_lessons_msg(
@@ -2943,39 +2899,6 @@ def perform_code_review(
         raise CodeReviewException(code_review_data)
     elif non_blocking_warnings:
         config.log(non_blocking_warnings)
-
-
-def get_prev_attemp_summaries(config: SelfDriverConfig, disabled=True) -> list[dict]:
-    if disabled:
-        return []
-    
-    attempt_count = 0
-    
-    previous_iterations: list[SelfDrivingTaskIteration] = list(
-        config.self_driving_task
-        .selfdrivingtaskiteration_set
-        .filter(evaluation_json__isnull=False)
-        .filter(planning_json__isnull=False)
-        .exclude(id=config.current_iteration.pk)
-        .order_by("-timestamp")
-    )[0:10]
-    
-    previous_iteration_datas = [
-        {
-            "iteration_id": i.id,
-            "timestamp": i.timestamp,
-            "version": i.version_number,
-            "coding_plan": i.planning_json.get("code_files"),
-            "summary": i.evaluation_json.get("summary"),
-            "error": i.evaluation_json.get("error")
-        }
-        for i in sorted(previous_iterations, key=lambda _i: _i.timestamp)
-    ]
-    
-    return LlmMessage.user_from_data(
-        f"Summaries from last {len(previous_iteration_datas)} code iterations(s).  The 'coding_plan' defines the coding plan that caused the error and resultant summary.  Treat these as lessons.  Do not repeat these errors",
-        previous_iteration_datas
-    )
 
 
 def get_lessons_msg(
@@ -3400,10 +3323,13 @@ def write_test(
     (test_file_path_dir / "__init__.py").touch(exist_ok=True)
     test_file_path = test_file_path_dir / sanitized_test_file_name
     
-    user_messages = common.ensure_list(user_messages) + get_existing_test_context_messages(
-        config,
-        test_file_path
-    )
+    user_messages = [
+        *get_existing_test_context_messages(
+            config,
+            test_file_path
+        ),
+        *common.ensure_list(user_messages)
+    ]
     
     previous_exception = None
     for i in range(3):
@@ -3559,9 +3485,6 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                 get_tombstone_message(
                     config
                 ),
-                get_prev_attemp_summaries(
-                    config
-                ),
                 get_lessons_msg(
                     "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                     config
@@ -3630,9 +3553,6 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 config
             ),
             config.business.get_existing_required_credentials_llmm(),
-            get_prev_attemp_summaries(
-                config
-            ),
             get_lessons_msg(
                 "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                 config
@@ -3642,7 +3562,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
             ),
             build_previous_iteration_context_messages(
                 config,
-                title="structured error reports"
+                title="Previous Iterations"
             ),
             get_relevant_code_files(
                 config,
@@ -3732,9 +3652,6 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 config
             ),
             config.business.get_existing_required_credentials_llmm(),
-            get_prev_attemp_summaries(
-                config
-            ),
             get_lessons_msg(
                 "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                 config
@@ -3853,9 +3770,6 @@ def plan_full_code_changes(config: SelfDriverConfig):
             config.sandbox_root_dir
         ) if not iteration_to_modify.has_error() else [],
         get_guidance_msg(
-            config
-        ),
-        get_prev_attemp_summaries(
             config
         ),
         get_lessons_msg(
@@ -4462,6 +4376,9 @@ def get_relevant_code_files(
             config.self_driving_task.test_file_path,
             InfrastructureStackType.APPLICATION.get_template_name(),
             InfrastructureStackType.FOUNDATION.get_template_name(),
+            "core/views.py",
+            "core/urls.py",
+            "core/models.py",
             "requirements.txt"
         ]
         

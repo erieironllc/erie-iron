@@ -1439,6 +1439,32 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     def goal_achieved(self):
         return common.parse_bool(common.get(self, ["evaluation_json", "goal_achieved"], False))
     
+    def get_llm_data(self, description):
+        code_changes = []
+        for cv in self.codeversion_set.all().order_by("created_at"):
+            diff = cv.get_diff()
+            if diff:
+                code_changes.append({
+                    "file_name": cv.code_file.file_path,
+                    "changes_diff": diff
+                })
+        
+        return {
+            "description": description,
+            "iteration_id": self.id,
+            "iteration_version_number": self.version_number,
+            "iteration_timestamp": self.timestamp,
+            "pre_planning_routing": self.routing_json,
+            "pre_coding_planning": self.planning_json,
+            "code_changes": code_changes,
+            "post_code_changes_execution_evaluation": {
+                "summary": self.evaluation_json.get("summary"),
+                "runtime_errors": self.evaluation_json.get("error"),
+                "test_errors": self.evaluation_json.get("test_errors"),
+            },
+            "important_reminder":  "Learn from the past.  If there are errors, make every attempt to not repeat them"
+        }
+    
     def get_all_code_versions(self):
         return {
             cv.code_file_id: cv for cv in self.codeversion_set.all().order_by("created_at")
