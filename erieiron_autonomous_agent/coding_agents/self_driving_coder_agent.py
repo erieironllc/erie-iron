@@ -61,47 +61,7 @@ def execute(
     
     if one_off_action:
         with SelfDriverConfig(self_driving_task, one_off_action) as config:
-            config.init_log()
-            
-            print(textwrap.dedent(f"""
-            
-            
-            Running {one_off_action} for
-            {config.task.id}
-            {config.task.description}
-            
-            
-            """))
-            
-            config.set_iteration(
-                SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
-            )
-            
-            if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
-                config.current_iteration.log_content_coding = None
-                config.current_iteration.save()
-            
-            if not SdaInitialAction.EVAL.eq(one_off_action):
-                config.current_iteration.log_content_execution = None
-                config.current_iteration.save()
-            
-            if SdaInitialAction.CODE.eq(one_off_action):
-                codex_exec(
-                    config,
-                    config.current_iteration.planning_json
-                )
-            elif SdaInitialAction.PLAN.eq(one_off_action):
-                plan_and_implement_code_changes(
-                    config
-                )
-            
-            if not SdaInitialAction.EVAL.eq(one_off_action):
-                build_deploy_exec_iteration(
-                    config
-                )
-            
-            evaluate_iteration(config)
-        
+            execute_one_off_action(config, one_off_action)
         return
     
     for i in range(10):
@@ -112,23 +72,9 @@ def execute(
                     break
                 
                 if i == 0:
-                    config.iterate_if_necessary()
-                    most_recent_iteration = self_driving_task.get_most_recent_iteration()
-                    
-                    if most_recent_iteration:
-                        # we've re-started an self driving task - just execute on the first time around
-                        config.set_iteration(most_recent_iteration)
-                    else:
-                        # we've started an self driving task - this is the first iteration
-                        config.set_iteration(self_driving_task.iterate())
-                    
-                    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                        log_content_execution="",
-                        evaluation_json=None
-                    )
-                    
-                    config.current_iteration.refresh_from_db(
-                        fields=["log_content_execution", "evaluation_json"]
+                    bootstrap_first_cycle(
+                        config,
+                        self_driving_task
                     )
                 else:
                     config.set_iteration(self_driving_task.iterate())
@@ -223,16 +169,82 @@ def execute(
                 config.cleanup_iteration()
 
 
-def plan_and_implement_code_changes(config):
-    planning_data = plan_code_changes(config)
-    config.set_phase(SdaPhase.CODING)
+def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivingTask):
+    most_recent_iteration = self_driving_task.get_most_recent_iteration()
     
-    ## TODO - inspect the code changes planned in planning_data.  if any of them is a lambda, do not use codex
-    
-    if USE_CODEX:
-        codex_exec(config, planning_data)
+    if most_recent_iteration:
+        # we've re-started an self driving task - just execute on the first time around
+        config.set_iteration(most_recent_iteration)
     else:
-        do_coding(config, planning_data)
+        # we've started a new self driving task and this is the first iteration
+        config.set_iteration(self_driving_task.iterate())
+    
+    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+        slowest_cloudformation_resources=None,
+        log_content_execution=None,
+        log_content_coding=None,
+        log_content_evaluation=None,
+        log_content_init=None,
+        evaluation_json=None
+    )
+    config.current_iteration.refresh_from_db()
+
+
+def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialAction):
+    config.init_log()
+    
+    print(textwrap.dedent(f"""
+            
+            
+            Running {one_off_action} for
+            {config.task.id}
+            {config.task.description}
+            
+            
+            """))
+    
+    config.set_iteration(
+        SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
+    )
+    
+    if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
+        config.current_iteration.log_content_coding = None
+        config.current_iteration.save()
+    
+    if not SdaInitialAction.EVAL.eq(one_off_action):
+        config.current_iteration.log_content_execution = None
+        config.current_iteration.save()
+    
+    if SdaInitialAction.CODE.eq(one_off_action):
+        codex_exec(
+            config,
+            config.current_iteration.planning_json
+        )
+    elif SdaInitialAction.PLAN.eq(one_off_action):
+        plan_and_implement_code_changes(
+            config
+        )
+    
+    if not SdaInitialAction.EVAL.eq(one_off_action):
+        build_deploy_exec_iteration(
+            config
+        )
+    
+    evaluate_iteration(config)
+
+
+def plan_and_implement_code_changes(config):
+    if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
+        config.set_phase(SdaPhase.CODING)
+        write_task_tdd_test(config)
+    else:
+        planning_data = plan_code_changes(config)
+        config.set_phase(SdaPhase.CODING)
+        
+        if USE_CODEX:
+            codex_exec(config, planning_data)
+        else:
+            do_coding(config, planning_data)
 
 
 def handle_agent_blocked(config, agent_blocked):
@@ -356,9 +368,9 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         
         iteration_to_modify = config.iteration_to_modify
         
-        readonly_entries = get_readonly_files_paths(config)
+        readonly_entries = config.self_driving_task.get_readonly_files()
         readonly_lines = []
-        for entry in common.ensure_list(readonly_entries):
+        for entry in readonly_entries:
             if not entry:
                 continue
             description_parts = [entry.get("description")]
@@ -1165,21 +1177,35 @@ def plan_code_changes(config):
     config.set_phase(SdaPhase.PLANNING)
     
     planning_data = None
-    route_to = route_code_changes(config)
     
-    if route_to in [DevelopmentRoutingPath.DIRECT_FIX, DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER] and config.guidance:
-        config.log(f"rerouting dev path from {route_to} to {DevelopmentRoutingPath.ESCALATE_TO_PLANNER} as we have task level guidance")
-        route_to = DevelopmentRoutingPath.ESCALATE_TO_PLANNER
-    
-    if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
-        config.log(f"PHASE - plan_code_changes: {config.current_iteration.id}")
-        planning_data = plan_full_code_changes(config)
-    elif DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER.eq(route_to):
-        planning_data = plan_aws_provisioning_code_changes(config)
-    elif DevelopmentRoutingPath.DIRECT_FIX.eq(route_to):
-        planning_data = plan_direct_fix_code_changes(config)
-    elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
-        raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(config.current_iteration.routing_json, indent=4)}")
+    config.log(f"PHASE - plan_code_changes: {config.current_iteration.id}")
+    if not config.self_driving_task.initial_tests_pass:
+        # ok the tests for exists tasks pass, but we don't have a test for this task.  write it now
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            routing_json={
+                "recovery_path_explanation": "previous task's tests have regressed",
+                "recovery_path": DevelopmentRoutingPath.DIRECT_FIX,
+                "classification": "previous task's tests have regressed.  need to fix before we do anything else"
+            }
+        )
+        config.current_iteration.refresh_from_db(fields=["routing_json"])
+        
+        planning_data = plan_test_fixing_code_changes(config)
+    else:
+        route_to = route_code_changes(config)
+        
+        if route_to in [DevelopmentRoutingPath.DIRECT_FIX, DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER] and config.guidance:
+            config.log(f"rerouting dev path from {route_to} to {DevelopmentRoutingPath.ESCALATE_TO_PLANNER} as we have task level guidance")
+            route_to = DevelopmentRoutingPath.ESCALATE_TO_PLANNER
+        
+        if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
+            planning_data = plan_full_code_changes(config)
+        elif DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER.eq(route_to):
+            planning_data = plan_aws_provisioning_code_changes(config)
+        elif DevelopmentRoutingPath.DIRECT_FIX.eq(route_to):
+            planning_data = plan_direct_fix_code_changes(config)
+        elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
+            raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(config.current_iteration.routing_json, indent=4)}")
     
     validate_plan(config, planning_data)
     
@@ -1201,7 +1227,7 @@ def plan_code_changes(config):
 
 
 def validate_plan(config: SelfDriverConfig, planning_data):
-    readonly_paths = get_readonly_files_paths(config)
+    readonly_paths = config.self_driving_task.get_readonly_files()
     
     for f in planning_data.get("code_files", []):
         code_file_path = str(f.get("code_file_path"))
@@ -1263,14 +1289,6 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.sandbox_root_dir, config.initiative.test_file_path):
             config.set_phase(SdaPhase.CODING)
             write_initiative_tdd_test(config)
-        
-        elif (
-                config.task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]
-                and not is_production_deployment
-                and common.invalid_file(config.sandbox_root_dir, self_driving_task.test_file_path)
-        ):
-            config.set_phase(SdaPhase.CODING)
-            write_task_tdd_test(config)
     
     return self_driving_task
 
@@ -1895,6 +1913,28 @@ def execute_iteration(
             docker_image=docker_image_tag
         )
     elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]:
+        run_automated_tests(
+            config, 
+            docker_env, 
+            docker_image_tag
+        )
+    else:
+        logging.info(f"nothing to execute for task type {task_type}")
+
+
+def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image_tag: str):
+    import random
+    import time
+    random.seed(time.time())
+    config.log(
+        "Running the test suite three times to detect flakiness. "
+        "If all three runs pass, tests are considered stable. "
+        "If some runs pass and some fail, tests are flaky. "
+        "If all runs fail, tests are broken."
+    )
+    results = []
+    for i in range(3):
+        time.sleep(random.uniform(0.5, 1.5))
         try:
             run_docker_command(
                 config=config,
@@ -1902,10 +1942,29 @@ def execute_iteration(
                 command_args=["test", "--keepdb", "--noinput"],
                 docker_image=docker_image_tag
             )
+            config.log(f"Test suite PASS on run {i + 1} of 3.")
+            results.append(True)
         except ExecutionException:
-            config.log(f"AT LEAST ONE TEST FAILED.  see previous logs for details")
+            config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
+            results.append(False)
+
+    passes = sum(results)
+    if passes == 3:
+        config.log("ALL TESTS PASS ON ALL THREE RUNS")
+        
+        if not config.self_driving_task.initial_tests_pass:
+            config.self_driving_task.initial_tests_pass = True
+            config.self_driving_task.save()
+    elif passes == 0:
+        config.log("TESTS FAILED ON ALL THREE RUNS")
+        raise ExecutionException("All test runs failed")
     else:
-        logging.info(f"nothing to execute for task type {task_type}")
+        config.log(
+            "TESTS PASSED ON SOME RUNS BUT FAILED ON OTHERS. "
+            "This indicates flakiness. Please review the test code for flakiness risks and fix."
+        )
+        raise ExecutionException("Some test runs failed - flaky tests")
+
 
 
 def deploy_iteration(
@@ -1922,7 +1981,7 @@ def deploy_iteration(
         raise bpe
     except Exception as e:
         config.log(e)
-        raise BadPlan(f"task {task.id} is failing to push lambdas to s3. {e}")
+        raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
     
     try:
         full_image_uri, ecr_arn = push_image_to_ecr(
@@ -1930,7 +1989,7 @@ def deploy_iteration(
             docker_image_tag
         )
     except Exception as e:
-        raise BadPlan(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+        raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
     
     try:
         empty_stack_buckets(
@@ -2258,11 +2317,25 @@ def evaluate_iteration(
     aws_env = config.aws_env
     stack_operational = is_stack_operational(config.get_stack_names(), config.aws_env)
     
+    if not stack_operational:
+        allow_goal_achieved = False
+        goal_achieved_reason = "the cloudformation stack(s) are not deployed.  You may not declare goal complete under any circumstances"
+    elif config.current_iteration.version_number == 1:
+        allow_goal_achieved = False
+        goal_achieved_reason = "We have not written any code yet for this task"
+    elif not config.self_driving_task.test_file_path:
+        allow_goal_achieved = False
+        goal_achieved_reason = "this task does not yet have an automated test.  Need to write an automated test and make it pass before allowing goal achieved"
+    else:
+        allow_goal_achieved = True
+        goal_achieved_reason = "we've written code and it deployed successfully"
+    
     messages += LlmMessage.user_from_data(
         "Cloudformation Status",
         {
             "stack_status": get_stack_statuses(config.get_stack_names(), config.aws_env),
-            "allow_goal_achieved": "True" if stack_operational else "False - the cloudformation stack(s) are not deployed.  You may not declare goal complete under any circumstances"
+            "allow_goal_achieved": allow_goal_achieved,
+            "allow_goal_achieved_justification": goal_achieved_reason
         }
     )
     
@@ -2298,6 +2371,9 @@ def evaluate_iteration(
         tag_entity=config.current_iteration,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
+    
+    if not allow_goal_achieved:
+        eval_data['goal_achieved'] = False
     
     if isinstance(exception, ExecutionException):
         # ExecutionExceptions generally correspond to infra/deployment/runtime issues,
@@ -3592,21 +3668,10 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     return planning_data
 
 
-def get_readonly_files_paths(config: SelfDriverConfig) -> list[str]:
-    alternative_path = None
-    
-    if config.task_type == TaskType.INITIATIVE_VERIFICATION:
-        alternative_path = config.initiative.test_file_path
-    elif config.task_type == TaskType.CODING_APPLICATION:
-        alternative_path = config.self_driving_task.test_file_path
-    
-    return config.business.get_readonly_files(alternative_path)
-
-
 def get_readonly_files_replacement(config: SelfDriverConfig) -> tuple[str, str]:
     parts = []
     
-    for f in get_readonly_files_paths(config):
+    for f in config.self_driving_task.get_readonly_files():
         if f['alternatives']:
             parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
         else:
@@ -3683,6 +3748,116 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             planning_model=config.model_code_planning
         )
         current_iteration.refresh_from_db(fields=["planning_model"])
+    
+    blocked_data = planning_data.get('blocked')
+    if blocked_data:
+        raise AgentBlocked(blocked_data)
+    
+    return planning_data
+
+
+def plan_test_fixing_code_changes(config: SelfDriverConfig):
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
+    relevant_code_files = get_relevant_code_files(config)
+    
+    business = config.self_driving_task.business
+    
+    task = config.self_driving_task.task
+    task_type = TaskType(task.task_type)
+    
+    system_prompt_files = [
+        MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
+        "codeplanner--test_fixer.md",
+        "common--general_coding_rules.md",
+        "common--agent_provided_functionality.md",
+        "codeplanner--common.md",
+        "common--llm_chat.md",
+        "common--iam_role.md",
+        "common--agent_provided_functionality.md",
+        "common--domain_management.md",
+        "common--forbidden_actions.md",
+        "common--credentials_architecture.md",
+        "common--environment_variables.md",
+        "common--infrastructure_rules.md",
+        "codewriter--lambda_coder.md"
+    ]
+    
+    messages = [
+        get_sys_prompt(
+            system_prompt_files,
+            [
+                ("<business_tag>", config.business.service_token),
+                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
+                ("<env_vars>", get_env_var_names(config)),
+                ("<aws_tag>", str(business.service_token)),
+                ("<db_name>", str(business.service_token)),
+                ("<iam_role_name>", str(business.get_iam_role_name())),
+                ("<artifacts_directory>", str(config.artifacts_dir)),
+                ("<sandbox_dir>", str(config.sandbox_root_dir)),
+                get_readonly_files_replacement(config)
+            ]
+        ),
+        get_architecture_docs(
+            config
+        ),
+        config.business.get_existing_required_credentials_llmm(),
+        get_budget_message(
+            config
+        ),
+        build_cloudformation_durations_context_messages(
+            config
+        ),
+        get_tombstone_message(
+            config
+        ),
+        build_previous_iteration_context_messages(
+            config
+        ),
+        get_dependencies_msg(
+            config,
+            for_planning=True
+        ),
+        relevant_code_files,
+        get_docs_msg(
+            config
+        ),
+        get_file_structure_msg(
+            config.sandbox_root_dir
+        ) if not iteration_to_modify.has_error() else [],
+        get_guidance_msg(
+            config
+        ),
+        get_lessons_msg(
+            "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+            config
+        ),
+        textwrap.dedent(f"""
+            One or more of the automated tests have regressed in the new environment
+
+            Your GOAL is to **MAKE THE FAILING TESTS PASS**
+        """)
+    
+    ]
+    
+    planning_data = llm_chat(
+        "Plan code changes",
+        messages,
+        config.model_code_planning,
+        tag_entity=config.current_iteration,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+            planning_model=config.model_code_planning,
+            execute_module=planning_data.get('execute_module'),
+            test_module=planning_data.get('test_module')
+        )
+        current_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
     
     blocked_data = planning_data.get('blocked')
     if blocked_data:
@@ -5066,4 +5241,11 @@ def run_existing_tests(config, self_driving_task):
     # make sure the tests run
     build_deploy_exec_iteration(config)
     
-    assert_tests_green(config)
+    try:
+        assert_tests_green(config)
+        config.self_driving_task.initial_tests_pass = False
+    except Exception as e:
+        logging.exception(e)
+        config.self_driving_task.initial_tests_pass = False
+    finally:
+        config.self_driving_task.save()

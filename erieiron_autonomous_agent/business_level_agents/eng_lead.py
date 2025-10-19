@@ -446,8 +446,7 @@ def write_business_architecture(business):
                     "common--credentials_architecture.md"
                 ],
                 replacements=[
-                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS)),
-                    get_readonly_files_replacement(business)
+                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS))
                 ]
             ),
             *LlmMessage.user_from_data("Business Description", {
@@ -489,8 +488,7 @@ def write_initiative_architecture(initiative: Initiative):
                     "common--credentials_architecture.md"
                 ],
                 replacements=[
-                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS)),
-                    get_readonly_files_replacement(business)
+                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS))
                 ]
             ),
             *LlmMessage.user_from_data("Full Business Architecture", {
@@ -532,8 +530,7 @@ def identify_required_credentials(business: Business):
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                     ("<business_tag>", business.service_token),
-                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS)),
-                    get_readonly_files_replacement(business)
+                    ("<env_vars>", ", ".join(DEFAULT_ENV_VARS))
                 ]),
             ),
             *LlmMessage.user_from_data(
@@ -562,13 +559,3 @@ def identify_required_credentials(business: Business):
     business.refresh_from_db(fields=["required_credentials"])
 
 
-def get_readonly_files_replacement(business: Business) -> tuple[str, str]:
-    parts = []
-    
-    for f in business.get_readonly_files():
-        if f['alternatives']:
-            parts.append(f"- `{f['path']}` — {f['description']}. If you believe a change is needed to {f['path']}, the change likely belongs in `{f['alternatives']}` instead")
-        else:
-            parts.append(f"- `{f['path']}` — {f['description']}")
-    
-    return "<read_only_files>", "\n".join(parts)

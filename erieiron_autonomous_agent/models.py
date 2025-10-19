@@ -71,24 +71,6 @@ class Business(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
-    def get_readonly_files(self, path_force_writable=None):
-        q = self.codefile_set.filter(
-            Q(file_path__contains="test/") | Q(file_path__contains="/test")
-        )
-        if path_force_writable:
-            q = q.exclude(file_path=path_force_writable)
-        
-        readonly_file_paths = [f for f in settings.READONLY_FILES]
-        for test_file in q.order_by("file_path").distinct("file_path"):
-            readonly_file_paths.append(
-                {
-                    "path": test_file.file_path,
-                    "alternatives": path_force_writable,
-                    "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression"
-                }
-            )
-        return readonly_file_paths
-    
     def get_existing_required_credentials_llmm(self) -> list[LlmMessage]:
         return LlmMessage.user_from_data("Existing Required Credentials.  Use for reference.  Not need to re-specify.", {
             "required_credentials": self.required_credentials or {}
@@ -849,10 +831,35 @@ class SelfDrivingTask(BaseErieIronModel):
     sandbox_path = models.TextField(null=False)
     goal = models.TextField(null=False)
     task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
-    cloudformation_stack_name = models.TextField(null=True)
-    cloudformation_stack_id = models.TextField(null=True)
+    initial_tests_pass = models.BooleanField(null=False, default=False)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    def get_readonly_files(self):
+        readonly_file_paths = [f for f in settings.READONLY_FILES]
+        
+        if self.initial_tests_pass:
+            if TaskType.INITIATIVE_VERIFICATION.eq(self.task.task_type):
+                test_file_path = self.task.initiative.test_file_path
+            else:
+                test_file_path = self.test_file_path
+            
+            q = self.business.codefile_set.filter(
+                Q(file_path__contains="test/") | Q(file_path__contains="/test")
+            )
+            if test_file_path:
+                q = q.exclude(file_path=test_file_path)
+            
+            for test_file in q.order_by("file_path").distinct("file_path"):
+                readonly_file_paths.append(
+                    {
+                        "path": test_file.file_path,
+                        "alternatives": "none",
+                        "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression"
+                    }
+                )
+        
+        return readonly_file_paths
     
     def get_git(self) -> GitWrapper:
         return GitWrapper(self.sandbox_path)
@@ -1462,7 +1469,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 "runtime_errors": self.evaluation_json.get("error"),
                 "test_errors": self.evaluation_json.get("test_errors"),
             },
-            "important_reminder":  "Learn from the past.  If there are errors, make every attempt to not repeat them"
+            "important_reminder": "Learn from the past.  If there are errors, make every attempt to not repeat them"
         }
     
     def get_all_code_versions(self):

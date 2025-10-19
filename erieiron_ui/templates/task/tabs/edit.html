@@ -91,13 +91,6 @@
                 </div>
 
                 <div class="mb-3">
-                    <label for="cloudformation_stack_name" class="form-label">CloudFormation Stack Name</label>
-                    <input type="text" name="cloudformation_stack_name" id="cloudformation_stack_name" class="form-control"
-                           value="{{ cloudformation_stack_edit_value }}" placeholder="Leave blank to auto-generate">
-                    <small class="text-muted">Applies to the development stack; clearing resets any saved name.</small>
-                </div>
-
-                <div class="mb-3">
                     <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
                     <input type="number" name="timeout_seconds" id="timeout_seconds" class="form-control"
                            value="{% if task.timeout_seconds %}{{ task.timeout_seconds }}{% endif %}">

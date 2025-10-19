@@ -312,8 +312,7 @@ def cloudformation_wait(
         *,
         timeout=20 * 60,
         poll_interval=10,
-        throw_on_fail=False,
-        rotate_on_delete=True
+        throw_on_fail=False
 ):
     for stack_name in common.ensure_list(stack_names):
         _wait_for_single_stack(
@@ -321,8 +320,7 @@ def cloudformation_wait(
             aws_env=aws_env,
             timeout=timeout,
             poll_interval=poll_interval,
-            throw_on_fail=throw_on_fail,
-            rotate_on_delete=False
+            throw_on_fail=throw_on_fail
         )
 
 
@@ -332,8 +330,7 @@ def _wait_for_single_stack(
         *,
         timeout: int,
         poll_interval: int,
-        throw_on_fail: bool,
-        rotate_on_delete: bool = True
+        throw_on_fail: bool
 ) -> None:
     cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
     ecs_client = boto3.client("ecs", region_name=aws_env.get_aws_region())
@@ -342,100 +339,47 @@ def _wait_for_single_stack(
     stack_update_start = get_cloudformation_update_starttime(cf_client, stack_name)
     
     start_time = time.time()
-    first_status = None
-    previous_status = None
     
-    while True:
+    for wait_idx in range(int(timeout / poll_interval) + 1):
         stack = get_stack(stack_name, cf_client)
         if not stack:
-            return
-        
-        if first_status is not None:
-            time.sleep(poll_interval)
-        
+            return True
+
         status = stack['StackStatus']
-        if first_status is None:
-            first_status = status
-        elif status != previous_status:
-            logging.info(f"Stack {stack_name} status changed from {previous_status} to {status}")
-            if "ROLLBACK" in status:
-                logging.info(
-                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
-                )
-                if throw_on_fail:
-                    raise CloudFormationException(
-                        f"Stack {stack_name} entered rollback while waiting: {status}"
-                    )
-                else:
-                    return
-        
-        wait_time = time.time() - start_time
-        if wait_time > timeout:
-            raise CloudFormationStackObsolete(
-                f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}",
-                status=status
-            )
-        
-        # Check for ECS service task failures during CloudFormation operations
-        for service in get_ecs_services(ecs_client, stack_name, active_only=True):
-            service_name = service['serviceName']
-            
-            failures = [d for d in service.get("deployments", []) if d.get("rolloutState") == "FAILED"]
-            if failures:
-                logging.error(f"ECS deployment failed for {service_name}: {failures}.  canceling the update (takes a minute to cancel)")
-                cancel_stack_push(stack_name, aws_env, wait_time=60)
-                if throw_on_fail:
-                    raise CloudFormationException(f"ECS service {service_name} deployment failed")
-                else:
-                    return
-            
-            for task in get_new_tasks(ecs_client, service, stack_update_start, failed_tasks=True):
-                last_status = task.get("lastStatus")
-                stopped_reason = task.get("stoppedReason", "")
-                
-                if last_status in ("STOPPED", "DEPROVISIONING"):
-                    logging.error(f"ECS task failure detected (started after stack update): {stopped_reason}.  canceling the update (takes a minute to cancel)")
-                    cancel_stack_push(stack_name, aws_env, wait_time=60)
-                    if throw_on_fail:
-                        raise CloudFormationException(f"ECS task failed after stack update: {stopped_reason}")
-                    else:
-                        return
-        
-        logging.info(f"waiting on {stack_name}.  status: {status}. waiting {int(wait_time)}s out of a max wait of {timeout}s")
-        
-        if "COMPLETE" in status and status.endswith("IN_PROGRESS"):
-            continue
-        
-        if throw_on_fail:
-            if "ROLLBACK" in status:
-                logging.info(
-                    f"Stack {stack_name} observed status {status}; exiting wait so the agent can react."
-                )
-                raise CloudFormationException(
-                    f"Stack {stack_name} entered rollback while waiting: {status}"
-                )
-            if rotate_on_delete and status.startswith("DELETE"):
-                logging.info(
-                    f"Stack {stack_name} entered {status}; signaling rotation to caller."
-                )
-                raise CloudFormationStackObsolete(
-                    stack_name=stack_name,
-                    status=status
-                )
-        else:
-            if rotate_on_delete and status.startswith("DELETE") and status.endswith("_IN_PROGRESS"):
-                logging.info(
-                    f"Stack {stack_name} is deleting (status={status}); signaling rotation to caller."
-                )
-                raise CloudFormationStackObsolete(
-                    stack_name=stack_name,
-                    status=status
-                )
-        
-        previous_status = status
+
+        if wait_idx > 0:
+            time.sleep(poll_interval)
+        logging.info(f"waiting on {stack_name}.  status: {status}. waiting {int(time.time() - start_time)}s out of a max wait of {timeout}s")
+
         if not status.endswith("_IN_PROGRESS"):
             break
-    
+        elif "COMPLETE" in status:
+            break
+        elif "ROLLBACK" in status:
+            break
+        elif status.startswith("DELETE"):
+            break
+
+        # Check for ECS service task failures during CloudFormation operations
+        try:
+            assert_no_ecs_errors(
+                stack_name,
+                aws_env,
+                stack_update_start
+            )
+        except Exception as e:
+            if throw_on_fail:
+                raise CloudFormationException(str(e))
+            else:
+                return
+    else:
+        # If we exit the loop without breaking, we've timed out
+        raise CloudFormationStackObsolete(
+            f"Timeout waiting for stack {stack_name} to reach a terminal state. Last status: {status}",
+            status=status
+        )
+
+    logging.info(f"exiting wait with status {status}")
     if throw_on_fail:
         assert_cloudformation_stack_valid(stack_name, cf_client)
 
@@ -682,3 +626,25 @@ def get_physical_resources(
                     resources[resource.get('PhysicalResourceId')] = resource
     
     return resources
+
+
+def assert_no_ecs_errors(stack_name, aws_env: AwsEnv, stack_update_start):
+    ecs_client = boto3.client("ecs", region_name=aws_env.get_aws_region())
+    
+    for service in get_ecs_services(ecs_client, stack_name, active_only=True):
+        service_name = service['serviceName']
+        
+        failures = [d for d in service.get("deployments", []) if d.get("rolloutState") == "FAILED"]
+        if failures:
+            logging.error(f"ECS deployment failed for {service_name}: {failures}.  canceling the update (takes a minute to cancel)")
+            cancel_stack_push(stack_name, aws_env, wait_time=60)
+            raise Exception(f"ECS service {service_name} deployment failed")
+        
+        for task in get_new_tasks(ecs_client, service, stack_update_start, failed_tasks=True):
+            last_status = task.get("lastStatus")
+            stopped_reason = task.get("stoppedReason", "")
+            
+            if last_status in ("STOPPED", "DEPROVISIONING"):
+                logging.error(f"ECS task failure detected (started after stack update): {stopped_reason}.  canceling the update (takes a minute to cancel)")
+                cancel_stack_push(stack_name, aws_env, wait_time=60)
+                raise Exception(f"ECS service {service_name} deployment failed")
