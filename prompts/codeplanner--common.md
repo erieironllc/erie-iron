@@ -18,20 +18,27 @@ Domain and DNS modifications are strictly forbidden for the planner. All Route53
 ### Rules
 - Do **not** add, modify, or delete any Route53 `RecordSet`, ACM certificate, or SES email identity.  
 - Do **not** create, alter, or reference parameters or resources such as `DomainName`, `DomainHostedZoneId`, `Alias`, `ARecord`, `AAAA`, `CNAME`, `TXT`, `MX`, or `DKIM`.  
-- If a plan requires such a change, immediately return the following JSON and stop planning:
+- If satisfying the GOAL would require those changes, immediately return the blocked JSON shown below instead of proposing edits.
+- When evaluator diagnostics or logs explicitly identify a DNS/SES/ACM/Route53 resource as the failure point, you must return the blocked JSON unless a clear non-DNS remediation exists.
 
+### Detection and Enforcement
+- While drafting the plan, confirm that no `code_file_path`, diff, or instruction attempts to edit Route53/SES/ACM/DomainName resources.
+- Only emit the blocked JSON when:
+  - The GOAL or evaluator output explicitly calls for DNS/SES/ACM/Route53 work, **or**
+  - CloudFormation stack events or other authoritative logs name a DNS/SES/ACM/Route53 resource in a `CREATE_FAILED`/`UPDATE_FAILED`/`ROLLBACK` message and no alternative fix avoids DNS changes, **or**
+  - Your planned edits would need to introduce or modify DNS/SES/ACM/Route53 resources to succeed.
+- Do **not** block solely because repository files, past deprecation plans, or prompts mention DNS-related tokens. Tokens in context are not evidence that DNS changes are required.
+- If stack logs are high-level (for example, only "foundation stack rollback"), request the specific resource-level failure from the user or evaluator instead of blocking by default.
+
+### Blocked Payload
+Return this exact payload when a DNS/Domain edit is truly required:
 ```json
 { "blocked": { "category": "infra_boundary", "reason": "Domain/DNS/Route53/ACM edits are disallowed in this iteration per operator policy; orchestration layer must perform DNS changes." } }
 ```
 
-### Detection and Enforcement
-Before emitting any `code_files`, scan all planned instructions and file paths for these tokens:  
-`Route53`, `RecordSet`, `DomainName`, `Alias`, `ACM`, `DKIM`, `SES`, `MX`, `CNAME`, `ARecord`, `AAAA`.  
-If any are present, return the blocked JSON above instead of proposing edits.
-
 ### Summary
 **DOMAIN_EDITS_FORBIDDEN = true**  
-Any fix or reference involving DNS, Route53, ACM, SES, or DomainName changes must be blocked and delegated to the orchestration layer.
+Only block when DNS/Route53/ACM/SES work is explicitly required or unavoidable; otherwise continue planning non-DNS remediation.
 
 ---
 

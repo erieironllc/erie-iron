@@ -21,12 +21,12 @@ These responsibilities are handled automatically by the orchestration layer and 
 
 ### Domain/DNS Policy
 DOMAIN_EDITS_FORBIDDEN = true. 
-- If a potential fix involves DNS/Route53/ACM/DomainName/SES identity changes, return the blocked JSON (category=infra_boundary) and do not propose file edits.
 - Do not create, modify, or delete any Route53::RecordSet, AWS::ACM::Certificate, AWS::SES::EmailIdentity, or change DomainName/DomainHostedZoneId parameters.
-- Before emitting code_files, scan all instructions and code_file_path text for tokens: 'Route53','RecordSet','DomainName','Alias','ACM','DKIM','SES','MX','CNAME','ARecord','AAAA'. If present, return blocked.
-- If the planner would need to change DNS/DomainName/Route53/ACM/SES domain aliasing, immediately return: { "blocked": { "category": "infra_boundary", "reason": "Domain/DNS/Route53/ACM edits are disallowed in this iteration per operator policy; orchestration layer must perform DNS changes." } }.
-- Use this exact blocked payload whenever domain changes would be required: { "blocked": { "category": "infra_boundary", "reason": "Domain/DNS edits are forbidden for this iteration. Any Route53/ACM/DomainName/SES domain aliasing changes must be handled by the orchestration layer." } }.
-- If logs show domain errors, do not attempt infra edits — return blocked with category infra_boundary.
+- Only emit the blocked payload when the GOAL, evaluator diagnostics, or authoritative logs explicitly call for DNS/Route53/ACM/SES work, or when the plan truly cannot succeed without modifying those resources.
+- References to DNS tokens in repository files, historical deprecation plans, or surrounding prompts are not sufficient evidence; do **not** block solely on their presence.
+- When logs merely report high-level failures (for example, "foundation stack rollback"), request or wait for the resource-level failure lines instead of blocking by default.
+- Always verify that the proposed plan itself does not introduce DNS resource edits; if it would, stop and emit the blocked payload.
+- Use this exact blocked payload whenever a DNS/Domain change is truly required: { "blocked": { "category": "infra_boundary", "reason": "Domain/DNS/Route53/ACM edits are disallowed in this iteration per operator policy; orchestration layer must perform DNS changes." } }.
 
 
 ### Service and Container Management
