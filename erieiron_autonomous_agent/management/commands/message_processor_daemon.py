@@ -117,7 +117,7 @@ class Command(BaseCommand):
         
         faulthandler.enable()
         
-        print_debug_info = True  # options.get('debug_output')
+        print_debug_info = options.get('debug_output')
         kill_on_drain = options.get('kill_on_drain')
         run_isolated = options.get('run_isolated')
         reset_host = options.get('reset_host')

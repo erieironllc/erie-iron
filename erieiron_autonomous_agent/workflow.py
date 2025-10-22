@@ -121,13 +121,14 @@ def business_workflow(pubsub_manager: PubSubManager):
     pubsub_manager.on(
         T.DESIGN_WORK_REQUESTED,
         worker_design.do_work,
-        T.TASK_COMPLETED
+        T.TASK_UPDATED
     )
 
     # Coder
     pubsub_manager.on(
         T.CODING_WORK_REQUESTED,
-        worker_coder.do_work
+        worker_coder.do_work,
+        T.TASK_UPDATED
     )
 
 

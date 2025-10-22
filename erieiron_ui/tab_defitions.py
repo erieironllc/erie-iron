@@ -35,13 +35,13 @@ INITIATIVE_TAB_DEFINITIONS = [
         "availability_fn": views._initiative_tab_available_tasks,
         "context_fn": views._initiative_tab_context_tasks,
     },
-    {
-        "slug": "processes",
-        "label": "Processes",
-        "template": "initiative/tabs/processes.html",
-        "availability_fn": views._initiative_tab_available_processes,
-        "context_fn": views._initiative_tab_context_processes,
-    },
+    # {
+    #     "slug": "processes",
+    #     "label": "Processes",
+    #     "template": "initiative/tabs/processes.html",
+    #     "availability_fn": views._initiative_tab_available_processes,
+    #     "context_fn": views._initiative_tab_context_processes,
+    # },
     TAB_DIVIDER,
     {
         "slug": "llmrequests",
@@ -274,13 +274,13 @@ ITERATION_TAB_DEFINITIONS = [
     #     "availability_fn": views._iteration_tab_available_execlog,
     #     "context_fn": views._iteration_tab_context_execlog,
     # },
-    {
-        "slug": "processes",
-        "label": "Processes",
-        "template": "iteration/tabs/processes.html",
-        "availability_fn": views._iteration_tab_available_processes,
-        "context_fn": views._iteration_tab_context_processes,
-    },
+    # {
+    #     "slug": "processes",
+    #     "label": "Processes",
+    #     "template": "iteration/tabs/processes.html",
+    #     "availability_fn": views._iteration_tab_available_processes,
+    #     "context_fn": views._iteration_tab_context_processes,
+    # },
     TAB_DIVIDER,
     {
         "slug": "llmrequests",

@@ -1,7 +1,11 @@
+import textwrap
+
 from django.core.management.base import BaseCommand
 
 from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SdaInitialAction
+from erieiron_autonomous_agent.enums import TaskStatus
+from erieiron_autonomous_agent.models import Initiative, Task
 
 
 class Command(BaseCommand):
@@ -9,7 +13,13 @@ class Command(BaseCommand):
         parser.add_argument(
             '--task_id',
             type=str,
-            required=True
+            required=False
+        )
+        
+        parser.add_argument(
+            '--initiative_id',
+            type=str,
+            required=False
         )
         
         parser.add_argument(
@@ -20,7 +30,20 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
-        self_driving_coder_agent.execute(
-            options.get("task_id"),
-            SdaInitialAction.valid_or(options.get("action"))
-        )
+        if options.get("initiative_id"):
+            task: Task = (
+                Initiative.objects.get(id=options.get("initiative_id"))
+                .tasks.exclude(status__in=[TaskStatus.BLOCKED, TaskStatus.COMPLETE])
+                .order_by("created_timestamp")
+                .first()
+            )
+            task_id = task.id
+        else:
+            task_id = options.get("task_id")
+        
+        print(textwrap.dedent(f"""
+        
+        SDA for task id {task_id}
+
+        """))
+        self_driving_coder_agent.execute(task_id, SdaInitialAction.valid_or(options.get("action")))

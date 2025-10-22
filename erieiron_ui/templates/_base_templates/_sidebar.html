@@ -6,11 +6,23 @@
             <div class="list-group-item disabled text-center">
                 <hr class="my-2">
             </div>
-        {% elif tab.available %}
-            <a class="list-group-item list-group-item-action{% if tab.slug == active_tab %} active{% endif %}"
+        {% else %}
+            <a class="
+                list-group-item 
+                list-group-item-action{% if tab.slug == active_tab %} active{% endif %}
+                {% if not tab.available %}
+                disabled
+                {% endif %}
+                "
                style="white-space: nowrap"
                id="{{ tab.slug }}-tab"
-               href="{{ tab.url }}">
+                {% if tab.available %}
+                   href="{{ tab.url }}"
+               {% else %}
+                   href="#"
+               {% endif %}
+            
+            >
                 {{ tab.label }}
                 {% if tab.badge %}
                     <span class="badge bg-danger ms-1">{{ tab.badge }}</span>

@@ -169,6 +169,11 @@ body {
 
       color: $sidebar-text;
       background-color: $sidebar-bg;
+      
+      &.disabled{
+        color: $gray-700;
+        cursor: not-allowed !important;
+      }
 
       &:hover {
         background-color: $sidebar-hover-bg;

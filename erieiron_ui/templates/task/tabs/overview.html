@@ -2,14 +2,31 @@
 
 <div class="tab-pane-content">
     <p>
-        <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">
-            {{ task.status }}
-        </span>
+        <div class="d-flex justify-content-between align-content-center">
+            <h5 >{{ task.get_name }}</h5>
+            <div style="height: 20px"  class=" me-2 badge d-flex align-content-center
+                    {% if task.status == "COMPLETE" %}
+                        bg-success
+                    {% elif task.status == "BLOCKED" %}
+                        bg-danger
+                    {% elif task.status == "IN_PROGRESS" %}
+                        bg-primary
+                    {% else %}
+                        bg-secondary
+                    {% endif %}
+                    
+                pt-1 p-2"
+            >{{ task.status }}</div>
+        </div>
+
         {% if task.role_assignee %}
             &nbsp;Owner: {{ task.role_assignee|label }}
         {% endif %}
     </p>
 
+    <div class="markdown-container">
+        {{ task.description|markdown }}
+    </div>
 
     {% if task.completion_criteria %}
         <div class="markdown-container">
@@ -20,10 +37,5 @@
         </div>
     {% endif %}
 
-    <hr>
 
-    <div class="markdown-container">
-        <h5 class="mt-4">Description</h5>
-        {{ task.description|markdown }}
-    </div>
 </div>

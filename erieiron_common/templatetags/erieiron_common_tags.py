@@ -41,7 +41,7 @@ def dedupe_divers(tabs):
             else:
                 prev_tab_is_divider = True
                 deduped_tabs.append(tab)
-        elif tab.get("available"):
+        else:
             prev_tab_is_divider = False
             deduped_tabs.append(tab)
     

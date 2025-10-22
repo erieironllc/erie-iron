@@ -57,11 +57,17 @@ def execute(
         task_id: str,
         one_off_action: SdaInitialAction = None
 ):
-    self_driving_task = bootstrap_selfdriving_agent(task_id)
-    
-    if one_off_action:
-        with SelfDriverConfig(self_driving_task, one_off_action) as config:
-            execute_one_off_action(config, one_off_action)
+    try:
+        self_driving_task = bootstrap_selfdriving_agent(task_id)
+        
+        if one_off_action:
+            with SelfDriverConfig(self_driving_task, one_off_action) as config:
+                execute_one_off_action(config, one_off_action)
+            return
+    except AgentBlocked as agent_blocked:
+        logging.info(agent_blocked)
+        handle_agent_blocked(task_id, agent_blocked)
+        logging.info(f"Stopping - Agent Blocked")
         return
     
     for i in range(10):
@@ -143,7 +149,7 @@ def execute(
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
                 config.log(agent_blocked)
-                handle_agent_blocked(config, agent_blocked)
+                handle_agent_blocked(task_id, agent_blocked)
                 logging.info(f"Stopping - Agent Blocked")
                 break
             except GoalAchieved as goal_achieved:
@@ -154,17 +160,8 @@ def execute(
             except Exception as e:
                 logging.exception(e)
                 config.log(e)
-                if config.self_driving_task.task_id:
-                    PubSubManager.publish(
-                        PubSubMessageType.TASK_FAILED,
-                        payload={
-                            "task_id": config.self_driving_task.task_id,
-                            "error": traceback.format_exc()
-                        }
-                    )
-                
                 logging.info(f"Stopping - Unhandled Exception")
-                break
+                raise e
             finally:
                 config.cleanup_iteration()
 
@@ -173,21 +170,23 @@ def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivi
     most_recent_iteration = self_driving_task.get_most_recent_iteration()
     
     if most_recent_iteration:
-        # we've re-started an self driving task - just execute on the first time around
+        # we've re-started an self driving task - re-execute on the first time around
         config.set_iteration(most_recent_iteration)
+        
+        CodeVersion.objects.filter(task_iteration_id=config.current_iteration.id).delete()
+    
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            slowest_cloudformation_resources=None,
+            log_content_execution=None,
+            log_content_coding=None,
+            log_content_evaluation=None,
+            log_content_init=None,
+            evaluation_json=None
+        )
+        config.current_iteration.refresh_from_db()
     else:
         # we've started a new self driving task and this is the first iteration
         config.set_iteration(self_driving_task.iterate())
-    
-    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-        slowest_cloudformation_resources=None,
-        log_content_execution=None,
-        log_content_coding=None,
-        log_content_evaluation=None,
-        log_content_init=None,
-        evaluation_json=None
-    )
-    config.current_iteration.refresh_from_db()
 
 
 def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialAction):
@@ -247,12 +246,12 @@ def plan_and_implement_code_changes(config):
             do_coding(config, planning_data)
 
 
-def handle_agent_blocked(config, agent_blocked):
-    if not config.self_driving_task.task_id:
+def handle_agent_blocked(task_id, agent_blocked):
+    if not task_id:
         return
     
     with transaction.atomic():
-        Task.objects.filter(id=config.self_driving_task.task_id).update(
+        Task.objects.filter(id=task_id).update(
             status=TaskStatus.BLOCKED
         )
     
@@ -260,7 +259,7 @@ def handle_agent_blocked(config, agent_blocked):
         PubSubMessageType.TASK_BLOCKED,
         payload={
             "blocked_data": json.dumps(agent_blocked.blocked_data),
-            "task_id": config.self_driving_task.task_id
+            "task_id": task_id
         }
     )
 
@@ -274,12 +273,6 @@ def handle_goal_achieved(config):
         config.git.add_commit_push(
             f"task {config.task.id}: {config.task.description}"
         )
-        
-        if config.self_driving_task.task_id:
-            PubSubManager.publish_id(
-                PubSubMessageType.TASK_COMPLETED,
-                config.self_driving_task.task_id
-            )
         
         Task.objects.filter(id=config.task.id).update(
             status=TaskStatus.COMPLETE
@@ -1278,9 +1271,6 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
             )
         
         if not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
-            if not is_production_deployment:
-                run_existing_tests(config, self_driving_task)
-            
             config.business.snapshot_code(
                 config.current_iteration,
                 include_erie_common=False
@@ -1863,7 +1853,9 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
             config.log(log_payload)
         
         config.log(extracted_exception)
-    
+        
+        if isinstance(e, AgentBlocked):
+            raise e
     finally:
         exec_docker_prune()
         config.business.snapshot_code(
@@ -1914,8 +1906,8 @@ def execute_iteration(
         )
     elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]:
         run_automated_tests(
-            config, 
-            docker_env, 
+            config,
+            docker_env,
             docker_image_tag
         )
     else:
@@ -1944,10 +1936,13 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
             )
             config.log(f"Test suite PASS on run {i + 1} of 3.")
             results.append(True)
-        except ExecutionException:
-            config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
-            results.append(False)
-
+        except ExecutionException as e:
+            if i == 0:
+                raise ExecutionException(f"FIRST test run failed.  See logs above for details.")
+            else:
+                config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
+                results.append(False)
+    
     passes = sum(results)
     if passes == 3:
         config.log("ALL TESTS PASS ON ALL THREE RUNS")
@@ -1964,7 +1959,6 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
             "This indicates flakiness. Please review the test code for flakiness risks and fix."
         )
         raise ExecutionException("Some test runs failed - flaky tests")
-
 
 
 def deploy_iteration(
@@ -2292,6 +2286,8 @@ def evaluate_iteration(
          """)
     else:
         goal_achieved_critera = textwrap.dedent(f"""
+            **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
+            **the cloudformation stack CREATE or UPDATE did not complete successfully, set `"goal_achieved": false`.**  
             **If the test output shows "Ran 0 tests", set `"goal_achieved": false`.**  
             **If any tests were skipped, set 'goal_achieved': false. Goal can only be set to true if all tests ran successfully without skips and the acceptance criteria are fully covered by the test suite.**  
             - Set `"goal_achieved": true` only if the logs contain no errors, the task output clearly meets the stated GOAL, and test logs show that one or more tests were actually run.  
@@ -4858,7 +4854,7 @@ def disable_lambda_concurrency(config: SelfDriverConfig, stack_name: str):
     lambda_client = boto3.client("lambda", region_name=config.aws_env.get_aws_region())
     
     for lambda_data in get_stack_lambdas(config):
-        function_name = lambda_data['resource_name']
+        function_name = lambda_data['lambda_name']
         try:
             resp = lambda_client.get_function_concurrency(FunctionName=function_name)
             reserved = resp.get('ReservedConcurrentExecutions')
@@ -5214,38 +5210,3 @@ def empty_stack_buckets(
     for bucket_resource in bucket_definitions:
         empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)
 
-
-def run_existing_tests(config, self_driving_task):
-    if config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
-        config.log("Skipping automated test suite for production deployment task")
-        return
-    
-    config.iterate_if_necessary()
-    
-    has_cloudformation = config.business.codefile_set.filter(
-        file_path__in=[
-            InfrastructureStackType.FOUNDATION.get_template_name(),
-            InfrastructureStackType.APPLICATION.get_template_name()
-        ]
-    ).exists()
-    
-    has_completed_tasks = config.business.selfdrivingtask_set.filter(
-        test_file_path__isnull=False,
-        task__status=TaskStatus.COMPLETE
-    ).exists()
-    
-    if not (has_cloudformation and has_completed_tasks):
-        # no need to run the tests
-        return
-    
-    # make sure the tests run
-    build_deploy_exec_iteration(config)
-    
-    try:
-        assert_tests_green(config)
-        config.self_driving_task.initial_tests_pass = False
-    except Exception as e:
-        logging.exception(e)
-        config.self_driving_task.initial_tests_pass = False
-    finally:
-        config.self_driving_task.save()

@@ -13,7 +13,17 @@
 
             <small class="text-muted d-flex justify-content-start">
                 <div class="me-2">
-                    <span class="badge {% if task.status == "COMPLETE" %}bg-success{% elif task.status == "BLOCKED" %}bg-danger{% else %}bg-secondary{% endif %}">{{ task.status }}</span>
+                    <span class="badge 
+                        {% if task.status == "COMPLETE" %}
+                            bg-success
+                        {% elif task.status == "BLOCKED" %}
+                            bg-danger
+                        {% elif task.status == "IN_PROGRESS" %}
+                            bg-primary
+                        {% else %}
+                            bg-secondary
+                        {% endif %}"
+                    >{{ task.status }}</span>
                 </div>
                 <div class="me-2">
                     <a href="{% url "view_task" task.id %}">{{ task.get_name }}</a>

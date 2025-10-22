@@ -8,18 +8,20 @@ def do_work(task_id):
     task = Task.objects.get(id=task_id)
     if not task.allow_execution():
         return
-
-    chat_data = build_chat_data(task)
-
-    designer = business_level_chat(
-        task.initiative,
-        "Do Designer Work",
-        "worker_design.md",
-        chat_data,
-        debug=True
-    )
-
-    process_response(task, designer)
+    
+    from erieiron_autonomous_agent.business_level_agents import worker_coder
+    worker_coder.do_work(task_id)
+    # chat_data = build_chat_data(task)
+    # 
+    # designer = business_level_chat(
+    #     task.initiative,
+    #     "Do Designer Work",
+    #     "worker_design.md",
+    #     chat_data,
+    #     debug=True
+    # )
+    # 
+    # process_response(task, designer)
 
 
 def build_chat_data(task):

@@ -1118,7 +1118,7 @@ def _task_tab_available_iterations(task, business, self_driving_task) -> bool:
 
 
 def _task_tab_context_latest_iteration(task, business, self_driving_task) -> dict:
-    iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("-timestamp").first()
+    iteration = self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
     
     return {"iteration": iteration}
 
@@ -1325,8 +1325,9 @@ def _task_tab_context_edit(task, business, self_driving_task: SelfDrivingTask) -
         stack = initiative.cloudformation_stacks.filter(aws_env=AwsEnv.DEV, stack_type=InfrastructureStackType.APPLICATION).first()
         if stack:
             cloudformation_stack_name = stack.stack_name
-            encoded_stack_id = quote(stack.stack_arn, safe="")
-            cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
+            if stack.stack_arn:
+                encoded_stack_id = quote(stack.stack_arn, safe="")
+                cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
     
     return {
         "sandbox_path": sandbox_path,
@@ -1462,18 +1463,21 @@ def _build_iteration_tabs(
         running_processes,
         running_processes_count: int,
         llm_requests,
+        active_tab_slug: str | None = None,
 ):
     from erieiron_ui import tab_defitions
-    
+
     if not iteration:
         return []
-    
+
     tabs = []
+    current_tab_slug = (active_tab_slug or "routing").lower()
+
     for definition in tab_defitions.ITERATION_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
-        
+
         slug = definition["slug"]
         available = definition["availability_fn"](
             iteration,
@@ -1494,45 +1498,100 @@ def _build_iteration_tabs(
         
         if slug == "routing":
             tab_data["label"] = f"Iteration {iteration.version_number}"
-        
+
         if slug == "processes" and running_processes_count:
             tab_data["badge"] = running_processes_count
-        
+
         tabs.append(tab_data)
-    
+
     from erieiron_ui.tab_defitions import TAB_DIVIDER
-    nav_links = [
-        TAB_DIVIDER,
-        {
-            "slug": "latest-iteration-link",
-            "label": "Latest Iteration",
-            "url": reverse('view_self_driver_latest_iteration', args=[task.id]),
-            "available": True,
-        }
-    ]
+    nav_links = [TAB_DIVIDER]
+
+    def _iteration_nav_url(target_iteration: SelfDrivingTaskIteration | None) -> str | None:
+        if not target_iteration:
+            return None
+
+        slug_for_url = current_tab_slug
+        if current_tab_slug != "routing":
+            tab_definition = tab_defitions.ITERATION_TAB_MAP.get(current_tab_slug)
+            if not tab_definition:
+                slug_for_url = "routing"
+            else:
+                try:
+                    available = tab_definition["availability_fn"](
+                        target_iteration,
+                        task=task,
+                        previous_iteration=target_iteration.get_previous_iteration(),
+                        next_iteration=target_iteration.get_next_iteration(),
+                        running_processes=None,
+                        running_processes_count=0,
+                        llm_requests=list(target_iteration.llmrequest_set.order_by("-timestamp")),
+                    )
+                except Exception:
+                    available = False
+                if not available:
+                    slug_for_url = "routing"
+
+        if slug_for_url == "routing":
+            return reverse('view_self_driver_iteration', args=[target_iteration.id])
+        return reverse('view_self_driver_iteration_tab', args=[slug_for_url, target_iteration.id])
+
+    latest_iteration = None
+    try:
+        latest_iteration = iteration.self_driving_task.get_most_recent_iteration()
+    except Exception:
+        latest_iteration = None
     
-    if previous_iteration:
-        nav_links.append({
-            "slug": "previous-iteration-link",
-            "label": "Previous Iteration",
-            "url": reverse('view_self_driver_iteration', args=[previous_iteration.id]),
-            "available": True,
-        })
-    if next_iteration:
-        nav_links.append({
-            "slug": "next-iteration-link",
-            "label": "Next Iteration",
-            "url": reverse('view_self_driver_iteration', args=[next_iteration.id]),
-            "available": True,
-        })
+
+    first_iteration = None
+    try:
+        first_iteration = iteration.self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
+    except Exception:
+        first_iteration = None
     
+    first_url = _iteration_nav_url(first_iteration)
+    latest_url = _iteration_nav_url(latest_iteration)
+    next_url = _iteration_nav_url(next_iteration)
+    previous_url = _iteration_nav_url(previous_iteration)
+    
+    nav_links.append({
+        "slug": "first-iteration-link",
+        "label": "First Iteration",
+        "url": first_url,
+        "available": bool(first_url)
+    })
+    
+    nav_links.append({
+        "slug": "latest-iteration-link",
+        "label": "Latest Iteration",
+        "url": latest_url,
+        "available": bool(latest_url)
+    })
+    
+    nav_links.append(TAB_DIVIDER)
+    
+    nav_links.append({
+        "slug": "previous-iteration-link",
+        "label": "Previous Iteration",
+        "url": previous_url,
+        "available": bool(previous_url),
+    })
+    
+
+    nav_links.append({
+        "slug": "next-iteration-link",
+        "label": "Next Iteration",
+        "url": next_url,
+        "available": bool(next_url)
+    })
+
     first_divider_index = next(
         (idx for idx, tab in enumerate(tabs) if tab.get("is_divider")),
         len(tabs)
     )
-    if nav_links:
+    if len(nav_links) > 1:
         tabs[first_divider_index:first_divider_index] = nav_links
-    
+
     return tabs
 
 
@@ -1648,6 +1707,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         running_processes=running_processes,
         running_processes_count=running_processes_count,
         llm_requests=llm_requests,
+        active_tab_slug=tab_slug,
     )
     
     tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
@@ -1823,10 +1883,11 @@ def action_restart_task(request, task_id):
         status=TaskStatus.NOT_STARTED
     )
     
-    SelfDrivingTask.objects.filter(id=task.selfdrivingtask.id).update(
-        test_file_path=None,
-        initial_tests_pass=False
-    )
+    if SelfDrivingTask.objects.filter(task_id=task.id).exists():
+        SelfDrivingTask.objects.filter(id=task.selfdrivingtask.id).update(
+            test_file_path=None,
+            initial_tests_pass=False
+        )
     
     PubSubManager.publish_id(
         PubSubMessageType.TASK_UPDATED,
@@ -1980,7 +2041,7 @@ def action_add_initiative(request):
     )
     
     messages.success(request, 'Initiative created successfully!')
-    return redirect(reverse('view_businesses_tab', args=['initiatives']))
+    return redirect(reverse('view_initiative', args=[initiative.id]))
 
 
 def action_dowork_initiative(request, initiative_id):
@@ -1991,8 +2052,9 @@ def action_dowork_initiative(request, initiative_id):
         initiative = get_object_or_404(Initiative, id=initiative_id)
         initiative_title = initiative.title
         
-        for t in initiative.tasks.exclude(status=TaskStatus.COMPLETE):
+        for t in initiative.tasks.exclude(status=TaskStatus.COMPLETE).order_by("created_timestamp"):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
+            break
         
         messages.success(request, f'Work successfully kicked off on "{initiative_title}"')
     except Initiative.DoesNotExist:
@@ -2000,7 +2062,7 @@ def action_dowork_initiative(request, initiative_id):
     except Exception as e:
         messages.error(request, f'Error with initiative: {str(e)}')
     
-    return redirect(reverse('view_businesses_tab', args=['initiatives']))
+    return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
 
 
 def action_update_initiative(request, initiative_id):
@@ -2025,9 +2087,6 @@ def action_update_initiative(request, initiative_id):
             'cloudformation_stack_name': cloudformation_stack_name or None,
             'requires_unit_tests': requires_unit_tests
         }
-        
-        if initiative.cloudformation_stack_name != cloudformation_stack_name:
-            update_data["cloudformation_stack_id"] = None
         
         # Update the initiative
         Initiative.objects.filter(id=initiative_id).update(**update_data)
@@ -2165,14 +2224,6 @@ def action_update_task(request, task_id):
         else:
             update_data['execution_start_time'] = None
         
-        self_driving_task = getattr(task, 'selfdrivingtask', None)
-        if self_driving_task:
-            new_stack_name = cloudformation_stack_name or None
-            if self_driving_task.cloudformation_stack_name != new_stack_name:
-                SelfDrivingTask.objects.filter(id=self_driving_task.id).update(
-                    cloudformation_stack_name=new_stack_name,
-                    cloudformation_stack_id=None
-                )
         
         # Update the task
         Task.objects.filter(id=task_id).update(**update_data)

@@ -66,7 +66,7 @@ Each task **must** include the following fields
 - `output_fields` *(list[str])* – list of field names on the task's output datastructure  
 - `risk_notes` *(markdown formatted string)* – operational or automation risks. Recommended format: `CATEGORY | PROBABILITY | IMPACT | NOTE`.  format for readability  
 - `requires_test` *(boolean)* – defaults to `true` for `CODING_*` tasks; set `false` for infra/setup tasks that don’t need automated tests  
-- `completion_criteria` *(array)* – bullet‑point list of acceptance criteria  
+- `completion_criteria` *(array)* – bullet‑point list of **user-facing or system-observable acceptance criteria**. Each item must describe externally verifiable behavior or output. Do not describe backend processes or infrastructure changes directly—only their **impact** as observed by the user or system. For example: "User receives confirmation email" or "System logs upload success in audit trail" is valid; "Add SNS topic" or "Update IAM role" is not.
 - `execution_schedule` *(string)*  
     - Allowed values (required field even for one‑off tasks):  
         - `NOT_APPLICABLE` (default for immediate tasks)  
@@ -93,6 +93,10 @@ The Engineering Lead agent must create tasks at a level of abstraction suitable 
 - Task descriptions and completion criteria should focus on **externally verifiable outcomes** (e.g., API endpoints, UI behavior, logs, or observable system effects).  
 - Task descriptions must not prescribe specific CloudFormation templates, resource logical IDs, property names, or other implementation minutiae; articulate the observable capability instead so downstream coders can choose the approach that fits the architecture.
 - Completion criteria must be framed as user- or system-observable validations (requests, workflows, logs) and must never enumerate infrastructure resources, configuration properties, port numbers, or other implementation artifacts (e.g., “Route53 Alias A exists” or “ALB listener on 8006”). State the externally visible behavior that proves success instead (e.g., “Domain serves the application over HTTPS with healthy responses”).
+
+- If infrastructure is required to make a task deployable, describe **required capabilities** (e.g., "Lambda is deployed and receives events", "S3 bucket exists and is wired to trigger function") – but **do not** name CloudFormation fields, resource properties, logical IDs, parameter names, or default values (e.g., Code.S3Bucket, Metadata.SourceFile, DeletionPolicy, etc.).  
+- Avoid phrasing like "update infrastructure.yaml to set..." or "declare the Lambda using..." – instead, describe the observable behavior that confirms the infra is present and functional.  
+- You **may** include guidance about what *must be possible*, such as "the function must be able to read inbound messages from the S3 bucket and send outbound notifications via SES."
 - Avoid specifying specific technologies, code files, or CloudFormation resources unless strictly necessary for dependency clarity.  
 - Acceptance criteria should express **user-facing or functional verification conditions**, not internal implementation steps.  
 - For example, instead of: “Add a Lambda to send SNS notifications,” use: “System emits a notification when a new event is recorded, verified by observing the notification being received.”  
@@ -156,7 +160,11 @@ The Engineering Lead agent must create tasks at a level of abstraction suitable 
     task or an earlier one.
 
 -   **Deployment truth-source**\
-    CloudFormation (`infrastructure.yaml` for foundation resources and `infrastructure-application.yaml` for delivery resources) remains the source of truth. Tasks must update the relevant template so stack updates alone can deploy the new code.
+CloudFormation (`infrastructure.yaml` for foundation resources and `infrastructure-application.yaml` for delivery resources) remains the source of truth. Tasks must update the relevant template so stack updates alone can deploy the new code.
+
+However, do **not** specify CloudFormation template internals in the task description.  
+**Never include:** field names like `Code.S3Bucket`, `VPCConfig`, or `Metadata.SourceFile`; logical resource names; default parameter values; or AWS property names.  
+**Instead, describe:** required system behavior, e.g., "The Lambda must be wired to the ingest bucket and able to emit outbound email." This ensures downstream coders retain flexibility while meeting deployment requirements.
 
 ## Example
 

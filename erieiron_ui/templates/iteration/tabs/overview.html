@@ -1,24 +1,31 @@
 {% load erieiron_common_tags %}
-<h2 class="mb-3">
-    Iteration {{ iteration.version_number }}
-    {% if iteration.achieved_goal %}
-        <span class="badge bg-success ms-2">Goal Achieved</span>
-    {% elif iteration.evaluation_json %}
-        <span class="badge bg-danger ms-2">Failed</span>
-    {% else %}
-        <span class="badge bg-info ms-2">In Progress</span>
-    {% endif %}
-</h2>
+
+<div class="d-flex justify-content-between align-content-center">
+    <h5>Iteration {{ iteration.version_number }}</h5>
+    <div style="height: 20px"  class=" me-2 badge d-flex align-content-center
+                    {% if task.status == "COMPLETE" %}
+                        bg-success
+                    {% elif task.status == "BLOCKED" %}
+                        bg-danger
+                    {% elif task.status == "IN_PROGRESS" %}
+                        bg-primary
+                    {% else %}
+                        bg-secondary
+                    {% endif %}
+                    
+                pt-1 p-2"
+    >{{ task.status }}</div>
+</div>
 
 {% if logs_prefix %}
     <div style="margin-top: -3rem; margin-bottom: 2rem">
-            <div class="d-flex justify-content-end">
-                <a class="me-3" target="_blank" href="{{ cloudformation_stack_url }}">Stack ({{ logs_prefix }})</a>
-                <a target=_blank
-                   href="https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#logsV2:log-groups$3FlogGroupNameFilter$3D{{ logs_prefix }}">
-                    Cloudwatch
-                </a>
-            </div>
+        <div class="d-flex justify-content-end">
+            <a class="me-3" target="_blank" href="{{ cloudformation_stack_url }}">Stack ({{ logs_prefix }})</a>
+            <a target=_blank
+               href="https://us-west-2.console.aws.amazon.com/cloudwatch/home?region=us-west-2#logsV2:log-groups$3FlogGroupNameFilter$3D{{ logs_prefix }}">
+                Cloudwatch
+            </a>
+        </div>
     </div>
 {% endif %}
 
