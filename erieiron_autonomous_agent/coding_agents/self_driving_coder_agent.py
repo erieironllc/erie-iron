@@ -174,7 +174,7 @@ def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivi
         config.set_iteration(most_recent_iteration)
         
         CodeVersion.objects.filter(task_iteration_id=config.current_iteration.id).delete()
-    
+        
         SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
             slowest_cloudformation_resources=None,
             log_content_execution=None,
@@ -250,10 +250,10 @@ def handle_agent_blocked(task_id, agent_blocked):
     if not task_id:
         return
     
-    with transaction.atomic():
-        Task.objects.filter(id=task_id).update(
-            status=TaskStatus.BLOCKED
-        )
+    # with transaction.atomic():
+    #     Task.objects.filter(id=task_id).update(
+    #         status=TaskStatus.BLOCKED
+    #     )
     
     PubSubManager.publish(
         PubSubMessageType.TASK_BLOCKED,
@@ -1825,6 +1825,8 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         config.log("Docker execution finished")
     
     except Exception as e:
+        logging.exception(e)
+        
         if not isinstance(e, CloudFormationException):
             config.log(common.get_stack_trace_as_string(e))
         
@@ -2220,6 +2222,8 @@ def validate_web_container(
 
 def init_task_execution(iteration):
     task = iteration.self_driving_task.task
+    if TaskType.TASK_EXECUTION.neq(task.task_type):
+        return
     
     task_input = {}
     for upstream_task in task.depends_on.all():
@@ -2295,21 +2299,6 @@ def evaluate_iteration(
             - Base this determination only on the current logs—do not consider prior iterations.
         """)
     
-    messages = ([
-        get_sys_prompt([
-            "iteration_summarizer.md",
-            "common--iam_role.md",
-            "common--agent_provided_functionality.md",
-            "common--domain_management.md",
-            "common--forbidden_actions.md",
-            "common--environment_variables.md"
-        ], replacements=[
-            ("<env_vars>", get_env_var_names(config)),
-            ("<goal_achieved_critera>", goal_achieved_critera)
-        ]),
-        get_goal_msg(config, "Task Goal")
-    ])
-    
     aws_env = config.aws_env
     stack_operational = is_stack_operational(config.get_stack_names(), config.aws_env)
     
@@ -2326,47 +2315,64 @@ def evaluate_iteration(
         allow_goal_achieved = True
         goal_achieved_reason = "we've written code and it deployed successfully"
     
-    messages += LlmMessage.user_from_data(
-        "Cloudformation Status",
-        {
-            "stack_status": get_stack_statuses(config.get_stack_names(), config.aws_env),
-            "allow_goal_achieved": allow_goal_achieved,
-            "allow_goal_achieved_justification": goal_achieved_reason
-        }
-    )
-    
-    if isinstance(exception, ExecutionException):
-        messages += LlmMessage.user_from_data(
-            f"**Exception throw during this iteration's execution**",
-            {
-                "exception": str(exception)
-            }
-        )
-    else:
-        messages += LlmMessage.user_from_data(
-            f"**Logs from the iteration's test output and execution**",
-            {
-                "log_output": log_output
-            }
-        )
-        
-        if exception:
-            messages += LlmMessage.user_from_data(
+    eval_data = llm_chat(
+        "Iteration Summarizer",
+        [
+            get_sys_prompt([
+                "iteration_summarizer.md",
+                "common--iam_role.md",
+                "common--agent_provided_functionality.md",
+                "common--domain_management.md",
+                "common--forbidden_actions.md",
+                "common--environment_variables.md"
+            ], replacements=[
+                ("<env_vars>", get_env_var_names(config)),
+                ("<goal_achieved_critera>", goal_achieved_critera)
+            ]),
+            
+            get_goal_msg(
+                config, 
+                "Task Goal"
+            ),
+            
+            get_previous_iteration_summaries_msg(
+                config
+            ),
+            
+            LlmMessage.user_from_data(
+                "Cloudformation Status",
+                {
+                    "stack_status": get_stack_statuses(config.get_stack_names(), config.aws_env),
+                    "allow_goal_achieved": allow_goal_achieved,
+                    "allow_goal_achieved_justification": goal_achieved_reason
+                }
+            ),
+            
+            LlmMessage.user_from_data(
+                f"**Logs from the iteration's test output and execution**",
+                {
+                    "log_output": log_output
+                }
+            ),
+            
+            LlmMessage.user_from_data(
                 f"**Exception throw during this iteration's execution**",
                 {
                     "exception": common.get_stack_trace_as_string(exception)
                 }
+            ) if exception else None,
+            
+            LlmMessage.user(
+                "Please summarize this iteration"
             )
-    
-    messages.append(LlmMessage.user("Please summarize this iteration"))
-    
-    eval_data = llm_chat(
-        "Iteration Summarizer",
-        messages,
-        LlmModel.OPENAI_GPT_5_NANO,
+        ],
+        LlmModel.OPENAI_GPT_5,
         tag_entity=config.current_iteration,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
+    
+    if eval_data.get("blocked"):
+        raise AgentBlocked(eval_data)
     
     if not allow_goal_achieved:
         eval_data['goal_achieved'] = False
@@ -5209,4 +5215,3 @@ def empty_stack_buckets(
     
     for bucket_resource in bucket_definitions:
         empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)
-

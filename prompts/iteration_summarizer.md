@@ -38,11 +38,21 @@ You will be provided
 
 ## What You Must Do
 
-1. **Determine if the GOAL Was Achieved**  
-   - field name:  'goal_achieved'  
-   <goal_achieved_critera>
+1. **Determine if the GOAL Was Achieved**
+    - field name:  'goal_achieved'  
+      <goal_achieved_critera>
 
-2. **Write an Evaluation Summary**  
+2. **Determine if you think the agent is blocked and needs human help**  
+   - field name:  'blocked'  
+   - boolean value indicating if you think the agent is blocked and needs human help.  
+   - reasons for being returning blocked might include (but no limited to):  
+        - exception throw in the agent orchestration layer
+        - missing required logging to diagnose errors or test failures 
+        - systemic issues like out of disk space, etc
+        - the automated test(s) are written in such a way that they will never pass
+        - we are repeating the same error repeatedly with no progress
+
+3. **Write an Evaluation Summary**  
    - field name: `summary`  
    - Summarize what the iteration logs show in clear, compact terms.  
    - **Purpose:** Give downstream LLMs an immediate, actionable understanding of what happened.  
@@ -54,7 +64,7 @@ You will be provided
      - **Blocked Runs:** If execution never started, state that directly (e.g., “Execution blocked by infrastructure failure.”).  
    - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers`. Avoid verbosity or speculation; prefer clarity and brevity.
 
-3. ### Extract Errors  
+4. ### Extract Errors  
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multple CloudFormation failures are found, include **all** cloudformation failure events
    - If the iteration ran automated tests and there were **test errors or failures**, capture **all of them** (since these can be addressed in parallel).  
    - When both runtime or infrastructure/compilation errors **and** automated test failures appear in the logs, include **both** sections in the response. Report the blocking runtime or infrastructure error in `error` *and* enumerate all test failures in `test_errors`. Do not omit the critical error when tests fail downstream.  
@@ -104,30 +114,3 @@ Therefore, if a domain name problem occurs, the iteration should be marked as **
 
 ### DO NOT INVENT
 - do not infer or invent filenames or file paths. Only report filenames that appear verbatim in the provided logs (matching a stack-trace File \"...\" line). If none are present, set filename to null, mark provenance: 'none', and include the exact log excerpt used."
-
----
-
-## Output Format
-
-```json
-{
-  "goal_achieved": false,
-  "summary": "Application rollout failed because S3 deployment permissions were denied, and after retrying locally two automated tests still fail (`test_process_email`, `test_parse_metadata`). Fix the IAM policy blocking deployment first, then resolve the test assertions.",
-  "error": {
-    "summary": "AccessDenied deploying assets to S3",
-    "logs": "2024-03-14T18:22:07Z ERROR deployment.upload AssetsBucket: AccessDenied: User is not authorized to perform s3:PutObject on bucket erieiron-assets\n2024-03-14T18:22:07Z ERROR deployment.upload Aborting deploy after first failure"
-  },
-  "test_errors": [
-    {
-      "summary": "AssertionError in test_process_email",
-      "file_name": "/app/core/tests/test_email.py",
-      "logs": "======================================================================\nFAIL: test_process_email (tests.test_email_processor)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/app/tests/test_email_processor.py\", line 45, in test_process_email\n    self.assertEqual(result, expected)\nAssertionError: 'foo' != 'bar'"
-    },
-    {
-      "summary": "ValueError in test_parse_metadata",
-      "file_name": "/app/core/tests/test_email.py",
-      "logs": "======================================================================\nERROR: test_parse_metadata (tests.test_metadata_parser)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/app/tests/test_metadata_parser.py\", line 22, in test_parse_metadata\n    parse_metadata(None)\nValueError: Metadata input cannot be None"
-    }
-  ]
-}
-```

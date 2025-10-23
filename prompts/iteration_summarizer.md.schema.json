@@ -7,6 +7,10 @@
       "type": "boolean",
       "description": "Indicates whether the iteration achieved the stated GOAL."
     },
+    "blocked": {
+      "type": "boolean",
+      "description": "Indicates if you think the agent is blocked and needs human help"
+    },
     "summary": {
       "type": "string",
       "description": "A high-level summary of the iteration's execution and test results."
