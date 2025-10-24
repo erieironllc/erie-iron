@@ -24,11 +24,25 @@ When writing or modifying a Lambda, these rules **must** be followed.  If you di
   ```python
   # LAMBDA_DEPENDENCIES: []
   ```
-- Any package listed in `# LAMBDA_DEPENDENCIES` **must** also be present in the base container `requirements.txt`; add it there if it is missing.
 - When adding a dependency that already exists in `requirements.txt`, you must reuse the existing pinned version. Never declare conflicting package versions across lambdas or between a lambda and the base container.
 - You may only use modules that are included in these packages - these are the only external modules available at runtime
-- Do not assume availability of any packages that were not explicitly listed.
 - Imports must work when the file and its dependencies are zipped and extracted into a flat directory structure.
+
+- To proactively enforce correct dependency declarations, the codewriter **must** automatically detect all imported modules and update the `LAMBDA_DEPENDENCIES` header comment accordingly before writing or modifying code.  
+  - If a new module is imported in the code but not present in the dependency list, the codewriter must immediately add it to the `LAMBDA_DEPENDENCIES` header.
+  - Deployment and runtime validation processes will enforce this requirement strictly; builds will fail if inconsistencies between imports and declared dependencies are found.
+  - Example workflow:
+    - Before adding a new import:
+      ```python
+      # LAMBDA_DEPENDENCIES: ["requests"]
+      import requests
+      ```
+    - After adding a new import of `boto3`:
+      ```python
+      # LAMBDA_DEPENDENCIES: ["requests", "boto3"]
+      import requests
+      import boto3
+      ```
 
 ---
 
@@ -36,6 +50,10 @@ When writing or modifying a Lambda, these rules **must** be followed.  If you di
 - Do not write to local disk or depend on any files that are not bundled into the deployment package.
 - All computation must be stateless unless explicitly instructed otherwise.
 - Use in-memory caching or reuse of global variables only if safe and explicitly helpful.
+
+### Database Connectivity
+- If the Lambda requires database access, you **must** import `agent_tools` from `erieiron_public` and call `agent_tools.get_database_conf(aws_region_name)` using the runtime AWS region. Do not reconstruct credentials, read raw environment variables for connection pieces, or query Secrets Manager directly.
+- Only the shared helper may be used to obtain connection details. Code running in Django continues to rely on Django settings helpers for `DATABASES` configuration—do not duplicate that logic inside Lambda code.
 
 ---
 

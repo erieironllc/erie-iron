@@ -517,7 +517,8 @@ class InfrastructureStack(BaseErieIronModel):
     aws_env = models.TextField(choices=AwsEnv.choices())
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     created_timestamp = models.DateTimeField(auto_now_add=True)
-    
+    updated_timestamp = models.DateTimeField(auto_now_add=True)
+
     @staticmethod
     def get(
             initiative: Initiative,
@@ -1561,9 +1562,12 @@ class CodeFile(BaseErieIronModel):
         return f"{self.file_path} - {self.id}"
     
     def allow_autonomous_delete(self) -> bool:
-        return self.file_path not in [
-            CodeFile.ARCHITECTURE_FILE
-        ]
+        p = (self.file_path or "").strip()
+        
+        if p.startswith(("venv", "./venv", "env", "./env")):
+            return False
+        
+        return p != CodeFile.ARCHITECTURE_FILE
     
     def get_path(self) -> Path:
         return Path(self.file_path)

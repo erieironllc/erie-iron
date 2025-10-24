@@ -9,21 +9,22 @@
         <table class="table table-striped align-middle">
             <thead>
                 <tr>
+                    <th scope="col">Token</th>
+                    <th scope="col">Stack Type</th>
                     <th scope="col">Scope</th>
                     <th scope="col">Environment</th>
-                    <th scope="col">Stack Type</th>
                     <th scope="col">Stack Name</th>
-                    <th scope="col">Namespace Token</th>
-                    <th scope="col">Created</th>
-                    <th scope="col" class="text-end">AWS Links</th>
+                    <th scope="col">Logs</th>
+                    <th scope="col" class="text-end">Updated</th>
                 </tr>
             </thead>
             <tbody>
                 {% for stack in stack_entries %}
                     <tr>
+                        <td><code>{{ stack.stack_namespace_token }}</code></td>
+                        <td>{{ stack.stack_type_label }}</td>
                         <td>{{ stack.scope_label }}</td>
                         <td>{{ stack.aws_env_label }}</td>
-                        <td>{{ stack.stack_type_label }}</td>
                         <td>
                             {% if stack.cloudformation_url %}
                                 <a href="{{ stack.cloudformation_url }}" target="_blank" rel="noopener">
@@ -33,16 +34,12 @@
                                 {{ stack.stack_name|default:"(unnamed stack)" }}
                             {% endif %}
                         </td>
-                        <td><code>{{ stack.stack_namespace_token }}</code></td>
-                        <td>{% if stack.created_timestamp %}{{ stack.created_timestamp|naturaltime }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</td>
-                        <td class="text-end">
-                            {% if stack.cloudformation_url %}
-                                <a href="{{ stack.cloudformation_url }}" target="_blank" rel="noopener">CloudFormation</a>
-                            {% endif %}
+                        <td>
                             {% if stack.cloudwatch_logs_url %}
-                                <a href="{{ stack.cloudwatch_logs_url }}" target="_blank" rel="noopener" class="ms-2">CloudWatch Logs</a>
+                                <a href="{{ stack.cloudwatch_logs_url }}" target="_blank" rel="noopener">Logs</a>
                             {% endif %}
                         </td>
+                        <td class="text-end" nowrap=>{% if stack.updated_timestamp %}{{ stack.updated_timestamp|naturaltime }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</td>
                     </tr>
                 {% empty %}
                     <tr>

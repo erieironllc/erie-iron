@@ -64,56 +64,6 @@ Use this context to assess existing test implementation, surface failures, and d
 
 ---
 
-## General Planning Responsibilities
-
-1. **Understand the GOAL**
-    - The GOAL is always explicitly provided as restoring all automated tests to passing state.
-    - If the GOAL is ambiguous, emit a `blocked` object with category `"task_def"` and suggest clarification.
-
-2. **Evaluate Context**
-    - The evaluator output, test logs, stack traces, or prior iterations may be included.
-    - Identify what test files or imports are failing, what fixtures or namespaces are broken, and what errors (single or multiple) were reported.
-    - If repeated failures indicate the test code itself is flawed or its logs are too sparse to diagnose the issue, include focused edits to repair the test code or add diagnostics while preserving the original test assertions.
-    - If `test_errors` is present, plan to address all test failures in parallel. If `error` is present, focus exclusively on resolving that single error before considering test failures.
-    - If in doubt, add a diagnostic entry in the `evaluation` section.
-    - Warnings should be ignored unless they directly interfere with achieving the GOAL (e.g., cause test failures, runtime exceptions). Prioritize fixing exceptions, errors, failed assertions, and clear regressions in tests. Attempting to resolve benign warnings can lead to regressions or distraction from the GOAL.
-
-3. **Reason Before Planning**
-    Before proposing any test file edits, reason through the problem step-by-step:
-    - What went wrong (based on the evaluator’s diagnostics or test execution logs)
-    - Why it happened (the probable root cause in test code or imports)
-    - What must be changed to fix it
-    Use this reasoning step to anticipate not only the immediate fix, but also any related issues likely to surface in the next execution cycle. Your goal is to reduce iteration count by proactively addressing clusters of related test errors and by forecasting likely consequences of the proposed plan.
-    - If an initial design document exists, examine its logic before proposing test file edits. Do not blindly follow its plan—evaluate whether its suggestions still align with the current GOAL and test code reality.
-    - If following the design would cause regressions, circular logic, or incomplete fixes, deviate from it and explain why in the planning output.
-
-4. **Plan Deterministic Edits**
-    - Emit only `code_files` plans—stepwise, deterministic instructions for modifying test files or test support modules.
-    - Always consult the file structure metadata before proposing new test files. If a test file of similar purpose exists, reuse or extend it.
-    - Do not emit raw code, templates, shell commands, or pseudocode.
-    - **AVOID python import errors AT ALL COSTS** Think ahead—add to requirements.txt if you use something in test files and it’s not in requirements.txt. The expectation is that you will not plan test code that has import errors.
-    - Every change must be grounded in achieving the GOAL. When planning a test fix, think forward: if the proposed edit will trigger new validation failures (e.g., unreferenced fixtures, missing test helpers, runtime exceptions), proactively plan the follow-up fixes.
-    - You must ensure that all import statements—whether newly added or already present in modified test files—are supported by entries in `requirements.txt`.
-      - For any new third-party imports in test code, add the corresponding package (with a pinned version) to `requirements.txt`.
-      - If editing a test file that imports third-party libraries not currently listed, add those as well.
-      - The version should match one of:
-        - What is already present elsewhere in the repo
-        - What is known to work based on the evaluator logs or environment listing
-        - A stable recent version if no other information is available
-      - If unsure about the correct package name or version, include a `TODO:` comment explaining the uncertainty.
-    - Be alert to version mismatches between package declarations in `requirements.txt` and the test code’s actual usage patterns. If imports are structured in a way that only work with specific versions of a library, verify that the declared version supports the expected structure. If not, either change the import structure to match the version or downgrade the version to match the expected import. Do not blindly upgrade packages—always confirm compatibility with existing test code.
-
-5. **Anticipate Secondary Consequences**
-    - Treat each test file change not just as a patch, but as part of the test suite. Ask:
-        • Will this test helper function need to be imported elsewhere in tests?
-        • Does this affect test fixtures, mocks, or test configuration?
-        • Is this field or import used in test parametrization or downstream test consumers?
-    - Plan the entire arc of the test fix, not just the local fix.
-
-If there’s a likely cascade (e.g., adding a new import affects multiple test files or shared fixtures), plan all necessary edits in this iteration.
-
----
-
 ### Documentation Planning Guidelines
 
 You are encouraged to propose new documentation files whenever they will improve current or future understanding of the test suite.

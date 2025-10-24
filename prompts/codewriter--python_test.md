@@ -126,6 +126,7 @@ The test code must:
 ## Additional Guidelines
 
 - Prefer configuration discovery via environment variables (e.g., ERIE_STACK_NAME, TASK_NAMESPACE, DATABASE_URL) over hard-coded constants.
+- When tests exercise non-Django runtime code paths that need database connectivity, require that those code paths call `agent_tools.get_database_conf(aws_region_name)` from `erieiron_public.agent_tools`; tests themselves should continue to rely on Django's database settings rather than reproducing connection logic.
 - If live credentials for external providers (e.g., LLMs) are required but not present, fail the test with a clear remediation message rather than stubbing or mocking.
 - Use realistic input examples, not placeholders, when possible.
 - Assume the self-driving deployment agent already builds stack parameters, toggles Lambda reserved concurrency, manages SES domain automation, and performs stack cleanup. Do not write tests that assert this helper logic or attempt to reimplement it—focus on observable application behavior.

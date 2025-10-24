@@ -43,6 +43,7 @@ DOMAIN_EDITS_FORBIDDEN = true.
   - Define the database name using `StackIdentifier` plus a sensible suffix.
 - **never** fall back to sqlite or any non-RDS database when RDS credentials are missing.
 - **never** construct secret names or paths in code, **never** include real or placeholder secret values in plans, and **never** log secret contents. Secrets must be fetched only via the ARN provided in the designated environment variable.
+- **never** attempt to compute database connection details in non-Django code by hand. All non-Django runtimes must call `agent_tools.get_database_conf(aws_region_name)` from `erieiron_public.agent_tools`; no alternative helper or manual assembly is allowed.
 
 ### IAM and Roles
 - **never** rely on out-of-stack roles.

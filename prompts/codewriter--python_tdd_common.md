@@ -53,6 +53,7 @@ You work in support of test-driven development
 - Only emit blocked according to the criteria in Blocked Output Example.
 - When database-related errors occur (e.g., `django.db.utils.OperationalError`, connection refused/timeouts, authentication failures), you **must** plan edits to the settings module to fully configure `DATABASES` from AWS Secrets Manager rather than escalating to a human.
 - if editing settings.py, you may **must always** set the "DATABASES" variable with this line of code:  "DATABASES = agent_tools.get_django_settings_databases_conf()".  You may **never** delete this line of code
+- For any non-Django code paths under test (Lambda functions, CLI tools, background workers) that require database connectivity, ensure they use `agent_tools.get_database_conf(aws_region_name)` from `erieiron_public.agent_tools`; do not approve or introduce alternate database discovery mechanisms.
 - you **may not** edit the file self_driving_coder_agent.py.  
     - if you need edits to self_driving_coder_agent.py, you must return as "Blocked"
     - only return "Blocked" in this case if you have no workarounds in the code that you are able to edit

@@ -1,0 +1,41 @@
+{% load humanize %}
+{% load erieiron_common_tags %}
+<div class="w-100 ps-1 d-flex justify-content-between">
+    <div>
+        <small class="me-3">
+            Model: {{ llm_response.model }};
+            Reasoning: {{ llm_response.reasoning_effort|default_if_none:"???" }};
+            Verbosity: {{ llm_response.verbosity|default_if_none:"???" }}
+        </small>
+        <small class="me-3">
+            {{ llm_response.token_count }} tokens
+        </small>
+        <small class="me-3">
+            {{ llm_response.chat_millis|floatformat:0|intcomma }}ms
+        </small>
+        <small class="me-3">
+            ${{ llm_response.price_total|floatformat:3 }}
+        </small>
+    </div>
+</div>
+
+<div class="mb-3 mt-3">
+    <div class="d-flex justify-content-between">
+        <h5>Explanation</h5>
+        {% include "_copy_clipboard_btn.html" with target_el="#change_explanation" %}
+    </div>
+    <p id="change_explanation">{{ explanation|markdown }}</p>
+</div>
+
+{% for change in recommended_prompt_changes %}
+    <hr>
+    <div class="mb-3 copy-container">
+        <div class="d-flex justify-content-between">
+            <h5>Change {{ forloop.counter }}</h5>
+            {% include "_copy_clipboard_btn.html" with target_el=".txt_new_text" %}
+        </div>
+        <p>{{ change.location }}</p>
+        <textarea class="txt_new_text form-control" rows=7>{{ change.new_text_markdown }}</textarea>
+    </div>
+{% endfor %}
+

@@ -1,6 +1,7 @@
 import difflib
 import json
 import logging
+import pprint
 import uuid
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, date
@@ -1009,6 +1010,7 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
                 "stack_namespace_token": stack.stack_namespace_token,
                 "stack_arn": stack.stack_arn,
                 "created_timestamp": stack.created_timestamp,
+                "updated_timestamp": stack.updated_timestamp,
                 "scope_label": "Initiative" if stack.initiative_id == initiative.id else "Business",
             }
         )
@@ -2729,21 +2731,36 @@ def action_llm_debug_compare(request, llm_request_id):
 
 def action_llm_debug_ask(request, llm_request_id):
     optimize = rget_bool(request, "optimize")
+    change_prompt = rget_bool(request, "change_prompt")
     prompt = rget(request, "prompt")
     llm_model, verbosity, reasoning_effort = rget(request, "llm_model").split(";")
     
     orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
     
+    if optimize:
+        title = "Optimize"
+        system_prompt = "chat_response_interpreter.md"
+        schema = None
+    elif change_prompt:
+        title = "Change"
+        system_prompt = "llm_prompt_changer.md"
+        schema = "llm_prompt_changer.md.schema.json"
+    else:
+        title = "Debug"
+        system_prompt = "chat_evaluator.md"
+        schema = None
+
     resp = system_agent_llm_interface.llm_chat(
-        description=f"{'Optimize' if optimize else 'Debug'} {orig_llm_request.title}",
+        description=f"{title} {orig_llm_request.title}",
         messages=[
-            get_sys_prompt("chat_evaluator.md" if optimize else "chat_response_interpreter.md"),
+            get_sys_prompt(system_prompt),
             LlmMessage.user_from_data(
                 "Chat Interatction",
                 orig_llm_request.get_llm_data()
             ),
             prompt
         ],
+        output_schema=schema,
         model=LlmModel(llm_model),
         tag_entity=(
                 orig_llm_request.task_iteration
@@ -2755,13 +2772,23 @@ def action_llm_debug_ask(request, llm_request_id):
         verbosity=LlmVerbosity(verbosity)
     )
     
-    return send_response(
-        request,
-        "_llm_request_response.html",
-        {
-            "llm_response": resp
-        }
-    )
+    if change_prompt:
+        pprint.pprint(resp.json())
+        return send_response(
+            request,
+            "_llm_changes_response.html",
+            {
+                **resp.json()
+            }
+        )
+    else:
+        return send_response(
+            request,
+            "_llm_request_response.html",
+            {
+                "llm_response": resp
+            }
+        )
 
 
 def view_llm_request(request, llm_request_id):

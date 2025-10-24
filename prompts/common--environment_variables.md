@@ -10,6 +10,7 @@ The following environment variables are passed in the environment and are access
 
 ### Conventions and aliases
 - Region - use `AWS_DEFAULT_REGION`. If `AWS_REGION` is present, treat it as an alias; do not require it.
+- Database helpers must pass the active region (`AWS_DEFAULT_REGION` or the approved alias) into `agent_tools.get_database_conf()` when non-Django code needs a connection.
 - System variables - `PATH` may be present for process execution but must not be used for application logic.
 - Host credentials - the system may read `AWS_PROFILE` on the host solely to obtain credentials; application code and tests must not rely on it.
 

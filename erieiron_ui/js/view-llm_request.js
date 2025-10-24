@@ -3,6 +3,7 @@ LlmRequestView = ErieView.extend({
 
     events: {
         'click #btn_ask': 'btn_ask_click',
+        'click #btn_ask_change': 'btn_ask_change_click',
         'click #btn_compare_response_diff': 'btn_compare_response_diff_click',
         'click #btn_compare': 'btn_compare_click',
         'click #btn_problems': 'btn_problems_click',
@@ -79,6 +80,23 @@ LlmRequestView = ErieView.extend({
             }
             );
         
+        return last_stop(ev)
+    },
+
+    btn_ask_change_click: function (ev) {
+        $("#txt_changes_response").text("thinking...  this might take a bit ");
+
+        const t = setInterval(() => {
+            $("#txt_changes_response").text($("#txt_changes_response").text() + ".");
+        }, 1000);
+
+        erie_server().exec_server_post(
+            $("#frm_change_request"), null,
+            (resp) => {
+                clearInterval(t);
+                $("#txt_changes_response").empty().append(resp);
+                this.delegateEvents();
+            })
         return last_stop(ev)
     },
 

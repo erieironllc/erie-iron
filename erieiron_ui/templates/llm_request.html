@@ -30,6 +30,16 @@
                 {% endif %}
 
                 <a id="chat-tab"
+                   href="#prompt_change"
+                   class="list-group-item list-group-item-action"
+                   role="tab"
+                   data-bs-toggle="list"
+                   aria-controls="prompt_change"
+                >
+                    Change Behavior
+                </a>
+
+                <a id="chat-tab"
                    href="#chat"
                    class="list-group-item list-group-item-action"
                    role="tab"
@@ -186,6 +196,33 @@
                     {% if llm_request.response %}
                         {{ llm_request.response|dynamic_format }}
                     {% endif %}
+                </div>
+
+                <div class="tab-pane " id="prompt_change" role="tabpanel" aria-labelledby="chat-tab">
+                    <form id="frm_change_request" action="{% url 'action_llm_debug_ask' llm_request.id %}">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <input type="hidden" name="change_prompt" value="True"/>
+                            <textarea class="form-control"
+                                      id="txt_debug_prompt"
+                                      name="prompt"
+                                      rows="3"
+                                      placeholder="What behavior do you want to change?"></textarea>
+                            <div class="mt-1 d-flex justify-content-end">
+                                <select name="llm_model" class="form-select">
+                                    {% for model_choice in model_choices %}
+                                        <option value="{{ model_choice.value }}"
+                                                {% if model_choice.value == model_choice_value %}selected{% endif %}>
+                                            {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <a id="btn_ask_change" class="ms-3 btn btn-outline-primary pull-right" href="#">Ask for Change</a>
+                            </div>
+                        </div>
+                        <div id="txt_changes_response">
+                        </div>
+                    </form>
                 </div>
 
                 <div class="tab-pane " id="chat" role="tabpanel" aria-labelledby="chat-tab">

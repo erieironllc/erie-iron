@@ -8,6 +8,16 @@ All database schema changes are managed through the Django ORM. Make changes by 
 - If evaluator diagnostics mention missing or stale migrations, resolve by planning the necessary model changes and proceed. Do not attempt to fix issues by editing migration files.
 - Any plan that proposes direct migration file changes must STOP and emit "blocked" with category "task_def" and a reason that cites this policy.
 
+
+### Planner guidance for missing/underspecified model fields:
+If evaluator diagnostics, failing tests, or the failure triage indicate missing model fields (e.g., tests reference a model field that does not exist or tests fail with AttributeError/FieldError pointing to absent fields), the planner should propose deterministic models.py edits rather than emitting blocked.
+Follow these rules for such model edits:
+- Prefer additive, null-safe edits: create new fields with null=True and blank=True or add a db_column alias when preserving an existing physical column is required.
+- If tests require non-nullable fields, propose a two-step plan: (A) add the field as nullable with a migration, (B) include a safe backfill strategy and then propose converting to non-nullable in a later iteration; declare any data-loss risk explicitly. If a safe backfill cannot be provided, emit blocked with category task_def.
+- Update all known code references and tests that depend on the field name in the same plan so the iteration applies deterministically.
+- Document the exact model class and field definitions to be added/modified, including types, nullability, default value rationale, and how orchestration will run makemigrations and migrate.
+- This policy preserves the existing migration-file prohibition (do not create/modify migration files) while enabling constructive, minimal model fixes when the missing information is the cause of failures.
+
 ---
 
 ## Canonical Django Model Fields
@@ -24,6 +34,12 @@ All database schema changes are managed through the Django ORM. Make changes by 
 - All Django view logic must reside in `./core/views.py`.  
   **Never** create a subdirectory such as `./core/views/` to split view implementations into multiple files.  
   All view functions and classes belong in the single `views.py` module unless there is a specific architectural contract requiring otherwise.
+
+## Database Connectivity Rules
+- Application code running inside the Django container must continue to obtain database configuration through Django settings helpers such as `agent_tools.get_django_settings_databases_conf()`.
+- Any non-Django runtime (including AWS Lambdas, standalone scripts, CLI tools, or background workers) that requires a database connection **must** import `agent_tools` from `erieiron_public` and call `agent_tools.get_database_conf(aws_region_name)` to retrieve connection details.
+- Generated code may **never** construct database URLs, read individual credential environment variables, fetch Secrets Manager entries directly, or otherwise derive database settings outside these approved helpers.
+- Plans and implementations that involve database usage must ensure the AWS region is sourced from existing configuration (environment variables or context) and passed into `get_database_conf`; hardcoded or inferred credentials are forbidden.
 
 ---
 
@@ -59,7 +75,7 @@ When planning Lambda-based functionality, follow these rules:
 - Each Lambda resource in `infrastructure-application.yaml` **must** include a `Metadata` section with the field `SourceFile` set to the full relative path of the Lambda `.py` file (e.g., `lambda/my_handler.py`). 
     - This is used during deployment to associate Lambda resources with their source files.
 - For every Lambda, you must emit a `dependencies` list that includes **only** the PyPI packages required by that file.
-- Treat Lambda deployment as a deployment concern, not an application concern.
+- Treat Lambda pachaging as an external orchestration concern, not an application concern.
 
 ----
 

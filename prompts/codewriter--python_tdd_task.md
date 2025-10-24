@@ -15,6 +15,7 @@ This test is being generated at the start of the implementation.  No implementat
 - Keep individual tests and the overall module runtime under 60 seconds. Use short, bounded retries instead of long sleeps, and fail fast with remediation guidance if the specification demands longer observation windows.
 - When validating Lambda-backed behavior, exercise the system pathway that leads AWS to invoke the Lambda (such as publishing the triggering event) and assert the downstream outcomes; do not import the Lambda module or call `lambda_handler` directly from the test.
 - Unless the GOAL is specifically about provisioning AWS resources, avoid asserting CloudFormation templates, stack outputs, IAM bindings, or other infrastructure wiring. Focus assertions on end-to-end behavior experienced by the user; infrastructure implementation details are too brittle.
+- Whenever the future implementation will require non-Django runtime code (Lambda, CLI, worker) to reach the database, design tests that assume those paths call `agent_tools.get_database_conf(aws_region_name)` from `erieiron_public.agent_tools`; do not encode or expect alternative database discovery mechanisms, and keep the tests themselves aligned with Django's configured settings.
 
 ---
 

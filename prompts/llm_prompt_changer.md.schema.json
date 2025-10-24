@@ -1,0 +1,32 @@
+
+
+{
+  "title": "LLM Response Interpretation Agent Output Schema",
+  "description": "This schema validates the output format from the LLM Response Interpretation Agent, ensuring the explanation and recommended prompt changes are correctly structured.",
+  "type": "object",
+  "required": ["explanation", "recommended_prompt_changes"],
+  "properties": {
+    "explanation": {
+      "type": "string",
+      "description": "A textual explanation of the prompt changes."
+    },
+    "recommended_prompt_changes": {
+      "type": "array",
+      "description": "A list of recommended prompt changes.",
+      "items": {
+        "type": "object",
+        "required": ["location", "new_text_markdown"],
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "A description of where the change should be applied."
+          },
+          "new_text_markdown": {
+            "type": "string",
+            "description": "The new prompt text in markdown format."
+          }
+        }
+      }
+    }
+  }
+}

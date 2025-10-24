@@ -25,7 +25,7 @@ from erieiron_public import agent_tools
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction, sentence_transformer_model, DatabaseMigrationException
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction, sentence_transformer_model, DatabaseMigrationException, FailingTestException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
     CodeVersion,
@@ -168,7 +168,10 @@ def execute(
 def handle_deploy_exception(config, e: Exception):
     start_epoch = config.logging_start_epoch
     
-    if not isinstance(e, CloudFormationException):
+    if not (
+            isinstance(e, CloudFormationException) 
+            or isinstance(e, FailingTestException)
+    ):
         config.log(common.get_stack_trace_as_string(e))
     
     if not isinstance(e, DatabaseMigrationException):
@@ -1299,7 +1302,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         # no tests
         self_driving_task.initial_tests_pass = True
         self_driving_task.save()
-
+    
     with SelfDriverConfig(self_driving_task) as config:
         is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
         config.set_phase(SdaPhase.INIT)
@@ -1645,45 +1648,67 @@ def get_stack_lambdas(config) -> list[dict]:
             config.cloudformation_configs,
             CloudformationResourceType.LAMBDA_FUNCTION
     ).items():
-        metadata = resource_config.get("Metadata", {})
-        source_file = metadata.get("SourceFile")
-        if not source_file:
+        s3_key_ref = common.get(resource_config, ["Properties", "Code", "S3Key"])
+        source_file = common.get(resource_config, ["Metadata", "SourceFile"])
+        if not (s3_key_ref and source_file):
             continue
         
-        if not isinstance(source_file, str):
-            raise Exception(f"Bad Lambda {resource_name}: SourceFile is not a string — got {source_file}")
-        candidate_path = Path(source_file)
+        s3_key_param = get_lambda_s3_key_param(
+            resource_name, 
+            s3_key_ref
+        )
         
-        props = resource_config.get("Properties", {})
-        code_block = props.get("Code", {})
-        s3_key_ref = code_block.get("S3Key")
-        if not s3_key_ref:
-            continue
-        
-        if not isinstance(s3_key_ref, dict) or "Ref" not in s3_key_ref:
-            raise BadPlan(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
-        
-        if not (config.sandbox_root_dir / candidate_path).exists():
-            raise BadPlan(f"Bad Lambda {resource_name} definition: file not found — expected at {candidate_path}")
-        
-        code_file_code = (config.sandbox_root_dir / candidate_path).read_text()
-        match = re.search(r'^# LAMBDA_DEPENDENCIES: (\[.*?])', code_file_code, flags=re.MULTILINE)
-        if match:
-            try:
-                dependencies = json.loads(match.group(1))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid LAMBDA_DEPENDENCIES in {candidate_path}: {e}")
-        else:
-            dependencies = []
+        dependencies = get_lambda_dependencies(
+            config,
+            source_file
+        )
         
         lambdas.append({
             "lambda_name": resource_name,
             "dependencies": dependencies,
-            "code_file_path": str(candidate_path),
-            "s3_key_param": s3_key_ref["Ref"]
+            "code_file_path": source_file,
+            "s3_key_param": s3_key_param
         })
     
     return lambdas
+
+
+def get_lambda_s3_key_param(resource_name, s3_key_ref):
+    if isinstance(s3_key_ref, dict):
+        if "Ref" in s3_key_ref:
+            return s3_key_ref["Ref"]
+        else:
+            raise BadPlan(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
+    
+    s3_key_ref = s3_key_ref.strip()
+    parts = s3_key_ref.split(None, 1)
+    if s3_key_ref.startswith("!Ref") and len(parts) == 2:
+        return parts[1]
+    else:
+        raise BadPlan(f"Bad Lambda {resource_name}: S3Key is not a Ref — got {s3_key_ref}")
+
+
+def get_lambda_dependencies(config, source_file: str) -> list:
+    candidate_path = Path(source_file)
+    candidate_path_abs = (config.sandbox_root_dir / candidate_path)
+    
+    if not candidate_path_abs.exists():
+        raise BadPlan(f"Bad Lambda {source_file}: file not found — expected at {candidate_path_abs}")
+    
+    code_file_code = candidate_path_abs.read_text()
+    match = re.search(r'^# LAMBDA_DEPENDENCIES: (\[.*?])', code_file_code, flags=re.MULTILINE)
+    if match:
+        try:
+            dependencies = json.loads(match.group(1))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid LAMBDA_DEPENDENCIES in {candidate_path}: {e}")
+    else:
+        dependencies = []
+    
+    dependencies = [d for d in dependencies if 'erieron-public-common' not in d]
+    dependencies.append("erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git")
+    
+    return dependencies
 
 
 def get_stack_buckets(config) -> list[dict]:
@@ -1949,7 +1974,7 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
             results.append(True)
         except ExecutionException as e:
             if i == 0:
-                raise ExecutionException(f"FIRST test run failed.  See logs above for details.")
+                raise FailingTestException(f"FIRST test run failed.  See logs above for details.")
             else:
                 config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
                 results.append(False)
@@ -1963,13 +1988,13 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
             config.self_driving_task.save()
     elif passes == 0:
         config.log("TESTS FAILED ON ALL THREE RUNS")
-        raise ExecutionException("All test runs failed")
+        raise FailingTestException("All test runs failed")
     else:
         config.log(
             "TESTS PASSED ON SOME RUNS BUT FAILED ON OTHERS. "
             "This indicates flakiness. Please review the test code for flakiness risks and fix."
         )
-        raise ExecutionException("Some test runs failed - flaky tests")
+        raise FailingTestException("Some test runs failed - flaky tests")
 
 
 def deploy_iteration(
@@ -2719,6 +2744,7 @@ def push_cloudformation(
         stack_arn = stack_data.get("StackId")
     
     InfrastructureStack.objects.filter(id=stack.id).update(
+        updated_timestamp=common.get_now(),
         stack_arn=stack_arn
     )
     stack.refresh_from_db(fields=["stack_arn"])

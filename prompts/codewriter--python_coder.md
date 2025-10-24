@@ -25,6 +25,13 @@ You operate inside a sandboxed environment and must follow strict safety and for
 
 ---
 
+## Database Connectivity
+- When implementing code that runs within the Django application, continue to rely on Django settings that call `agent_tools.get_django_settings_databases_conf()`; do not duplicate configuration logic.
+- Any non-Django Python code you generate (including AWS Lambdas, management scripts, CLI tools, or background workers) that requires database access **must** import `agent_tools` from `erieiron_public` and invoke `agent_tools.get_database_conf(aws_region_name)` using an AWS region provided by existing configuration.
+- You may **not** reconstruct connection strings, read raw credential environment variables, query Secrets Manager directly, or otherwise derive database settings outside these helpers.
+
+---
+
 ## Output Format
 - Your response must contain only raw, valid Python code. No explanations, no markdown formatting.
 - Do not include a `if __name__ == '__main__':` block in the output.
