@@ -62,11 +62,19 @@ Each task **must** include the following fields
     - `HUMAN_WORK` – requires human execution or judgment  
 - `depends_on` *(array)* – list of `task_id`s that must finish first  
 - `task_description` *(markdown formatted string)* – clear description of the work formatted for readability  
+  **Validation Priority Rules**
+    - task_description should describe end-user observable behavior directly wherever feasible (for example, by sending a request to an endpoint and asserting the response).
+    - task_description based on logs or internal messages should be used only as a **last resort**, when no direct or reliable method exists to confirm expected end behavior.
+    - Prefer validating functional outcomes through API responses, database state, or returned data rather than by checking for log text.
 - `input_fields` *(dict[str, list])* – input data dict.  key is upstream task id, value is list of fields the upstream task returns; if depending on another task’s output, reference it as `<task_id>:[<output_fields>]`  
 - `output_fields` *(list[str])* – list of field names on the task's output datastructure  
 - `risk_notes` *(markdown formatted string)* – operational or automation risks. Recommended format: `CATEGORY | PROBABILITY | IMPACT | NOTE`.  format for readability  
 - `requires_test` *(boolean)* – defaults to `true` for `CODING_*` tasks; set `false` for infra/setup tasks that don’t need automated tests  
 - `completion_criteria` *(array)* – bullet‑point list of **user-facing or system-observable acceptance criteria**. Each item must describe externally verifiable behavior or output. Do not describe backend processes or infrastructure changes directly—only their **impact** as observed by the user or system. For example: "User receives confirmation email" or "System logs upload success in audit trail" is valid; "Add SNS topic" or "Update IAM role" is not.
+  **Validation Priority Rules**  
+  - Criteria should validate end-user observable behavior directly wherever feasible (for example, by sending a request to an endpoint and asserting the response).  
+  - Acceptance criteria based on logs or internal messages should be used only as a **last resort**, when no direct or reliable method exists to confirm expected end behavior.  
+  - Prefer validating functional outcomes through API responses, database state, or returned data rather than by checking for log text.
 - `execution_schedule` *(string)*  
     - Allowed values (required field even for one‑off tasks):  
         - `NOT_APPLICABLE` (default for immediate tasks)  

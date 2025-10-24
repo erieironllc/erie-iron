@@ -838,7 +838,7 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_readonly_files(self):
         readonly_file_paths = [f for f in settings.READONLY_FILES]
         
-        if self.initial_tests_pass:
+        if False and self.initial_tests_pass:
             if TaskType.INITIATIVE_VERIFICATION.eq(self.task.task_type):
                 test_file_path = self.task.initiative.test_file_path
             else:

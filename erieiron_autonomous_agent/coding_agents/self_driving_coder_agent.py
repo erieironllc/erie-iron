@@ -25,7 +25,7 @@ from erieiron_public import agent_tools
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction, sentence_transformer_model
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig, CodeReviewException, TASK_DESC_CODE_WRITING, BadPlan, GoalAchieved, RetryableException, AgentBlocked, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, NeedPlan, ExecutionException, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, USE_CODEX, SdaInitialAction, sentence_transformer_model, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
     CodeVersion,
@@ -44,9 +44,9 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager, cloudformation_log_reader, cloudformation_utils
+from erieiron_common import common, aws_utils, domain_manager, cloudformation_utils, cloudformation_log_reader
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket
-from erieiron_common.cloudformation_utils import get_stack_outputs, CloudFormationStackObsolete, CloudFormationException, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, get_resource_configs, CloudformationResourceType, get_physical_resources
+from erieiron_common.cloudformation_utils import get_stack_outputs, CloudFormationStackObsolete, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, get_resource_configs, CloudformationResourceType, get_physical_resources, CloudFormationException
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, DockerPlatform, InfrastructureStackType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -93,24 +93,23 @@ def execute(
                 execution_exception = None
                 try:
                     build_deploy_exec_iteration(config)
-                except BadPlan as bpe:
-                    config.log(bpe)
-                    execution_exception = bpe
-                    raise bpe
-                except AgentBlocked as abe:
-                    execution_exception = abe
-                    raise abe
-                except NeedPlan as npe:
-                    execution_exception = npe
-                    raise npe
                 except Exception as e:
                     execution_exception = e
-                    config.log(e)
-                finally:
-                    evaluate_iteration(
-                        config,
-                        execution_exception
-                    )
+                
+                if execution_exception:
+                    handle_deploy_exception(config, e)
+                
+                evaluate_iteration(
+                    config,
+                    execution_exception
+                )
+                
+                exec_docker_prune()
+                
+                config.business.snapshot_code(
+                    config.current_iteration,
+                    include_erie_common=False
+                )
             except NeedPlan as npe:
                 logging.info(f'NeedPlan - {npe}')
             except RetryableException as retryable_execution_exception:
@@ -164,6 +163,44 @@ def execute(
                 raise e
             finally:
                 config.cleanup_iteration()
+
+
+def handle_deploy_exception(config, e: Exception):
+    start_epoch = config.logging_start_epoch
+    
+    if not isinstance(e, CloudFormationException):
+        config.log(common.get_stack_trace_as_string(e))
+    
+    if not isinstance(e, DatabaseMigrationException):
+        local_logs = config.get_log_content() or ""
+        
+        failure_details = cloudformation_log_reader.read_cloudformation_stack_activity(
+            config.aws_env.get_aws_region(),
+            config.get_stack_names(),
+            config.aws_env,
+            start_epoch,
+            local_logs=local_logs
+        )
+        
+        sections: list[str] = []
+        if local_logs:
+            sections.append(local_logs)
+        
+        if failure_details:
+            sections.append("==== CloudFormation Failure Details ====")
+            sections.append(failure_details)
+        
+        enriched_logs = common.safe_join(sections, "\n\n")
+        log_payload = enriched_logs or failure_details or local_logs
+        extracted_exception = extract_exception(config, log_payload)
+        
+        if log_payload:
+            config.log(log_payload)
+        
+        config.log(extracted_exception)
+        
+        if isinstance(e, AgentBlocked):
+            raise e
 
 
 def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivingTask):
@@ -1783,13 +1820,18 @@ def run_docker_command(
 
 
 def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
+    if len(log_content) < 10_000:
+        model = LlmModel.OPENAI_GPT_5_MINI
+    else:
+        model = LlmModel.OPENAI_GPT_5
+    
     return llm_chat(
         "Log Extraction",
         [
             get_sys_prompt("log_parser.md"),
             log_content
         ],
-        model=LlmModel.OPENAI_GPT_5,
+        model=model,
         tag_entity=config.current_iteration
     ).text
 
@@ -1798,72 +1840,32 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     config.current_iteration.evaluation_json = None
     config.current_iteration.save()
     
-    start_epoch = int(time.time())
-    try:
-        docker_env = build_env(config)
-        
-        start_epoch = int(time.time())
-        docker_image_tag = build_iteration(
-            config,
-            docker_env
-        )
-        
-        start_epoch = int(time.time())
-        deploy_iteration(
-            config,
-            docker_env,
-            docker_image_tag
-        )
-        
-        start_epoch = int(time.time())
-        execute_iteration(
-            config,
-            docker_env,
-            docker_image_tag
-        )
-        
-        config.log("Docker execution finished")
+    config.logging_start_epoch = int(time.time())
+    docker_env = build_env(
+        config
+    )
     
-    except Exception as e:
-        logging.exception(e)
-        
-        if not isinstance(e, CloudFormationException):
-            config.log(common.get_stack_trace_as_string(e))
-        
-        local_logs = config.get_log_content() or ""
-        
-        failure_details = cloudformation_log_reader.read_cloudformation_failures(
-            config.aws_env.get_aws_region(),
-            config.get_stack_names(),
-            start_epoch,
-            local_logs=local_logs
-        )
-        
-        sections: list[str] = []
-        if local_logs:
-            sections.append(local_logs)
-        
-        if failure_details:
-            sections.append("==== CloudFormation Failure Details ====")
-            sections.append(failure_details)
-        
-        enriched_logs = common.safe_join(sections, "\n\n")
-        log_payload = enriched_logs or failure_details or local_logs
-        extracted_exception = extract_exception(config, log_payload)
-        
-        if log_payload:
-            config.log(log_payload)
-        
-        config.log(extracted_exception)
-        
-        if isinstance(e, AgentBlocked):
-            raise e
-    finally:
-        exec_docker_prune()
-        config.business.snapshot_code(
-            config.current_iteration,
-            include_erie_common=False
-        )
+    config.logging_start_epoch = int(time.time())
+    docker_image_tag = build_iteration(
+        config,
+        docker_env
+    )
+    
+    config.logging_start_epoch = int(time.time())
+    deploy_iteration(
+        config,
+        docker_env,
+        docker_image_tag
+    )
+    
+    config.logging_start_epoch = int(time.time())
+    execute_iteration(
+        config,
+        docker_env,
+        docker_image_tag
+    )
+    
+    config.log("Docker execution finished")
 
 
 def execute_iteration(
@@ -2134,21 +2136,21 @@ def manage_db(
         run_docker_command(
             config=config,
             docker_env=docker_env,
-            command_args="makemigrations",
+            command_args=["makemigrations", "--noinput"],
             docker_image=docker_image_tag
         )
         
         run_docker_command(
             config=config,
             docker_env=docker_env,
-            command_args="migrate",
+            command_args=["migrate"],
             docker_image=docker_image_tag
         )
     except Exception as e:
         if "DuplicateDatabase" in str(e):
             raise AgentBlocked(e.__dict__)
         else:
-            raise e
+            raise DatabaseMigrationException(e)
 
 
 def validate_web_container(
@@ -2223,7 +2225,7 @@ def validate_web_container(
 def init_task_execution(iteration):
     task = iteration.self_driving_task.task
     if TaskType.TASK_EXECUTION.neq(task.task_type):
-        return
+        return None
     
     task_input = {}
     for upstream_task in task.depends_on.all():
@@ -2253,7 +2255,6 @@ def assert_tests_green(config: SelfDriverConfig):
             config.get_log_content()
         ],
         output_schema="test_reviewer.md.schema.json",
-        model=LlmModel.OPENAI_GPT_5,
         tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.LOW
     ).json()
@@ -2331,7 +2332,7 @@ def evaluate_iteration(
             ]),
             
             get_goal_msg(
-                config, 
+                config,
                 "Task Goal"
             ),
             
@@ -2366,7 +2367,6 @@ def evaluate_iteration(
                 "Please summarize this iteration"
             )
         ],
-        LlmModel.OPENAI_GPT_5,
         tag_entity=config.current_iteration,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
@@ -2455,7 +2455,6 @@ def evaluate_iteration(
                     "iteration_full_evaluation"
                 )
             ],
-            LlmModel.OPENAI_GPT_5_MINI,
             tag_entity=config.current_iteration,
             output_schema="iteration_selector.md.schema.json"
         ).json()
@@ -2964,7 +2963,6 @@ def perform_code_review(
     code_review_data = llm_chat(
         "Perform Code Review",
         messages,
-        LlmModel.OPENAI_GPT_5,
         tag_entity=config.current_iteration,
         output_schema="codereviewer.md.schema.json"
     ).json()
@@ -3102,8 +3100,7 @@ def extract_lessons(
             )
         ],
         output_schema="lesson_extractor.md.schema.json",
-        tag_entity=config.current_iteration,
-        model=LlmModel.OPENAI_GPT_5
+        tag_entity=config.current_iteration
     ).json()
     
     for lesson_data in common.ensure_list(common.get(lessons_data, "lessons", [])):
@@ -3445,7 +3442,6 @@ def write_test(
             code = llm_chat(
                 description,
                 messages,
-                LlmModel.OPENAI_GPT_5,
                 tag_entity=config.current_iteration
             ).text
             
@@ -3573,7 +3569,6 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                 ),
                 "Please perform the routing analysis"
             ],
-            LlmModel.OPENAI_GPT_5,
             tag_entity=config.current_iteration,
             output_schema="failure_router.md.schema.json"
         ).json()
@@ -3652,7 +3647,6 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
             ),
             "Please produce a development plan that addresses this issue"
         ],
-        config.model_code_planning,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -3740,7 +3734,6 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
             ),
             "Please produce a development plan that addresses this issue"
         ],
-        config.model_code_planning,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -3848,7 +3841,7 @@ def plan_test_fixing_code_changes(config: SelfDriverConfig):
     planning_data = llm_chat(
         "Plan code changes",
         messages,
-        config.model_code_planning,
+        model=config.model_code_planning,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -3960,7 +3953,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
     planning_data = llm_chat(
         "Plan code changes",
         messages,
-        config.model_code_planning,
+        model=config.model_code_planning,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
@@ -4151,7 +4144,7 @@ def write_code_file(
     code = llm_chat(
         f"Write code for {code_file_name} {code_file_data.get('validator')}",
         messages,
-        code_writing_model,
+        model=code_writing_model,
         tag_entity=config.current_iteration
     ).text
     
@@ -4594,7 +4587,7 @@ def get_relevant_code_files(
                 get_sys_prompt("codefinder.md"),
                 LlmMessage.user(config.self_driving_task.task.get_work_desc())
             ],
-            LlmModel.OPENAI_GPT_5_MINI,
+            model=LlmModel.OPENAI_GPT_5_MINI,
             tag_entity=config.current_iteration,
             output_schema="codefinder.md.schema.json",
             code_response=True

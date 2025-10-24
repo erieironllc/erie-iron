@@ -3,7 +3,6 @@
 import datetime
 import json
 import logging
-import re
 import time
 
 import boto3
@@ -11,46 +10,57 @@ import boto3
 from erieiron_common import common
 from erieiron_common.aws_utils import client
 from erieiron_common.date_utils import to_utc
+from erieiron_common.cloudformation_utils import get_physical_resources
+from erieiron_common.enums import AwsEnv, CloudformationResourceType
 
 
-def read_cloudformation_failures(
+def read_cloudformation_stack_activity(
         aws_region: str,
         stack_names: list[str],
+        aws_env: AwsEnv,
         start_time: float,
         local_logs: str | None = None
 ) -> str:
+    """Collect CloudFormation stack events and related AWS logs since ``start_time``."""
     deployment_start_datetime = to_utc(start_time)
-    
-    error_lines = []
-    for stack_name in common.ensure_list(stack_names):
-        read_errors_for_stack(
+    stack_names = common.ensure_list(stack_names)
+
+    activity_sections: list[str] = []
+    for stack_name in stack_names:
+        stack_activity = collect_stack_activity_sections(
             aws_region,
             stack_name,
             deployment_start_datetime
         )
-    
+        if stack_activity:
+            if activity_sections:
+                activity_sections.append("")
+            activity_sections.append(f"CloudFormation activity for stack '{stack_name}':")
+            activity_sections.extend(stack_activity)
+
     if local_logs:
         try:
             lambda_logs = extract_cloudwatch_lambda_logs(
-                local_logs=local_logs,
+                stack_names=stack_names,
+                aws_env=aws_env,
                 lookback_minutes=120
             )
             if lambda_logs:
-                error_lines.append("\nCloudWatch Lambda logs for RequestIds observed in local logs:")
-                error_lines.append(lambda_logs)
+                activity_sections.append("\nCloudWatch Lambda logs for stack Lambda functions:")
+                activity_sections.append(lambda_logs)
         except Exception as lambda_ex:
-            error_lines.append(f"Failed to collect CloudWatch Lambda logs: {lambda_ex}")
-    
-    return common.safe_join(error_lines, "\n")
+            activity_sections.append(f"Failed to collect CloudWatch Lambda logs: {lambda_ex}")
+
+    return common.safe_join(activity_sections, "\n")
 
 
-def read_errors_for_stack(
+def collect_stack_activity_sections(
         aws_region: str,
         stack_name,
         deployment_start_datetime
 ):
     return [
-        *get_cloudformation_errors(
+        *get_cloudformation_activity(
             aws_region,
             stack_name,
             deployment_start_datetime
@@ -68,12 +78,51 @@ def read_errors_for_stack(
     ]
 
 
-def get_cloudformation_errors(
+def _format_stack_event(event: dict) -> str:
+    """Return a compact summary string describing a CloudFormation stack event."""
+    timestamp = event.get("Timestamp")
+    if hasattr(timestamp, "isoformat"):
+        timestamp_str = timestamp.isoformat()
+    else:
+        timestamp_str = str(timestamp) if timestamp is not None else ""
+
+    stack_identifier = event.get("StackName") or event.get("StackId") or ""
+    logical_id = event.get("LogicalResourceId") or ""
+    resource_type = event.get("ResourceType") or ""
+    status = event.get("ResourceStatus") or ""
+    reason = event.get("ResourceStatusReason") or ""
+    physical_id = event.get("PhysicalResourceId") or ""
+    client_token = event.get("ClientRequestToken") or ""
+
+    parts: list[str] = []
+    if timestamp_str:
+        parts.append(str(timestamp_str))
+    if stack_identifier:
+        parts.append(f"Stack: {stack_identifier}")
+    if logical_id and resource_type:
+        parts.append(f"{logical_id} ({resource_type})")
+    elif logical_id:
+        parts.append(str(logical_id))
+    elif resource_type:
+        parts.append(f"ResourceType: {resource_type}")
+    if status:
+        parts.append(f"Status: {status}")
+    if reason:
+        parts.append(f"Reason: {reason}")
+    if physical_id:
+        parts.append(f"PhysicalId: {physical_id}")
+    if client_token:
+        parts.append(f"Token: {client_token}")
+
+    return " | ".join(parts)
+
+
+def get_cloudformation_activity(
         aws_region: str,
         stack_name,
         deployment_start_datetime
 ):
-    error_lines = []
+    activity_lines: list[str] = []
     cf_client = boto3.client("cloudformation", region_name=aws_region)
     try:
         recent_events, collection_errors = collect_recent_events(
@@ -85,58 +134,63 @@ def get_cloudformation_errors(
         
         recent_events.sort(key=lambda x: (x.get('Timestamp'), x.get('StackName', '')))  # type: ignore[arg-type]
         
+        all_events: list[str] = []
         failed_events: list[str] = []
         failed_logical_ids: list[str] = []
         seen_failed_ids: set[str] = set()
         
         for event in recent_events:
             status = event.get("ResourceStatus")
-            if not (isinstance(status, str) and "FAILED" in status):
-                continue
-            
-            failed_events.append(
-                f"{event['Timestamp']} | Stack: {event.get('StackName')} | {event.get('LogicalResourceId')} "
-                f"({event.get('ResourceType')}) | Status: {status} | Reason: {event.get('ResourceStatusReason', '')} | "
-                f"PhysicalId: {event.get('PhysicalResourceId', '')} | Token: {event.get('ClientRequestToken', '')}"
-            )
-            
-            logical_id = event.get("LogicalResourceId")
-            if logical_id and logical_id not in seen_failed_ids:
-                failed_logical_ids.append(logical_id)
-                seen_failed_ids.add(logical_id)
-        
-        error_lines.append("CloudFormation failure events:")
+            event_summary = _format_stack_event(event)
+            if event_summary:
+                all_events.append(event_summary)
+            if isinstance(status, str) and "FAILED" in status:
+                if event_summary:
+                    failed_events.append(event_summary)
+                logical_id = event.get("LogicalResourceId")
+                if logical_id and logical_id not in seen_failed_ids:
+                    failed_logical_ids.append(logical_id)
+                    seen_failed_ids.add(logical_id)
+
+        activity_lines.append("CloudFormation stack events since deployment start:")
+        if all_events:
+            activity_lines.append("\n".join(all_events))
+        else:
+            activity_lines.append("No CloudFormation events found for this window.")
+
         if failed_events:
-            error_lines.append("\n".join(failed_events))
+            activity_lines.append("\nCloudFormation failure events:")
+            activity_lines.append("\n".join(failed_events))
         
-        error_lines.append("\nDetailed resource descriptions for top failures:")
-        for logical_id in failed_logical_ids[:3]:
-            owning_stack = next(
-                (
-                    evt.get("StackId") or evt.get("StackName")
-                    for evt in recent_events
-                    if evt.get("LogicalResourceId") == logical_id
-                    and isinstance(evt.get("ResourceStatus"), str)
-                    and "FAILED" in evt["ResourceStatus"]
-                ),
-                stack_name
-            )
-            try:
-                resource_details = cf_client.describe_stack_resource(
-                    StackName=owning_stack,
-                    LogicalResourceId=logical_id  # type: ignore[arg-type]
+        if failed_logical_ids:
+            activity_lines.append("\nDetailed resource descriptions for top failures:")
+            for logical_id in failed_logical_ids[:3]:
+                owning_stack = next(
+                    (
+                        evt.get("StackId") or evt.get("StackName")
+                        for evt in recent_events
+                        if evt.get("LogicalResourceId") == logical_id
+                        and isinstance(evt.get("ResourceStatus"), str)
+                        and "FAILED" in evt["ResourceStatus"]
+                    ),
+                    stack_name
                 )
-                error_lines.append(json.dumps(resource_details, indent=2, default=str))
-            except Exception as ex:  # pragma: no cover - AWS failures should not crash aggregation
-                error_lines.append(f"Failed to describe resource {logical_id}: {ex}")
+                try:
+                    resource_details = cf_client.describe_stack_resource(
+                        StackName=owning_stack,
+                        LogicalResourceId=logical_id  # type: ignore[arg-type]
+                    )
+                    activity_lines.append(json.dumps(resource_details, indent=2, default=str))
+                except Exception as ex:  # pragma: no cover - AWS failures should not crash aggregation
+                    activity_lines.append(f"Failed to describe resource {logical_id}: {ex}")
         
         if collection_errors:
-            error_lines.append("\nIssues encountered while collecting stack events:")
-            error_lines.extend(collection_errors)
+            activity_lines.append("\nIssues encountered while collecting stack events:")
+            activity_lines.extend(collection_errors)
     except Exception as event_ex:
-        error_lines.append(f"Failed to fetch stack events for {stack_name}: {event_ex}")
+        activity_lines.append(f"Failed to fetch stack events for {stack_name}: {event_ex}")
     
-    return error_lines
+    return activity_lines
 
 
 def get_cloudtrail_errors(
@@ -878,65 +932,60 @@ def extract_cloudwatch_stack_logs_for_window(
 
 
 def extract_cloudwatch_lambda_logs(
-        local_logs: str,
+        stack_names: list[str],
+        aws_env: AwsEnv,
         lookback_minutes: int = 60,
         max_groups: int = 50
 ) -> str:
     """
-    Fetch CloudWatch Logs Insights for Lambda log groups that contain any of the given RequestIds.
+    Fetch CloudWatch Logs Insights entries for Lambda functions provisioned by the given stacks.
     We scan recent logs (lookback window) across up to `max_groups` Lambda log groups.
     Returns a concatenated text block, sorted by timestamp, suitable for appending to error output.
     """
-    request_ids = re.findall(r"RequestId:\s*([0-9a-fA-F\-]{36})", local_logs)
-    if not request_ids:
-        return ""
-    
-    logs = client("logs")
-    
-    # Discover Lambda log groups (limit to keep queries bounded)
-    log_groups = []
-    next_token = None
     try:
-        while True:
-            kwargs = {"logGroupNamePrefix": "/aws/lambda/"}
-            if next_token:
-                kwargs["nextToken"] = next_token
-            resp = logs.describe_log_groups(**kwargs)
-            for lg in resp.get("logGroups", []):
-                name = lg.get("logGroupName")
-                if name:
-                    log_groups.append(name)
-                    if len(log_groups) >= max_groups:
-                        break
-            if len(log_groups) >= max_groups or not resp.get("nextToken"):
-                break
-            next_token = resp.get("nextToken")
-    except Exception as e:
-        logging.info(f"Failed to list CloudWatch log groups: {e}")
+        lambda_resources = get_physical_resources(
+            stack_names,
+            aws_env,
+            CloudformationResourceType.LAMBDA_FUNCTION
+        )
+    except Exception as exc:
+        logging.info(f"Failed to enumerate Lambda resources for stacks {stack_names}: {exc}")
         return ""
-    
-    if not log_groups:
+
+    if not lambda_resources:
         return ""
-    
+
+    log_group_candidates = set()
+    for physical_id in lambda_resources.keys():
+        if not isinstance(physical_id, str):
+            continue
+        function_name = physical_id.split(":")[-1]
+        if not function_name:
+            continue
+        log_group_candidates.add(f"/aws/lambda/{function_name}")
+
+    if not log_group_candidates:
+        return ""
+
+    sorted_log_groups = sorted(log_group_candidates)
+    if len(sorted_log_groups) > max_groups:
+        logging.info(
+            "Truncating Lambda log group list from %s to %s while collecting CloudWatch logs",
+            len(sorted_log_groups),
+            max_groups
+        )
+    log_group_names = sorted_log_groups[:max_groups]
+
+    logs = boto3.client("logs", region_name=aws_env.get_aws_region())
+
     end = int(time.time())
     start = end - lookback_minutes * 60
-    
-    # Build a Logs Insights query that matches any of the request IDs
-    # We OR the patterns to reduce the number of queries.
-    request_ids = [rid for rid in request_ids if isinstance(rid, str) and len(rid) >= 36]
-    if not request_ids:
-        return ""
-    
-    # Escape single quotes in IDs just in case
-    or_terms = ["@message like '" + rid.replace("'", "\\'") + "'" for rid in request_ids]
-    or_filters = " or ".join(or_terms)
-    query_str = "fields @timestamp, @log, @message | filter " + or_filters + " | sort @timestamp asc | limit 1000"
-    
+    query_str = "fields @timestamp, @log, @message | sort @timestamp asc | limit 1000"
+
     combined = []
-    # Run the query against all discovered groups in small batches to stay within API limits
     batch_size = 10
-    for i in range(0, len(log_groups), batch_size):
-        batch = log_groups[i:i + batch_size]
+    for i in range(0, len(log_group_names), batch_size):
+        batch = log_group_names[i:i + batch_size]
         try:
             q = logs.start_query(
                 logGroupNames=batch,
@@ -948,8 +997,7 @@ def extract_cloudwatch_lambda_logs(
         except Exception as e:
             logging.info(f"start_query failed for batch {batch}: {e}")
             continue
-        
-        # Poll for completion
+
         status = "Running"
         for _ in range(60):
             time.sleep(1)
@@ -957,7 +1005,6 @@ def extract_cloudwatch_lambda_logs(
             status = resp.get("status")
             if status in ("Complete", "Failed", "Cancelled", "Timeout"):
                 results = resp.get("results", [])
-                # Flatten results into text lines
                 for item in results:
                     fields = {f.get("field"): f.get("value") for f in item}
                     ts = fields.get("@timestamp", "")
@@ -965,8 +1012,8 @@ def extract_cloudwatch_lambda_logs(
                     msg = fields.get("@message", "")
                     combined.append(f"{ts}  {lg}\n{msg}")
                 break
-        
+
         if status != "Complete":
             logging.info(f"Logs Insights query did not complete (status={status}) for batch {batch}")
-    
+
     return "\n\n".join(combined)

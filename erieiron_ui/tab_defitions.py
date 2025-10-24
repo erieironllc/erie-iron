@@ -35,6 +35,13 @@ INITIATIVE_TAB_DEFINITIONS = [
         "availability_fn": views._initiative_tab_available_tasks,
         "context_fn": views._initiative_tab_context_tasks,
     },
+    {
+        "slug": "infrastructure-stacks",
+        "label": "Infrastructure Stacks",
+        "template": "initiative/tabs/infrastructure_stacks.html",
+        "availability_fn": views._initiative_tab_available_infrastructure_stacks,
+        "context_fn": views._initiative_tab_context_infrastructure_stacks,
+    },
     # {
     #     "slug": "processes",
     #     "label": "Processes",
@@ -141,13 +148,20 @@ TASK_TAB_DEFINITIONS = [
         "context_fn": views._task_tab_context_latest_iteration,
     },
     {
+        "slug": "iterations",
+        "label": "Iterations",
+        "template": "task/tabs/iterations.html",
+        "availability_fn": views._task_tab_available_iterations,
+        "context_fn": views._task_tab_context_iterations,
+    },
+    TAB_DIVIDER,
+    {
         "slug": "testcode",
         "label": "Test Code",
         "template": "task/tabs/testcode.html",
         "availability_fn": views._task_tab_available_testcode,
         "context_fn": views._task_tab_context_testcode,
     },
-    TAB_DIVIDER,
     {
         "slug": "guidance",
         "label": "Guidance",
@@ -169,14 +183,6 @@ TASK_TAB_DEFINITIONS = [
         "availability_fn": views._task_tab_available_blocks,
         "context_fn": views._task_tab_context_blocks,
     },
-    TAB_DIVIDER,
-    {
-        "slug": "iterations",
-        "label": "Iterations",
-        "template": "task/tabs/iterations.html",
-        "availability_fn": views._task_tab_available_iterations,
-        "context_fn": views._task_tab_context_iterations,
-    },
     {
         "slug": "codefiles",
         "label": "Code Files",
@@ -191,14 +197,6 @@ TASK_TAB_DEFINITIONS = [
         "availability_fn": views._task_tab_available_iterations,
         "context_fn": views._task_tab_context_latest_iteration_logs,
     },
-    {
-        "slug": "executions",
-        "label": "Executions",
-        "template": "task/tabs/executions.html",
-        "availability_fn": views._task_tab_available_executions,
-        "context_fn": views._task_tab_context_executions,
-    },
-    TAB_DIVIDER,
     {
         "slug": "resolve",
         "label": "Resolve",

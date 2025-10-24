@@ -211,6 +211,16 @@ sufficient for secret creation and validation.**
     - Add guidance reminding the code writer not to perform network calls inside migrations or tests except where
       strictly necessary, and to guard settings-time calls with short timeouts.
 
+### Canonical Django ORM fields
+
+- Treat Django model field names as canonical; if a field name changes, all references in tests and application code must be updated accordingly.  
+- The planner must ensure the plan includes edits for all code references that use that field name (e.g., in serializers, views, forms, querysets, and dependent modules) to maintain consistency.  
+- If tests fail due to a model field name change, update the affected tests so their assertions, fixtures, and expectations match the new schema.  
+- Never add runtime fallbacks (e.g., `getattr(obj, 'old_name', obj.new_name)`) to bridge field name differences.  
+- Each schema plan must describe the specific `models.py` edits, justify nullability/defaults, and note that orchestration will run `python manage.py makemigrations` and `python manage.py migrate` after the change.  
+- When field names change, confirm a migration is generated and applied as part of the plan.  
+- If the proposed migration could cause data loss or cannot be executed safely, stop and emit `blocked` with category `task_def`, including mitigation guidance or prerequisites.
+
 ---
 
 ## Blocked Output Example
@@ -330,6 +340,7 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
         - `code_writing_model`:
             - The LLM model that will be used to write the code based on the instructions. **Must be one of**:
                 - gpt-5
+                - gpt-5-turbo
                 - gpt-5-mini
                 - gpt-5-nano
             - The selection of `code_writing_model` must be done carefully and thoughtfully to optimize for both
@@ -339,7 +350,7 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
                     - Logging adjustments
                     - Static content updates
                     - Markdown or documentation generation
-                - Use more powerful models (e.g., `gpt-5`) for:
+                - Use more powerful models (e.g., `gpt-5`, `gpt-5-turbo`) for:
                     - Multi-file logic coordination
                     - Complex branching, parsing, or concurrency
                     - AWS infrastructure, IAM policies, or CloudFormation generation

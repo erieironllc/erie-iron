@@ -27,6 +27,9 @@ Violating these constraints may result in invalid task execution or untrustworth
 ## Test Validation
 
 - All core functionality must be exercised by an automated test implement in '<test_file_path>' to ensure the functionality does not regress.
+- Tests should validate end-user observable behavior directly wherever feasible (for example, by sending a request to an endpoint and asserting the response).  
+- Assertions based on logs or internal messages should be used only as a **last resort**, when no direct or reliable method exists to confirm expected end behavior.  
+- Prefer validating functional outcomes through API responses, database state, or returned data rather than by checking for log text.
 - All test classes must subclass `django.test.TestCase` and include the import `from django.test import TestCase`.
 - Test methods should be named `test_...` and placed in files discoverable by Django’s test runner.
 - Tests must operate only on test data (not production data) and validate all critical feature behavior.

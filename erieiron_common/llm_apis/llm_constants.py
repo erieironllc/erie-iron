@@ -222,3 +222,12 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
         "output": 1.10,
     }
 }
+
+
+def get_token_count(model: LlmModel, s: str) -> int:
+    try:
+        encoding = tiktoken.encoding_for_model(model.value)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    
+    return len(encoding.encode(s))

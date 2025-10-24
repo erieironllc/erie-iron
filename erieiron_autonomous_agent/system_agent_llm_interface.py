@@ -123,8 +123,8 @@ def agent_chat(
     resp = llm_chat(
         description,
         messages,
-        model,
         tag_entity=tag_entity,
+        model=model,
         output_schema=output_schema,
         code_response=not text_output,
         reasoning_effort=reasoning_effort,
@@ -140,8 +140,8 @@ def agent_chat(
 def llm_chat(
         description: str,
         messages: list[LlmMessage],
-        model: LlmModel,
         tag_entity,
+        model: LlmModel = LlmModel.OPENAI_GPT_5,
         output_schema: Path = None,
         reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.LOW,
         verbosity: LlmVerbosity = LlmVerbosity.LOW,

@@ -10,6 +10,16 @@ All database schema changes are managed through the Django ORM. Make changes by 
 
 ---
 
+## Canonical Django Model Fields
+- Treat Django model field names as canonical.
+- If the model's field name needs to change, update all tests and application code to reflect the model name.
+- **Never** add runtime fallbacks that probe for multiple names.
+- Resolve field-name drift with schema edits first: prefer renaming/adding the canonical field; if the physical column must retain the legacy name, add a nullable alias that uses `db_column` to point at it. Only change tests when they are incorrect.
+- Document the exact model edits, nullability/default rationale, and that orchestration will run `python manage.py makemigrations` and `python manage.py migrate` after the change. Never rely on ad-hoc runtime shims to hide mismatches.
+- A proposed change that could cause data loss or an unsafe migration must STOP and emit `blocked` with category `task_def`, along with the mitigation or prerequisite steps.
+
+---
+
 ## Django Specific Rules
 - All Django view logic must reside in `./core/views.py`.  
   **Never** create a subdirectory such as `./core/views/` to split view implementations into multiple files.  

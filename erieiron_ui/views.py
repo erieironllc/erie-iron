@@ -18,7 +18,14 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
-from erieiron_autonomous_agent.models import Business, LlmRequest, AgentLesson, CodeFile, CodeVersion
+from erieiron_autonomous_agent.models import (
+    Business,
+    LlmRequest,
+    AgentLesson,
+    CodeFile,
+    CodeVersion,
+    InfrastructureStack,
+)
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager
@@ -915,7 +922,7 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
     tasks = list(initiative.tasks.order_by("created_timestamp"))
     if not tasks:
         return {"tasks": tasks}
-    
+
     task_ids = [task.id for task in tasks]
     self_driving_tasks = list(
         SelfDrivingTask.objects.filter(task_id__in=task_ids).order_by("created_at")
@@ -956,6 +963,60 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
         task.last_execution_time = last_execution_time
     
     return {"tasks": tasks}
+
+
+def _initiative_tab_available_infrastructure_stacks(_: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dict:
+    stacks_qs = initiative.cloudformation_stacks.all().order_by("aws_env", "stack_type", "created_timestamp")
+    stack_entries: list[dict] = []
+    default_region = AwsEnv.DEV.get_aws_region()
+
+    for stack in stacks_qs:
+        stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
+        env_enum = AwsEnv.valid_or(getattr(stack, "aws_env", None), None)
+        region = env_enum.get_aws_region() if env_enum else default_region
+
+        cloudformation_url = None
+        if stack.stack_arn:
+            cloudformation_url = (
+                f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={quote(stack.stack_arn, safe='')}"
+            )
+        elif stack.stack_name:
+            stack_name_encoded = quote(stack.stack_name, safe='')
+            cloudformation_url = (
+                f"https://{region}.console.aws.amazon.com/cloudformation/home"
+                f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
+            )
+
+        logs_url = (
+            f"https://{region}.console.aws.amazon.com/cloudwatch/home"
+            f"?region={region}#logsV2:log-groups$3FlogGroupNameFilter$3D{quote(stack.stack_namespace_token, safe='')}"
+        )
+
+        stack_entries.append(
+            {
+                "id": str(stack.id),
+                "stack_name": stack.stack_name,
+                "stack_type_label": stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown"),
+                "stack_type_value": stack.stack_type,
+                "aws_env_label": env_enum.label() if env_enum else (stack.aws_env or "Unknown"),
+                "aws_env_value": stack.aws_env,
+                "cloudformation_url": cloudformation_url,
+                "cloudwatch_logs_url": logs_url,
+                "stack_namespace_token": stack.stack_namespace_token,
+                "stack_arn": stack.stack_arn,
+                "created_timestamp": stack.created_timestamp,
+                "scope_label": "Initiative" if stack.initiative_id == initiative.id else "Business",
+            }
+        )
+
+    return {
+        "stack_entries": stack_entries,
+        "child_task_count": initiative.tasks.count(),
+    }
 
 
 def _initiative_tab_available_processes(initiative: Initiative) -> bool:
@@ -1550,7 +1611,7 @@ def _build_iteration_tabs(
         first_iteration = None
     
     first_url = _iteration_nav_url(first_iteration)
-    latest_url = _iteration_nav_url(latest_iteration)
+    latest_url = reverse('view_self_driver_latest_iteration', args=[iteration.self_driving_task.task_id])
     next_url = _iteration_nav_url(next_iteration)
     previous_url = _iteration_nav_url(previous_iteration)
     
