@@ -463,7 +463,7 @@ def wait_for_dns_propagation(
                 return True
             logging.info(f"waiting for dns propagation {domain_name} -> {target_dns_name} ({target_ips}).  {int(time.time() - start_time)}s of max {timeout}s.  current {answers[2]}")
         except Exception as e:
-            logging.info(f"err for dns propagation {domain_name} -> {target_dns_name}: {e}")
+            logging.exception(f"err for dns propagation {domain_name} -> {target_dns_name}: {e}")
         time.sleep(interval)
     
     raise TimeoutError(

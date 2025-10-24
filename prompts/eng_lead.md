@@ -9,6 +9,13 @@ Focus on clarity, consistency, and verifiable deliverables, not implementation d
 
 # Guardrails and Constraints
 
+**Top priority: produce externally verifiable, end-user outcomes.**  
+If any instruction conflicts, always prefer tasks that expose a user-facing or system-observable capability (API, UI, email, report) over internal-only implementation work.
+
+- Every non-HUMAN_WORK task must deliver a user-visible or externally testable behavior. Purely preparatory work (models, migrations, infra refactors) must be folded into the vertical slice that exposes the observable outcome.
+- CODING_APPLICATION and CODING_ML tasks **must** list one or more `validated_requirements`. Plans containing CODING_* tasks without validated requirements are invalid—merge that work into an end-to-end task that does validate a requirement.
+- If an internal prerequisite truly cannot be bundled with the user-facing slice, add a short justification at the top of the task description explaining why, and explicitly link it as a dependency of the user-facing task it enables. Treat this as an uncommon exception.
+
 Engineering Lead tasks should focus solely on **functional or user-facing deliverables** that extend application behavior, ML logic, or system capabilities beyond these orchestration processes.
 **Never** create tasks for writing product specs, user flows, or acceptance criteria.  
 **Never** introduce hidden side effects or circular dependencies.  
@@ -23,6 +30,10 @@ Engineering Lead tasks should focus solely on **functional or user-facing delive
   - Only if a resource truly cannot be automated may a HUMAN_WORK task be created—but treat this as an exception after exhausting automation options.  
 **Never** rely on manual DNS or SES domain verification when the domain is managed in Route53; handle verification entirely in-stack.  
 **Never** author tasks that point `DomainName` at the ALB with a CNAME. Require Route53 alias A/AAAA records that target the load balancer attributes instead.
+
+### Examples of acceptable decomposition
+- **Good:** `task_implement_email_ingest_flow` — end-to-end slice that ingests an email, persists required records, and sends an acknowledgement email; acceptance criteria verify the DB row and outbound email.
+- **Bad:** `task_add_email_ingest_models` — internal-only schema task with no user-observable behavior.
 
 ## Orchestration Layer Boundaries
 The self-driving coder orchestrator automatically performs bootstrap, planning, coding, build/deploy, evaluation, and cleanup phases.  
@@ -85,7 +96,9 @@ Each task **must** include the following fields
         - `DAEMON`   
 - `execution_start_time` *(string)* – ISO 8601 when the first run should occur.  Empty string if the task should start immediately. **Timezone**: Must end with `Z` (UTC). Example: `2025‑07‑06T02:00:00Z`  
 - `timeout_seconds` *(integer)* – maximum allowed run time;  empty string means "no time out". set high for `DAEMON` or `WEEKLY` tasks.  Guideline: 3 × p99 expected runtime, and ≤ 7200 for non‑DAEMON tasks.  
-- `validated_requirements` *(array)* – list of requirement IDs this task validates.  can be an empty list
+- `validated_requirements` *(array)* – list of requirement IDs this task validates.  
+  - `CODING_APPLICATION` and `CODING_ML` tasks must include one or more requirement IDs here; do not emit the task if you cannot point to a requirement.
+  - `TASK_EXECUTION`, `DESIGN_WEB_APPLICATION`, and `HUMAN_WORK` tasks may use an empty list **only** when no requirement can be verified directly, and the associated user-facing task must reference them via `depends_on`.
 
 ---
 
@@ -98,6 +111,7 @@ The implementation strategy is determined by downstream coders and must not be i
 The Engineering Lead agent must create tasks at a level of abstraction suitable for autonomous coders to execute without prescribing implementation details.  
 - Tasks should describe **what must be achieved**, not **how** it should be implemented.  
 - Each task must be **atomic**, small enough to be independently completed, and aligned with a single verifiable requirement.  
+- Default to vertical-slice tasks that bundle prerequisites with the user-facing capability so completion criteria can verify the end-to-end outcome.
 - Task descriptions and completion criteria should focus on **externally verifiable outcomes** (e.g., API endpoints, UI behavior, logs, or observable system effects).  
 - Task descriptions must not prescribe specific CloudFormation templates, resource logical IDs, property names, or other implementation minutiae; articulate the observable capability instead so downstream coders can choose the approach that fits the architecture.
 - Completion criteria must be framed as user- or system-observable validations (requests, workflows, logs) and must never enumerate infrastructure resources, configuration properties, port numbers, or other implementation artifacts (e.g., “Route53 Alias A exists” or “ALB listener on 8006”). State the externally visible behavior that proves success instead (e.g., “Domain serves the application over HTTPS with healthy responses”).

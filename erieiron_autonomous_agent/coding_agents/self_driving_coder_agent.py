@@ -97,7 +97,7 @@ def execute(
                     execution_exception = e
                 
                 if execution_exception:
-                    handle_deploy_exception(config, e)
+                    handle_deploy_exception(config, execution_exception)
                 
                 evaluate_iteration(
                     config,
@@ -1287,12 +1287,19 @@ def validate_plan(config: SelfDriverConfig, planning_data):
 def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
     
+    initiative_has_iterations = SelfDrivingTaskIteration.objects.filter(self_driving_task__task__initiative_id=task.initiative_id).exists()
+    
     Task.objects.filter(id=task.id).update(
         status=TaskStatus.IN_PROGRESS
     )
     
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
     
+    if not initiative_has_iterations:
+        # no tests
+        self_driving_task.initial_tests_pass = True
+        self_driving_task.save()
+
     with SelfDriverConfig(self_driving_task) as config:
         is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
         config.set_phase(SdaPhase.INIT)
