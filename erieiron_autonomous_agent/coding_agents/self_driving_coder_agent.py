@@ -70,7 +70,7 @@ def execute(
         logging.info(f"Stopping - Agent Blocked")
         return
     
-    for i in range(10):
+    for i in range(20):
         with SelfDriverConfig(self_driving_task) as config:
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
@@ -2409,6 +2409,12 @@ def evaluate_iteration(
         tag_entity=config.current_iteration,
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
+            evaluation_json=eval_data
+        )
+        iteration.refresh_from_db(fields=["evaluation_json"])
     
     if eval_data.get("blocked"):
         raise AgentBlocked(eval_data)

@@ -209,3 +209,27 @@ Task {task.id}: {task.description} FAILED
     task.update_dependent_tasks()
 
     return task.id
+
+
+def on_initiative_green_lit(initiative_id):
+    """Handle INITIATIVE_GREEN_LIT event by triggering task execution for all tasks in the initiative."""
+    from erieiron_autonomous_agent.models import Initiative
+    
+    try:
+        initiative = Initiative.objects.get(id=initiative_id)
+        
+        # Get all tasks for this initiative that are ready to be executed
+        tasks = initiative.tasks.filter(
+            status__in=[TaskStatus.NOT_STARTED.value, TaskStatus.BLOCKED.value]
+        )
+        
+        # Trigger task updates for all tasks in the initiative
+        for task in tasks:
+            PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, task.id)
+            
+        logging.info(f"Initiative {initiative_id} green lit - triggered {tasks.count()} tasks for execution")
+        
+    except Initiative.DoesNotExist:
+        logging.error(f"Initiative {initiative_id} not found when handling INITIATIVE_GREEN_LIT")
+    except Exception as e:
+        logging.error(f"Error handling INITIATIVE_GREEN_LIT for initiative {initiative_id}: {str(e)}")

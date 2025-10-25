@@ -27,7 +27,11 @@ You operate inside a sandboxed environment and must follow strict safety and for
 
 ## Database Connectivity
 - When implementing code that runs within the Django application, continue to rely on Django settings that call `agent_tools.get_django_settings_databases_conf()`; do not duplicate configuration logic.
-- Any non-Django Python code you generate (including AWS Lambdas, management scripts, CLI tools, or background workers) that requires database access **must** import `agent_tools` from `erieiron_public` and invoke `agent_tools.get_database_conf(aws_region_name)` using an AWS region provided by existing configuration.
+- Any non-Django Python code you generate (including AWS Lambdas, management scripts, CLI tools, or background workers) that requires database access **must** import `get_pg8000_connection` from `erieiron_public.agent_tools` and open connections via:
+  ```python
+  with get_pg8000_connection() as conn:
+      conn.cursor().execute(<sql>)
+  ```
 - You may **not** reconstruct connection strings, read raw credential environment variables, query Secrets Manager directly, or otherwise derive database settings outside these helpers.
 
 ---

@@ -13,7 +13,7 @@ You do **not** write code directly. Instead, you emit step-by-step instructions 
 ## General Planning Responsibilities
 
 1. **PRIORITIZE CONTRACT COMPLIANCE OVER SYMPTOM WORKAROUNDS**
-- When a runtime/import error appears to be the immediate cause of failing tests, the planner must NOT propose code-level deviations that violate higher-level platform contracts (for example, replacing agent_tools.get_database_conf with direct secretsmanager calls). Instead, the planner must first propose changes that restore required platform contracts (e.g., dependency/packaging fixes, LAMBDA_DEPENDENCIES updates, requirements.txt edits). Only if restoring the contract is impossible within the allowed surface area should the planner emit a 'blocked' result and request human approval.
+- When a runtime/import error appears to be the immediate cause of failing tests, the planner must NOT propose code-level deviations that violate higher-level platform contracts (for example, replacing the required `get_pg8000_connection()` pattern with direct Secrets Manager calls). Instead, the planner must first propose changes that restore required platform contracts (e.g., dependency/packaging fixes, LAMBDA_DEPENDENCIES updates, requirements.txt edits). Only if restoring the contract is impossible within the allowed surface area should the planner emit a 'blocked' result and request human approval.
 - Do not conflate 'make tests pass quickly' with 'respect security/infra contracts'. A small packaging fix that restores agent_tools is the correct remediation in nearly all cases involving ImportModuleError for platform helpers.
 
 2. **Understand the error**
@@ -352,24 +352,26 @@ sufficient for secret creation and validation.**
 ### Non-Django Database Access Contract
 
 #### Purpose
-Ensure that all non-Django runtimes (including all AWS Lambdas, background workers, and standalone scripts) access databases securely and consistently through shared `agent_tools` abstractions rather than through direct Secrets Manager calls or manual construction of DSNs. This guarantees uniform credential handling, consistent auditing, and alignment with the orchestration layer’s security model.
+Ensure that all non-Django runtimes (including all AWS Lambdas, background workers, and standalone scripts) access databases securely and consistently through the shared `get_pg8000_connection()` helper rather than through direct Secrets Manager calls or manual construction of DSNs. This guarantees uniform credential handling, consistent auditing, and alignment with the orchestration layer’s security model.
 
 #### Enforcement Rules (MANDATORY)
 1. **MUST NOT** propose direct Secrets Manager or API calls for database credentials (e.g., `boto3.client('secretsmanager')`) or manually construct DB connection strings in non-Django application code.
-2. **MUST** retrieve connection configuration exclusively via:
+2. **MUST** open database connections exclusively via:
    ```python
-   from erieiron_public import agent_tools
-   conf = agent_tools.get_database_conf(os.environ["AWS_REGION"])
+   from erieiron_public.agent_tools import get_pg8000_connection
+
+   with get_pg8000_connection() as conn:
+       conn.cursor().execute(<sql>)
    ```
-3. **MUST** obtain the AWS region dynamically from environment or configuration; never hardcode credentials or region names.
+3. **MUST** ensure the AWS region/environment inputs used by `get_pg8000_connection()` are sourced dynamically (e.g., `AWS_DEFAULT_REGION`); never hardcode credentials or region names.
 4. **MUST NOT** read raw credential values from environment variables, call Secrets Manager directly, or manually assemble DSNs.
-5. **MUST** preserve Django’s own database handling logic (`agent_tools.get_django_settings_databases_conf()`) unchanged. Non-Django runtimes must never replicate or fork this logic.
+5. **MUST** preserve Django’s own database handling logic (`agent_tools.get_django_settings_databases_conf()`) unchanged. Non-Django runtimes must never replicate or fork this logic, nor may they call `agent_tools.get_database_conf()` directly—`get_pg8000_connection()` is the only approved interface.
 
 #### Approved Planning Sequence (Priority Order)
 1. **Option A – Ensure agent_tools availability**
-   - Add to `requirements.txt` the package providing `agent_tools` (for example, `erieiron-public` or `erieiron-public-common`) with a pinned compatible version.
+   - Add to `requirements.txt` the package providing `agent_tools`/`get_pg8000_connection` (`erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git`) 
    - Add the same dependency to the Lambda’s `LAMBDA_DEPENDENCIES` header comment if the runtime uses that packaging convention.
-   - If adding this dependency resolves the issue, **do not** modify code beyond ensuring correct usage of `agent_tools.get_database_conf(region)`.
+   - If adding this dependency resolves the issue, **do not** modify code beyond ensuring correct usage of the `get_pg8000_connection()` context manager.
    - Cross-reference: See “AWS Lambda quick-fix rules (important)” section for consistency.
 
 2. **Option B – Surface Area Constraint**
@@ -384,7 +386,7 @@ Ensure that all non-Django runtimes (including all AWS Lambdas, background worke
        ```python
        from erieiron_public import agent_tools
        ```
-     - This shim must not reimplement or duplicate any logic from `agent_tools`.
+     - This shim must not reimplement or duplicate any logic from `agent_tools`; it simply preserves access to helpers such as `get_pg8000_connection()`.
 
 #### Decision Tree
 When planning database access in non-Django runtimes:
@@ -403,8 +405,10 @@ Instead, replace it with a compliant remediation plan conforming to the hierarch
 
 ✅ **Allowed:**
 ```python
-from erieiron_public import agent_tools
-conf = agent_tools.get_database_conf(os.environ["AWS_REGION"])
+from erieiron_public.agent_tools import get_pg8000_connection
+
+with get_pg8000_connection() as conn:
+    conn.cursor().execute(<sql>)
 ```
 
 ❌ **Forbidden:**
@@ -415,7 +419,7 @@ secret = sm.get_secret_value(SecretId='RDS_SECRET')
 ```
 
 #### Rationale
-This contract prevents credential divergence, maintains centralized auditability, and ensures that all components—Django or not—share a single source of truth for database credentials.  
+This contract prevents credential divergence, maintains centralized auditability, and ensures that all components—Django or not—share a single source of truth for database connections via `get_pg8000_connection()`.  
 It enforces deterministic and secure orchestration behavior while maintaining minimal surface area growth and consistent planner behavior across runtimes.
 
 ---

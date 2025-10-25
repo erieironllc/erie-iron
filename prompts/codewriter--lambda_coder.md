@@ -53,7 +53,14 @@ When writing or modifying a Lambda, these rules **must** be followed.  If you di
 - Use in-memory caching or reuse of global variables only if safe and explicitly helpful.
 
 ### Database Connectivity
-- If the Lambda requires database access, you **must** import `agent_tools` from `erieiron_public` and call `agent_tools.get_database_conf(aws_region_name)` using the runtime AWS region. Do not reconstruct credentials, read raw environment variables for connection pieces, or query Secrets Manager directly.
+- If the Lambda requires database access, you **must** import `get_pg8000_connection` from `erieiron_public.agent_tools` and execute queries via:
+  ```python
+  from erieiron_public.agent_tools import get_pg8000_connection
+
+  with get_pg8000_connection() as conn:
+      conn.cursor().execute(<sql>)
+  ```
+  Do not reconstruct credentials, read raw environment variables for connection pieces, or query Secrets Manager directly.
 - Only the shared helper may be used to obtain connection details. Code running in Django continues to rely on Django settings helpers for `DATABASES` configuration—do not duplicate that logic inside Lambda code.
 
 ---

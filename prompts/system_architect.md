@@ -60,7 +60,12 @@ The architecture document must be formatted in markdown and include the followin
 - Expected data flow or architecture.
 - All required AWS resources (e.g., RDS, S3, Lambda, ECS, etc.) must be listed explicitly. For each resource, specify intended usage, sizing, and cost-related constraints. The design must favor the least expensive AWS option that meets the needs of the scope.
 - Document network access patterns. For RDS, explicitly state that connectivity is limited to the application VPC and the CloudFormation parameter `ClientIpForRemoteAccess` to support local development while keeping the database private to Erie Iron infrastructure.
-- When any non-Django runtime (Lambda functions, standalone scripts, background workers) needs database access, the design **must** specify that code will call `agent_tools.get_database_conf(<aws_region_name>)` from `erieiron_public.agent_tools`; the design must also note that code running inside the Django container continues to rely on Django settings helpers. No alternative mechanisms for collecting database credentials are allowed.
+- When any non-Django runtime (Lambda functions, standalone scripts, background workers) needs database access, the design **must** specify that code will import `get_pg8000_connection` from `erieiron_public.agent_tools` and issue queries via:
+  ```python
+  with get_pg8000_connection() as conn:
+      conn.cursor().execute(<sql>)
+  ```
+  Code running inside the Django container continues to rely on Django settings helpers. No alternative mechanisms for collecting database credentials or assembling connections are allowed.
 - Any third-party services, libraries, or APIs to be used.
 - Function signatures (if relevant).
 

@@ -20,7 +20,12 @@ This contract defines how credentials are passed and handled across the system, 
   - No credentials should be stored or logged in plaintext.
   - Credential fetching logic should handle secrets refresh and errors gracefully.
   - The database connection logic must use the dynamically constructed database name based on the stack identifier.
-  - Non-Django runtime code (Lambdas, background workers, CLI tools, standalone scripts) must import `agent_tools` from `erieiron_public` and call `agent_tools.get_database_conf(aws_region_name)` to obtain database connection details. Only Django settings may invoke `agent_tools.get_django_settings_databases_conf()`; no other method of acquiring database configuration is allowed.
+  - Non-Django runtime code (Lambdas, background workers, CLI tools, standalone scripts) must import `get_pg8000_connection` from `erieiron_public.agent_tools` and access the database only through:
+    ```python
+    with get_pg8000_connection() as conn:
+        conn.cursor().execute(<sql>)
+    ```
+    Only Django settings may invoke `agent_tools.get_django_settings_databases_conf()`; non-Django code must never call `agent_tools.get_database_conf()` directly or assemble credentials manually.
 
 ### Forbidden Actions:
 This section is authoritative. All other sections must not restate these rules.

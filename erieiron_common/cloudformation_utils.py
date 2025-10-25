@@ -351,9 +351,11 @@ def _wait_for_single_stack(
             time.sleep(poll_interval)
         logging.info(f"waiting on {stack_name}.  status: {status}. waiting {int(time.time() - start_time)}s out of a max wait of {timeout}s")
 
-        if not status.endswith("_IN_PROGRESS"):
+        if status in {"UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"}:
+            continue
+        elif status in {"CREATE_COMPLETE", "UPDATE_COMPLETE", "ROLLBACK_COMPLETE", "DELETE_COMPLETE"}:
             break
-        elif "COMPLETE" in status:
+        elif not status.endswith("_IN_PROGRESS"):
             break
         elif "ROLLBACK" in status:
             break

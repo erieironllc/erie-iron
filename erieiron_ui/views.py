@@ -1941,9 +1941,13 @@ def action_restart_task(request, task_id):
         common.delete_dir(task.selfdrivingtask.sandbox_path)
     except:
         ...
+    
     SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=task_id).delete()
     CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
     
+    for stack in InfrastructureStack.objects.filter(initiative_id=task.initiative_id):
+        stack.tombstone()
+
     # Reset task status and clear any existing executions
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.NOT_STARTED
@@ -2149,6 +2153,10 @@ def action_update_initiative(request, initiative_id):
         architecture = rget(request, 'architecture', '').strip()
         cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
         requires_unit_tests = request.POST.get('requires_unit_tests') == 'on'
+        green_lit = request.POST.get('green_lit') == 'on'
+        
+        # Check if green_lit status is changing from False to True
+        was_green_lit = initiative.green_lit
         
         # Prepare update data
         update_data = {
@@ -2156,11 +2164,16 @@ def action_update_initiative(request, initiative_id):
             'description': description,
             'architecture': architecture or None,
             'cloudformation_stack_name': cloudformation_stack_name or None,
-            'requires_unit_tests': requires_unit_tests
+            'requires_unit_tests': requires_unit_tests,
+            'green_lit': green_lit
         }
         
         # Update the initiative
         Initiative.objects.filter(id=initiative_id).update(**update_data)
+        
+        # Publish INITIATIVE_GREEN_LIT event if green_lit changed from False to True
+        if not was_green_lit and green_lit:
+            PubSubManager.publish_id(PubSubMessageType.INITIATIVE_GREEN_LIT, initiative_id)
         
         messages.success(request, 'Initiative updated successfully!')
         return redirect(reverse('view_initiative_tab', args=['edit', initiative_id]))

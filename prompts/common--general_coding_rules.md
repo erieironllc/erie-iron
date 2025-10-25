@@ -37,9 +37,18 @@ Follow these rules for such model edits:
 
 ## Database Connectivity Rules
 - Application code running inside the Django container must continue to obtain database configuration through Django settings helpers such as `agent_tools.get_django_settings_databases_conf()`.
-- Any non-Django runtime (including AWS Lambdas, standalone scripts, CLI tools, or background workers) that requires a database connection **must** import `agent_tools` from `erieiron_public` and call `agent_tools.get_database_conf(aws_region_name)` to retrieve connection details.
+- Any non-Django runtime (including AWS Lambdas, standalone scripts, CLI tools, or background workers) that requires a database connection **must** import `get_pg8000_connection` from `erieiron_public.agent_tools` and issue queries via the shared pattern:
+  ```python
+  from erieiron_public.agent_tools import get_pg8000_connection
+
+  with get_pg8000_connection() as conn:
+      conn.cursor().execute(<sql>)
+  ```
+  This helper acquires credentials/regions on your behalf; non-Django code may **never** call `agent_tools.get_database_conf()` directly or reassemble connection strings by hand.
+- If `get_pg8000_connection()` raises an `ImportError`/`ModuleNotFoundError`, immediately stop and return a `BLOCKED` response so packaging can be fixed—do **not** attempt alternate helpers or inline credentials.
+- If the helper raises a database connectivity error (network reachability, authentication, IAM/role permissions), plan stack or infrastructure edits (security groups, subnet routing, IAM policies, Secrets Manager wiring) that restore access rather than working around the failure in code.
 - Generated code may **never** construct database URLs, read individual credential environment variables, fetch Secrets Manager entries directly, or otherwise derive database settings outside these approved helpers.
-- Plans and implementations that involve database usage must ensure the AWS region is sourced from existing configuration (environment variables or context) and passed into `get_database_conf`; hardcoded or inferred credentials are forbidden.
+- Plans and implementations that involve database usage must rely on the shared helper so the AWS region and credentials flow from existing configuration; hardcoded or inferred credentials are forbidden.
 
 ---
 

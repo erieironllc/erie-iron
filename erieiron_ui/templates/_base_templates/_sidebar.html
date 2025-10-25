@@ -1,5 +1,5 @@
 {% load erieiron_common_tags %}
-<div class="list-group sidebar-tabs-scroll" role="tablist">
+<div class="list-group sidebar-tabs-scroll pb-5" role="tablist">
     <h3 style="white-space: nowrap;">{{ sidebar_title }}</h3>
     {% for tab in tabs|dedupe_divers %}
         {% if tab.is_divider %}

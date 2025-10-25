@@ -483,6 +483,7 @@ class Initiative(BaseErieIronModel):
     expected_kpi_lift = models.JSONField(default=dict)
     requires_unit_tests = models.BooleanField(default=True)
     domain = models.TextField(null=True)
+    green_lit = models.BooleanField(default=False)
     
     def all_tasks_complete(self) -> bool:
         if self.tasks.count() == 0:
@@ -720,6 +721,10 @@ class Task(BaseErieIronModel):
         b = self.initiative.business
         if Business.get_erie_iron_business().id == b.id:
             return True
+        
+        # Check if initiative is green lit
+        if not self.initiative.green_lit:
+            return False
         
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
     

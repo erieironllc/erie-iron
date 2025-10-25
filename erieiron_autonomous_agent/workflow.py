@@ -115,6 +115,9 @@ def business_workflow(pubsub_manager: PubSubManager):
     ).on(
         T.TASK_SPEND,
         task_manager.on_task_spend
+    ).on(
+        T.INITIATIVE_GREEN_LIT,
+        task_manager.on_initiative_green_lit
     )
 
     # Desiger
