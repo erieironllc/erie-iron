@@ -31,6 +31,35 @@
 
         <form action="{% url 'action_update_business' business.id %}" method="post">
             {% csrf_token %}
+            
+            <div class="mb-3 d-flex justify-content-between align-items-center">
+                <div>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <form method="post" action="{% url 'action_delete_business' business.id %}" class="d-inline"
+                          id="delete-business-form">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline-danger">Delete Business</button>
+                    </form>
+                    <form method="post" action="{% url 'action_business_new_domain' business.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-warning"
+                                onclick="return confirm('Are you sure you want to register a new Domain for this business?')">
+                            New Domain
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-danger"
+                                onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
+                            Bootstrap
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <hr>
             <div class="row">
                 <div class="col-md-6">
                     <div class="mb-3">
@@ -184,32 +213,7 @@
                           placeholder="Describe the system architecture, components, and technology stack...">{{ business.architecture|default:"" }}</textarea>
             </div>
 
-            <button type="submit" class="btn btn-primary">Save Changes</button>
-            <a href="{% url 'view_business' business.id %}" class="btn btn-secondary ms-2">Cancel</a>
-
         </form>
-
-        <div class="d-flex justify-content-end flex-wrap gap-2" style="margin-top: -40px">
-            <form method="post" action="{% url 'action_delete_business' business.id %}" class="d-inline ms-2"
-                  id="delete-business-form">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-outline-danger">Delete Business</button>
-            </form>
-            <form method="post" action="{% url 'action_business_new_domain' business.id %}" class="d-inline ms-2">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-warning"
-                        onclick="return confirm('Are you sure you want to register a new Domain for this business?')">
-                    New Domain
-                </button>
-            </form>
-            <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline ms-2">
-                {% csrf_token %}
-                <button type="submit" class="btn btn-danger"
-                        onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
-                    Bootstrap
-                </button>
-            </form>
-        </div>
     </div>
 
 <script>

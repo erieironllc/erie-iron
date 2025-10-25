@@ -32,8 +32,8 @@ BaseContainerView = ErieView.extend({
 
     init_view: function (options) {
         this.tooltip_instances = [];
-        
-        $("input").each(function() {
+
+        $("input").each(function () {
             $(this).attr({
                 autocomplete: "off",
                 "data-lpignore": "true",
@@ -161,7 +161,7 @@ BaseContainerView = ErieView.extend({
                 }
             }, 100);
         }, 2000);
-        
+
         this.delegateEvents()
 
 
@@ -730,37 +730,39 @@ BaseContainerView = ErieView.extend({
 
         let target_el;
         const targetSelector = btn.data('target');
-        if (targetSelector.startsWith(".")){
+        if (targetSelector.startsWith(".")) {
             const copy_container = btn.closest(".copy-container");
-            if (copy_container.length){
+            if (copy_container.length) {
                 target_el = $(targetSelector + ":visible", copy_container).first();
-                if (!target_el.length){
+                if (!target_el.length) {
                     target_el = $(targetSelector, copy_container).first();
                 }
-            }else{
+            } else {
                 target_el = $(targetSelector + ":visible").first();
-                if (!target_el.length){
+                if (!target_el.length) {
                     target_el = $(targetSelector).first();
                 }
             }
-        }else{
+        } else {
             target_el = $(targetSelector);
         }
-        const content = target_el.text().trim();
-            
+        const content = target_el.is("input") ? target_el.val().trim() : target_el.text().trim();
+
 
         navigator.clipboard.writeText(content).then(function () {
-            if (btn.hasClass("bi")) {
-                btn.removeClass('bi-copy').addClass('bi-check');
-                setTimeout(function () {
-                    btn.removeClass('bi-check').addClass('bi-copy');
-                }, 2000);
-            } else {
-                const originalIcon = btn.find('i');
-                originalIcon.removeClass('bi-copy').addClass('bi-check');
-                setTimeout(function () {
-                    originalIcon.removeClass('bi-check').addClass('bi-copy');
-                }, 2000);
+            if (btn.hasClass("bi-copy")) {
+                if (btn.hasClass("bi")) {
+                    btn.removeClass('bi-copy').addClass('bi-check');
+                    setTimeout(function () {
+                        btn.removeClass('bi-check').addClass('bi-copy');
+                    }, 2000);
+                } else {
+                    const originalIcon = btn.find('i');
+                    originalIcon.removeClass('bi-copy').addClass('bi-check');
+                    setTimeout(function () {
+                        originalIcon.removeClass('bi-check').addClass('bi-copy');
+                    }, 2000);
+                }
             }
         }.bind(this)).catch(function (err) {
             console.error('Failed to copy text: ', err);
