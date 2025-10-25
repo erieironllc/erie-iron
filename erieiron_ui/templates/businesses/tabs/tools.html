@@ -33,6 +33,15 @@
                         <label for="businessDescription" class="form-label">Business Description</label>
                         <textarea class="form-control" id="businessDescription" name="business_description" rows="10" placeholder="Describe the business idea, market opportunity, business model, and any other relevant details..."></textarea>
                     </div>
+                    <div class="mb-3">
+                        <label for="operationType" class="form-label">Operation Type</label>
+                        <select class="form-control" id="operationType" name="operation_type" required>
+                            {% for value, label in operation_type_choices %}
+                                <option value="{{ value }}" {% if value == operation_type_default %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Identify whether Erie Iron or a third party will run this business and if it is autonomous or manual.</div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>

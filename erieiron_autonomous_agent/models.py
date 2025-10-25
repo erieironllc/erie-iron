@@ -16,7 +16,7 @@ from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
 
 import settings
-from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus
+from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus, BusinessOperationType
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
@@ -43,7 +43,8 @@ class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
     source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
     status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
-    
+    operation_type = models.TextField(default=BusinessOperationType.ERIE_IRON_AUTONOMOUS, choices=BusinessOperationType.choices())
+
     service_token = models.TextField(null=True)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)

@@ -39,7 +39,8 @@ def on_resource_planning_requested(business_id):
             
             ## Human Capacity
             {json.dumps(business.get_human_capacity(), indent=4)}
-        """)
+        """,
+        business=business)
     
     BusinessCapacityAnalysis.objects.create(
         business=business,

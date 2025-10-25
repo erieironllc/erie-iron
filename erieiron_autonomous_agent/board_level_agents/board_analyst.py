@@ -12,15 +12,18 @@ def on_analysis_requested(business_id):
 
 def execute_business_analysis(business) -> BusinessAnalysis:
     business_analysis = board_level_chat(
-        "Business Analysis", 
-        "board_analyst--business.md", f"""
+        "Business Analysis",
+        "board_analyst--business.md",
+        f"""
             Please analyze this Business
 
             {business.name}
             
             {common.model_to_dict_s(business)}
-        """)
-
+        """,
+        business=business
+    )
+    
     analysis = BusinessAnalysis.objects.create(
         business=business,
         business_name=business_analysis.get("business_name"),
@@ -40,7 +43,7 @@ def execute_business_analysis(business) -> BusinessAnalysis:
         potential_competitors_data=business_analysis.get("potential_competitors", []),
         use_of_funds_data=business_analysis.get("upfront_cash_investment_required", {}).get("use_of_funds", []),
     )
-
+    
     return analysis
 
 
@@ -49,8 +52,9 @@ def execute_legal_analysis(
         business_analysis: BusinessAnalysis
 ):
     legal_analysis = board_level_chat(
-        "Legal Analysis", 
-        "board_analyst--legal.md", f"""
+        "Legal Analysis",
+        "board_analyst--legal.md",
+        f"""
             Please analyze this Business
 
             {business.name}
@@ -58,8 +62,10 @@ def execute_legal_analysis(
             {common.model_to_dict_s(business)}
 
             {common.model_to_dict_s(business_analysis)}
-        """)
-
+        """,
+        business=business
+    )
+    
     BusinessLegalAnalysis.objects.create(
         business=business,
         approved=legal_analysis.get("approved"),

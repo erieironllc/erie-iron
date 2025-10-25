@@ -2013,13 +2013,20 @@ def deploy_iteration(
         config.log(e)
         raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
     
-    try:
-        full_image_uri, ecr_arn = push_image_to_ecr(
-            config,
-            docker_image_tag
-        )
-    except Exception as e:
-        raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+    for i in range(3):
+        try:
+            full_image_uri, ecr_arn = push_image_to_ecr(
+                config,
+                docker_image_tag
+            )
+            break
+        except Exception as e:
+            logging.exception(e)
+            if i < 2:
+                logging.info(f"failed to push to ECR on attempt {i + 1}")
+                time.sleep(5)
+            else:
+                raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
     
     try:
         empty_stack_buckets(

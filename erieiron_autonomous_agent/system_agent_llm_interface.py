@@ -4,6 +4,7 @@ import traceback
 from pathlib import Path
 
 import settings
+from erieiron_autonomous_agent.enums import BusinessOperationType
 from erieiron_autonomous_agent.models import LlmRequest, Business, Initiative, SelfDrivingTaskIteration
 from erieiron_common import common
 from erieiron_common.common import assert_exists
@@ -21,15 +22,25 @@ def board_level_chat(
         user_messages: list[LlmMessage],
         text_output=False,
         model: LlmModel = None,
+        business: Business = None,
         debug=False
 ):
     system_prompt = assert_exists(BOARD_LEVEL_BASE_PATH / system_prompt)
     
+    if business and BusinessOperationType.is_manual(business.operation_type):
+        base_prompt = "_base_prompt--board_level--manual.md"
+    else:
+        base_prompt = "_base_prompt--board_level.md"
+    
     system_prompts = [
         system_prompt,
-        BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level.md"
+        BOARD_LEVEL_BASE_PATH / base_prompt
     ]
-    
+    if business:
+        system_prompts.append(
+            f"The business operation type is `{'Third-Party' if BusinessOperationType.is_thirdparty(business.operation_type) else 'Erie Iron Portfolio' }` ({business.operation_type})"
+        )
+
     output_schema = BOARD_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
     
     if not output_schema.exists():

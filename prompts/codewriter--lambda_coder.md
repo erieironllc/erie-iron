@@ -43,6 +43,7 @@ When writing or modifying a Lambda, these rules **must** be followed.  If you di
       import requests
       import boto3
       ```
+- Import-error concretes (**binding rule**): When a Lambda fails with `Runtime.ImportModuleError` for a known package, resolve it by declaring the exact dependency in `LAMBDA_DEPENDENCIES`. For example, if logs show `No module named 'psycopg2._psycopg'`, declare `# LAMBDA_DEPENDENCIES: ["psycopg2-binary", ...]`. Do not introduce retries or refactors until the import succeeds.
 
 ---
 

@@ -1,9 +1,14 @@
+import logging
+
 from django.db import transaction
 
+from erieiron_autonomous_agent.enums import BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_common import common
 from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.models import BusinessKPI, BusinessGoal, BusinessCeoDirective
+from erieiron_common.enums import PubSubMessageType
+from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
 def on_business_guidance_updated(business_id):
@@ -11,6 +16,10 @@ def on_business_guidance_updated(business_id):
         return
 
     business = Business.objects.get(id=business_id)
+    
+    if BusinessStatus.IDEA.eq(business.status):
+        logging.info(f"skipping ceo guidance generation - status = {business.status}")
+        return
 
     chat_data = build_chat_data(business)
 
@@ -22,6 +31,11 @@ def on_business_guidance_updated(business_id):
     )
 
     process_response(business, ceo_analysis)
+    
+    PubSubManager.publish_id(
+        PubSubMessageType.BUSINESS_BOOTSTRAP_REQUESTED,
+        business.id
+    )
 
 
 def build_chat_data(business):

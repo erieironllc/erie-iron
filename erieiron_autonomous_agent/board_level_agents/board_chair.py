@@ -60,7 +60,8 @@ def on_board_guidance_requested(business_id):
 
             ## {business.name} Legal Analysis
             {common.model_to_dict_s(legal_analysis)}
-        """
+        """,
+        business=business
     )
     
     process_response(business, business_guidance)
@@ -73,6 +74,7 @@ def process_response(business, business_guidance):
         guidance=business_guidance.get("guidance"),
         justification=business_guidance.get("justification")
     )
+    
     # TODO maybe look at last x number of guidances?
     business_guidance = business.businessguidance_set.order_by("created_timestamp").last()
     if not BusinessGuidanceRating.MAINTAIN.eq(business_guidance.guidance):

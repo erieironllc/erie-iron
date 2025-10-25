@@ -97,12 +97,6 @@ def submit_business_opportunity(payload):
         }
     )
     
-    # this might be better at the "GREEN LIGHT BUSINESS" - whenever we implement "GREEN LIGHT BUSINESS"
-    PubSubManager.publish_id(
-        PubSubMessageType.BUSINESS_BOOTSTRAP_REQUESTED,
-        business.id
-    )
-    
     business_structure = board_level_chat(
         "Business Structurer",
         "corporate_development--business_structurer.md",

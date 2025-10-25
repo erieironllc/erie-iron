@@ -14,11 +14,12 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone, formats
 from django.utils.html import escape
+from django.views.decorators.http import require_POST
 
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
-from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
+from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import (
     Business,
     LlmRequest,
@@ -94,7 +95,9 @@ def _businesses_tab_available_tools(_: Business) -> bool:
 
 def _businesses_tab_context_tools(_: Business) -> dict:
     return {
-        "all_running_processes": RunningProcess.objects.filter(is_running=True).order_by('-started_at')
+        "all_running_processes": RunningProcess.objects.filter(is_running=True).order_by('-started_at'),
+        "operation_type_choices": BusinessOperationType.choices(),
+        "operation_type_default": BusinessOperationType.ERIE_IRON_AUTONOMOUS.value,
     }
 
 
@@ -1988,6 +1991,8 @@ def action_add_business(request):
     
     business_name = rget(request, 'business_name', '').strip()
     business_description = rget(request, 'business_description', '').strip()
+    operation_type = rget(request, 'operation_type', BusinessOperationType.ERIE_IRON_AUTONOMOUS.value)
+    operation_type = (operation_type or '').strip() or BusinessOperationType.ERIE_IRON_AUTONOMOUS.value
     
     if not business_name:
         messages.error(request, 'Business name is required.')
@@ -1997,10 +2002,15 @@ def action_add_business(request):
         messages.error(request, 'Business description is required.')
         return redirect(reverse('view_businesses_tab', args=['tools']))
     
+    if not BusinessOperationType.valid(operation_type):
+        messages.error(request, 'Invalid operation type selected.')
+        return redirect(reverse('view_businesses_tab', args=['tools']))
+    
     business = Business.objects.create(
         name=business_name,
         source=BusinessIdeaSource.HUMAN,
-        raw_idea=business_description
+        raw_idea=business_description,
+        operation_type=operation_type
     )
     
     PubSubManager.publish(
@@ -2049,10 +2059,8 @@ def action_initiative_regenerate_tasks(request, initiative_id):
     return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
 
 
+@require_POST
 def action_delete_business(request, business_id):
-    if request.method != 'POST':
-        raise Exception()
-    
     try:
         business = get_object_or_404(Business, id=business_id)
         business_name = business.name
