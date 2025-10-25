@@ -104,9 +104,7 @@
         {% for code_file in iteration.planning_json.code_files %}
             <div class="card mb-4 iteration_card">
                 <div class="card-header d-flex justify-content-start">
-                    <small class="text-muted">
-                        <a href="{% url "view_codefile" %}?v={{ iteratoin.version_number }}">{{ code_file.code_file_path }}</a>
-                    </small>
+                    <small class="text-muted">{{ code_file.code_file_path }}</small>
                 </div>
                 <div class="card-body">
                     <dl class="row">

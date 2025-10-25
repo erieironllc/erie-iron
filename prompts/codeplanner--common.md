@@ -216,6 +216,14 @@ When you recieve a chat request:
 - Do not split predictable sub-failures into separate iterations when they stem from the same cause and can be fixed
   safely now without SA expansion.
 
+### Database Consistency Enforcement (MANDATORY)
+
+- All automated tests—new or modified—must share the exact database configuration used by Lambdas and long-running services; there is **never** a separate `test_*` database.
+- When planning edits that touch tests or database wiring, require that tests obtain their connection info solely through `agent_tools.get_django_settings_databases_conf()` (usually via `django.conf.settings.DATABASES`). Reject duct-tape connection strings, inline credentials, or ORM configs that bypass this helper.
+- If any existing test or runtime code references a database name beginning with `test_` (for example `test_default`, `test_appdb`, etc.), the plan **must** call out the violation and include concrete steps to rewrite those references to the canonical configuration.
+- Never propose creating or connecting to stand-alone test databases, in-memory SQLite fixtures, or any schema that drifts from the shared stack database. Tests already execute against the provisioned stack DB instance.
+- Treat detected discrepancies as blockers: document them in the plan narrative and include deterministic edits that realign the configuration before moving on to other work.
+
 ---
 
 ## Minimal-Delta & Surface Area (SA) Contract

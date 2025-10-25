@@ -38,6 +38,14 @@ Tests must prefer assertions that provide context for debugging when they fail. 
 - Network timeouts and waits are tightly bounded—the entire test module must finish well under 60 seconds.
 - Never add sleeps, waits, polling loops, or backoffs whose cumulative delay exceeds 60 seconds; prefer fast checks and fail fast with remediation guidance if a requirement demands longer waits.
 
+## Database Consistency Requirements
+
+- Acceptance and unit tests must share the exact same database configuration as runtime code—**never** provision or connect to a dedicated `test_*` database.
+- Obtain database settings exclusively from `agent_tools.get_django_settings_databases_conf()` (typically via `from django.conf import settings` and `settings.DATABASES`). Do not craft inline connection dictionaries, URLs, or credentials.
+- Whenever existing code or fixtures reference a database whose name begins with `test_`, rewrite the test to consume the canonical configuration instead of the hard-coded name.
+- Tests may not introduce SQLite, in-memory, or other alternate data stores. The provisioned stack database is the only valid target, and mismatches must be corrected immediately rather than deferred.
+- Treat any detected discrepancy between test and runtime configuration as a blocker: fix it within the same response instead of continuing with stale wiring.
+
 ---
 
 ## Output:

@@ -18,6 +18,11 @@ body {
   .col-sidebar {
     @extend .col-md-3;
     width: 20%;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 3.75rem);
+    min-height: 0;
+    overflow: hidden; // allows internal scroll containers to handle overflow
   }
 
   .col-main-content {
@@ -186,6 +191,11 @@ body {
         border-color: $sidebar-active-bg;
       }
     }
+  }
+
+  .sidebar-tabs-scroll {
+    max-height: 100%;
+    overflow-y: auto;
   }
 
   #main-content-container {
