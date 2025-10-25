@@ -44,7 +44,7 @@ class Business(BaseErieIronModel):
     source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
     status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
     operation_type = models.TextField(default=BusinessOperationType.ERIE_IRON_AUTONOMOUS, choices=BusinessOperationType.choices())
-
+    
     service_token = models.TextField(null=True)
     summary = models.TextField(null=True)
     raw_idea = models.TextField(null=True)
@@ -520,7 +520,7 @@ class InfrastructureStack(BaseErieIronModel):
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     @staticmethod
     def get(
             initiative: Initiative,
@@ -1454,7 +1454,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     def goal_achieved(self):
         return common.parse_bool(common.get(self, ["evaluation_json", "goal_achieved"], False))
     
-    def get_llm_data(self, description):
+    def get_llm_data(self, description, include_details=False):
         code_changes = []
         for cv in self.codeversion_set.all().order_by("created_at"):
             diff = cv.get_diff()
@@ -1464,14 +1464,11 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                     "changes_diff": diff
                 })
         
-        return {
+        d = {
             "description": description,
             "iteration_id": self.id,
             "iteration_version_number": self.version_number,
             "iteration_timestamp": self.timestamp,
-            "pre_planning_routing": self.routing_json,
-            "pre_coding_planning": self.planning_json,
-            "code_changes": code_changes,
             "post_code_changes_execution_evaluation": {
                 "summary": self.evaluation_json.get("summary"),
                 "runtime_errors": self.evaluation_json.get("error"),
@@ -1479,6 +1476,17 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             },
             "important_reminder": "Learn from the past.  If there are errors, make every attempt to not repeat them"
         }
+        
+        if include_details:
+            d.update({
+                "pre_planning_routing": self.routing_json,
+                "pre_coding_planning": self.planning_json,
+                "code_changes": code_changes,
+                "cloudformation_logs": self.cloudformation_logs or "N/A",
+                "sysout": self.log_content_execution or "N/A"
+            })
+            
+        return d
     
     def get_all_code_versions(self):
         return {

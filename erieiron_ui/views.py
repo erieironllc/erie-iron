@@ -1465,7 +1465,30 @@ def _iteration_tab_available_planning(iteration: SelfDrivingTaskIteration, **_):
 
 
 def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
-    return {}
+    code_file_datas = common.ensure_list(common.get(iteration, ["planning_json", "code_files"]))
+    code_file_paths = [
+        code_file.get('code_file_path')
+        for code_file in code_file_datas
+    ]
+    
+    code_file_map = {
+        cf.file_path: cf
+        for cf in iteration.self_driving_task.business.codefile_set.filter(file_path__in=code_file_paths)
+    }
+
+    code_files = []
+    for code_file in code_file_datas:
+        code_file_path = code_file.get('code_file_path')
+        if code_file_path and code_file_path in code_file_map:
+            codefile_id = code_file_map[code_file_path].id
+            code_file['url'] = reverse(view_codefile, args=[codefile_id])
+            
+        code_files.append(code_file)
+    
+    return {
+        "iteration": iteration,
+        "code_files": code_files
+    }
 
 
 def _iteration_tab_available_evaluation(iteration: SelfDrivingTaskIteration, **_):
@@ -1486,6 +1509,7 @@ def _iteration_tab_available_codelog(iteration: SelfDrivingTaskIteration, **_):
 
 def _iteration_tab_context_cloudformation_logs(iteration: SelfDrivingTaskIteration, **_):
     return {}
+
 
 def _iteration_tab_context_codelog(iteration: SelfDrivingTaskIteration, **_):
     return {}

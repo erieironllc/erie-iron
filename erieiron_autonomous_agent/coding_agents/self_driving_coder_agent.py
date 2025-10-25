@@ -205,7 +205,11 @@ def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialA
         config.current_iteration.save()
     
     if not SdaInitialAction.EVAL.eq(one_off_action):
+        config.current_iteration.log_content_coding = None
         config.current_iteration.log_content_execution = None
+        config.current_iteration.log_content_evaluation = None
+        config.current_iteration.cloudformation_logs = None
+        config.current_iteration.evaluation_json = None
         config.current_iteration.save()
     
     if SdaInitialAction.CODE.eq(one_off_action):
@@ -2360,7 +2364,8 @@ def evaluate_iteration(
             ),
             
             get_logs_msg(
-                config
+                config,
+                config.current_iteration
             ),
             
             LlmMessage.user(
@@ -2483,9 +2488,7 @@ def evaluate_iteration(
     return eval_data
 
 
-def get_logs_msg(config):
-    iteration = config.current_iteration
-    
+def get_logs_msg(config, iteration):
     return LlmMessage.user_from_data(
         "All Logs",
         {
@@ -2878,17 +2881,20 @@ def get_iteration_eval_llm_messages(
             id__in=all_iteration_ids
     ).exclude(
         evaluation_json__isnull=True
-    ).order_by("timestamp"):
+    ).order_by("-timestamp")[:5][::-1]:
         description = ""
         if iteration == previous_iteration and previous_iteration != iteration_to_modify:
-            description = "This is the evalutation of the execution of a previous iteration of the code"
+            description = "Evalutation of the execution of a previous iteration of the code"
         elif iteration == iteration_to_modify:
             description = "We are rolling the code back to this iteration. This is the evalutation of the execution of iteration of the code we are rolling back to.  We will start our new changes from this code"
         else:
-            description = "This is an evaluation previous iteration of the code.  It is not the previous iteration neither is it the iteration we are rolling back to"
+            description = "Previous iteration evaluation.  This is not the previous iteration neither is it the iteration we are rolling back to"
         
         messages.append(
-            iteration.get_llm_data(description)
+            iteration.get_llm_data(
+                description, 
+                include_details=iteration.id == iteration_to_modify.id
+            )
         )
     
     return LlmMessage.user_from_data(

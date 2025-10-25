@@ -33,7 +33,6 @@
     <hr class="mt-4">
     <h5 class="mt-3">Code Changes</h5>
     {% for code_version in iteration.codeversion_set.all %}
-        {% if code_version.code_instructions|dictsort:"step_number" %}
             <div class="card mb-4 iteration_card">
                 <div class="card-header d-flex justify-content-start">
                     <small class="text-muted">
@@ -93,18 +92,23 @@
                     </dl>
                 </div>
             </div>
-        {% endif %}
     {% endfor %}
 
 {% else %}
 
-    {% if iteration.planning_json %}
+    {% if code_files %}
         <hr class="mt-4">
         <h5 class="mt-3">Code File Modification Plan</h5>
-        {% for code_file in iteration.planning_json.code_files %}
+        {% for code_file in code_files %}
             <div class="card mb-4 iteration_card">
                 <div class="card-header d-flex justify-content-start">
-                    <small class="text-muted">{{ code_file.code_file_path }}</small>
+                    <small class="text-muted">
+                        {% if code_file.url %}
+                            <a href="{{ code_file.url }}">{{ code_file.code_file_path }}</a>
+                        {% else %}
+                            {{ code_file.code_file_path }}
+                        {% endif %}
+                    </small>
                 </div>
                 <div class="card-body">
                     <dl class="row">
