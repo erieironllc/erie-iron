@@ -926,7 +926,7 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
     tasks = list(initiative.tasks.order_by("created_timestamp"))
     if not tasks:
         return {"tasks": tasks}
-
+    
     task_ids = [task.id for task in tasks]
     self_driving_tasks = list(
         SelfDrivingTask.objects.filter(task_id__in=task_ids).order_by("created_at")
@@ -977,12 +977,12 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
     stacks_qs = initiative.cloudformation_stacks.all().order_by("aws_env", "stack_type", "created_timestamp")
     stack_entries: list[dict] = []
     default_region = AwsEnv.DEV.get_aws_region()
-
+    
     for stack in stacks_qs:
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         env_enum = AwsEnv.valid_or(getattr(stack, "aws_env", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
-
+        
         cloudformation_url = None
         if stack.stack_arn:
             cloudformation_url = (
@@ -994,12 +994,12 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
                 f"https://{region}.console.aws.amazon.com/cloudformation/home"
                 f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
             )
-
+        
         logs_url = (
             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
             f"?region={region}#logsV2:log-groups$3FlogGroupNameFilter$3D{quote(stack.stack_namespace_token, safe='')}"
         )
-
+        
         stack_entries.append(
             {
                 "id": str(stack.id),
@@ -1017,7 +1017,7 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
                 "scope_label": "Initiative" if stack.initiative_id == initiative.id else "Business",
             }
         )
-
+    
     return {
         "stack_entries": stack_entries,
         "child_task_count": initiative.tasks.count(),
@@ -1476,9 +1476,16 @@ def _iteration_tab_context_evaluation(iteration: SelfDrivingTaskIteration, **_):
     return {}
 
 
+def _iteration_tab_available_cloudformation_logs(iteration: SelfDrivingTaskIteration, **_):
+    return bool(iteration.cloudformation_logs)
+
+
 def _iteration_tab_available_codelog(iteration: SelfDrivingTaskIteration, **_):
     return getattr(iteration, "log_content_coding") or getattr(iteration, "log_content_execution")
 
+
+def _iteration_tab_context_cloudformation_logs(iteration: SelfDrivingTaskIteration, **_):
+    return {}
 
 def _iteration_tab_context_codelog(iteration: SelfDrivingTaskIteration, **_):
     return {}
@@ -1532,18 +1539,18 @@ def _build_iteration_tabs(
         active_tab_slug: str | None = None,
 ):
     from erieiron_ui import tab_defitions
-
+    
     if not iteration:
         return []
-
+    
     tabs = []
     current_tab_slug = (active_tab_slug or "routing").lower()
-
+    
     for definition in tab_defitions.ITERATION_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
-
+        
         slug = definition["slug"]
         available = definition["availability_fn"](
             iteration,
@@ -1564,19 +1571,19 @@ def _build_iteration_tabs(
         
         if slug == "routing":
             tab_data["label"] = f"Iteration {iteration.version_number}"
-
+        
         if slug == "processes" and running_processes_count:
             tab_data["badge"] = running_processes_count
-
+        
         tabs.append(tab_data)
-
+    
     from erieiron_ui.tab_defitions import TAB_DIVIDER
     nav_links = [TAB_DIVIDER]
-
+    
     def _iteration_nav_url(target_iteration: SelfDrivingTaskIteration | None) -> str | None:
         if not target_iteration:
             return None
-
+        
         slug_for_url = current_tab_slug
         if current_tab_slug != "routing":
             tab_definition = tab_defitions.ITERATION_TAB_MAP.get(current_tab_slug)
@@ -1597,18 +1604,17 @@ def _build_iteration_tabs(
                     available = False
                 if not available:
                     slug_for_url = "routing"
-
+        
         if slug_for_url == "routing":
             return reverse('view_self_driver_iteration', args=[target_iteration.id])
         return reverse('view_self_driver_iteration_tab', args=[slug_for_url, target_iteration.id])
-
+    
     latest_iteration = None
     try:
         latest_iteration = iteration.self_driving_task.get_most_recent_iteration()
     except Exception:
         latest_iteration = None
     
-
     first_iteration = None
     try:
         first_iteration = iteration.self_driving_task.selfdrivingtaskiteration_set.order_by("timestamp").first()
@@ -1643,21 +1649,20 @@ def _build_iteration_tabs(
         "available": bool(previous_url),
     })
     
-
     nav_links.append({
         "slug": "next-iteration-link",
         "label": "Next Iteration",
         "url": next_url,
         "available": bool(next_url)
     })
-
+    
     first_divider_index = next(
         (idx for idx, tab in enumerate(tabs) if tab.get("is_divider")),
         len(tabs)
     )
     if len(nav_links) > 1:
         tabs[first_divider_index:first_divider_index] = nav_links
-
+    
     return tabs
 
 
@@ -1947,7 +1952,7 @@ def action_restart_task(request, task_id):
     
     for stack in InfrastructureStack.objects.filter(initiative_id=task.initiative_id):
         stack.tombstone()
-
+    
     # Reset task status and clear any existing executions
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.NOT_STARTED
@@ -2307,7 +2312,6 @@ def action_update_task(request, task_id):
                 return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['execution_start_time'] = None
-        
         
         # Update the task
         Task.objects.filter(id=task_id).update(**update_data)
@@ -2770,7 +2774,7 @@ def action_llm_debug_ask(request, llm_request_id):
         title = "Debug"
         system_prompt = "chat_evaluator.md"
         schema = None
-
+    
     resp = system_agent_llm_interface.llm_chat(
         description=f"{title} {orig_llm_request.title}",
         messages=[

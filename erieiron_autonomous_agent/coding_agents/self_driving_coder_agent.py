@@ -90,26 +90,14 @@ def execute(
                     
                     plan_and_implement_code_changes(config)
                 
-                execution_exception = None
-                try:
-                    build_deploy_exec_iteration(config)
-                except Exception as e:
-                    execution_exception = e
-                
-                if execution_exception:
-                    handle_deploy_exception(config, execution_exception)
+                build_deploy_exec_iteration(
+                    config
+                )
                 
                 evaluate_iteration(
-                    config,
-                    execution_exception
+                    config
                 )
-                
-                exec_docker_prune()
-                
-                config.business.snapshot_code(
-                    config.current_iteration,
-                    include_erie_common=False
-                )
+            
             except NeedPlan as npe:
                 logging.info(f'NeedPlan - {npe}')
             except RetryableException as retryable_execution_exception:
@@ -162,48 +150,14 @@ def execute(
                 logging.info(f"Stopping - Unhandled Exception")
                 raise e
             finally:
+                exec_docker_prune()
+                
+                config.business.snapshot_code(
+                    config.current_iteration,
+                    include_erie_common=False
+                )
+                
                 config.cleanup_iteration()
-
-
-def handle_deploy_exception(config, e: Exception):
-    start_epoch = config.logging_start_epoch
-    
-    if not (
-            isinstance(e, CloudFormationException) 
-            or isinstance(e, FailingTestException)
-    ):
-        config.log(common.get_stack_trace_as_string(e))
-    
-    if not isinstance(e, DatabaseMigrationException):
-        local_logs = config.get_log_content() or ""
-        
-        failure_details = cloudformation_log_reader.read_cloudformation_stack_activity(
-            config.aws_env.get_aws_region(),
-            config.get_stack_names(),
-            config.aws_env,
-            start_epoch,
-            local_logs=local_logs
-        )
-        
-        sections: list[str] = []
-        if local_logs:
-            sections.append(local_logs)
-        
-        if failure_details:
-            sections.append("==== CloudFormation Failure Details ====")
-            sections.append(failure_details)
-        
-        enriched_logs = common.safe_join(sections, "\n\n")
-        log_payload = enriched_logs or failure_details or local_logs
-        extracted_exception = extract_exception(config, log_payload)
-        
-        if log_payload:
-            config.log(log_payload)
-        
-        config.log(extracted_exception)
-        
-        if isinstance(e, AgentBlocked):
-            raise e
 
 
 def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivingTask):
@@ -1654,7 +1608,7 @@ def get_stack_lambdas(config) -> list[dict]:
             continue
         
         s3_key_param = get_lambda_s3_key_param(
-            resource_name, 
+            resource_name,
             s3_key_ref
         )
         
@@ -1869,35 +1823,53 @@ def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
 
 
 def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
-    config.current_iteration.evaluation_json = None
-    config.current_iteration.save()
-    
-    config.logging_start_epoch = int(time.time())
-    docker_env = build_env(
-        config
-    )
-    
-    config.logging_start_epoch = int(time.time())
-    docker_image_tag = build_iteration(
-        config,
-        docker_env
-    )
-    
-    config.logging_start_epoch = int(time.time())
-    deploy_iteration(
-        config,
-        docker_env,
-        docker_image_tag
-    )
-    
-    config.logging_start_epoch = int(time.time())
-    execute_iteration(
-        config,
-        docker_env,
-        docker_image_tag
-    )
-    
-    config.log("Docker execution finished")
+    logging_start_epoch = int(time.time())
+    try:
+        config.current_iteration.evaluation_json = None
+        config.current_iteration.save()
+        
+        docker_env = build_env(
+            config
+        )
+        
+        logging_start_epoch = int(time.time())
+        docker_image_tag = build_iteration(
+            config,
+            docker_env
+        )
+        
+        logging_start_epoch = int(time.time())
+        deploy_iteration(
+            config,
+            docker_env,
+            docker_image_tag
+        )
+        
+        logging_start_epoch = int(time.time())
+        execute_iteration(
+            config,
+            docker_env,
+            docker_image_tag
+        )
+        
+        config.log("Docker execution finished")
+    except NeedPlan as e:
+        raise e
+    except AgentBlocked as e:
+        raise e
+    except CloudFormationException as e:
+        config.log(f"cloudformation threw exception: {e}.  **review cloudformation logs for details**")
+    except FailingTestException as e:
+        config.log(f"Tests are failing.  **review sysout logs for details**")
+    except Exception as e:
+        config.log(common.get_stack_trace_as_string(e))
+    finally:
+        config.current_iteration.cloudformation_logs = cloudformation_log_reader.read_cloudformation_stack_activity(
+            config.aws_env,
+            config.get_stack_names(),
+            logging_start_epoch
+        )
+        config.current_iteration.save()
 
 
 def execute_iteration(
@@ -2013,6 +1985,7 @@ def deploy_iteration(
         config.log(e)
         raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
     
+    ecr_arn = full_image_uri = None
     for i in range(3):
         try:
             full_image_uri, ecr_arn = push_image_to_ecr(
@@ -2306,18 +2279,13 @@ def assert_tests_green(config: SelfDriverConfig):
 
 
 def evaluate_iteration(
-        config: SelfDriverConfig,
-        exception: Exception = None
+        config: SelfDriverConfig
 ):
+    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(
+        id=config.current_iteration.id
+    )
+    
     log_output = config.set_phase(SdaPhase.EVALUATE)
-    
-    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(id=config.current_iteration.id)
-    
-    if isinstance(exception, AgentBlocked):
-        raise exception
-    
-    if isinstance(exception, NeedPlan):
-        return None
     
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
@@ -2340,7 +2308,10 @@ def evaluate_iteration(
         """)
     
     aws_env = config.aws_env
-    stack_operational = is_stack_operational(config.get_stack_names(), config.aws_env)
+    stack_operational = is_stack_operational(
+        config.get_stack_names(),
+        config.aws_env
+    )
     
     if not stack_operational:
         allow_goal_achieved = False
@@ -2388,19 +2359,9 @@ def evaluate_iteration(
                 }
             ),
             
-            LlmMessage.user_from_data(
-                f"**Logs from the iteration's test output and execution**",
-                {
-                    "log_output": log_output
-                }
+            get_logs_msg(
+                config
             ),
-            
-            LlmMessage.user_from_data(
-                f"**Exception throw during this iteration's execution**",
-                {
-                    "exception": common.get_stack_trace_as_string(exception)
-                }
-            ) if exception else None,
             
             LlmMessage.user(
                 "Please summarize this iteration"
@@ -2421,24 +2382,6 @@ def evaluate_iteration(
     
     if not allow_goal_achieved:
         eval_data['goal_achieved'] = False
-    
-    if isinstance(exception, ExecutionException):
-        # ExecutionExceptions generally correspond to infra/deployment/runtime issues,
-        # but could also arise during test runs.
-        if "test" in str(exception).lower():
-            # Attach to test_errors array
-            test_error_entry = {
-                "summary": "ExecutionException during test run",
-                "file_name": "not applicable",
-                "logs": str(exception)
-            }
-            existing = eval_data.get("test_errors") or []
-            eval_data["test_errors"] = existing + [test_error_entry]
-        else:
-            # Default to single error object
-            eval_data.setdefault("error", {})
-            eval_data["error"].setdefault("summary", "ExecutionException during iteration")
-            eval_data["error"]["logs"] = str(exception)
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
@@ -2538,6 +2481,23 @@ def evaluate_iteration(
     )
     
     return eval_data
+
+
+def get_logs_msg(config):
+    iteration = config.current_iteration
+    
+    return LlmMessage.user_from_data(
+        "All Logs",
+        {
+            "CloudFormation Logs": iteration.cloudformation_logs or "N/A",
+            "sysout logs by Phase": {
+                "init": iteration.log_content_init or "N/A",
+                "coding": iteration.log_content_coding or "N/A",
+                "execution": iteration.log_content_execution or "N/A",
+                "evaluation": iteration.log_content_evaluation or "N/A"
+            }
+        }
+    )
 
 
 def get_previous_iteration_summaries_msg(config):

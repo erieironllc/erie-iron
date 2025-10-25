@@ -107,7 +107,6 @@ class SelfDriverConfig:
         self.log_path: Path = None
         self.log_f = None
         self.stop_tailing = None
-        self.logging_start_epoch = int(time.time())
         self.phase = SdaPhase.INIT
         
         self.cloudformation_configs: list[Path] = [
@@ -214,7 +213,6 @@ class SelfDriverConfig:
         self.stop_tailing = self.start_log_tail_thread()
     
     def reset_log(self):
-        self.logging_start_epoch = int(time.time())
         self.close_log()
         self.init_log()
     

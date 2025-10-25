@@ -253,10 +253,17 @@ ITERATION_TAB_DEFINITIONS = [
     },
     {
         "slug": "logs",
-        "label": "Logs",
+        "label": "Agent Logs",
         "template": "iteration/tabs/logs.html",
         "availability_fn": views._iteration_tab_available_codelog,
         "context_fn": views._iteration_tab_context_codelog,
+    },
+    {
+        "slug": "cloudformation",
+        "label": "CloudFormation Logs",
+        "template": "iteration/tabs/cloudformation_logs.html",
+        "availability_fn": views._iteration_tab_available_cloudformation_logs,
+        "context_fn": views._iteration_tab_context_cloudformation_logs,
     },
     {
         "slug": "evaluation",

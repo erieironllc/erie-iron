@@ -7,10 +7,31 @@ from erieiron_common.enums import AwsEnv
 
 def test_read_cloudformation_stack_activity_returns_full_sections(monkeypatch):
     def fake_collect_stack_activity(region, stack_name, deployment_start_datetime):
-        return [
-            "CloudFormation stack events since deployment start:",
-            f"{stack_name} event summary",
-        ]
+        return {
+            "cloudformation": {
+                "context": "CloudFormation stack events since deployment start",
+                "events": [
+                    {"summary": f"{stack_name} event summary"}
+                ],
+                "failure_events": [],
+                "failed_logical_ids": [],
+                "failed_resource_descriptions": [],
+                "status_counts": {},
+                "collection_errors": [],
+                "errors": []
+            },
+            "cloudtrail": {"context": "", "events": [], "errors": []},
+            "cloudwatch": {
+                "context": "",
+                "time_window": {},
+                "stack_logs": None,
+                "ecs_task_logs": None,
+                "ecs_task_stop_reasons": None,
+                "cloudwatch_alarms": None,
+                "alb_error_logs": None,
+                "errors": []
+            },
+        }
 
     monkeypatch.setattr(
         cloudformation_log_reader,
@@ -24,16 +45,15 @@ def test_read_cloudformation_stack_activity_returns_full_sections(monkeypatch):
     )
 
     rendered = cloudformation_log_reader.read_cloudformation_stack_activity(
-        "us-east-1",
-        "sample-stack",
         AwsEnv.DEV,
-        time.time(),
-        local_logs="local run logs",
+        "sample-stack",
+        time.time()
     )
 
-    assert "CloudFormation activity for stack 'sample-stack':" in rendered
-    assert "sample-stack event summary" in rendered
-    assert "lambda diagnostics" in rendered
+    assert "sample-stack" in rendered["stacks"]
+    stack_activity = rendered["stacks"]["sample-stack"]
+    assert stack_activity["cloudformation"]["events"][0]["summary"] == "sample-stack event summary"
+    assert rendered["lambda_logs"]["logs"] == "lambda diagnostics"
 
 
 def test_get_cloudformation_activity_includes_success_and_failure_events(monkeypatch):
@@ -89,8 +109,8 @@ def test_get_cloudformation_activity_includes_success_and_failure_events(monkeyp
         "sample-stack",
         deployment_start,
     )
-    rendered = common.safe_join(activity_lines, "\n")
-
-    assert "CREATE_IN_PROGRESS" in rendered
-    assert "CREATE_FAILED" in rendered
-    assert "Detailed resource descriptions for top failures" in rendered
+    assert len(activity_lines["events"]) == 2
+    assert activity_lines["events"][0]["status"] == "CREATE_IN_PROGRESS"
+    assert activity_lines["failure_events"][0]["status"] == "CREATE_FAILED"
+    assert activity_lines["failed_resource_descriptions"][0]["logical_resource_id"] == "Topic"
+    assert activity_lines["status_counts"]["CREATE_FAILED"] == 1

@@ -1,0 +1,5 @@
+{% load erieiron_common_tags %}
+<div class="d-flex justify-content-end">
+    {% include "_copy_clipboard_btn.html" with target_el="#div_cloudformation_logs" %}
+</div>
+<div class="pre" id="div_cloudformation_logs">{{ iteration.cloudformation_logs|pprint_json }}</div>
