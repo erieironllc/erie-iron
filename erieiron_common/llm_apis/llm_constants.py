@@ -1,3 +1,5 @@
+import tiktoken
+
 from erieiron_common.enums import LlmModel
 from erieiron_common.llm_apis import openai_chat_api, gemini_chat_api, claude_chat_api, deepseek_chat_api
 

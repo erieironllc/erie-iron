@@ -19,6 +19,8 @@ def chat(
         model: LlmModel = None,
         output_schema: Path = None,
         code_response=False,
+        reasoning_effort: LlmReasoningEffort = None,
+        verbosity: LlmVerbosity = None,
         debug=False
 ) -> 'LlmResponse':
     messages = common.flatten(messages)
@@ -48,36 +50,24 @@ def chat(
             messages = LlmMessage.parse_prompt(model, messages, code_response)
             json_messages = [m.get_message_json(model) for m in messages]
             
-            if debug:
-                debug_messages(model, messages)
-            
             start_time = time.time()
             resp = impl.chat(
                 json_messages,
                 model,
-                code_response
+                code_response,
+                reasoning_effort,
+                verbosity
             )
             chat_time = (time.time() - start_time) * 1000
-            token_count = LlmMessage.get_total_token_count(model, messages)
-            logging.info(f"chat with {model.value} took {chat_time:.2f}ms for {token_count} tokens")
             
-            response_text = post_process_response(resp)
-            
-            price_total, price_input, price_output = LlmMessage.get_price(
-                model,
-                messages,
-                response_text
-            )
-            
-            resp = LlmResponse(
-                text=response_text,
-                model=model,
-                price_total=price_total,
-                price_input=price_input,
-                price_output=price_output,
-                token_count=token_count,
-                chat_millis=chat_time
-            )
+            if not isinstance(resp, LlmResponse):
+                resp = LlmResponse(
+                    text=resp,
+                    model=model,
+                    input_token_count=LlmMessage.get_total_token_count(model, messages),
+                    output_token_count=get_token_count(model, resp),
+                    chat_millis=chat_time
+                )
             
             if output_schema:
                 output_schema = common.assert_exists(output_schema)
@@ -91,20 +81,6 @@ def chat(
                     except Exception as e:
                         # Attempt to coerce JSON to schema using a cheaper model
                         resp.parsed_json = coerce_json_to_schema(resp.text, schema, e)
-                
-                if debug:
-                    print(f"""
---------------------------------------
-{model} json response (validated against {output_schema}):
-{json.dumps(resp.json(), indent=4)}
---------------------------------------""")
-            else:
-                if debug:
-                    print(f"""
---------------------------------------
-{model} response:
-{response_text}
---------------------------------------""")
             
             return resp
         except Exception as e:
@@ -115,42 +91,11 @@ def chat(
                 logging.exception(f"chat with {model} failed.  will try {models[idx + 1]}")
 
 
-def post_process_response(resp):
-    resp = resp.strip()
-    if resp.startswith("```markdown"):
-        resp = resp[len("```markdown"):]
-    if resp.startswith("```json"):
-        resp = resp[len("```json"):]
-    if resp.startswith("```python"):
-        resp = resp[len("```python"):]
-    if resp.endswith("```"):
-        resp = resp[:-len("```")]
-    return resp
-
-
 def sanitize_prompt(raw_text: str) -> str:
     if isinstance(raw_text, dict):
         return json.dumps(raw_text, indent=4, cls=ErieIronJSONEncoder)
     else:
         return raw_text
-
-
-@dataclass
-class LlmResponse:
-    text: str
-    model: LlmModel
-    price_total: float
-    price_input: float
-    price_output: float
-    token_count: int
-    chat_millis: float
-    parsed_json: Optional[dict] = None
-    
-    def json(self) -> dict:
-        if not self.parsed_json:
-            self.parsed_json = ensure_parsable_json(self.text)
-        
-        return self.parsed_json
 
 
 class LlmMessage:
@@ -185,16 +130,6 @@ class LlmMessage:
 {self.text}
 -----------------------""")
     
-    @staticmethod
-    def get_price(model: LlmModel, input_messages: List['LlmMessage'], response_text: str) -> Tuple[float, float, float]:
-        usd_per_million_input_token = MODEL_PRICE_USD_PER_MILLION_TOKENS[model]['input']
-        usd_per_million_output_token = MODEL_PRICE_USD_PER_MILLION_TOKENS[model]['output']
-        
-        price_input = LlmMessage.get_total_token_count(model, input_messages) * usd_per_million_input_token / 1_000_000
-        price_output = LlmMessage._get_token_count(model, response_text) * usd_per_million_output_token / 1_000_000
-        
-        return price_input + price_output, price_input, price_output
-    
     def get_message_json(self, model: LlmModel) -> dict:
         model = LlmModel(model)
         
@@ -228,29 +163,19 @@ class LlmMessage:
         for m in messages:
             if isinstance(m, LlmMessage):
                 messages_processed.append(m)
-            else:
+            elif m:
                 messages_processed.append(LlmMessage.user(str(m)))
         
         return sum([m.get_token_count(model) for m in messages_processed]) + (4 * len(messages_processed))
     
-    @staticmethod
-    def _get_token_count(model: LlmModel, s: str) -> int:
-        try:
-            encoding = tiktoken.encoding_for_model(model.value)
-        except KeyError:
-            encoding = tiktoken.get_encoding("cl100k_base")
-        
-        return len(encoding.encode(s))
-    
     def get_token_count(self, model: LlmModel) -> int:
         try:
-            return LlmMessage._get_token_count(
+            return get_token_count(
                 model,
                 json.dumps(self.get_message_json(model), cls=ErieIronJSONEncoder)
             )
         except Exception as e:
             logging.exception(e)
-            asdf = 1
     
     @staticmethod
     def parse_prompt(model, messages_in: list['LlmMessage'], code_response=False) -> List['LlmMessage']:
@@ -361,14 +286,14 @@ class LlmMessage:
         for title_name in ["description", "desc", "title", "name", "summary"]:
             if title_name not in data:
                 break
-                
+        
         data_string = json.dumps({
             f"{title_name}": title,
             **data
         }, indent=4, cls=ErieIronJSONEncoder)
         
         return data_string
-        
+    
     @classmethod
     def dumps(cls, messages: list['LlmMessage']):
         strings = []
@@ -378,67 +303,10 @@ class LlmMessage:
 {m.text}
             """)
         return "\n\n".join(strings)
-
+    
     @classmethod
     def log(cls, messages: list['LlmMessage']):
         print(cls.dumps(messages))
-
-
-def ensure_parsable_json(json_text: str) -> dict:
-    orig_json_text = json_text
-    price = 0
-    last_e = None
-    for i in range(5):
-        if not json_text:
-            raise Exception(f"json_text is empty")
-        
-        while len(json_text) > 0 and json_text[0] != "{":
-            json_text = json_text[1:]
-        
-        while len(json_text) > 0 and json_text[-1] != "}":
-            json_text = json_text[:-1]
-        
-        if common.is_empty(json_text):
-            raise Exception(f"unable to parse json\n{orig_json_text}")
-        
-        try:
-            return json.loads(json_text)
-        except Exception as e:
-            print(f"----------\n{json_text}\n\n{e}\n--------------")
-            
-            last_e = e
-            llm_response_reformat = chat(
-                f"""
-please format and return the following json text as valid and parsable json:
-
-========= json text start ================
-{json_text}
-========= json text end ================
-
-
-the previous attempt at parsing this content resulted in this error:  {e}
-
-
-resond only with parsable json.  do not include any comments, explanations, or non-json markdown
-""",
-                LlmModel.OPENAI_O3_MINI,
-                code_response=True
-            )
-            json_text = llm_response_reformat.text
-    
-    raise last_e
-
-
-def debug_messages(model: LlmModel, messages: list[LlmMessage]):
-    print(f"""
---------------- --------------- --------------- --------------- ---------------
-Begin chat with {model}
-    """)
-    
-    for m in common.ensure_list(messages):
-        print(f"\n\n\n{common.truncate_text_lines(m)}\n\n\n")
-    
-    print("--------------- --------------- --------------- --------------- ---------------")
 
 
 def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:

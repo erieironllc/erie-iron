@@ -260,6 +260,8 @@ class PubSubMessageType(ErieEnum):
     SELF_DRIVING_CODER_UPDATED = auto()
     SELF_DRIVING_CODER_COMPLETED = auto()
     
+    RESET_TASK_TEST = auto()
+    
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:
         return {
@@ -334,6 +336,19 @@ class LlmMessageType(ErieEnum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+
+
+class LlmReasoningEffort(ErieEnum):
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class LlmVerbosity(ErieEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class LlmModel(ErieEnum):
@@ -519,4 +534,3 @@ class InfrastructureStackType(ErieEnum):
             return "infrastructure-application.yaml"
         else:
             raise Exception(f"unhandled stack type {self}")
-

@@ -17,6 +17,40 @@ TIME_ZONE = 'America/Los_Angeles'
 STATIC_ROOT = os.path.join(Path(__file__).resolve().parent, "erieiron_ui", "static")
 SECRET_KEY = "django-insecure-4yp%)5s=rx5ph(+zs7mhk&zj9&sko+15(bi=nx-94^m-hrd&2v"
 AWS_ACCOUNT_ID = "782005355493"
+AWS_DEFAULT_REGION_NAME = "us-west-2"
+LLM_API_KEYS_SECRET_ARN = "arn:aws:secretsmanager:us-west-2:782005355493:secret:LLM_API_KEYS-B1Bn3t"
+STRIPE_WEBHOOK_SECRET_ARN = "TODO"
+DOMAIN_CONTACT_INFO = {
+    "FirstName": "ErieIron",
+    "LastName": "LLC",
+    "ContactType": "COMPANY",
+    "OrganizationName": "Erie Iron LLC",
+    "AddressLine1": "2108 N St. STE N",
+    "City": "Sacramento",
+    "State": "CA",
+    "CountryCode": "US",
+    "ZipCode": "95816",
+    "PhoneNumber": "+1.9253381985",
+    "Email": "erieironllc@gmail.com"
+}
+
+READONLY_FILES = [
+    {
+        "path": "manage.py",
+        "alternatives": "settings.py",
+        "description": "Django's core management script"
+    },
+    {
+        "path": "Dockerfile",
+        "alternatives": "return blocked or otherwise ESCALATE_TO_HUMAN",
+        "description": "the Dockerfile"
+    },
+    {
+        "path": "docker-internal-startup-cmd.sh",
+        "alternatives": "return blocked or otherwise ESCALATE_TO_HUMAN",
+        "description": "the docker startup script"
+    }
+]
 
 BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
 

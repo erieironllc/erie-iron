@@ -172,29 +172,12 @@ class SelfDriverConfig:
         
         return log_content
     
-    def set_iteration(self, *args):
-        args = common.flatten(args)
-        
-        self.current_iteration: SelfDrivingTaskIteration = common.first(args)
+    def set_iteration(self, current_iteration: SelfDrivingTaskIteration):
+        self.current_iteration = current_iteration
         if not self.current_iteration:
             raise "current_iteration cannot be None"
         
-        self.previous_iteration: SelfDrivingTaskIteration = common.first(args[1:])
-        if not self.previous_iteration:
-            self.previous_iteration = self.current_iteration.get_previous_iteration()
-        
-        if not self.previous_iteration:
-            self.previous_iteration = self.current_iteration
-        
-        self.iteration_to_modify: SelfDrivingTaskIteration = common.first(args[2:])
-        if not self.iteration_to_modify:
-            self.iteration_to_modify = self.current_iteration.start_iteration
-        
-        if not self.iteration_to_modify:
-            self.iteration_to_modify = self.previous_iteration
-        
-        if not self.iteration_to_modify:
-            self.iteration_to_modify = self.current_iteration
+        self.previous_iteration, self.iteration_to_modify = self.current_iteration.get_relevant_iterations()
         
         self.reset_log()
     
@@ -339,21 +322,9 @@ class NeedPlan(Exception):
         super().__init__(msg)
 
 
-class CloudFormationException(Exception):
+class FailingTestException(Exception):
     def __init__(self, extracted_exception: str):
         super().__init__(extracted_exception)
-
-
-class CloudFormationStackDeleting(Exception):
-    """Signal raised when a stack enters a delete workflow."""
-    
-    def __init__(self, stack_name: str, status: str, new_stack_name: str):
-        self.stack_name = stack_name
-        self.status = status
-        self.new_stack_name = new_stack_name
-        super().__init__(
-            f"CloudFormation stack {stack_name} entered {status}; will pivot to {new_stack_name}"
-        )
 
 
 class ExecutionException(Exception):
@@ -365,7 +336,7 @@ class BadPlan(Exception):
     def __init__(self, msg: str, plan_data: dict = None):
         if not plan_data:
             plan_data = {}
-            
+        
         self.plan_data = plan_data
         super().__init__(msg)
 

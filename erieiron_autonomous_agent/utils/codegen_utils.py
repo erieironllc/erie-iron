@@ -174,64 +174,69 @@ def looks_like_unified_diff(text: str) -> bool:
     return t.startswith('--- ') and '\n+++' in t and '\n@@' in t
 
 
-def apply_unified_diff_to_text(original_text: str, patch_text: str, expected_relpath: str | None = None) -> str:
+def apply_unified_diff_to_text(original_text: str, patch_text: str) -> str:
     """
     Apply a single-file unified diff to original_text and return the patched text.
-    This is a minimal, in-memory applier that supports standard unified diff hunks.
-    It does not support file renames; callers should treat renames as delete+add.
+    This is an in-memory applier that supports standard unified diff hunks.
+    It intentionally does not support multi-file patches or renames.
 
     Raises ValueError if the patch cannot be applied cleanly.
     """
     import re
     
+    # --- helpers ---------------------------------------------------------
+    def _norm_line(s: str) -> str:
+        """Normalize platform newlines to LF, preserve trailing newline if present."""
+        return s.replace('\r\n', '\n') if isinstance(s, str) else s
+    
+    def _rstrip_nl(s: str) -> str:
+        """Remove a single trailing LF if present."""
+        if s.endswith('\n'):
+            return s[:-1]
+        return s
+    
+    def _ctx_match(out_line: str, content_wo_nl: str) -> bool:
+        """Compare a file line (with possible trailing NL) to patch content (no NL)."""
+        ol = _norm_line(out_line)
+        return _rstrip_nl(ol) == content_wo_nl
+    
+    # --------------------------------------------------------------------
     lines = original_text.splitlines(keepends=True)
     patch_lines = patch_text.splitlines(keepends=False)
     
-    # Parse headers
+    # Parse headers (single-file only)
     i = 0
-    # Skip any leading blank/prologue lines the model might include
     while i < len(patch_lines) and not patch_lines[i].startswith('--- '):
         i += 1
     if i >= len(patch_lines) or not patch_lines[i].startswith('--- '):
         raise ValueError('Missing --- header in unified diff')
-    old_hdr = patch_lines[i];
+    old_hdr = patch_lines[i]
     i += 1
     if i >= len(patch_lines) or not patch_lines[i].startswith('+++ '):
         raise ValueError('Missing +++ header in unified diff')
-    new_hdr = patch_lines[i];
+    new_hdr = patch_lines[i]
     i += 1
     
-    # Optional path sanity check
-    def _extract_path(h):
-        # headers look like: '--- a/path' or '--- /dev/null'
-        parts = h.split(maxsplit=1)
-        return parts[1].strip() if len(parts) > 1 else ''
+    # Reject multi-file patches early if we see a second file header later
+    def _is_file_header(line: str) -> bool:
+        return line.startswith('--- ') or line.startswith('+++ ')
     
-    old_path = _extract_path(old_hdr)[2:] if _extract_path(old_hdr).startswith('a/') else _extract_path(old_hdr)
-    new_path = _extract_path(new_hdr)[2:] if _extract_path(new_hdr).startswith('b/') else _extract_path(new_hdr)
-    
-    if expected_relpath:
-        exp = expected_relpath.lstrip('./')
-        # Allow either old or new header to match expected path (new files use /dev/null in old header)
-        header_paths = {old_path.lstrip('./'), new_path.lstrip('./')}
-        # If headers contain absolute or sandboxed paths, only compare the tail
-        header_tails = {p.split('/')[-len(exp.split('/')):] for p in header_paths if p}
-        # Quick tail match
-        if exp not in header_paths and not any('/'.join(tail) == exp for tail in header_tails):
-            # Do not fail hard; models sometimes emit slightly different prefixes. Continue.
-            pass
-    
-    # Pattern for hunk header: @@ -l,s +l,s @@
+    # Hunk header pattern
     hunk_re = re.compile(r'^@@ -(?P<old_start>\d+)(,(?P<old_count>\d+))? \+(?P<new_start>\d+)(,(?P<new_count>\d+))? @@')
     
-    # Work on a mutable copy
     out = lines[:]
-    # Offset adjustment as we apply hunks
     line_offset = 0
     
+    # If any hunk indicates the resulting file should not end with a newline,
+    # we will trim it at the end.
+    final_strip_trailing_newline = False
+    
     while i < len(patch_lines):
+        # Explicitly fail on multi-file patches
+        if _is_file_header(patch_lines[i]):
+            raise ValueError('Multi-file patch not supported')
+        
         if not patch_lines[i].startswith('@@ '):
-            # Skip non-hunk lines (e.g., file metadata) until next hunk
             i += 1
             continue
         
@@ -243,7 +248,7 @@ def apply_unified_diff_to_text(original_text: str, patch_text: str, expected_rel
         old_start = int(m.group('old_start'))
         old_count = int(m.group('old_count') or '0')
         new_start = int(m.group('new_start'))
-        # new_count unused for application
+        new_count = int(m.group('new_count') or '0')
         
         # Convert 1-based to 0-based index into 'out' with current offset
         idx = old_start - 1 + line_offset
@@ -251,53 +256,79 @@ def apply_unified_diff_to_text(original_text: str, patch_text: str, expected_rel
         # Build the replacement block from hunk lines
         removal_count = 0
         addition_block = []
+        ctx_count = 0
+        addition_count = 0
         
-        # We'll also validate context lines against current 'out'
+        last_sign = None
+        saw_no_nl_marker = False
         probe_idx = idx
         
         while i < len(patch_lines) and not patch_lines[i].startswith('@@ '):
-            line = patch_lines[i]
-            if line.startswith('--- ') or line.startswith('+++ '):
-                # Next file header - single-file patch expected; stop processing
+            # Stop if another file header appears (unsupported multi-file)
+            if _is_file_header(patch_lines[i]):
                 break
+            
+            curr_patch_line = i
+            line = patch_lines[i]
+            
+            if line == r'\ No newline at end of file':
+                saw_no_nl_marker = True
+                i += 1
+                continue
+            
             sign = line[:1] if line else ''
             content = line[1:] if len(line) > 0 else ''
             
             if sign == ' ':
                 # Context: must match existing
-                if probe_idx >= len(out) or out[probe_idx] != content + ('\n' if not out[probe_idx].endswith('\n') and content != '' else '') and out[probe_idx].rstrip('\n') != content:
-                    # Be tolerant of LF/CRLF variations
-                    if out[probe_idx].replace('\r\n', '\n').rstrip('\n') != content:
-                        raise ValueError('Context mismatch while applying hunk')
+                if probe_idx >= len(out) or not _ctx_match(out[probe_idx], content):
+                    raise ValueError(f'Context mismatch while applying hunk starting at -{old_start} (patch line {curr_patch_line + 1})')
                 addition_block.append(out[probe_idx])
                 probe_idx += 1
+                ctx_count += 1
+                last_sign = ' '
             elif sign == '-':
                 # Removal: must match existing
-                if probe_idx >= len(out) or out[probe_idx].replace('\r\n', '\n').rstrip('\n') != content:
-                    raise ValueError('Removal mismatch while applying hunk')
+                if probe_idx >= len(out) or not _ctx_match(out[probe_idx], content):
+                    raise ValueError(f'Removal mismatch while applying hunk starting at -{old_start} (patch line {curr_patch_line + 1})')
                 removal_count += 1
                 probe_idx += 1
+                last_sign = '-'
             elif sign == '+':
-                # Addition: append with newline
+                # Addition: append with newline; may be trimmed by marker
                 addition_block.append(content + '\n')
-            elif line == r'\ No newline at end of file':
-                # Ignore standard marker
-                pass
+                addition_count += 1
+                last_sign = '+'
             else:
-                # Unknown marker - treat as error
-                raise ValueError(f'Unknown hunk line prefix: {sign!r}')
+                raise ValueError(f'Unknown hunk line prefix: {sign!r} (patch line {curr_patch_line + 1})')
+            
             i += 1
-            if i >= len(patch_lines):
-                break
+        
+        # Apply the standard "no newline at end of file" marker semantics
+        if saw_no_nl_marker:
+            if addition_block and last_sign in ('+', ' '):
+                addition_block[-1] = _rstrip_nl(addition_block[-1])
+                # If the marker followed a '+' line, the resulting file should not end with a newline
+                if last_sign == '+':
+                    final_strip_trailing_newline = True
+            else:
+                # No additions in this hunk: try to trim newline on the last context line already in 'out'
+                if idx + ctx_count - 1 >= 0 and idx + ctx_count - 1 < len(out):
+                    out[idx + ctx_count - 1] = _rstrip_nl(out[idx + ctx_count - 1])
+                    final_strip_trailing_newline = True
+        
+        # Validate hunk counts if provided
+        if old_count and old_count != ctx_count + removal_count:
+            raise ValueError(f'Hunk old_count mismatch: expected {old_count}, got {ctx_count + removal_count}')
+        if new_count and new_count != ctx_count + addition_count:
+            raise ValueError(f'Hunk new_count mismatch: expected {new_count}, got {ctx_count + addition_count}')
         
         # Apply: replace the slice [idx, idx + removed) with addition_block
         out[idx:idx + removal_count] = addition_block
         # Update offset for subsequent hunks: new_len - old_len
         line_offset += len(addition_block) - removal_count
-        
-        # Stop if another file header appears (we only support single-file patches here)
-        if i < len(patch_lines) and (patch_lines[i].startswith('--- ') or patch_lines[i].startswith('+++ ')):
-            break
     
-    return ''.join(out)
-
+    result = ''.join(out)
+    if final_strip_trailing_newline and result.endswith('\n'):
+        result = result[:-1]
+    return result

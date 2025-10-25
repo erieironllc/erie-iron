@@ -4,7 +4,7 @@ from typing import List
 
 import requests
 
-from erieiron_common.enums import LlmModel
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
 
 
 @lru_cache
@@ -16,7 +16,10 @@ def get_api_key():
 def chat(
         messages: List[dict],
         model: LlmModel = LlmModel.DEEPSEEK_CHAT,
-        code_response=False
+        code_response=False,
+        reasoning_effort: LlmReasoningEffort = None,
+        verbosity: LlmVerbosity = None,
+        schema_file: Path = None
 ):
     response = requests.post(
         "https://api.deepseek.com/v1/chat/completions",

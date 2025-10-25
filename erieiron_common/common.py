@@ -124,6 +124,10 @@ def contains_any(val: str, test_vals: List[str], ignore_case=False) -> bool:
     return any(v in val for v in test_vals)
 
 
+def get_list(o, key) -> list:
+    return ensure_list(get(o, key, default_val=[]))
+
+
 def get(o, key, default_val=None, check_attr=True):
     if isinstance(key, list):
         v = get(o, key[0], default_val, check_attr=check_attr)

@@ -53,7 +53,7 @@ Follow these rules for such model edits:
 ---
 
 ## File and Module Naming
-- All python code files and tests **must** be written to dist as a child of the top level directory named "./core".  You may create sub-directories in "./core" for code organization
+- All Python application modules must live under `./core/`. The build pipeline copies `./core` into the deployment `dist/` directory automatically—do **not** attempt to write artifacts directly into `dist/`.
 - All python test files **must** live in the directory "./core/tests".  **Do not** put them anywhere else
 - All files and modules must be named in a professional manner that describes their purpose.
     - This is an example of bad name:  "your_lambda_function"
@@ -119,6 +119,7 @@ If the required file type does not match one of the codewriters listed below, yo
 - `*.txt` → `txt code writer`
 - `*.ini` → `ini code writer`
 - When editing `.md` files that include URLs, prefer dynamic placeholders (e.g., `{DOMAIN_NAME}`). If tests scan for a literal, include a separate "Example" line that resolves the placeholder using DOMAIN_NAME from evaluator logs.
+- When a remediation requires edits across multiple file types, enumerate **each file** separately with its corresponding codewriter (for example: `infrastructure-application.yaml` via the AWS CloudFormation writer **and** `core/views.py` via the Python writer). Never collapse multi-file edits into a single step or ask one writer to output another writer's format.
 
 ### Forbidden Files
 - Any `.env*` file is forbidden. All environment variables must come from the OS environment.

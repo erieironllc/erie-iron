@@ -2,6 +2,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List
 
+from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity
+
 
 @lru_cache
 def get_api_key():
@@ -12,7 +14,10 @@ def get_api_key():
 def chat(
         messages: List[dict],
         model,
-        code_response
+        code_response,
+        reasoning_effort: LlmReasoningEffort = None,
+        verbosity: LlmVerbosity = None,
+        schema_file: Path = None
 ):
     # fireworks.api_key = get_api_key()
     # response = fireworks.chat.completions.create(

@@ -4,7 +4,7 @@ from typing import List
 
 import anthropic
 
-from erieiron_common.enums import LlmModel
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
 
 
 @lru_cache
@@ -17,7 +17,10 @@ def get_api_key():
 def chat(
         messages: List[dict],
         model: LlmModel = LlmModel.CLAUDE_3_7,
-        code_response=False
+        code_response=False,
+        reasoning_effort: LlmReasoningEffort = None,
+        verbosity: LlmVerbosity = None,
+        schema_file: Path = None
 ):
     client = anthropic.Anthropic(api_key=get_api_key())
 

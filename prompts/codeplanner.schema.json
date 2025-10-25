@@ -9,6 +9,38 @@
       "title": "Planned Code Change",
       "required": ["code_files"],
       "properties": {
+        "deprecation_plan": {
+          "type": "object",
+          "required": ["tombstones"],
+          "properties": {
+            "tombstones": {
+              "type": "array",
+              "description": "List of deprecated parameters and how to migrate away from them.",
+              "items": {
+                "type": "object",
+                "required": ["name", "migration_steps"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Deprecated parameter name"
+                  },
+                  "replace_with": {
+                    "type": ["string", "null"],
+                    "description": "Optional replacement parameter/value; null if not applicable"
+                  },
+                  "migration_steps": {
+                    "type": "array",
+                    "description": "Ordered steps to remove/replace the deprecated parameter",
+                    "minItems": 1,
+                    "items": { "type": "string" }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "required_credentials": {
           "type": "object",
           "description": "Optional. Mapping of service names to credential specification objects required for this code change. Each key is a service name (e.g., 'github', 'openai', 'aws'), and each value describes the expected secret in AWS Secrets Manager.",
@@ -19,7 +51,8 @@
             "properties": {
               "secret_arn_env_var": {
                 "type": "string",
-                "description": "Name of the environment variable that will contain the AWS Secrets Manager secret ARN at runtime."
+                "description": "Name of the environment variable that will contain the AWS Secrets Manager secret ARN at runtime.",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
               },
               "secret_arn_cfn_parameter": {
                 "type": "string",
@@ -63,73 +96,6 @@
             "type": "string"
           }
         },
-        "dsl_plan": {
-          "type": "array",
-          "description": "Structured plan using DSL format for multi-file coordination",
-          "items": {
-            "type": "object",
-            "required": ["file", "action", "language", "description"],
-            "properties": {
-              "file": {
-                "type": "string",
-                "description": "Path to the file to modify"
-              },
-              "action": {
-                "type": "string",
-                "description": "The action type, such as add_env_variable, read_env_variable, etc."
-              },
-              "language": {
-                "type": "string",
-                "description": "Programming or config language (e.g., python, dockerfile, yaml)"
-              },
-              "description": {
-                "type": "string",
-                "description": "Natural language description of the intent"
-              },
-              "variable": {
-                "type": "string"
-              },
-              "source": {
-                "type": "string",
-                "enum": ["build_arg", "env", "static"]
-              },
-              "default": {
-                "type": ["string", "null"]
-              },
-              "assign_to": {
-                "type": "string"
-              },
-              "fallback": {
-                "type": "string"
-              },
-              "function_name": {
-                "type": "string"
-              },
-              "signature": {
-                "type": "string"
-              },
-              "body": {
-                "type": "array",
-                "items": { "type": "string" }
-              },
-              "insert_after": {
-                "type": "string"
-              },
-              "key": {
-                "type": "string"
-              },
-              "old_value": {},
-              "new_value": {},
-              "package": {
-                "type": "string"
-              },
-              "version": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": false
-          }
-        },
         "code_files": {
           "type": "array",
           "description": "Ordered list of file-level deterministic planning instructions. A single file may appear multiple times if edits must occur in interleaved stages due to dependencies.",
@@ -139,7 +105,8 @@
               "code_file_path",
               "instructions",
               "guidance",
-              "code_writing_model"
+              "code_writing_model",
+              "dependencies"
             ],
             "properties": {
               "code_file_path": {
@@ -153,7 +120,8 @@
               },
               "validator": {
                 "type": "string",
-                "description": "Strategic advice for the code writer based on trends or previous iteration summaries"
+                "enum": ["jinja", "django_template"],
+                "description": "Optional validator type. If provided, must be one of 'jinja' or 'django_template'."
               },
               "instructions": {
                 "type": "array",
@@ -247,6 +215,7 @@
                 "description": "LLM model name to be used for generating this file",
                 "enum": [
                   "gpt-5",
+                  "gpt-5-turbo",
                   "gpt-5-mini",
                   "gpt-5-nano"
                 ]
@@ -254,6 +223,14 @@
               "related_code_file_paths": {
                 "type": "array",
                 "description": "Other files being modified in this iteration that may be useful for context. Read-only. Do not edit these files.  Files must be expressed as relative to the code-root directory.  Must not start with a '/'",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[^/].*"
+                }
+              },
+              "dependencies": {
+                "type": "array",
+                "description": "List of PyPI package names required by this file's code. Used to generate per-Lambda requirements.txt.",
                 "items": {
                   "type": "string"
                 }

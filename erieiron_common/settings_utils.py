@@ -37,22 +37,15 @@ def get_logging(debug_sql_statements=False):
             },
         },
         'loggers': {
-            '': {  # 'root' logger
-                'handlers': ['console'],
-                'level': 'INFO',
-            },
-            'django.security.DisallowedHost': {
-                'handlers': ['null'],
-                'propagate': False,
-            },
-            'django.security.csrf': {
-                'handlers': ['null'],
-                'level': 'ERROR',
-                'propagate': False,
-            },
+            '': {'handlers': ['console'], 'level': 'INFO'},
+            "openai": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "httpx": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "httpcore": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            'django.security.DisallowedHost': {'handlers': ['null'], 'propagate': False},
+            'django.security.csrf': {'handlers': ['null'], 'level': 'ERROR', 'propagate': False},
         },
     }
-
+    
     if debug_sql_statements:
         debug_conf = {
             'formatters': {
@@ -77,7 +70,7 @@ def get_logging(debug_sql_statements=False):
         }
         for section, settings in debug_conf.items():
             conf[section].update(settings)
-
+    
     return conf
 
 
@@ -96,7 +89,7 @@ def get_databases(config):
             from erieiron_common import aws_utils
             db_credentials = get_secret(DATABASES_AWS_SECRET)
             print(f"db is {db_credentials['dbInstanceIdentifier']} ")
-
+            
             if not default_str(os.getenv('ERIEIRON_ENV')).startswith("prod") and db_credentials['dbInstanceIdentifier'] == 'erieiron-db':
                 print("""
 
@@ -105,7 +98,7 @@ If this is intentional, be very very careful. if unintentional, please connect t
 the DATABASES_AWS_SECRET value in your .env.dev file to DATABASES_AWS_SECRET = "erieiron-db-dev-credentials"
 
                 """)
-
+            
             return {
                 'default': {
                     'ENGINE': 'django.db.backends.postgresql',
@@ -144,7 +137,7 @@ def get_secret(secret_name: str):
         service_name='secretsmanager',
         region_name=os.getenv("AWS_REGION", "us-west-2")
     )
-
+    
     try:
         get_secret_value_response = client.get_secret_value(
             SecretId=secret_name
@@ -170,27 +163,27 @@ def get_buckets(config):
 
 def get_config():
     import decouple
-
+    
     # Get the path from the ERIEIRON_ENV environment variable
     erieiron_env = os.getenv('ERIEIRON_ENV')  # Default to '.env' if ERIEIRON_ENV is not set
     erieiron_env_commandline = os.getenv('ERIEIRON_ENV_COMMANDLINE')
     if erieiron_env_commandline:
         erieiron_env = erieiron_env_commandline
-
+    
     if erieiron_env is None:
         raise Exception("ERIEIRON_ENV is not defined")
-
+    
     conf_file = Path(os.getcwd()) / 'conf' / f'./.env.{erieiron_env}'
     config = decouple.Config(decouple.RepositoryEnv(conf_file))
     print("config file", conf_file)
-
+    
     return config
 
 
 def default_str(s, default_val=""):
     if s is None:
         return default_val
-
+    
     s = str(s)
     if not s:
         return default_val

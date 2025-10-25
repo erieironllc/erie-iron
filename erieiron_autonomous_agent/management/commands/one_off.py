@@ -19,4 +19,3 @@ class Command(BaseCommand):
         # eng_lead.write_initiative_architecture(initiative)
         initiative.tasks.all().delete()
         eng_lead.define_tasks_for_initiative(initiative.id)
-

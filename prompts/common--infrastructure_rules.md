@@ -31,6 +31,30 @@
     - **CloudFormation stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
 - Erie Iron deploys every stack inside the shared VPC `erie-iron-shared-vpc`. Plans and templates must rely on `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr` parameters and must not create or modify VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints.
 
+### S3 Event Notification Standard
+- Always configure S3 -> Lambda/SNS/SQS notifications using the inline `NotificationConfiguration` property on the `AWS::S3::Bucket` resource.
+  - There is no `AWS::S3::BucketNotification` resource type in CloudFormation.
+  - Configure notifications directly within the bucket definition using the `NotificationConfiguration` property.
+  - Example:
+    ```yaml
+    EmailIngestBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: !Sub "${StackIdentifier}-email-ingest"
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: "s3:ObjectCreated:*"
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: inbound/
+                    - Name: suffix
+                      Value: .eml
+              Function: !GetAtt EmailIngestionLambda.Arn
+    ```
+- Ensure proper Lambda invoke permissions are defined separately using `AWS::Lambda::Permission` resources that grant `s3.amazonaws.com` permission to invoke the target Lambda.
+
 - When writing or updating `infrastructure-application.yaml`, **always** include an ingress rule that allows the ALB to reach ECS tasks from within the shared VPC. This rule must look exactly like this:
 
   ```yaml
@@ -119,7 +143,13 @@ The RDS cloudformation configuration should always look like this:
           Value: !Sub ${StackIdentifier}-db-instance
 ```
 
-- The `DBSubnetGroup` defined in `infrastructure.yaml` must list `!Ref PublicSubnet1Id` and `!Ref PublicSubnet2Id` so the database resides in the public subnets and remains reachable from JJ's laptop. Do **not** use the private subnet parameters for this subnet group.  DBSubnetGroup should look like this (note the public SubnetIds):
+- The `DBSubnetGroup` defined in `infrastructure.yaml` must list `!Ref PublicSubnet1Id` and `!Ref PublicSubnet2Id` so the database resides in the public subnets and remains reachable from JJ's laptop. Any historical guidance that mentioned private subnets is **deprecated**.
+  - Migration steps when you encounter a private-subnet DB subnet group:
+    1. Update the `DBSubnetGroup` resource to reference `PublicSubnet1Id` / `PublicSubnet2Id` exactly as shown below.
+    2. Confirm the associated security group still allows developer CIDR + application ingress on tcp/5432.
+    3. Run the stack update and monitor the change set to ensure CloudFormation performs an in-place subnet swap (no replacement) before continuing with application changes.
+
+  DBSubnetGroup should look like this (note the public SubnetIds):
 ```yaml
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
