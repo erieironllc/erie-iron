@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import tempfile
@@ -465,6 +466,11 @@ def rget_list(request, key, delimeter=","):
 
     return list(set(retvals))
 
+
+def rget_json(request, key, default_val=None):
+    s = rget(request, key)
+    return json.loads(s) if s else default_val
+    
 
 def rget(request, key, default_val=None):
     if key in request.POST:

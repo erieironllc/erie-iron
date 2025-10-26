@@ -10,14 +10,16 @@
 {% endif %}
 
 {% if messages %}
-  <div class="container mt-3">
+<div id="fixed-message-container" style="position:fixed;top:0;left:0;right:0;z-index:1055;background-color:rgba(0,0,0,0.85);pointer-events:none;">
+  <div class="container py-2" style="pointer-events:auto;">
     {% for message in messages %}
-      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show" role="alert">
+      <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show mb-2" role="alert">
         {{ message }}
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
       </div>
     {% endfor %}
   </div>
+</div>
 {% endif %}
 
 {% block content %}

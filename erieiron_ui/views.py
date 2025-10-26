@@ -34,7 +34,7 @@ from erieiron_common import common, domain_manager
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, rget_json
 
 LLM_SPEND_RANGE_DEFAULT = "15d"
 LLM_SPEND_RANGE_OPTIONS = [
@@ -2313,7 +2313,7 @@ def action_update_task(request, task_id):
         execution_schedule = rget(request, 'execution_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
-        completion_criteria = json.loads(rget(request, 'completion_criteria', '').strip())
+        completion_criteria = rget_json(request, 'completion_criteria', ["all tests pass"])
         requires_test = request.POST.get('requires_test') == 'on'
         
         # Prepare update data
@@ -2369,9 +2369,11 @@ def action_update_task(request, task_id):
         messages.success(request, 'Task updated successfully!')
         return redirect(reverse('view_task_tab', args=['edit', task_id]))
     except Task.DoesNotExist:
+        logging.exception(e)
         messages.error(request, 'Task not found.')
         return redirect(reverse('view_businesses'))
     except Exception as e:
+        logging.exception(e)
         messages.error(request, f'Error updating task: {str(e)}')
         return redirect(reverse('view_task', args=[task_id]))
 
