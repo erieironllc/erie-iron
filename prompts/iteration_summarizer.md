@@ -41,16 +41,25 @@ You will be provided
 1. **Determine if the GOAL Was Achieved**
     - field name:  'goal_achieved'  
       <goal_achieved_critera>
+    
+2. **Determine if the agent is blocked and needs human intervention**  
+   - field name: `blocked`  
+   - Type: boolean  
+   - Indicates whether the agent cannot proceed autonomously and requires human input.
 
-2. **Determine if you think the agent is blocked and needs human help**  
-   - field name:  'blocked'  
-   - boolean value indicating if you think the agent is blocked and needs human help.  
-   - reasons for being returning blocked might include (but no limited to):  
-        - exception throw in the agent orchestration layer
-        - missing required logging to diagnose errors or test failures 
-        - systemic issues like out of disk space, etc
-        - the automated test(s) are written in such a way that they will never pass
-        - we are repeating the same error repeatedly with no progress
+   **Mark `blocked: true` if:**
+   - Execution failed due to orchestration (errors in the agent, out-of-disk space).
+   - The agent cannot start or complete tests (e.g., domain/DNS boundary, missing env vars beyond contract).
+   - The system is repeating the same error many times after many attempts to fix with no progress.
+
+   **Do *not* mark blocked (prefer `blocked: false`) if:**
+   - Tests ran and failed due to cloudformation configuratin, application code, schema, IAM adjustments, SDK calls, or log validation.
+   - AWS SDK or CloudWatch filter queries failed due to syntax or parameter issues (e.g., `InvalidParameterException`).
+   - Expected logs exist but test filters did not match them (logging mismatch).
+   - Stacks deployed and at least one test executed successfully, even if other errors occurred.
+
+   **Rule of thumb:**  
+   Mark `blocked: true` only when an orchestration or environment-level issue prevents the iteration from executing or being diagnosed at all. Otherwise, default to `blocked: false`.
 
 3. **Write an Evaluation Summary**  
    - field name: `summary`  
@@ -68,6 +77,11 @@ You will be provided
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multple CloudFormation failures are found, include **all** cloudformation failure events
    - If the iteration ran automated tests and there were **test errors or failures**, capture **all of them** (since these can be addressed in parallel).  
    - When both runtime or infrastructure/compilation errors **and** automated test failures appear in the logs, include **both** sections in the response. Report the blocking runtime or infrastructure error in `error` *and* enumerate all test failures in `test_errors`. Do not omit the critical error when tests fail downstream.  
+
+    **Classification refinement:**
+    - Errors occur during test execution (e.g., CloudWatch `FilterLogEvents` `InvalidParameterException` due to filter pattern) are considered test/runtime failures. Include them in `test_errors` with full context.
+    - Reserve the top-level `error` field for infrastructure/deployment/compilation errors that block execution (e.g., CloudFormation create/update failures, build errors, orchestration-layer exceptions).
+    - When tests fail and no blocking infra error exists, do not populate `error`; instead, enumerate all relevant `test_errors` and keep `blocked: false`.
 
    **For infrastructure/deployment/compilation errors:**  
    - field name: `error`  

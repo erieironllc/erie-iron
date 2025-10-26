@@ -1885,7 +1885,11 @@ def extract_cloudformation_logs(config: SelfDriverConfig, logging_start_epoch: i
     
     cloudformation_logs['exceptions'] = extract_exception(
         config,
-        log_content=json.dumps(cloudformation_logs, indent=4, cls=ErieIronJSONEncoder)
+        log_content=f"""
+            {config.get_log_content()}
+            
+            {json.dumps(cloudformation_logs, indent=4, cls=ErieIronJSONEncoder)}
+        """
     )
     
     config.current_iteration.cloudformation_logs = cloudformation_logs
