@@ -10,6 +10,8 @@ from enum import auto
 from pathlib import Path
 
 from django.db import transaction
+from django.db.models import F
+from django.utils import timezone
 from sentence_transformers import SentenceTransformer
 
 from erieiron_autonomous_agent.models import (
@@ -170,7 +172,21 @@ class SelfDriverConfig:
         else:
             self.log(f"Phase: {phase}")
         
+        self._record_phase_change()
         return log_content
+
+    def _record_phase_change(self):
+        if not self.self_driving_task:
+            return
+        now = timezone.now()
+        updated = SelfDrivingTask.objects.filter(id=self.self_driving_task.id).update(
+            phase_change_seq=F('phase_change_seq') + 1,
+            latest_phase_change_at=now
+        )
+        if updated:
+            current_seq = (self.self_driving_task.phase_change_seq or 0) + 1
+            self.self_driving_task.phase_change_seq = current_seq
+            self.self_driving_task.latest_phase_change_at = now
     
     def set_iteration(self, current_iteration: SelfDrivingTaskIteration):
         self.current_iteration = current_iteration

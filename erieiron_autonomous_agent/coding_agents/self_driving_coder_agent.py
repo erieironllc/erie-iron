@@ -10,7 +10,7 @@ import textwrap
 import time
 import traceback
 from collections import defaultdict
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -1868,11 +1868,19 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     except Exception as e:
         config.log(common.get_stack_trace_as_string(e))
     finally:
-        config.current_iteration.cloudformation_logs = cloudformation_log_reader.read_cloudformation_stack_activity(
+        cloudformation_logs = cloudformation_log_reader.read_cloudformation_stack_activity(
             config.aws_env,
             config.get_stack_names(),
             logging_start_epoch
         )
+        
+        cloudformation_logs['exceptions'] = extract_exception(
+            config, 
+            log_content=json.dumps(cloudformation_logs, indent=4)
+        )
+        
+        
+        config.current_iteration.cloudformation_logs =cloudformation_logs
         config.current_iteration.save()
 
 
@@ -2285,9 +2293,8 @@ def assert_tests_green(config: SelfDriverConfig):
 def evaluate_iteration(
         config: SelfDriverConfig
 ):
-    iteration: SelfDrivingTaskIteration = SelfDrivingTaskIteration.objects.get(
-        id=config.current_iteration.id
-    )
+    iteration = config.current_iteration
+    exceptions_str = common.get(iteration, ["cloudformation_logs", "exceptions"])
     
     log_output = config.set_phase(SdaPhase.EVALUATE)
     
@@ -2367,6 +2374,14 @@ def evaluate_iteration(
                 config,
                 config.current_iteration
             ),
+            
+            LlmMessage.user(textwrap.dedent(
+                f"""
+                **QUICK REFERENCE** Exceptions extracted from the logs.  If there are problems, most likely related to the following:
+                
+                {exceptions_str}
+                """
+            )) if exceptions_str else None,
             
             LlmMessage.user(
                 "Please summarize this iteration"
@@ -2766,7 +2781,10 @@ def compute_cfn_resource_durations(config: SelfDriverConfig, cf_client, stack_na
         # Unknown type; include all events to avoid type errors
         deployment_start_datetime = datetime.min.replace(tzinfo=dt_timezone.utc)
     
-    recent_events = [e for e in events if e.get('Timestamp') and e['Timestamp'] >= deployment_start_datetime]
+    # Apply a 60-second buffer before deployment start to ensure we capture all relevant events
+    # This matches the CloudWatch log collection buffer used in cloudformation_log_reader.py:314
+    buffered_start_datetime = deployment_start_datetime - timedelta(seconds=60)
+    recent_events = [e for e in events if e.get('Timestamp') and e['Timestamp'] >= buffered_start_datetime]
     recent_events.sort(key=lambda x: x['Timestamp'])
     
     events_by_logical = defaultdict(list)

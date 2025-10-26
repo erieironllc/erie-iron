@@ -16,4 +16,11 @@
             rm -rf ~/src/iteration_debug && ln -s {{ self_driving_task.sandbox_path }} ~/src/iteration_debug
         </div>
     {% endif %}
+    {% if self_driving_task %}
+        <div class="d-none"
+             data-phase-watch-task-id="{{ task.id }}"
+             data-phase-watch-url="{% url 'view_task_phase_state' task.id %}"
+             data-phase-watch-seq="{{ self_driving_task.phase_change_seq|default_if_none:0 }}">
+        </div>
+    {% endif %}
 {% endblock %}

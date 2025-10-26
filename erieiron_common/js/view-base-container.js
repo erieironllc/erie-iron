@@ -234,6 +234,10 @@ BaseContainerView = ErieView.extend({
             el.trigger("toggled", [el.hasClass("erie_toggle-active"), true]);
         });
 
+        if (typeof window.initPhaseWatchers === 'function') {
+            window.initPhaseWatchers();
+        }
+
         if ($("#modal_cookie_consent").length) {
             $("#modal_cookie_consent").show();
         }

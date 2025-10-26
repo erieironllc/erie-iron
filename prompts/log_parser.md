@@ -27,4 +27,11 @@ You must:
    - The filename(s) of failing test(s) if applicable,
    - Minimum surrounding context to make sense of the failure.
 
+## Multiple exception handling
+If there are multiple exceptions found in the logs, extract them all in chronological order. Separate each full exception block with a line formatted as:
+```
+   ========= <timestamp> ===========
+```
+Use the timestamp of the first line of that exception block if available; otherwise, leave the timestamp placeholder blank.
+
 Do not format the response as JSON or markdown. Just return the log snippet exactly as it appears.

@@ -35,6 +35,7 @@ urlpatterns = [
     path("task/updateguidance/<str:task_id>", views.action_update_task_guidance, name="action_update_task_guidance"),
     path("task/latest_iteration/<str:task_id>", views.view_self_driver_latest_iteration, name="view_self_driver_latest_iteration"),
     path("task/latest-logs/<str:task_id>", views.view_task_latest_iteration_logs, name="view_task_latest_iteration_logs"),
+    path("task/phase-state/<str:task_id>", views.view_task_phase_state, name="view_task_phase_state"),
     path("process/kill/<uuid:process_id>", views.action_kill_process, name="action_kill_process"),
     path("task/<str:task_id>", views.view_task, name="view_task"),
     path("task/<slug:tab>/<str:task_id>", views.view_task, name="view_task_tab"),

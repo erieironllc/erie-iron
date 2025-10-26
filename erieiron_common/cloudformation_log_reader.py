@@ -1,6 +1,7 @@
 """Utilities for collecting CloudFormation failure context and related AWS logs."""
 
 import datetime
+from datetime import timedelta
 import json
 import logging
 import time
@@ -52,7 +53,7 @@ def read_cloudformation_stack_activity(
         lambda_logs = extract_cloudwatch_lambda_logs(
             stack_names=stack_names,
             aws_env=aws_env,
-            lookback_minutes=120
+            deployment_start_datetime=deployment_start_datetime
         )
         if lambda_logs:
             lambda_log_payload["logs"] = lambda_logs
@@ -396,9 +397,13 @@ def collect_recent_events(
         if stack_id:
             visited.add(stack_id)
     
+    # Apply a 60-second buffer before deployment start to ensure we capture all relevant events
+    # This matches the CloudWatch log collection buffer used in get_cloudwatch_errors:314
+    buffered_start_datetime = deployment_start_datetime - timedelta(seconds=60)
+    
     for evt in events:
         timestamp = evt.get("Timestamp")
-        if timestamp and timestamp >= deployment_start_datetime:
+        if timestamp and timestamp >= buffered_start_datetime:
             recent.append(evt)
     
     # Discover nested stacks so their failure events are included as well
@@ -743,8 +748,8 @@ def extract_cloudwatch_ecs_task_logs(
         try:
             q = logs.start_query(
                 logGroupNames=batch,
-                startTime=int(start_time) - 3600,
-                endTime=int(time.time()) + 3600,
+                startTime=int(start_time) - 60,
+                endTime=int(end_time) + 60,
                 queryString=query_str
             )
             query_id = q["queryId"]
@@ -1010,12 +1015,12 @@ def extract_cloudwatch_stack_logs_for_window(
 def extract_cloudwatch_lambda_logs(
         stack_names: list[str],
         aws_env: AwsEnv,
-        lookback_minutes: int = 60,
+        deployment_start_datetime: datetime.datetime,
         max_groups: int = 50
 ) -> str:
     """
     Fetch CloudWatch Logs Insights entries for Lambda functions provisioned by the given stacks.
-    We scan recent logs (lookback window) across up to `max_groups` Lambda log groups.
+    We scan logs from deployment start time (with 60-second buffer) across up to `max_groups` Lambda log groups.
     Returns a concatenated text block, sorted by timestamp, suitable for appending to error output.
     """
     try:
@@ -1054,8 +1059,13 @@ def extract_cloudwatch_lambda_logs(
 
     logs = boto3.client("logs", region_name=aws_env.get_aws_region())
 
-    end = int(time.time())
-    start = end - lookback_minutes * 60
+    # Apply a 60-second buffer before deployment start to ensure we capture all relevant events
+    # This matches the buffer logic used in collect_recent_events and get_cloudwatch_errors
+    buffered_start_datetime = deployment_start_datetime - timedelta(seconds=60)
+    effective_end_time = to_utc(time.time())
+    
+    start = int(buffered_start_datetime.timestamp())
+    end = int(effective_end_time.timestamp()) + 60
     query_str = "fields @timestamp, @log, @message | sort @timestamp asc | limit 1000"
 
     combined = []

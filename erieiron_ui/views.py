@@ -1829,6 +1829,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         "previous_evaluations": previous_evaluations,
         "running_processes_count": running_processes_count,
         "task": task,
+        "self_driving_task": self_driving_task,
         "initiative": initiative,
         "business": business,
         "llm_requests": llm_requests,
@@ -1910,6 +1911,31 @@ def view_task_latest_iteration_logs(request, task_id):
         "iteration_version_number": iteration.version_number,
         "iteration_timestamp": timestamp.isoformat() if timestamp else None,
         "iteration_timestamp_display": timestamp_display,
+    }
+
+
+@json_endpoint
+def view_task_phase_state(request, task_id):
+    task = get_object_or_404(Task, pk=task_id)
+    self_driving_task = getattr(task, "selfdrivingtask", None)
+    if not self_driving_task:
+        return {
+            "task_id": task.id,
+            "phase_change_seq": None,
+            "latest_phase_change_at": None,
+            "iteration_id": None,
+            "iteration_version_number": None,
+        }
+    try:
+        latest_iteration = self_driving_task.get_most_recent_iteration()
+    except Exception:
+        latest_iteration = None
+    return {
+        "task_id": task.id,
+        "phase_change_seq": self_driving_task.phase_change_seq,
+        "latest_phase_change_at": self_driving_task.latest_phase_change_at,
+        "iteration_id": getattr(latest_iteration, "id", None),
+        "iteration_version_number": getattr(latest_iteration, "version_number", None),
     }
 
 

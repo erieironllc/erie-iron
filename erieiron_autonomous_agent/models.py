@@ -841,6 +841,8 @@ class SelfDrivingTask(BaseErieIronModel):
     initial_tests_pass = models.BooleanField(null=False, default=False)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    latest_phase_change_at = models.DateTimeField(null=True)
+    phase_change_seq = models.IntegerField(default=0)
     
     def get_readonly_files(self):
         readonly_file_paths = [f for f in settings.READONLY_FILES]
