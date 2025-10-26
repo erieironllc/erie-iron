@@ -46,6 +46,14 @@ You have the Architecture for the business and the current Product Initiative in
 
 ---
 
+## Import Hygiene
+- Before adding or modifying logic in a file, inspect its existing import statements and list every new module, class, or function you intend to reference.
+- Add the precise `import`/`from ... import ...` statements for each of those symbols within the same file—do not rely on transitive imports or assume another module already pulled them in.
+- When removing or renaming code that previously required an import, delete or update the corresponding import so the file compiles without unused or stale references.
+- Treat standard-library modules the same as third-party ones: if the file uses them, import them explicitly at the top in the established ordering.
+
+---
+
 ## Logging and Observability
 - All generated code should include **robust, structured logging** to support the generative feedback loop.
 - Each major operation (network call, file I/O, AWS action, model invocation, etc.) must log:

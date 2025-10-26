@@ -101,6 +101,8 @@ The following guardrails are ordered by precedence. If two rules appear to confl
     - **AVOID python import errors AT ALL COSTS**  Think ahead - add to requirements.txt if you use something and its not in requirements.txt.  requirements.txt is in the context. The expectation of you as a Principal Engineer is that you will not plan code that has import errors
     - Do not replace dynamic domain references with hardcoded strings in code or docs. If a literal is necessary for a test, include it in addition to the dynamic form.
     - Every change must directly resolve the diagnosed error. When planning a change, think forward: if the proposed edit will trigger new validation failures (e.g., unreferenced functions, missing schemas, runtime exceptions), proactively plan the follow-up fixes.
+    - Whenever the plan introduces a module, helper, or symbol that is not already imported in the target file, include an explicit step that tells the code writer which import line(s) to add or update. Do not assume the writer will infer the needed imports—spell them out with the exact module path.
+    - If a change removes or renames a dependency, direct the writer to clean up the corresponding import block so the file compiles without unused imports.
     - You must ensure that all import statements—whether newly added or already present in modified files—are supported by entries in `requirements.txt`.
     - Do not replace dynamic domain references with hardcoded strings in code or docs. If a literal is necessary for a test, include it in addition to the dynamic form.
       - For any new third-party imports, add the corresponding package (with a pinned version) to `requirements.txt`.
