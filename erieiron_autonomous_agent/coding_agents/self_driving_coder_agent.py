@@ -1,3 +1,4 @@
+import contextlib
 import copy
 import json
 import logging
@@ -51,6 +52,7 @@ from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExe
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
+
 
 
 def execute(
@@ -150,13 +152,6 @@ def execute(
                 logging.info(f"Stopping - Unhandled Exception")
                 raise e
             finally:
-                exec_docker_prune()
-                
-                config.business.snapshot_code(
-                    config.current_iteration,
-                    include_erie_common=False
-                )
-                
                 config.cleanup_iteration()
 
 
@@ -1390,19 +1385,20 @@ def build_docker_image(
     ])
     
     config.log(f"\n\nstarting docker build with the command:\n{' '.join(docker_build_cmd)}\n\n")
-    build_process = subprocess.Popen(
-        docker_build_cmd,
-        stdout=config.log_f,
-        stderr=subprocess.STDOUT,
-        text=True,
-        env=docker_env
-    )
-    
-    while build_process.poll() is None:
-        time.sleep(1)
-    
-    if build_process.returncode != 0:
-        raise Exception(f"Docker build failed with return code: {build_process.returncode}")
+    with temporarily_ignore_lambda_sources_in_docker_context(config, docker_file):
+        build_process = subprocess.Popen(
+            docker_build_cmd,
+            stdout=config.log_f,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=docker_env
+        )
+        
+        while build_process.poll() is None:
+            time.sleep(1)
+        
+        if build_process.returncode != 0:
+            raise Exception(f"Docker build failed with return code: {build_process.returncode}")
     
     env_flags = " ".join(build_env_flags(docker_env))
     config.log(f"""
@@ -1421,6 +1417,67 @@ docker run --rm -it \
         """)
     
     return docker_image_tag
+
+
+
+@contextlib.contextmanager
+def temporarily_ignore_lambda_sources_in_docker_context(
+        config: SelfDriverConfig,
+        docker_file: Path
+):
+    lambda_paths = _get_lambda_source_paths(config)
+    if not lambda_paths:
+        yield
+        return
+    
+    config.log(
+        f"Excluding {len(lambda_paths)} lambda source files from docker build context"
+    )
+
+    dockerignore_path = docker_file.parent / ".dockerignore"
+    original_content = dockerignore_path.read_text() if dockerignore_path.exists() else None
+
+    block_lines = [
+        "# START AUTO-GENERATED LAMBDA EXCLUSIONS",
+        *lambda_paths,
+        "# END AUTO-GENERATED LAMBDA EXCLUSIONS",
+        ""
+    ]
+    new_content = original_content or ""
+    if new_content and not new_content.endswith("\n"):
+        new_content += "\n"
+    dockerignore_path.write_text(new_content + "\n".join(block_lines))
+
+    try:
+        yield
+    finally:
+        if original_content is None:
+            try:
+                dockerignore_path.unlink()
+            except FileNotFoundError:
+                ...
+        else:
+            dockerignore_path.write_text(original_content)
+
+
+def _get_lambda_source_paths(config: SelfDriverConfig) -> list[str]:
+    lambda_datas = get_stack_lambdas(config)
+    lambda_paths: set[str] = set()
+    for lambda_data in lambda_datas:
+        code_file_path = lambda_data.get("code_file_path")
+        if not code_file_path:
+            continue
+        normalized_path = _normalize_dockerignore_path(code_file_path)
+        if normalized_path:
+            lambda_paths.add(normalized_path)
+    return sorted(lambda_paths)
+
+
+def _normalize_dockerignore_path(path: str) -> str:
+    normalized = Path(path).as_posix()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def exec_docker_prune():
@@ -1868,20 +1925,33 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     except Exception as e:
         config.log(common.get_stack_trace_as_string(e))
     finally:
-        cloudformation_logs = cloudformation_log_reader.read_cloudformation_stack_activity(
-            config.aws_env,
-            config.get_stack_names(),
+        extract_cloudformation_logs(
+            config, 
             logging_start_epoch
         )
         
-        cloudformation_logs['exceptions'] = extract_exception(
-            config, 
-            log_content=json.dumps(cloudformation_logs, indent=4)
+        exec_docker_prune()
+
+        config.business.snapshot_code(
+            config.current_iteration,
+            include_erie_common=False
         )
-        
-        
-        config.current_iteration.cloudformation_logs =cloudformation_logs
-        config.current_iteration.save()
+
+
+def extract_cloudformation_logs(config: SelfDriverConfig, logging_start_epoch: int):
+    cloudformation_logs = cloudformation_log_reader.read_cloudformation_stack_activity(
+        config.aws_env,
+        config.get_stack_names(),
+        logging_start_epoch
+    )
+    
+    cloudformation_logs['exceptions'] = extract_exception(
+        config,
+        log_content=json.dumps(cloudformation_logs, indent=4)
+    )
+    
+    config.current_iteration.cloudformation_logs = cloudformation_logs
+    config.current_iteration.save()
 
 
 def execute_iteration(
@@ -5238,3 +5308,5 @@ def empty_stack_buckets(
     
     for bucket_resource in bucket_definitions:
         empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)
+
+
