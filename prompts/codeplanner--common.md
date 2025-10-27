@@ -203,6 +203,34 @@ Always:
 
 ---
 
+### Strategic Unblocking Guidance
+
+The Code Planning Agent may receive input from the `strategic_unblocker` agent, especially in cases where iteration progress is stagnating or a novel approach may be warranted. The following principles govern how to interpret and act upon this input:
+
+1. **Alternate Strategies and Recommendations**  
+   - The planner may receive `strategic_unblocker` output containing an `alternate_strategies` list and a `recommended_strategy_index`. This provides one or more possible approaches to unblocking the current task, with a specific recommendation highlighted.
+
+2. **Handling Stagnation and Recommendations**  
+   - When `is_stagnating` is true and a `strategic_unblocker` recommendation is available, treat the recommended strategy as a fresh starting hypothesis—not a direct plan.  
+     - Evaluate whether the recommended approach aligns with current system constraints and the GOAL.  
+     - If the recommendation involves relaxing constraints, only proceed if it does not violate the canonical guardrails or surface-area contract.
+
+3. **Incorporate Strategic Insights**  
+   - Integrate relevant insights from the `strategic_unblocker` output—including root cause analysis, reframed problem definitions, and rationale—into your reasoning and the narrative of your plan. This context can help clarify why a new approach is being considered and guide more effective planning.
+
+4. **Agent Recommendations**  
+   - If the `strategic_unblocker` suggests engaging a new agent (such as a different codeplanner variant), document this recommendation in the `guidance` field for visibility. However, you must still produce a valid plan consistent with your current role.
+
+5. **Missing or Contradictory Output**  
+   - If the `strategic_unblocker` output is missing, incomplete, or contradictory, prioritize the evaluator diagnostics and proceed with normal planning. Do not block solely due to lack of strategic unblocker input.
+
+This guidance ensures that strategic unblocker input is used constructively—serving as a source of new hypotheses and context, but always filtered through the system's contract and guardrails.
+
+**REQUIRED BEHAVIOR If `Strategic Unblocking Guidance` is provided**
+If `Strategic Unblocking Guidance` is provided in the context, you **must** either 
+a) include the unblocking guidance in the `code_file`'s `guidance` field noting that it came from strategic guidance
+or b) add a justification to the `guidance` field explaining why you didn't use the strategic guidance
+
 ## Self Reflection
 
 When you recieve a chat request:

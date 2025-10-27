@@ -7,6 +7,10 @@
       "type": "boolean",
       "description": "Indicates whether the iteration achieved the stated GOAL."
     },
+    "is_stagnating": {
+      "type": "boolean",
+      "description": "True if recent iterations show stagnation (repeated similar failures or lack of progress toward the goal), false otherwise."
+    },
     "blocked": {
       "type": "boolean",
       "description": "Indicates if you think the agent is blocked and needs human help"

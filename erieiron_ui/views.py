@@ -1475,6 +1475,11 @@ def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
         cf.file_path: cf
         for cf in iteration.self_driving_task.business.codefile_set.filter(file_path__in=code_file_paths)
     }
+    
+    code_version_map = {
+        code_version.code_file_id: code_version
+        for code_version in iteration.codeversion_set.all()
+    }
 
     code_files = []
     for code_file in code_file_datas:
@@ -1482,7 +1487,8 @@ def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
         if code_file_path and code_file_path in code_file_map:
             codefile_id = code_file_map[code_file_path].id
             code_file['url'] = reverse(view_codefile, args=[codefile_id])
-            
+            code_file['code_version'] = code_version_map.get(codefile_id)
+
         code_files.append(code_file)
     
     return {

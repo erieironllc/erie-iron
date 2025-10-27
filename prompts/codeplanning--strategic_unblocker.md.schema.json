@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Strategic Unblocker Output Schema",
+  "type": "object",
+  "required": [
+    "root_cause_summary",
+    "problem_reframing",
+    "alternate_strategies",
+    "recommended_strategy_index",
+    "justification_for_recommendation"
+  ],
+  "properties": {
+    "root_cause_summary": {
+      "type": "string",
+      "description": "Concise explanation of why recent iterations have failed."
+    },
+    "problem_reframing": {
+      "type": "string",
+      "description": "Restated version of the problem from a higher level of abstraction."
+    },
+    "alternate_strategies": {
+      "type": "array",
+      "minItems": 1,
+      "description": "List of potential new approaches to resolve the blockage.",
+      "items": {
+        "type": "object",
+        "required": ["approach", "rationale", "recommended_next_agent"],
+        "properties": {
+          "approach": {
+            "type": "string",
+            "description": "Description of an alternate technical or conceptual approach."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Reason why this approach may succeed where previous ones failed."
+          },
+          "recommended_next_agent": {
+            "type": "string",
+            "description": "Name of the agent that should handle this next."
+          }
+        }
+      }
+    },
+    "recommended_strategy_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Index of the chosen strategy in the alternate_strategies list."
+    },
+    "justification_for_recommendation": {
+      "type": "string",
+      "description": "Explanation of why the chosen strategy is best."
+    }
+  },
+  "additionalProperties": false
+}

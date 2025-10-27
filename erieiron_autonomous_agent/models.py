@@ -1001,6 +1001,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     evaluation_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     slowest_cloudformation_resources = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     routing_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    strategic_unblocking_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     timestamp = models.DateTimeField(auto_now_add=True)
     
     def get_all_log_content(self):

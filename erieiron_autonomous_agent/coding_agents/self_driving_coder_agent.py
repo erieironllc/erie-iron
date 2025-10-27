@@ -212,6 +212,8 @@ def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialA
             config.current_iteration.planning_json
         )
     elif SdaInitialAction.PLAN.eq(one_off_action):
+        # config.iteration_to_modify.strategic_unblocking_json = get_strategic_unblocking_data(config)
+        # config.iteration_to_modify.save()
         plan_and_implement_code_changes(
             config
         )
@@ -342,7 +344,7 @@ def on_reset_task_test(task_id):
         write_initiative_tdd_test(config)
     else:
         write_task_tdd_test(config)
-        
+    
     return config
 
 
@@ -1218,6 +1220,56 @@ def plan_code_changes(config):
         )
     
     return planning_data
+
+
+def get_strategic_unblocking_data(config):
+    return llm_chat(
+        "Get Stragic Unblocking Data",
+        [
+            get_sys_prompt("codeplanning--strategic_unblocker.md"),
+            get_architecture_docs(
+                config
+            ),
+            config.business.get_existing_required_credentials_llmm(),
+            get_budget_message(
+                config
+            ),
+            build_cloudformation_durations_context_messages(
+                config
+            ),
+            get_tombstone_message(
+                config
+            ),
+            get_previous_iteration_summaries_msg(
+                config
+            ),
+            build_previous_iteration_context_messages(
+                config
+            ),
+            get_dependencies_msg(
+                config,
+                for_planning=True
+            ),
+            get_relevant_code_files(config),
+            get_docs_msg(
+                config
+            ),
+            get_file_structure_msg(
+                config.sandbox_root_dir
+            ),
+            get_guidance_msg(
+                config
+            ),
+            get_lessons_msg(
+                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+                config
+            ),
+            get_tasktype_specific_instructions(config),
+            get_goal_msg(config, "Please think of ways to unblock the agent from reaching this goal ")
+        ],
+        output_schema="codeplanning--strategic_unblocker.md.schema.json",
+        tag_entity=config.current_iteration
+    ).json()
 
 
 def validate_plan(config: SelfDriverConfig, planning_data):
@@ -2407,6 +2459,10 @@ def evaluate_iteration(
         output_schema="iteration_summarizer.md.schema.json"
     ).json()
     
+    if eval_data.get("is_stagnating"):
+        config.current_iteration.strategic_unblocking_json = get_strategic_unblocking_data(config)
+        config.current_iteration.save()
+    
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             evaluation_json=eval_data
@@ -2426,25 +2482,6 @@ def evaluate_iteration(
     
     if common.parse_bool(eval_data.get("goal_achieved")):
         raise GoalAchieved(eval_data)
-    
-    previous_iteration_evals = []
-    if config.iteration_to_modify and config.iteration_to_modify != config.previous_iteration:
-        previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
-            evaluation_json__isnull=False,
-            timestamp__gte=config.iteration_to_modify.timestamp
-        ).order_by("timestamp")
-    else:
-        previous_iterations = config.self_driving_task.selfdrivingtaskiteration_set.filter(
-            evaluation_json__isnull=False
-        ).order_by("-timestamp")[:3][::-1]
-    
-    for prev_iter in previous_iterations:
-        previous_iteration_evals.append({
-            "iteration_id": prev_iter.id,
-            "iteration_is_current_iteration": prev_iter == iteration,
-            "iteration_timestamp": prev_iter.timestamp,
-            "iteration_full_evaluation": prev_iter.evaluation_json,
-        })
     
     if not TaskType.CODING_ML.eq(config.task_type):
         # with non ML tasks, we always must move on from the latest
@@ -2473,10 +2510,11 @@ def evaluate_iteration(
                 get_previous_iteration_summaries_msg(
                     config
                 ),
-                LlmMessage.user_from_data(
-                    f"**Recent Iteration Full Evaluations**",
-                    previous_iteration_evals,
-                    "iteration_full_evaluation"
+                get_previous_iteration_summaries_msg(
+                    config
+                ),
+                build_previous_iteration_context_messages(
+                    config
                 )
             ],
             tag_entity=config.current_iteration,
@@ -3691,6 +3729,10 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 "structured failure triage object",
                 routing_json
             ),
+            LlmMessage.user_from_data(
+                "Strategic Unblocking Guidance",
+                config.iteration_to_modify.strategic_unblocking_json
+            ) if config.iteration_to_modify.strategic_unblocking_json else None,
             get_tasktype_specific_instructions(config),
             "Please produce a development plan that addresses this issue"
         ],
@@ -3780,6 +3822,10 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 routing_json
             ),
             get_tasktype_specific_instructions(config),
+            LlmMessage.user_from_data(
+                "Strategic Unblocking Guidance",
+                config.iteration_to_modify.strategic_unblocking_json
+            ) if config.iteration_to_modify.strategic_unblocking_json else None,
             "Please produce a development plan that addresses this issue"
         ],
         tag_entity=config.current_iteration,
@@ -3879,6 +3925,10 @@ def plan_test_fixing_code_changes(config: SelfDriverConfig):
             config
         ),
         get_tasktype_specific_instructions(config),
+        LlmMessage.user_from_data(
+            "Strategic Unblocking Guidance",
+            config.iteration_to_modify.strategic_unblocking_json
+        ) if config.iteration_to_modify.strategic_unblocking_json else None,
         textwrap.dedent(f"""
             One or more of the automated tests have regressed in the new environment
 
@@ -4009,6 +4059,10 @@ def plan_full_code_changes(config: SelfDriverConfig):
             "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             config
         ),
+        LlmMessage.user_from_data(
+            "Strategic Unblocking Guidance",
+            config.iteration_to_modify.strategic_unblocking_json
+        ) if config.iteration_to_modify.strategic_unblocking_json else None,
         get_tasktype_specific_instructions(config),
         get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
     

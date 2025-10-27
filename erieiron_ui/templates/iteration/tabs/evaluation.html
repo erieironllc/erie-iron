@@ -13,4 +13,10 @@
         <h5>Test Error(s)</h5>
         {% include "_test_errors.html" with test_errors=iteration.evaluation_json.test_errors %}
     {% endif %}
+
+    {% if iteration.strategic_unblocking_json %}
+        <hr>
+        <h5>Strategic Unblocking Guidance</h5>
+        {{ iteration.strategic_unblocking_json|json_to_div }}
+    {% endif %}
 {% endif %}

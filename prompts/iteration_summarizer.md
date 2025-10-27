@@ -99,6 +99,12 @@ You will be provided
    **Important:**  
    - Always err on the side of including more raw log context.  
 
+5. **Determine if Development is Stagnating**
+   - **Field**: `is_stagnating`
+   - Return `true` if recent iterations show stagnation — meaning the same or similar failures occur over multiple iterations, or no meaningful progress toward the GOAL is being made.
+   - Return `false` otherwise.
+
+
 ### Root Cause Extraction
 
 When analyzing logs for iteration outcomes, you must also identify the **root cause** of any failure. 
