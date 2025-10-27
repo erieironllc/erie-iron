@@ -20,6 +20,19 @@
     {% endfor %}
   </div>
 </div>
+<script>
+document.addEventListener('scroll', () => {
+    const messageContainer = document.getElementById('fixed-message-container');
+    if (messageContainer) messageContainer.style.display = 'none';
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const messageContainer = document.getElementById('fixed-message-container');
+        if (messageContainer) messageContainer.style.display = 'none';
+    }
+});
+</script>
 {% endif %}
 
 {% block content %}

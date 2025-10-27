@@ -473,7 +473,6 @@ class Initiative(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     architecture = models.TextField(null=True)
     initiative_type = models.TextField(choices=InitiativeType.choices(), default=InitiativeType.PRODUCT)
-    test_file_path = models.TextField(null=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     title = models.TextField()
     description = models.TextField()
@@ -848,10 +847,7 @@ class SelfDrivingTask(BaseErieIronModel):
         readonly_file_paths = [f for f in settings.READONLY_FILES]
         
         if False and self.initial_tests_pass:
-            if TaskType.INITIATIVE_VERIFICATION.eq(self.task.task_type):
-                test_file_path = self.task.initiative.test_file_path
-            else:
-                test_file_path = self.test_file_path
+            test_file_path = self.test_file_path
             
             q = self.business.codefile_set.filter(
                 Q(file_path__contains="test/") | Q(file_path__contains="/test")

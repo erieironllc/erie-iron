@@ -2313,7 +2313,7 @@ def action_update_task(request, task_id):
         execution_schedule = rget(request, 'execution_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
-        completion_criteria = rget_json(request, 'completion_criteria', ["all tests pass"])
+        completion_criteria = rget(request, 'completion_criteria', "").strip()
         requires_test = request.POST.get('requires_test') == 'on'
         
         # Prepare update data

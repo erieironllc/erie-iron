@@ -1,4 +1,3 @@
-import contextlib
 import copy
 import json
 import logging
@@ -37,7 +36,6 @@ from erieiron_autonomous_agent.models import (
     CodeFile,
     AgentLesson,
     AgentTombstone,
-    Initiative,
     LlmRequest,
     Business,
     InfrastructureStack,
@@ -52,7 +50,6 @@ from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExe
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-
 
 
 def execute(
@@ -207,7 +204,9 @@ def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialA
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
     
-    if SdaInitialAction.CODE.eq(one_off_action):
+    if SdaInitialAction.WRITE_INITIATIVE_TEST.eq(one_off_action):
+        write_initiative_tdd_test(config)
+    elif SdaInitialAction.CODE.eq(one_off_action):
         codex_exec(
             config,
             config.current_iteration.planning_json
@@ -228,7 +227,12 @@ def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialA
 def plan_and_implement_code_changes(config):
     if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
         config.set_phase(SdaPhase.CODING)
-        write_task_tdd_test(config)
+        
+        if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
+            write_initiative_tdd_test(config)
+        else:
+            write_task_tdd_test(config)
+    
     else:
         planning_data = plan_code_changes(config)
         config.set_phase(SdaPhase.CODING)
@@ -334,7 +338,11 @@ def on_reset_task_test(task_id):
         config.log("Skipping test regeneration for production deployment task")
         return config
     
-    write_task_tdd_test(config)
+    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
+        write_initiative_tdd_test(config)
+    else:
+        write_task_tdd_test(config)
+        
     return config
 
 
@@ -1275,10 +1283,6 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
                 config.current_iteration,
                 include_erie_common=False
             )
-        
-        if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type) and common.invalid_file(config.sandbox_root_dir, config.initiative.test_file_path):
-            config.set_phase(SdaPhase.CODING)
-            write_initiative_tdd_test(config)
     
     return self_driving_task
 
@@ -1864,12 +1868,12 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         config.log(common.get_stack_trace_as_string(e))
     finally:
         extract_cloudformation_logs(
-            config, 
+            config,
             logging_start_epoch
         )
         
         exec_docker_prune()
-
+        
         config.business.snapshot_code(
             config.current_iteration,
             include_erie_common=False
@@ -1936,7 +1940,7 @@ def execute_iteration(
             ],
             docker_image=docker_image_tag
         )
-    elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION]:
+    elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION, TaskType.INITIATIVE_VERIFICATION]:
         run_automated_tests(
             config,
             docker_env,
@@ -2922,7 +2926,7 @@ def get_iteration_eval_llm_messages(
         
         messages.append(
             iteration.get_llm_data(
-                description, 
+                description,
                 include_details=iteration.id == iteration_to_modify.id
             )
         )
@@ -3337,10 +3341,10 @@ def write_initiative_tdd_test(config: SelfDriverConfig):
     )
     
     with transaction.atomic():
-        Initiative.objects.filter(id=config.initiative.id).update(
+        SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
             test_file_path=test_file_path
         )
-        config.initiative.refresh_from_db(fields=["test_file_path"])
+        config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
 def write_task_tdd_test(config: SelfDriverConfig):
@@ -3505,13 +3509,13 @@ def write_test(
                     else:
                         code = fix_code_compilation(
                             config,
-                            test_file_path,
+                            sanitized_test_file_name,
                             code,
                             code_compilation_error
                         )
             
             test_file_path.write_text(code)
-            code_verson = config.current_iteration.get_code_version(test_file_path)
+            code_verson = config.current_iteration.get_code_version(test_file_path.relative_to(config.sandbox_root_dir))
             code_verson.code = code
             code_verson.save()
             code_verson.write_to_disk(config.sandbox_root_dir)
@@ -3687,6 +3691,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 "structured failure triage object",
                 routing_json
             ),
+            get_tasktype_specific_instructions(config),
             "Please produce a development plan that addresses this issue"
         ],
         tag_entity=config.current_iteration,
@@ -3774,6 +3779,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 "structured failure triage object",
                 routing_json
             ),
+            get_tasktype_specific_instructions(config),
             "Please produce a development plan that addresses this issue"
         ],
         tag_entity=config.current_iteration,
@@ -3872,6 +3878,7 @@ def plan_test_fixing_code_changes(config: SelfDriverConfig):
             "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             config
         ),
+        get_tasktype_specific_instructions(config),
         textwrap.dedent(f"""
             One or more of the automated tests have regressed in the new environment
 
@@ -3901,6 +3908,20 @@ def plan_test_fixing_code_changes(config: SelfDriverConfig):
         raise AgentBlocked(blocked_data)
     
     return planning_data
+
+
+def get_tasktype_specific_instructions(config: SelfDriverConfig) -> str:
+    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
+        return textwrap.dedent(f"""
+                The Initiative's end-to-end test is located at 
+                {config.self_driving_task.test_file_path}
+                
+                This test must always assert end-to-end behavior using real services (never mocks)
+                
+                This test is the last line of QA before a production push
+            """)
+    else:
+        return None
 
 
 def plan_full_code_changes(config: SelfDriverConfig):
@@ -3988,6 +4009,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
             "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
             config
         ),
+        get_tasktype_specific_instructions(config),
         get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
     
     ]
@@ -5250,5 +5272,3 @@ def empty_stack_buckets(
     
     for bucket_resource in bucket_definitions:
         empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)
-
-

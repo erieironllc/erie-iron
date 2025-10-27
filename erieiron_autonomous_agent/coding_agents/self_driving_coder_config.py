@@ -39,6 +39,7 @@ os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 
 class SdaInitialAction(ErieEnum):
     CODE = auto()
+    WRITE_INITIATIVE_TEST = auto()
     PLAN = auto()
     DEPLOY = auto()
     EVAL = auto()
