@@ -66,6 +66,7 @@ class GitWrapper:
             logging.info(result.stdout)
             logging.info(result.stderr)
         
+        self._last_result = result
         return self
     
     def clone_to_new_repo(self, source_repo, target_repo) -> 'GitWrapper':
@@ -80,7 +81,27 @@ class GitWrapper:
         return self.exec("clone", self.wrap_url_with_token(source_repo), self.source_root)
     
     def pull(self) -> 'GitWrapper':
-        return self.exec("pull")
+        # Stash any local changes first
+        try:
+            self.exec("stash", "push", "-m", "Auto-stash before pull")
+            # Check if files were actually stashed by examining the output
+            stashed = "No local changes to save" not in self._last_result.stdout
+        except:
+            stashed = False
+        
+        # Pull with auto-merge strategy
+        self.exec("pull", "--no-edit", "--strategy=ort", "--strategy-option=ours")
+        
+        # Re-apply stashed changes if we stashed anything
+        if stashed:
+            try:
+                self.exec("stash", "pop")
+            except:
+                # If pop fails due to conflicts, keep the stash for manual resolution
+                logging.warning("Stash pop failed - conflicts may need manual resolution")
+                raise 
+        
+        return self
     
     def exists(self, repo_url):
         try:

@@ -2230,7 +2230,7 @@ def action_submit_bug_report(request, business_id):
         selected_initiative = get_object_or_404(Initiative, id=selected_initiative_id)
         parsed_data = system_agent_llm_interface.llm_chat(
             description=f"Parse bug report for {selected_initiative.title}",
-            messages=[
+           messages=[
                 get_sys_prompt("eng_lead--bug_ingester.md"),
                 LlmMessage.user_from_data("Bug Report", bug_description)
             ],

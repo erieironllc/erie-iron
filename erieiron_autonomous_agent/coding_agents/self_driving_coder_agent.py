@@ -70,6 +70,8 @@ def execute(
         return
     
     for i in range(20):
+        self_driving_task.get_git().pull()
+        
         with SelfDriverConfig(self_driving_task) as config:
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
@@ -2017,6 +2019,52 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
     import random
     import time
     random.seed(time.time())
+    
+    test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
+    
+    if test_errors_blob:
+        first_tests = llm_chat(
+            "parse test failures",
+            [
+                LlmMessage.sys(textwrap.dedent("""
+                    Parse the failing tests from the supplied log output.  
+                    format the test name as fully qualified test_module.test_method
+                    return a list of all failing tests using the following format
+                    ```json
+                    {
+                        "failing_tests": [
+                            'core.tests.test_task_bug_report_articleparsernew_t57y4lei.ForwardToDigestAcceptanceTests.test_s3_upload_triggers_digest_job_enqueue'
+                        ]
+                    }
+                """)),
+                LlmMessage.user_from_data("Tests log output", test_errors_blob)
+            ],
+            tag_entity=config.current_iteration,
+            model=LlmModel.OPENAI_GPT_5_NANO,
+            code_response=True
+        ).json().get("failing_tests")
+    elif config.self_driving_task.test_file_path:
+        test_label = config.self_driving_task.test_file_path
+        first_tests = [
+            test_label.replace("/", ".").removesuffix(".py").lstrip(".")
+        ]
+    else:
+        first_tests = None
+        
+    if first_tests:
+        config.log(f"Running task's automated test first: {first_tests}")
+        try:
+            run_docker_command(
+                config=config,
+                docker_env=docker_env,
+                command_args=["test", "--keepdb", "--noinput", *first_tests],
+                docker_image=docker_image_tag
+            )
+            config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
+        except ExecutionException as e:
+            config.log(f"some of all of {first_tests} FAILED. Skipping full test suite.")
+            raise FailingTestException(f"Some or all of {first_tests} failed. See logs above for details.")
+    
     config.log(
         "Running the test suite three times to detect flakiness. "
         "If all three runs pass, tests are considered stable. "
@@ -2261,7 +2309,15 @@ def validate_web_container(
         docker_env: dict,
         docker_image_tag: str
 ):
-    port = settings.VALIDATION_PORT
+    import socket
+    
+    port = None
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            port = s.getsockname()[1]
+    except Exception:
+        port = settings.VALIDATION_PORT
     
     process = None
     config.log(f"==========  BEGIN Docker webcontainer validation ===============")
@@ -2269,6 +2325,7 @@ def validate_web_container(
         process = subprocess.Popen(
             [
                 "docker", "run", "--rm",
+                "-e", f"HTTP_LISTENER_PORT={port}",
                 "--platform", DockerPlatform.FARGATE,
                 "-p", f"{port}:{port}",
                 "-v", f"{config.sandbox_root_dir}:/app",
