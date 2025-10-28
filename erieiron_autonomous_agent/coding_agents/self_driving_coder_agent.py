@@ -38,7 +38,7 @@ from erieiron_autonomous_agent.models import (
     AgentTombstone,
     LlmRequest,
     Business,
-    InfrastructureStack,
+    InfrastructureStack, Initiative,
 )
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
@@ -1228,7 +1228,7 @@ def get_strategic_unblocking_data(config):
         [
             get_sys_prompt("codeplanning--strategic_unblocker.md"),
             get_architecture_docs(
-                config
+                config.initiative
             ),
             config.business.get_existing_required_credentials_llmm(),
             get_budget_message(
@@ -1317,7 +1317,6 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         self_driving_task.save()
     
     with SelfDriverConfig(self_driving_task) as config:
-        is_production_deployment = config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT)
         config.set_phase(SdaPhase.INIT)
         
         self_driving_task.get_git().pull()
@@ -2392,6 +2391,9 @@ def evaluate_iteration(
         config.aws_env
     )
     
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) and stack_operational:
+        raise GoalAchieved(f"Production deployment succeed for {config.business.domain}")
+    
     if not stack_operational:
         allow_goal_achieved = False
         goal_achieved_reason = "the cloudformation stack(s) are not deployed.  You may not declare goal complete under any circumstances"
@@ -2976,14 +2978,11 @@ def get_iteration_eval_llm_messages(
     )
 
 
-def get_architecture_docs(config: SelfDriverConfig):
+def get_architecture_docs(initiative: Initiative):
+    business = initiative.business
     return LlmMessage.user_from_data(
         "Architecture", {
-            "business_architecture": config.business.architecture,
-            "initiative_architecture": config.initiative.architecture,
-            "notes": "Business_architecture describes the whole picture for the business.  "
-                     "Initiative_architecture describes details specific to this initiative.  "
-                     "If there are conflicts between business_architecture and initiative_architecture, Business Architecture takes precedence."
+            "initiative_architecture": initiative.architecture
         }
     )
 
@@ -3005,7 +3004,7 @@ def perform_code_review(
             ]
         ),
         get_architecture_docs(
-            config
+            config.initiative
         ),
         get_tombstone_message(
             config
@@ -3360,7 +3359,7 @@ def write_initiative_tdd_test(config: SelfDriverConfig):
         test_file_name=f"test_initiative_{config.initiative.id}.py",
         system_prompt_name="codewriter--python_tdd_initiative.md",
         user_messages=[
-            *get_architecture_docs(config),
+            *get_architecture_docs(config.initiative),
             *LlmMessage.user_from_data(
                 "Please one-shot write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
                 {
@@ -3412,33 +3411,36 @@ def write_task_tdd_test(config: SelfDriverConfig):
 
 
 def get_existing_test_context_messages(
-        config: SelfDriverConfig,
-        excluding_test_path: Path
+        initiative: Initiative,
+        excluding_test_path: Path = None,
+        title: str = None
 ) -> list[LlmMessage]:
-    """Build context messages describing other automated tests to avoid duplication."""
-    test_dir = excluding_test_path.parent
-    if not test_dir.exists():
-        return []
+    title = title or textwrap.dedent(f"""
+        Existing automated tests that must continue to pass and should not be duplicated.  
+        New tests must complement the provided suites, avoid duplicating coverage, 
+        and remain consistent so all tests can pass together.
+    """)
     
+    """Build context messages describing other automated tests to avoid duplication."""
     existing_test_entries: list[dict[str, str]] = []
-    for path in sorted(test_dir.rglob("test*.py")):
-        if path.name == "__init__.py" or not path.is_file():
-            continue
-        
-        if Path(path).absolute() == excluding_test_path.absolute():
-            continue
-        
-        try:
-            code = path.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        
-        if not code.strip():
+    
+    code_version_map = {
+        cv.code_file_id: cv
+        for cv in CodeVersion.objects.filter(
+            task_iteration__self_driving_task__task__initiative_id=initiative.id,
+            code_file__file_path__startswith="test",
+            code_file__file_path__endswith=".py"
+        ).order_by("task_iteration__version_number").select_related("code_file")
+    }
+    
+    for cv in code_version_map.values():
+        file_path = cv.code_file.file_path
+        if excluding_test_path and file_path == str(excluding_test_path):
             continue
         
         existing_test_entries.append({
-            "path": str(path.relative_to(config.sandbox_root_dir)),
-            "code": code
+            "path": file_path,
+            "code": cv.code
         })
     
     if not existing_test_entries:
@@ -3448,11 +3450,7 @@ def get_existing_test_context_messages(
     selected_entries = existing_test_entries[:max_files_to_embed]
     
     messages = LlmMessage.user_from_data(
-        f"""
-        Existing automated tests that must continue to pass and should not be duplicated.  
-        New tests must complement the provided suites, avoid duplicating coverage, 
-        and remain consistent so all tests can pass together.
-        """,
+        title,
         selected_entries,
         item_name="file"
     )
@@ -3484,7 +3482,7 @@ def write_test(
     
     user_messages = [
         *get_existing_test_context_messages(
-            config,
+            config.initiative,
             test_file_path
         ),
         *common.ensure_list(user_messages)
@@ -3632,7 +3630,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
                     config
                 ),
                 get_architecture_docs(
-                    config
+                    config.initiative
                 ),
                 get_previous_iteration_summaries_msg(
                     config
@@ -3707,7 +3705,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
                 config
             ),
             get_architecture_docs(
-                config
+                config.initiative
             ),
             config.business.get_existing_required_credentials_llmm(),
             get_lessons_msg(
@@ -3799,7 +3797,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
                 config
             ),
             get_architecture_docs(
-                config
+                config.initiative
             ),
             config.business.get_existing_required_credentials_llmm(),
             get_lessons_msg(
@@ -3891,7 +3889,7 @@ def plan_test_fixing_code_changes(config: SelfDriverConfig):
             ]
         ),
         get_architecture_docs(
-            config
+            config.initiative
         ),
         config.business.get_existing_required_credentials_llmm(),
         get_budget_message(
@@ -4026,7 +4024,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
             ]
         ),
         get_architecture_docs(
-            config
+            config.initiative
         ),
         config.business.get_existing_required_credentials_llmm(),
         get_budget_message(
@@ -4131,7 +4129,7 @@ def write_code_file(
             ]
         ),
         get_architecture_docs(
-            config
+            config.initiative
         ),
         build_previous_iteration_context_messages(
             config,
@@ -5077,7 +5075,11 @@ def get_stack_parameters(
     if business.web_desired_count:
         known_params["WebDesiredCount"] = business.web_desired_count
     
-    domain_name = config.initiative.domain
+    if AwsEnv.PRODUCTION.eq(config.aws_env):
+        domain_name = config.business.domain
+    else:
+        domain_name = config.initiative.domain
+    
     if not domain_name:
         raise AgentBlocked(
             json.dumps({

@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import textwrap
 from datetime import timedelta
 from pathlib import Path
 from typing import Tuple, Optional
@@ -29,7 +30,7 @@ from erieiron_common.enums import (
     BusinessIdeaSource,
     TaskType,
     AwsEnv,
-    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH,
+    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -472,6 +473,7 @@ class Initiative(BaseErieIronModel):
     id = models.TextField(primary_key=True)  # initiative_token
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     architecture = models.TextField(null=True)
+    user_documentation = models.TextField(null=True)
     initiative_type = models.TextField(choices=InitiativeType.choices(), default=InitiativeType.PRODUCT)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     title = models.TextField()
@@ -483,6 +485,36 @@ class Initiative(BaseErieIronModel):
     requires_unit_tests = models.BooleanField(default=True)
     domain = models.TextField(null=True)
     green_lit = models.BooleanField(default=False)
+    
+    def write_user_documentation(self):
+        from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
+        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import get_existing_test_context_messages
+        
+        self.user_documentation = llm_chat(
+            "Log Extraction",
+            [
+                get_sys_prompt("initiative--user_documentation_writer.md"),
+                textwrap.dedent(f"""
+                    ## Feature Description
+                    {self.description}
+                """),
+                textwrap.dedent(f"""
+                    ## Architecture
+                    {self.architecture}
+                """),
+                get_existing_test_context_messages(
+                    self, 
+                    title="Automated Tests"
+                ),
+                textwrap.dedent(f"""
+                ## Domain Name to use in docs:
+                {self.business.domain}
+            """),
+            ],
+            verbosity=LlmVerbosity.HIGH,
+            tag_entity=self
+        ).text
+        self.save()
     
     def all_tasks_complete(self) -> bool:
         if self.tasks.count() == 0:
@@ -530,7 +562,19 @@ class InfrastructureStack(BaseErieIronModel):
         from erieiron_common import domain_manager
         from erieiron_common.aws_utils import sanitize_aws_name
         
-        stack = InfrastructureStack.objects.filter(initiative=initiative, stack_type=stack_type, aws_env=aws_env).first()
+        if AwsEnv.PRODUCTION.eq(aws_env):
+            stack = InfrastructureStack.objects.filter(
+                business_id=initiative.business_id, 
+                initiative__isnull=True, 
+                stack_type=stack_type, 
+                aws_env=aws_env
+            ).first()
+        else:
+            stack = InfrastructureStack.objects.filter(
+                initiative=initiative, 
+                stack_type=stack_type, 
+                aws_env=aws_env
+            ).first()
         if stack:
             if assert_create:
                 raise Exception("was supposed to create new but did not")

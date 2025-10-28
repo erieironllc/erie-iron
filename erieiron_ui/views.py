@@ -911,10 +911,18 @@ def _initiative_tab_context_requirements(initiative: Initiative) -> dict:
 
 
 def _initiative_tab_available_architecture(initiative: Initiative) -> bool:
-    return bool(initiative.architecture)
+    return True
 
 
 def _initiative_tab_context_architecture(initiative: Initiative) -> dict:
+    return {}
+
+
+def _initiative_tab_available_user_documentation(initiative: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_user_documentation(initiative: Initiative) -> dict:
     return {}
 
 
@@ -2105,19 +2113,28 @@ def action_business_regenerate_architecture(request, business_id):
 
 def action_initiative_regenerate_architecture(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-    
+
     # PubSubManager.publish_id(
     #     PubSubMessageType.RESET_TASK_TEST,
     #     initiative_id
     # )
     eng_lead.write_initiative_architecture(initiative)
-    
+    initiative.write_user_documentation()
+
     return redirect(reverse('view_initiative_tab', args=['architecture', initiative_id]))
+
+
+def action_initiative_regenerate_user_documentation(request, initiative_id):
+    initiative = get_object_or_404(Initiative, pk=initiative_id)
+
+    initiative.write_user_documentation()
+
+    return redirect(reverse('view_initiative_tab', args=['user-documentation', initiative_id]))
 
 
 def action_initiative_regenerate_tasks(request, initiative_id):
     initiative: Initiative = get_object_or_404(Initiative, pk=initiative_id)
-    
+
     initiative.tasks.all().delete()
     eng_lead.define_tasks_for_initiative(initiative_id)
     

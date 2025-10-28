@@ -1,0 +1,27 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content">
+    <div class="card mb-4 iteration_card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <small class="text-muted">User Documentation</small>
+            <form method="post"
+                  action="{% url 'action_initiative_regenerate_user_documentation' initiative.id %}"
+                  class="me-3 d-inline">
+                {% csrf_token %}
+                <button type="submit"
+                        class="btn btn-sm bi bi-arrow-counterclockwise"
+                        onclick="return confirm('Are you sure you want to regenerate the user documentation?')">
+                    Regenerate Documentation
+                </button>
+                {% include "_copy_clipboard_btn.html" with target_el="#initiative_user_documentation" %}
+            </form>
+        </div>
+        <div class="card-body">
+            <div id="initiative_user_documentation" class="markdown-container">
+                {% if initiative.user_documentation %}
+                    {{ initiative.user_documentation|markdown }}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>

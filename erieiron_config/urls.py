@@ -24,8 +24,9 @@ urlpatterns = [
     path("_initiative/delete/<str:initiative_id>", views.action_delete_initiative, name="action_delete_initiative"),
     path("_initiative/dowork/<str:initiative_id>", views.action_dowork_initiative, name="action_dowork_initiative"),
     path("_initiative/regenerate/architecture/<str:initiative_id>", views.action_initiative_regenerate_architecture, name="action_initiative_regenerate_architecture"),
+    path("_initiative/regenerate/user_documentation/<str:initiative_id>", views.action_initiative_regenerate_user_documentation, name="action_initiative_regenerate_user_documentation"),
     path("_initiative/regenerate/tasks/<str:initiative_id>", views.action_initiative_regenerate_tasks, name="action_initiative_regenerate_tasks"),
-    
+
     path("task/resolve/<str:task_id>", views.action_resolve_task, name="action_resolve_task"),
     path("task/retry/<str:task_id>", views.action_retry_task, name="action_retry_task"),
     path("task/regen_test/<str:task_id>", views.action_task_regenerate_test, name="action_task_regenerate_test"),

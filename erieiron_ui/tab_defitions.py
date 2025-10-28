@@ -29,6 +29,13 @@ INITIATIVE_TAB_DEFINITIONS = [
         "context_fn": views._initiative_tab_context_architecture,
     },
     {
+        "slug": "user-documentation",
+        "label": "User Documentation",
+        "template": "initiative/tabs/user_documentation.html",
+        "availability_fn": views._initiative_tab_available_user_documentation,
+        "context_fn": views._initiative_tab_context_user_documentation,
+    },
+    {
         "slug": "tasks",
         "label": "Tasks",
         "template": "initiative/tabs/tasks.html",

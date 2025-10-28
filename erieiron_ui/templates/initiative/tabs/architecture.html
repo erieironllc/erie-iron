@@ -10,5 +10,7 @@
     </button>
 </form>
 <div class="markdown-container">
+    {% if initiative.architecture %}
     {{ initiative.architecture|markdown }}
+    {%  endif %}
 </div>

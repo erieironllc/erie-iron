@@ -48,6 +48,7 @@ class SdaInitialAction(ErieEnum):
 MAP_TASKTYPE_TO_PLANNING_PROMPT = {
     TaskType.CODING_ML: "codeplanner--ml_trainer.md",
     TaskType.CODING_APPLICATION: "codeplanner--feature_development.md",
+    TaskType.PRODUCTION_DEPLOYMENT: "codeplanner--production_deployment.md",
     TaskType.INITIATIVE_VERIFICATION: "codeplanner--initiative_verification.md",
     TaskType.DESIGN_WEB_APPLICATION: "codeplanner--web_designer.md",
     TaskType.TASK_EXECUTION: "codeplanner--executable_task.md",
