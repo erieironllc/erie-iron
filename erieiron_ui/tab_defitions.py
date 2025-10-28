@@ -72,6 +72,13 @@ INITIATIVE_TAB_DEFINITIONS = [
         "context_fn": views._initiative_tab_context_llm_spend,
     },
     {
+        "slug": "bug-report",
+        "label": "Bug Report",
+        "template": "initiative/tabs/bug_report.html",
+        "availability_fn": views._initiative_tab_available_bug_report,
+        "context_fn": views._initiative_tab_context_bug_report,
+    },
+    {
         "slug": "edit",
         "label": "Edit",
         "template": "initiative/tabs/edit.html",
@@ -116,6 +123,7 @@ BUSINESSES_TAB_DEFINITIONS = [
         "availability_fn": views._businesses_tab_available_lessons,
         "context_fn": views._businesses_tab_context_lessons,
     },
+
     TAB_DIVIDER,
     {
         "slug": "llm-spend",
@@ -355,6 +363,11 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_board_guidance,
     },
     TAB_DIVIDER,
+    {
+        "slug": "bug-report",
+        "label": "Bug Report",
+        "template": "business/tabs/bug_report.html"
+    },
     {
         "slug": "ceo-guidance",
         "label": "CEO Guidance",

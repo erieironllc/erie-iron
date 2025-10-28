@@ -524,6 +524,7 @@ class Initiative(BaseErieIronModel):
     
     def llm_data(self):
         return {
+            "initiative_id": self.id,
             "title": self.title,
             "description": self.description,
             "priority": self.priority,

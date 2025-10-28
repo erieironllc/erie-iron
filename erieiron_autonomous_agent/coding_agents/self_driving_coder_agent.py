@@ -422,8 +422,20 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
             ## Business & Architecture Context
             Business Service Token: {business.service_token}
             Initiative ID: {initiative.id}
-            """)
+            """),
         ]
+        
+        if initiative.architecture:
+            prompt_parts.append(textwrap.dedent(f"""
+            ### Initiative Architecture
+            {initiative.architecture}
+            """))
+        
+        if initiative.user_documentation:
+            prompt_parts.append(textwrap.dedent(f"""
+            ### User Documentation
+            {initiative.user_documentation}
+            """))
         
         prompt_parts.append(textwrap.dedent(f"""
         ### Lessons Learned - do not repeat these errors 
@@ -2979,12 +2991,16 @@ def get_iteration_eval_llm_messages(
 
 
 def get_architecture_docs(initiative: Initiative):
-    business = initiative.business
-    return LlmMessage.user_from_data(
-        "Architecture", {
-            "initiative_architecture": initiative.architecture
-        }
-    )
+    return [
+        textwrap.dedent(f"""
+        ## Architecture
+        {initiative.architecture or initiative.business.architecture}
+        """),
+        textwrap.dedent(f"""
+        ## User Documentation / Help Docs (**note** domain names in the docs may reference the top level business domain.  task level domains are usually subdomains - unless you're pushing to production env, use the subdomain)
+        {initiative.user_documentation}
+        """) if initiative.user_documentation else None
+    ]
 
 
 def perform_code_review(
@@ -3359,7 +3375,6 @@ def write_initiative_tdd_test(config: SelfDriverConfig):
         test_file_name=f"test_initiative_{config.initiative.id}.py",
         system_prompt_name="codewriter--python_tdd_initiative.md",
         user_messages=[
-            *get_architecture_docs(config.initiative),
             *LlmMessage.user_from_data(
                 "Please one-shot write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
                 {
@@ -3481,6 +3496,7 @@ def write_test(
     test_file_path = test_file_path_dir / sanitized_test_file_name
     
     user_messages = [
+        *get_architecture_docs(config.initiative),
         *get_existing_test_context_messages(
             config.initiative,
             test_file_path

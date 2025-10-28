@@ -1,5 +1,14 @@
 {% load erieiron_common_tags %}
 <div class="tab-pane-content">
+    <div class="d-flex justify-content-end mb-3">
+        <button type="button"
+                class="btn btn-primary"
+                data-bs-toggle="modal"
+                data-bs-target="#addInitiativeModal">
+            Add Initiative
+        </button>
+    </div>
+
     {% if initiatives %}
         <table class="table table-striped">
             <thead>
@@ -30,4 +39,42 @@
     {% else %}
         <em class="text-muted">No product initiatives available.</em>
     {% endif %}
+</div>
+
+<div class="modal fade" id="addInitiativeModal" tabindex="-1" aria-labelledby="addInitiativeModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="post" action="{% url 'action_add_initiative_from_brief' business.id %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addInitiativeModalLabel">Add Initiative</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">
+                        Provide a product initiative concept. The assistant will extract a title, description, and relevant KPIs for this business.
+                    </p>
+                    {% if business_kpis %}
+                        <div class="alert alert-info small">
+                            <strong>Existing KPIs:</strong>
+                            {{ business_kpis|join:", " }}
+                        </div>
+                    {% endif %}
+                    <div class="mb-3">
+                        <label for="initiativeBrief" class="form-label">Initiative Brief</label>
+                        <textarea id="initiativeBrief"
+                                  name="initiative_brief"
+                                  class="form-control"
+                                  rows="10"
+                                  placeholder="Describe the problem, target user, desired outcomes, and KPIs to influence."
+                                  required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Initiative</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </div>

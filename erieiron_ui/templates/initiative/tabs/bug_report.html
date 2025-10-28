@@ -1,0 +1,22 @@
+<div class="tab-pane-content">
+    <div class="row">
+        <div class="col-md-12">
+            <h5>Report a Bug</h5>
+            <p class="text-muted">Report issues with this initiative to help improve its operation.</p>
+            
+            <form action="{% url 'action_submit_bug_report_initiative' initiative.id %}" method="post">
+                {% csrf_token %}
+                
+                <div class="mb-3">
+                    <label for="bug_description" class="form-label">Bug Report <span class="text-danger">*</span></label>
+                    <textarea name="bug_description" id="bug_description" class="form-control" rows="8" 
+                              placeholder="Describe the bug in detail. Include what happened, what you expected, steps to reproduce, and any other relevant information..." required></textarea>
+                </div>
+                
+                <div class="mb-3">
+                    <button type="submit" class="btn btn-primary">Submit Bug Report</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

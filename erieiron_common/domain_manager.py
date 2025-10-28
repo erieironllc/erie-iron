@@ -5,6 +5,8 @@ import time
 import uuid
 from typing import Iterable, Optional
 
+import dns.resolver
+
 import boto3
 from botocore.exceptions import ClientError
 from django.db import transaction
@@ -457,7 +459,14 @@ def wait_for_dns_propagation(
     start_time = time.time()
     while time.time() < deadline:
         try:
-            answers = socket.gethostbyname_ex(domain_name)
+            try:
+                answers = socket.gethostbyname_ex(domain_name)
+            except Exception as e:
+                try:
+                    dns_answers = dns.resolver.resolve(domain_name, "A")
+                    answers = (domain_name, [], [rdata.address for rdata in dns_answers])
+                except Exception:
+                    raise e
             target_ips = socket.gethostbyname_ex(target_dns_name)[2]
             if any(ip in target_ips for ip in answers[2]):
                 return True

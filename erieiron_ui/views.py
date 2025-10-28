@@ -22,6 +22,7 @@ from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import (
     Business,
+    BusinessKPI,
     LlmRequest,
     AgentLesson,
     CodeFile,
@@ -31,10 +32,10 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv, InitiativeType
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, rget_json
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
 LLM_SPEND_RANGE_DEFAULT = "15d"
 LLM_SPEND_RANGE_OPTIONS = [
@@ -670,8 +671,14 @@ def _tab_available_product_initiatives(business: Business) -> bool:
 
 def _tab_context_product_initiatives(business: Business) -> dict:
     from erieiron_autonomous_agent.business_level_agents.eng_lead import INITIATIVE_TITLE_BOOTSTRAP_ENVS
+    existing_kpis = [
+        kpi.name or kpi.kpi_id
+        for kpi in business.businesskpi_set.order_by("name")
+        if (kpi.name or kpi.kpi_id)
+    ]
     return {
-        "initiatives": business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).order_by("created_timestamp")
+        "initiatives": business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).order_by("created_timestamp"),
+        "business_kpis": existing_kpis
     }
 
 
@@ -724,6 +731,22 @@ def _tab_context_edit(business: Business) -> dict:
         "business_status_choices": BusinessStatus.choices(),
         "business_source_choices": BusinessIdeaSource.choices(),
         "autonomy_level_choices": Level.choices()
+    }
+
+
+def _tab_available_bug_report(business: Business) -> bool:
+    return True
+
+
+def _tab_context_bug_report(business: Business) -> dict:
+    bug_fix_initiative = Initiative.objects.filter(
+        business=business,
+        initiative_type=InitiativeType.ENGINEERING,
+        title__icontains="Bug Fix"
+    ).first()
+    
+    return {
+        "bug_fix_initiative": bug_fix_initiative
     }
 
 
@@ -831,7 +854,11 @@ def _build_business_tabs(business: Business) -> list[dict]:
             tabs.append(definition)
         else:
             slug = definition["slug"]
-            available = definition["availability_fn"](business)
+            if "availability_fn" in definition:
+                available = definition["availability_fn"](business)
+            else:
+                available = True
+            
             if slug == "overview":
                 url = reverse('view_business', args=[business.id])
             else:
@@ -874,7 +901,7 @@ def view_business(request, business_id, tab='overview'):
     }
     if tab == 'llm-spend':
         context.update(_tab_context_llm_spend(business, request=request))
-    else:
+    elif "context_fn" in tab_definition:
         context.update(tab_definition["context_fn"](business))
     
     breadcrumbs = [
@@ -1063,6 +1090,14 @@ def _initiative_tab_available_llm_spend(initiative: Initiative) -> bool:
 
 def _initiative_tab_context_llm_spend(initiative: Initiative, request=None) -> dict:
     return _build_llm_spend_context(initiative=initiative, request=request)
+
+
+def _initiative_tab_available_bug_report(initiative: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_bug_report(initiative: Initiative) -> dict:
+    return {}
 
 
 def _initiative_tab_available_edit(initiative: Initiative) -> bool:
@@ -1488,7 +1523,7 @@ def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
         code_version.code_file_id: code_version
         for code_version in iteration.codeversion_set.all()
     }
-
+    
     code_files = []
     for code_file in code_file_datas:
         code_file_path = code_file.get('code_file_path')
@@ -1496,7 +1531,7 @@ def _iteration_tab_context_planning(iteration: SelfDrivingTaskIteration, **_):
             codefile_id = code_file_map[code_file_path].id
             code_file['url'] = reverse(view_codefile, args=[codefile_id])
             code_file['code_version'] = code_version_map.get(codefile_id)
-
+        
         code_files.append(code_file)
     
     return {
@@ -2113,28 +2148,28 @@ def action_business_regenerate_architecture(request, business_id):
 
 def action_initiative_regenerate_architecture(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-
+    
     # PubSubManager.publish_id(
     #     PubSubMessageType.RESET_TASK_TEST,
     #     initiative_id
     # )
     eng_lead.write_initiative_architecture(initiative)
     initiative.write_user_documentation()
-
+    
     return redirect(reverse('view_initiative_tab', args=['architecture', initiative_id]))
 
 
 def action_initiative_regenerate_user_documentation(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-
+    
     initiative.write_user_documentation()
-
+    
     return redirect(reverse('view_initiative_tab', args=['user-documentation', initiative_id]))
 
 
 def action_initiative_regenerate_tasks(request, initiative_id):
     initiative: Initiative = get_object_or_404(Initiative, pk=initiative_id)
-
+    
     initiative.tasks.all().delete()
     eng_lead.define_tasks_for_initiative(initiative_id)
     
@@ -2154,6 +2189,116 @@ def action_delete_business(request, business_id):
         messages.error(request, f'Error deleting business: {str(e)}')
     
     return redirect(reverse('view_businesses'))
+
+
+def action_submit_bug_report(request, business_id):
+    if request.method != 'POST':
+        raise Exception()
+    
+    business = get_object_or_404(Business, id=business_id)
+    
+    bug_description = rget(request, 'bug_description', '').strip()
+    
+    if not bug_description:
+        messages.error(request, 'Please provide a bug description.')
+        return redirect(reverse('view_business_tab', args=['bug-report', business_id]))
+    
+    try:
+        initiatives = [i.llm_data() for i in Initiative.objects.filter(business=business)]
+        if not initiatives:
+            messages.error(request, f'Bug report rejected: no initiatives yet for the business')
+            return redirect(reverse('view_business_tab', args=['bug-report', business_id]))
+        
+        selection_data = system_agent_llm_interface.llm_chat(
+            description=f"Select initiative for bug report in {business.name}",
+            messages=[
+                get_sys_prompt("eng_lead--initiative_selector.md"),
+                LlmMessage.user_from_data("Available Initiatives", initiatives, "initiative"),
+                LlmMessage.user_from_data("Bug Description", bug_description)
+            ],
+            tag_entity=business,
+            model=LlmModel.OPENAI_GPT_5_NANO
+        ).json()
+        
+        selected_initiative_id = selection_data.get('selected_initiative_id')
+        rationale = selection_data.get('rationale', 'No rationale provided')
+        
+        if not selected_initiative_id:
+            messages.error(request, f'Bug report rejected: {rationale}')
+            return redirect(reverse('view_business_tab', args=['bug-report', business_id]))
+        
+        selected_initiative = get_object_or_404(Initiative, id=selected_initiative_id)
+        parsed_data = system_agent_llm_interface.llm_chat(
+            description=f"Parse bug report for {selected_initiative.title}",
+            messages=[
+                get_sys_prompt("eng_lead--bug_ingester.md"),
+                LlmMessage.user_from_data("Bug Report", bug_description)
+            ],
+            tag_entity=selected_initiative,
+            model=LlmModel.OPENAI_GPT_5_MINI
+        ).json()
+        
+        task_id = f"task_bug_report_{business.service_token}_{common.gen_random_token(8)}"
+        
+        Task.objects.create(
+            id=task_id,
+            initiative=selected_initiative,
+            task_type=TaskType.CODING_APPLICATION,
+            status=TaskStatus.NOT_STARTED,
+            description=parsed_data.get('description', f'Bug report: {bug_description[:100]}'),
+            risk_notes=parsed_data.get('risk_notes', ''),
+            completion_criteria=parsed_data.get('completion_criteria', ['Bug is reproduced and fixed'])
+        )
+        
+        messages.success(request, f'Bug report submitted successfully! A task has been created in the "{selected_initiative.title}" initiative. Selection rationale: {rationale}')
+        return redirect(reverse('view_initiative_tab', args=["tasks", selected_initiative.id]))
+    
+    except Exception as e:
+        messages.error(request, f'Error submitting bug report: {str(e)}')
+        return redirect(reverse('view_business_tab', args=['bug-report', business_id]))
+
+
+def action_submit_bug_report_initiative(request, initiative_id):
+    if request.method != 'POST':
+        raise Exception()
+    
+    initiative = get_object_or_404(Initiative, id=initiative_id)
+    
+    bug_description = rget(request, 'bug_description', '').strip()
+    
+    if not bug_description:
+        messages.error(request, 'Please provide a bug description.')
+        return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
+    
+    try:
+        # Use LLM to parse the bug report and extract structured information
+        parsed_data = system_agent_llm_interface.llm_chat(
+            description=f"Parse bug report for {initiative.title}",
+            messages=[
+                get_sys_prompt("eng_lead--bug_ingester.md"),
+                LlmMessage.user_from_data("Bug Report", bug_description)
+            ],
+            tag_entity=initiative,
+            model=LlmModel.OPENAI_GPT_5_MINI,
+            verbosity=LlmVerbosity.MEDIUM
+        ).json()
+        
+        Task.objects.create(
+            id=f"task_bug_report_{initiative.business.service_token}_{common.gen_random_token(8)}",
+            initiative=initiative,
+            task_type=TaskType.CODING_APPLICATION,
+            status=TaskStatus.NOT_STARTED,
+            description=parsed_data.get('description', f'Bug report: {bug_description[:100]}'),
+            risk_notes=parsed_data.get('risk_notes', ''),
+            completion_criteria=parsed_data.get('completion_criteria', ['Bug is reproduced and fixed'])
+        )
+        
+        messages.success(request, 'Bug report submitted successfully! A task has been created in this initiative.')
+        return redirect(reverse('view_initiative_tab', args=["tasks", initiative_id]))
+    
+    except Exception as e:
+        messages.error(request, f'Error submitting bug report: {str(e)}')
+        return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
 
 
 def action_add_initiative(request):
@@ -2194,6 +2339,82 @@ def action_add_initiative(request):
     )
     
     messages.success(request, 'Initiative created successfully!')
+    return redirect(reverse('view_initiative', args=[initiative.id]))
+
+
+@require_POST
+def action_add_initiative_from_brief(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
+    
+    brief = rget(request, 'initiative_brief', '').strip()
+    if not brief:
+        messages.error(request, 'Please provide a description for the initiative.')
+        return redirect(reverse('view_business_tab', args=['product-initiatives', business_id]))
+    
+    business_kpis = list(business.businesskpi_set.all())
+    
+    existing_kpis = [k.name for k in business_kpis if k.name]
+    parsed_payload = system_agent_llm_interface.llm_chat(
+        description=f"Extract initiative details for {business.name}",
+        messages=[
+            get_sys_prompt("initiative--parse_brief.md"),
+            LlmMessage.user_from_data(
+                "Business Context",
+                {
+                    "business_name": business.name,
+                    "existing_kpis": existing_kpis,
+                }
+            ),
+            LlmMessage.user_from_data("Initiative Brief", brief)
+        ],
+        tag_entity=business,
+        model=LlmModel.OPENAI_GPT_5,
+        verbosity=LlmVerbosity.MEDIUM
+    ).json()
+    
+    title = (parsed_payload.get('title') or 'New Initiative').strip()
+    description = (parsed_payload.get('description') or brief).strip()
+    kpi_entries = [str(k).strip() for k in common.ensure_list(parsed_payload.get('kpis')) if str(k).strip()]
+    
+    expected_kpi_lift = {kpi: 0.0 for kpi in kpi_entries}
+    
+    initiative = Initiative.objects.create(
+        id=str(uuid.uuid4()),
+        business=business,
+        title=title,
+        description=description,
+        initiative_type=InitiativeType.PRODUCT,
+        priority=Level.MEDIUM,
+        requires_unit_tests=True,
+        expected_kpi_lift=expected_kpi_lift
+    )
+    
+    if kpi_entries and business_kpis:
+        kpi_lookup: dict[str, BusinessKPI] = {}
+        for kpi in business_kpis:
+            name_key = (kpi.name or '').strip().lower()
+            if name_key:
+                kpi_lookup.setdefault(name_key, kpi)
+            id_key = (getattr(kpi, 'kpi_id', '') or '').strip().lower()
+            if id_key:
+                kpi_lookup.setdefault(id_key, kpi)
+        
+        matched_kpis = []
+        for kpi_name in kpi_entries:
+            key = kpi_name.lower()
+            kpi_obj = kpi_lookup.get(key)
+            if kpi_obj:
+                matched_kpis.append(kpi_obj)
+        
+        if matched_kpis:
+            initiative.linked_kpis.set(matched_kpis)
+    
+    PubSubManager.publish_id(
+        PubSubMessageType.INITIATIVE_DEFINITION_REQUESTED,
+        initiative.id
+    )
+    
+    messages.success(request, f'Initiative "{initiative.title}" created successfully!')
     return redirect(reverse('view_initiative', args=[initiative.id]))
 
 
@@ -2391,7 +2612,7 @@ def action_update_task(request, task_id):
         
         messages.success(request, 'Task updated successfully!')
         return redirect(reverse('view_task_tab', args=['edit', task_id]))
-    except Task.DoesNotExist:
+    except Task.DoesNotExist as e:
         logging.exception(e)
         messages.error(request, 'Task not found.')
         return redirect(reverse('view_businesses'))

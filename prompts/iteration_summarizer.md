@@ -101,8 +101,12 @@ You will be provided
 
 5. **Determine if Development is Stagnating**
    - **Field**: `is_stagnating`
-   - Return `true` if recent iterations show stagnation — meaning the same or similar failures occur over multiple iterations, or no meaningful progress toward the GOAL is being made.
-   - Return `false` otherwise.
+   - Return `true` **only if recent iterations show repeated stagnation** — meaning the same or highly similar failures have persisted for **three or more consecutive iterations** with little or no measurable progress toward the GOAL.
+   - **Early iterations** (e.g., first or second attempts) should **never** be marked as stagnating, even if they fail in similar ways, since the agent is still exploring and establishing baseline functionality.
+   - Return `false` if:
+     - The agent is encountering new types of failures or making partial progress (e.g., new tests passing, different error signatures, or improved infra stability).
+     - The iteration shows any meaningful change in behavior or outcomes relative to prior runs.
+   - **Note:** Minor progress, partial fixes, or emergence of new failure types should reset stagnation detection. Stagnation should only be flagged if there are at least three consecutive iterations showing the same or highly similar failures with no measurable improvement toward the GOAL.
 
 
 ### Root Cause Extraction

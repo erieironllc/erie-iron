@@ -212,6 +212,7 @@ def build_chat_data(business, initiative):
         "initiative_id": initiative.id,
         "initiative_title": initiative.title,
         "initiative_description": initiative.description,
+        "user_documentation": initiative.user_documentation,
         "requirements": requirements,
         "linked_kpis": linked_kpis,
         "linked_goals": linked_goals,
@@ -557,5 +558,4 @@ def identify_required_credentials(business: Business):
         }
     )
     business.refresh_from_db(fields=["required_credentials"])
-
 

@@ -1,5 +1,6 @@
 erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git
 Django==5.1.6
+dnspython>=2.6.1
 cfn-lint
 PyJWT
 PyJWT[crypto]>=2.0.0
