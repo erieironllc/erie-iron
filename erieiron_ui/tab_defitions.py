@@ -383,6 +383,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_architecture,
     },
     {
+        "slug": "infrastructure-stacks",
+        "label": "Infrastructure Stacks",
+        "template": "business/tabs/infrastructure_stacks.html",
+        "availability_fn": views._tab_available_infrastructure_stacks,
+        "context_fn": views._tab_context_infrastructure_stacks,
+    },
+    {
         "slug": "product-initiatives",
         "label": "Product Initiatives",
         "template": "business/tabs/product_initiatives.html",

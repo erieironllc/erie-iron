@@ -6,6 +6,7 @@ import uuid
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, date
 from pathlib import Path
+from typing import Callable, Iterable
 from urllib.parse import quote
 
 from django.contrib import messages
@@ -664,6 +665,38 @@ def _tab_context_architecture(business: Business) -> dict:
     return {}
 
 
+def _tab_available_infrastructure_stacks(_: Business) -> bool:
+    return True
+
+
+def _tab_context_infrastructure_stacks(business: Business) -> dict:
+    stacks_qs = (
+        business.infrastructurestack_set
+        .select_related("initiative")
+        .all()
+        .order_by("aws_env", "stack_type", "created_timestamp")
+    )
+    stack_entries = _build_infrastructure_stack_entries(
+        stacks_qs,
+        scope_label_fn=lambda stack: (
+            stack.initiative.title
+            if getattr(stack.initiative, "title", None)
+            else "Initiative"
+        ) if stack.initiative_id else "Business",
+    )
+
+    stack_count = len(stack_entries)
+    initiative_stack_count = len({entry["initiative_id"] for entry in stack_entries if entry["initiative_id"]})
+    business_scoped_stack_count = stack_count - initiative_stack_count
+
+    return {
+        "stack_entries": stack_entries,
+        "stack_count": stack_count,
+        "initiative_stack_count": initiative_stack_count,
+        "business_scoped_stack_count": business_scoped_stack_count,
+    }
+
+
 def _tab_available_product_initiatives(business: Business) -> bool:
     from erieiron_autonomous_agent.business_level_agents.eng_lead import INITIATIVE_TITLE_BOOTSTRAP_ENVS
     return business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).exists()
@@ -1004,20 +1037,19 @@ def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
     return {"tasks": tasks}
 
 
-def _initiative_tab_available_infrastructure_stacks(_: Initiative) -> bool:
-    return True
-
-
-def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dict:
-    stacks_qs = initiative.cloudformation_stacks.all().order_by("aws_env", "stack_type", "created_timestamp")
-    stack_entries: list[dict] = []
+def _build_infrastructure_stack_entries(
+        stacks: Iterable[InfrastructureStack],
+        *,
+        scope_label_fn: Callable[[InfrastructureStack], str] | None = None,
+) -> list[dict]:
     default_region = AwsEnv.DEV.get_aws_region()
-    
-    for stack in stacks_qs:
+    entries: list[dict] = []
+
+    for stack in stacks:
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         env_enum = AwsEnv.valid_or(getattr(stack, "aws_env", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
-        
+
         cloudformation_url = None
         if stack.stack_arn:
             cloudformation_url = (
@@ -1029,15 +1061,22 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
                 f"https://{region}.console.aws.amazon.com/cloudformation/home"
                 f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
             )
-        
+
         logs_url = (
             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
             f"?region={region}#logsV2:log-groups$3FlogGroupNameFilter$3D{quote(stack.stack_namespace_token, safe='')}"
         )
-        
-        stack_entries.append(
+
+        scope_label = scope_label_fn(stack) if scope_label_fn else (
+            "Initiative" if stack.initiative_id else "Business"
+        )
+
+        entries.append(
             {
                 "id": str(stack.id),
+                "business_id": stack.business_id,
+                "initiative_id": stack.initiative_id,
+                "initiative_title": getattr(stack.initiative, "title", None) if stack.initiative_id else None,
                 "stack_name": stack.stack_name,
                 "stack_type_label": stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown"),
                 "stack_type_value": stack.stack_type,
@@ -1049,10 +1088,36 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
                 "stack_arn": stack.stack_arn,
                 "created_timestamp": stack.created_timestamp,
                 "updated_timestamp": stack.updated_timestamp,
-                "scope_label": "Initiative" if stack.initiative_id == initiative.id else "Business",
+                "scope_label": scope_label,
             }
         )
-    
+
+    entries.sort(
+        key=lambda entry: (
+            (entry.get("scope_label") or "").lower(),
+            (entry.get("stack_name") or "").lower(),
+        )
+    )
+
+    return entries
+
+
+def _initiative_tab_available_infrastructure_stacks(_: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dict:
+    stacks_qs = (
+        initiative.cloudformation_stacks
+        .select_related("initiative")
+        .all()
+        .order_by("aws_env", "stack_type", "created_timestamp")
+    )
+    stack_entries = _build_infrastructure_stack_entries(
+        stacks_qs,
+        scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
+    )
+
     return {
         "stack_entries": stack_entries,
         "child_task_count": initiative.tasks.count(),

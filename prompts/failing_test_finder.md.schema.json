@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://erieiron.ai/schemas/failing_test_finder.schema.json",
+  "title": "Failing Test Finder Output Schema",
+  "description": "Validates the structured output from the failing_test_finder prompt.",
+  "type": "object",
+  "required": ["failing_tests"],
+  "properties": {
+    "failing_tests": {
+      "type": "array",
+      "description": "List of fully qualified test names that failed, in module.test_method format.",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9_\\.]+\\.[a-zA-Z0-9_]+$",
+        "examples": [
+          "core.tests.test_task_bug_report_articleparsernew_t57y4lei.ForwardToDigestAcceptanceTests.test_s3_upload_triggers_digest_job_enqueue"
+        ]
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}
