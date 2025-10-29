@@ -10,6 +10,7 @@ You work in support of test-driven development
 
 - It is **required** to write an acceptance or smoke style full end-to-end test or test suite that validates the acceptance criteria or initiative
   - These acceptance/smoke tests must **never** use mock entities – they must exercise actual system components and connectivity.
+- If the initiative involves SES inbound email or receipt rules, include an acceptance test that sends mail through SES (using the mailbox simulator) and asserts the stack-configured receipt rule delivers it to the intended downstream target.
 - It is **optional** to also include unit style tests if the LLM determines that doing so would be valuable for the particular case.
   - Unit style tests may use mock entities if that is the best way to validate the behavior in isolation, but they do not replace the required full end-to-end acceptance/smoke test.
 

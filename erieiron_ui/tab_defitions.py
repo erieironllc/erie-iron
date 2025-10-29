@@ -73,7 +73,7 @@ INITIATIVE_TAB_DEFINITIONS = [
     },
     {
         "slug": "bug-report",
-        "label": "Bug Report",
+        "label": "Report Bug",
         "template": "initiative/tabs/bug_report.html",
         "availability_fn": views._initiative_tab_available_bug_report,
         "context_fn": views._initiative_tab_context_bug_report,
@@ -219,6 +219,13 @@ TASK_TAB_DEFINITIONS = [
         "availability_fn": views._task_tab_available_resolve,
         "context_fn": views._task_tab_context_resolve,
     },
+    {
+        "slug": "debug-assistance",
+        "label": "Debug Assistance",
+        "template": "task/tabs/debug_assistance.html",
+        "availability_fn": views._task_tab_available_debug_assistance,
+        "context_fn": views._task_tab_context_debug_assistance,
+    },
     # {
     #     "slug": "processes",
     #     "label": "Processes",
@@ -328,7 +335,7 @@ BUSINESS_TAB_DEFINITIONS = [
     },
     {
         "slug": "bug-report",
-        "label": "Bug Report",
+        "label": "Report Bug",
         "template": "business/tabs/bug_report.html"
     },
     {
@@ -342,7 +349,6 @@ BUSINESS_TAB_DEFINITIONS = [
         "slug": "product-initiatives",
         "label": "Product Initiatives",
         "template": "business/tabs/product_initiatives.html",
-        "availability_fn": views._tab_available_product_initiatives,
         "context_fn": views._tab_context_product_initiatives,
     },
     TAB_DIVIDER,

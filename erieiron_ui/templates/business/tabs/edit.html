@@ -29,37 +29,37 @@
 
         <hr>
 
-        <form action="{% url 'action_update_business' business.id %}" method="post">
-            {% csrf_token %}
-            
-            <div class="mb-3 d-flex justify-content-between align-items-center">
-                <div>
-                    <button type="submit" class="btn btn-primary">Save Changes</button>
-                </div>
-                <div class="d-flex flex-wrap gap-2">
-                    <form method="post" action="{% url 'action_delete_business' business.id %}" class="d-inline"
-                          id="delete-business-form">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-outline-danger">Delete Business</button>
-                    </form>
-                    <form method="post" action="{% url 'action_business_new_domain' business.id %}" class="d-inline">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-warning"
-                                onclick="return confirm('Are you sure you want to register a new Domain for this business?')">
-                            New Domain
-                        </button>
-                    </form>
-                    <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-danger"
-                                onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
-                            Bootstrap
-                        </button>
-                    </form>
-                </div>
+        <div class="mb-3 d-flex justify-content-between align-items-center">
+            <div>
+                <button type="submit" class="btn btn-primary" form="business_edit_form">Save Changes</button>
             </div>
-            
-            <hr>
+            <div class="d-flex flex-wrap gap-2">
+                <form method="post" action="{% url 'action_delete_business' business.id %}" class="d-inline"
+                      id="delete-business-form">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-danger">Delete Business</button>
+                </form>
+                <form method="post" action="{% url 'action_business_new_domain' business.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-warning"
+                            onclick="return confirm('Are you sure you want to register a new Domain for this business?')">
+                        New Domain
+                    </button>
+                </form>
+                <form method="post" action="{% url 'action_bootstrap_business' business.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-danger"
+                            onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
+                        Bootstrap
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <hr>
+        <form id="business_edit_form" action="{% url 'action_update_business' business.id %}" method="post">
+            {% csrf_token %}
+
             <div class="row">
                 <div class="col-md-6">
                     <div class="mb-3">
@@ -216,26 +216,26 @@
         </form>
     </div>
 
-<script>
-    (function () {
-        const wireDeleteConfirmation = function () {
-            const deleteForm = document.getElementById('delete-business-form');
-            if (!deleteForm) {
-                return;
-            }
-
-            deleteForm.addEventListener('submit', function (event) {
-                const confirmMessage = 'Are you sure you want to delete this business? This action cannot be undone.';
-                if (!window.confirm(confirmMessage)) {
-                    event.preventDefault();
+    <script>
+        (function () {
+            const wireDeleteConfirmation = function () {
+                const deleteForm = document.getElementById('delete-business-form');
+                if (!deleteForm) {
+                    return;
                 }
-            });
-        };
 
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', wireDeleteConfirmation);
-        } else {
-            wireDeleteConfirmation();
-        }
-    })();
-</script>
+                deleteForm.addEventListener('submit', function (event) {
+                    const confirmMessage = 'Are you sure you want to delete this business? This action cannot be undone.';
+                    if (!window.confirm(confirmMessage)) {
+                        event.preventDefault();
+                    }
+                });
+            };
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', wireDeleteConfirmation);
+            } else {
+                wireDeleteConfirmation();
+            }
+        })();
+    </script>

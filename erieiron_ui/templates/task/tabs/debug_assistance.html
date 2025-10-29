@@ -1,0 +1,35 @@
+<div class="tab-pane-content debug-assistance-view" data-task-id="{{ task.id }}">
+    <h5>Debug Assistance</h5>
+    <form id="debug-assistance-form" action="{% url 'action_debug_assistance' task.id %}" method="post">
+        {% csrf_token %}
+        <div class="mb-3">
+            <label for="debug-question" class="form-label">Debug Question:</label>
+            <textarea id="debug-question" name="question" class="form-control" rows="4"
+                      placeholder="Describe the issue you're debugging or ask a specific question about the task...">Please help me debug this issue</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Debug</button>
+    </form>
+    
+    <div id="debug-response" class="{% if not debug_steps %}d-none{% endif %}">
+        <hr>
+        <div class="d-flex justify-content-between">
+            <h6>Debug Steps:</h6>
+            {% include "_copy_clipboard_btn.html" with target_el="#debug-response-content" %}
+        </div>
+        <div id="debug-response-content">
+            {{ debug_steps|safe|default:"" }}
+        </div>
+    </div>
+</div>
+
+<script>
+    $(document).ready(function () {
+        if (typeof DebugAssistanceView !== 'undefined') {
+            if (!window.debugAssistanceView) {
+                window.debugAssistanceView = new DebugAssistanceView();
+            } else {
+                window.debugAssistanceView.initialize();
+            }
+        }
+    });
+</script>

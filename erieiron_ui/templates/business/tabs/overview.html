@@ -1,6 +1,8 @@
 <div class="tab-pane-content">
     <div>{{ business.summary|default_if_none:"" }}</div>
+    {% if business.raw_idea %}
     <hr>
     <h5>The Pitch</h5>
     <div>{{ business.raw_idea|linebreaksbr }}</div>
+    {% endif %}
 </div>

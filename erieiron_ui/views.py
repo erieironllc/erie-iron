@@ -57,7 +57,7 @@ def _businesses_tab_available_portfolio(_: Business) -> bool:
 
 def _businesses_tab_context_portfolio(erieiron_business: Business) -> dict:
     return {
-        "businesses": Business.objects.exclude(id=erieiron_business.id).order_by("created_at"),
+        "businesses": Business.objects.all().order_by("created_at"),
     }
 
 
@@ -684,11 +684,11 @@ def _tab_context_infrastructure_stacks(business: Business) -> dict:
             else "Initiative"
         ) if stack.initiative_id else "Business",
     )
-
+    
     stack_count = len(stack_entries)
     initiative_stack_count = len({entry["initiative_id"] for entry in stack_entries if entry["initiative_id"]})
     business_scoped_stack_count = stack_count - initiative_stack_count
-
+    
     return {
         "stack_entries": stack_entries,
         "stack_count": stack_count,
@@ -1044,12 +1044,12 @@ def _build_infrastructure_stack_entries(
 ) -> list[dict]:
     default_region = AwsEnv.DEV.get_aws_region()
     entries: list[dict] = []
-
+    
     for stack in stacks:
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         env_enum = AwsEnv.valid_or(getattr(stack, "aws_env", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
-
+        
         cloudformation_url = None
         if stack.stack_arn:
             cloudformation_url = (
@@ -1061,16 +1061,16 @@ def _build_infrastructure_stack_entries(
                 f"https://{region}.console.aws.amazon.com/cloudformation/home"
                 f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
             )
-
+        
         logs_url = (
             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
             f"?region={region}#logsV2:log-groups$3FlogGroupNameFilter$3D{quote(stack.stack_namespace_token, safe='')}"
         )
-
+        
         scope_label = scope_label_fn(stack) if scope_label_fn else (
             "Initiative" if stack.initiative_id else "Business"
         )
-
+        
         entries.append(
             {
                 "id": str(stack.id),
@@ -1091,14 +1091,14 @@ def _build_infrastructure_stack_entries(
                 "scope_label": scope_label,
             }
         )
-
+    
     entries.sort(
         key=lambda entry: (
             (entry.get("scope_label") or "").lower(),
             (entry.get("stack_name") or "").lower(),
         )
     )
-
+    
     return entries
 
 
@@ -1117,7 +1117,7 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
         stacks_qs,
         scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
     )
-
+    
     return {
         "stack_entries": stack_entries,
         "child_task_count": initiative.tasks.count(),
@@ -1464,7 +1464,7 @@ def _task_tab_context_guidance(task, business, self_driving_task) -> dict:
 
 
 def _task_tab_available_testcode(task, business, self_driving_task) -> bool:
-    return bool(self_driving_task and self_driving_task.test_file_path)
+    return True
 
 
 def _task_tab_context_testcode(task, business, self_driving_task) -> dict:
@@ -1487,6 +1487,16 @@ def _task_tab_context_resolve(task, business, self_driving_task) -> dict:
     return {}
 
 
+def _task_tab_available_debug_assistance(task, business, self_driving_task) -> bool:
+    return True
+
+
+def _task_tab_context_debug_assistance(task, business, self_driving_task) -> dict:
+    return {
+        "debug_steps": task.debug_steps
+    }
+
+
 def _task_tab_available_edit(task, business, self_driving_task) -> bool:
     return True
 
@@ -1496,13 +1506,7 @@ def _task_tab_context_edit(task, business, self_driving_task: SelfDrivingTask) -
     
     if self_driving_task:
         initiative = self_driving_task.task.initiative
-        stack = initiative.cloudformation_stacks.filter(aws_env=AwsEnv.DEV, stack_type=InfrastructureStackType.APPLICATION).first()
-        if stack:
-            cloudformation_stack_name = stack.stack_name
-            if stack.stack_arn:
-                encoded_stack_id = quote(stack.stack_arn, safe="")
-                cloudformation_stack_url = f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={encoded_stack_id}"
-    
+        
     return {
         "sandbox_path": sandbox_path,
         "task_status_choices": TaskStatus.choices(),
@@ -2295,7 +2299,7 @@ def action_submit_bug_report(request, business_id):
         selected_initiative = get_object_or_404(Initiative, id=selected_initiative_id)
         parsed_data = system_agent_llm_interface.llm_chat(
             description=f"Parse bug report for {selected_initiative.title}",
-           messages=[
+            messages=[
                 get_sys_prompt("eng_lead--bug_ingester.md"),
                 LlmMessage.user_from_data("Bug Report", bug_description)
             ],
@@ -2310,7 +2314,7 @@ def action_submit_bug_report(request, business_id):
             initiative=selected_initiative,
             task_type=TaskType.CODING_APPLICATION,
             status=TaskStatus.NOT_STARTED,
-            description=parsed_data.get('description', f'Bug report: {bug_description[:100]}'),
+            description=parsed_data.get('description'),
             risk_notes=parsed_data.get('risk_notes', ''),
             completion_criteria=parsed_data.get('completion_criteria', ['Bug is reproduced and fixed'])
         )
@@ -2486,7 +2490,7 @@ def action_add_initiative_from_brief(request, business_id):
 @require_POST
 def action_business_production_push(request, business_id):
     business = get_object_or_404(Business, pk=business_id)
-
+    
     initiative, _ = Initiative.objects.get_or_create(
         business=business,
         title=InitiativeNames.OPERATIONAL_TASKS,
@@ -2498,7 +2502,7 @@ def action_business_production_push(request, business_id):
             "requires_unit_tests": False,
         }
     )
-
+    
     task = Task.objects.create(
         id=f"task_production_push_{business.service_token}_{common.gen_random_token(8)}",
         initiative=initiative,
@@ -2517,12 +2521,12 @@ def action_business_production_push(request, business_id):
         requires_test=False,
         created_by=getattr(request.user, "username", None) or "system",
     )
-
+    
     messages.success(
         request,
         f"Production push task queued in '{initiative.title}'."
     )
-
+    
     return redirect(reverse('view_task', args=[task.id]))
 
 
@@ -2558,7 +2562,6 @@ def action_update_initiative(request, initiative_id):
         title = rget(request, 'title', '').strip()
         description = rget(request, 'description', '').strip()
         architecture = rget(request, 'architecture', '').strip()
-        cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
         requires_unit_tests = request.POST.get('requires_unit_tests') == 'on'
         green_lit = request.POST.get('green_lit') == 'on'
         
@@ -2570,7 +2573,6 @@ def action_update_initiative(request, initiative_id):
             'title': title,
             'description': description,
             'architecture': architecture or None,
-            'cloudformation_stack_name': cloudformation_stack_name or None,
             'requires_unit_tests': requires_unit_tests,
             'green_lit': green_lit
         }
@@ -2588,6 +2590,7 @@ def action_update_initiative(request, initiative_id):
         messages.error(request, 'Initiative not found.')
         return redirect(reverse('view_businesses_tab', args=['initiatives']))
     except Exception as e:
+        logging.exception(e)
         messages.error(request, f'Error updating initiative: {str(e)}')
         return redirect(reverse('view_initiative', args=[initiative_id]))
 
@@ -2648,6 +2651,41 @@ def action_update_task_guidance(request, task_id):
         return redirect(reverse('view_task', args=[task_id]))
 
 
+@require_POST
+@json_endpoint
+def action_debug_assistance(request, task_id):
+    try:
+        task = get_object_or_404(Task, pk=task_id)
+        question = rget(request, 'question', '').strip()
+        
+        initiative = task.initiative
+        business = initiative.business
+        
+        debug_steps_html = system_agent_llm_interface.llm_chat(
+            description=f"Debug assistance for task: {task.id}",
+            messages=[
+                get_sys_prompt("debug_assistance.md"),
+                LlmMessage.user_from_data("Task Description", task.description),
+                LlmMessage.user_from_data("Task Completion Criteria", task.completion_criteria or "None specified"),
+                LlmMessage.user_from_data("Task Risk Notes", task.risk_notes or "None specified"),
+                LlmMessage.user_from_data("Debug Question", question) if question else None
+            ],
+            tag_entity=initiative,
+            model=LlmModel.OPENAI_GPT_5_MINI
+        ).text.replace('\n', '<br>')
+        
+        task.debug_steps = debug_steps_html
+        task.save()
+
+        return {"success": True, "debug_steps": debug_steps_html}
+    
+    except Task.DoesNotExist:
+        return {"success": False, "error": "Task not found"}
+    except Exception as e:
+        logging.exception(e)
+        return {"success": False, "error": f"Error getting debug assistance: {str(e)}"}
+
+
 def action_update_task(request, task_id):
     if request.method != 'POST':
         raise Exception()
@@ -2664,7 +2702,6 @@ def action_update_task(request, task_id):
         task_type = rget(request, 'task_type', '').strip()
         execution_schedule = rget(request, 'execution_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
-        cloudformation_stack_name = rget(request, 'cloudformation_stack_name', '').strip()
         completion_criteria = rget(request, 'completion_criteria', "").strip()
         requires_test = request.POST.get('requires_test') == 'on'
         
@@ -2795,6 +2832,7 @@ def action_update_business(request, business_id):
         messages.error(request, 'Business not found.')
         return redirect(reverse('view_businesses'))
     except Exception as e:
+        logging.exception(e)
         messages.error(request, f'Error updating business: {str(e)}')
         return redirect(reverse('view_business', args=[business_id]))
 

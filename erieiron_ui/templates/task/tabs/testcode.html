@@ -8,7 +8,7 @@
                 <form method="post" action="{% url 'action_task_regenerate_test' task.id %}"
                       class="me-3 d-inline">
                     {% csrf_token %}
-                    
+
                     <button type="submit" class="btn btn-sm bi bi-arrow-counterclockwise"
                             onclick="return confirm('Are you sure you want to regenerate this test?')">
                         Regenerate Test
@@ -25,6 +25,15 @@
             </div>
         </div>
     {% else %}
+        <form method="post" action="{% url 'action_task_regenerate_test' task.id %}"
+              class="me-3 d-inline d-flex justify-content-end">
+            {% csrf_token %}
+
+            <button type="submit" class="btn btn-sm bi bi-arrow-counterclockwise"
+                    onclick="return confirm('Are you sure you want to regenerate this test?')">
+                Generate Test
+            </button>
+        </form>
         <em class="text-muted">No test file registered for this task.</em>
     {% endif %}
 </div>

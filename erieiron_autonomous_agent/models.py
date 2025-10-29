@@ -693,7 +693,8 @@ class Task(BaseErieIronModel):
     product_initiative = models.TextField(null=True)
     task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_APPLICATION, null=False)
     status = models.TextField(null=False, choices=TaskStatus.choices())
-    
+    debug_steps = models.TextField(null=True)
+
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
     description = models.TextField()
     depends_on = models.ManyToManyField(

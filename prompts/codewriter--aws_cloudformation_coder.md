@@ -282,6 +282,13 @@ Any output that is not valid YAML is a hard failure and will be rejected.
 
 ---
 
+## SES Receipt Rule Set Management
+- When email ingestion is part of the task, define an `AWS::SES::ReceiptRuleSet` whose name derives from `!Ref StackIdentifier` and populate it with the required `AWS::SES::ReceiptRule` resources that point to stack-managed S3 buckets, Lambdas, or SNS topics. Do not emit empty rule sets or defer rule creation to orchestration.
+- Add a Lambda-backed `Custom::ActivateSesRuleSet` (or equivalent) that issues `ses:SetActiveReceiptRuleSet` so the stack-owned rule set becomes active on create/update. Gate the custom resource with `DependsOn` relationships so activation runs after the rule set and rules exist.
+- Ensure the same custom resource clears the active rule set back to `""` during stack deletion before CloudFormation removes the `AWS::SES::ReceiptRuleSet` resource.
+
+---
+
 ## CloudFormation Update Efficiency Guidelines
 
 When planning or modifying AWS CloudFormation templates:

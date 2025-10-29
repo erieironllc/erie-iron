@@ -23,6 +23,7 @@ You must:
 
 - The test file is **required** to contain an acceptance or smoke style full end-to-end test or test suite that validates the acceptance criteria.
     - Acceptance/smoke tests must not use mocks. They must exercise actual system components end to end.
+- If the task involves email receipt or SES inbound processing, include an acceptance test that sends an email (using the SES mailbox simulator) and asserts the stack-configured receipt rule processes and delivers it to the expected destination.
 - The test file may also include unit style tests if you determines that doing so would be valuable for the particular case.  
     - Unit tests may use mocks to isolate behavior, but this is optional and does not replace the required acceptance/smoke test.
 

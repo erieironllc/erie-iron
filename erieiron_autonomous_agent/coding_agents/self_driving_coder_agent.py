@@ -3,9 +3,7 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
-import tempfile
 import textwrap
 import time
 import traceback
@@ -44,7 +42,7 @@ from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_s
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, cloudformation_utils, cloudformation_log_reader, ErieIronJSONEncoder
-from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket
+from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda
 from erieiron_common.cloudformation_utils import get_stack_outputs, CloudFormationStackObsolete, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, get_resource_configs, CloudformationResourceType, get_physical_resources, CloudFormationException
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
@@ -1592,74 +1590,29 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     )
     
     for lambda_data in lambda_datas:
-        dependencies = lambda_data["dependencies"]
-        
-        dependencies_normalized = []
-        for d in dependencies:
-            if "erieiron-public-common" in d:
-                dependencies_normalized.append("erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git")
-            else:
-                dependencies_normalized.append(d)
-        dependencies = dependencies_normalized
-        
-        code_file_path = lambda_data["code_file_path"]
-        full_lambda_path = config.sandbox_root_dir / code_file_path
-        
-        if not full_lambda_path.exists():
-            raise FileNotFoundError(f"Lambda source file not found: {full_lambda_path}")
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir_path = Path(temp_dir)
-            shutil.copy(full_lambda_path, temp_dir_path / full_lambda_path.name)
-            
-            if dependencies:
-                req_file = temp_dir_path / "requirements.txt"
-                req_file.write_text("\n".join(dependencies))
-                config.log(f"building dependencies for {code_file_path}: {dependencies}")
-                try:
-                    subprocess.run(
-                        [
-                            "podman", "run", "--rm",
-                            "--platform", ContainerPlatform.LAMBDA,
-                            "--entrypoint", "/bin/bash",
-                            "-v", f"{temp_dir_path}:/var/task",
-                            "public.ecr.aws/lambda/python:3.11",
-                            "-c",
-                            (
-                                "set -euxo pipefail && "
-                                "yum install -y git && "
-                                "pip install --no-cache-dir --only-binary=:all: "
-                                "-r /var/task/requirements.txt -t /var/task && "
-                                "ls -lh /var/task"
-                            ),
-                        ],
-                        stdout=config.log_f,
-                        stderr=subprocess.STDOUT,
-                        check=True
-                    )
-                except Exception as e:
-                    logging.exception(e)
-                    raise e
-            
-            s3_key_name = aws_utils.sanitize_aws_name(common.safe_join([
+        zip_path = None
+        try:
+            lambda_data['s3_key_name'] = s3_key_name = aws_utils.sanitize_aws_name(common.safe_join([
                 config.task.id,
-                common.get_basename(code_file_path),
+                common.get_basename(lambda_data["code_file_path"]),
                 config.current_iteration.version_number,
                 time.time()
             ], "-"), 1000) + ".zip"
             
-            logging.info(f"Packaging Lambda: {code_file_path} → {s3_key_name} with dependencies: {dependencies}")
-            
-            zip_path = temp_dir_path / s3_key_name
-            shutil.make_archive(zip_path.with_suffix(""), 'zip', root_dir=temp_dir_path)
-            logging.info(f"Uploading {code_file_path} package.  {zip_path} → {s3_key_name} ({zip_path.stat().st_size / (1024 * 1024):.2f}MB)")
+            zip_path = package_lambda(
+                config.sandbox_root_dir,
+                lambda_data["code_file_path"],
+                lambda_data["dependencies"],
+                s3_key_name
+            )
             
             s3.upload_file(
                 str(zip_path),
                 LAMBDA_PACKAGES_BUCKET,
                 s3_key_name
             )
-            lambda_data['s3_key_name'] = s3_key_name
+        finally:
+            common.quietly_delete(zip_path)
     
     return lambda_datas
 
@@ -1831,10 +1784,13 @@ def run_container_command(
         config: SelfDriverConfig,
         command_args: list[str],
         container_env: dict,
-        container_image_tag: str
+        container_image_tag: str,
+        stdout=None
 ) -> None:
-    command_args = common.ensure_list(command_args)
+    if stdout is None:
+        stdout = config.log_f
     
+    command_args = common.ensure_list(command_args)
     cmd = [
         "podman", "run", "--rm",
         "--platform", ContainerPlatform.FARGATE,
@@ -1853,7 +1809,7 @@ def run_container_command(
     # Capture podman run start time
     process = subprocess.Popen(
         cmd,
-        stdout=config.log_f,
+        stdout=stdout,
         env=container_env,
         stderr=subprocess.STDOUT,
         text=True
@@ -1920,7 +1876,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
             container_image_tag
         )
         
-        config.log("Docker execution finished")
+        config.log("Execution finished")
     except NeedPlan as e:
         raise e
     except AgentBlocked as e:
@@ -2050,7 +2006,7 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
         ]
     else:
         first_tests = None
-        
+    
     if first_tests:
         config.log(f"Running task's automated test first: {first_tests}")
         try:
@@ -2062,8 +2018,11 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
             )
             config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
         except ExecutionException as e:
-            config.log(f"some of all of {first_tests} FAILED. Skipping full test suite.")
-            raise FailingTestException(f"Some or all of {first_tests} failed. See logs above for details.")
+            if "ModuleNotFoundError: No module named" not in str(e):
+                logging.info(f"error running first tests. {e}")
+            else:
+                config.log(f"some of all of {first_tests} FAILED. Skipping full test suite.")
+                raise FailingTestException(f"Some or all of {first_tests} failed. See logs above for details.")
     
     config.log(
         "Running the test suite three times to detect flakiness. "
@@ -2223,7 +2182,7 @@ def build_iteration(config, container_env):
     task_execution = init_task_execution(iteration)
     docker_file = config.sandbox_root_dir / "Dockerfile"
     
-    ecr_authenticate_for_dockerfile(
+    ecr_authenticate(
         config,
         docker_file
     )
@@ -2320,11 +2279,11 @@ def validate_web_container(
         port = settings.VALIDATION_PORT
     
     process = None
-    config.log(f"==========  BEGIN Docker webcontainer validation ===============")
+    config.log(f"==========  BEGIN Webcontainer Validation ===============")
     try:
         process = subprocess.Popen(
             [
-                "docker", "run", "--rm",
+                "podman", "run", "--rm",
                 "-e", f"HTTP_LISTENER_PORT={port}",
                 "--platform", ContainerPlatform.FARGATE,
                 "-p", f"{port}:{port}",
@@ -2339,7 +2298,7 @@ def validate_web_container(
             text=True
         )
         
-        config.log(f"Starting Docker webcontainer validation (PID={process.pid})")
+        config.log(f"Starting Webcontainer Validation (PID={process.pid})")
         start_time = time.time()
         max_wait = 60  # seconds
         healthy = False
@@ -2364,9 +2323,9 @@ def validate_web_container(
                 break
         
         if healthy:
-            config.log("Docker webcontainer validation completed successfully")
+            config.log("Webcontainer validation completed successfully")
         else:
-            raise BadPlan("Web container validation failed.  see error logs for details")
+            raise BadPlan("Webcontainer validation failed.  see error logs for details")
     finally:
         try:
             config.log("terminating healthcheck container")
@@ -2379,7 +2338,7 @@ def validate_web_container(
             logging.exception(e)
             logging.error("failed to kill the healthcheck container")
         
-        config.log(f"========== END Docker webcontainer validation ===============")
+        config.log(f"========== END Webcontainer Validation ===============")
 
 
 def init_task_execution(iteration):
@@ -2435,8 +2394,8 @@ def evaluate_iteration(
     log_output = config.set_phase(SdaPhase.EVALUATE)
     
     if "no space left on device" in common.default_str(log_output).lower():
-        subprocess.run(["docker", "system", "prune", "-a", "-f"], check=True)
-        raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned docker, so should be cleared up now.")
+        subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
+        raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
     
     if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
         goal_achieved_critera = textwrap.dedent(f"""
@@ -4640,6 +4599,12 @@ def get_goal_msg(config, description):
         {task.risk_notes}
     """)
     
+    if task.debug_steps:
+        goal += f"""
+        
+        ## Manual Debugging Steps (FYI)
+        {task.debug_steps}
+        """
     test_errors = config.iteration_to_modify.get_unit_test_errors() if config.iteration_to_modify else []
     
     if is_stack_exists(config.get_stack_names(), config.aws_env):
@@ -5322,7 +5287,7 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
     return json_val
 
 
-def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):
+def ecr_authenticate(config: SelfDriverConfig, dockerfile):
     base_img = ""
     try:
         with open(dockerfile) as f:

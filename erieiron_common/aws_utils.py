@@ -5,6 +5,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import urllib
@@ -25,6 +28,7 @@ import settings
 from erieiron_common import common
 from erieiron_common import settings_common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
+from erieiron_common.enums import ContainerPlatform
 
 logging.getLogger('botocore.credentials').setLevel(logging.ERROR)
 
@@ -1331,3 +1335,60 @@ def empty_s3_bucket(bucket_name: str, *, delete_bucket: bool = False):
         s3_client.delete_bucket(Bucket=bucket_name)
         logging.info(f"Deleted S3 bucket {bucket_name}")
 
+
+def package_lambda(
+        sandbox_root_dir: Path,
+        code_file_path: str,
+        dependencies: list[str],
+        file_name: str
+) -> Path:
+    dependencies_normalized = []
+    for d in dependencies:
+        if "erieiron-public-common" in d:
+            dependencies_normalized.append("erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git")
+        else:
+            dependencies_normalized.append(d)
+    dependencies = list(set(dependencies_normalized))
+    
+    full_lambda_path = sandbox_root_dir / code_file_path
+    if not full_lambda_path.exists():
+        raise FileNotFoundError(f"Lambda source file not found: {full_lambda_path}")
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        shutil.copy(full_lambda_path, temp_dir_path / full_lambda_path.name)
+        
+        if dependencies:
+            req_file = temp_dir_path / "requirements.txt"
+            req_file.write_text("\n".join(dependencies))
+            logging.info(f"building dependencies for {code_file_path}: {dependencies}")
+            try:
+                subprocess.run(
+                    [
+                        "podman", "run", "--rm",
+                        "--platform", ContainerPlatform.LAMBDA,
+                        "--entrypoint", "/bin/bash",
+                        "-v", f"{temp_dir_path}:/var/task",
+                        "public.ecr.aws/lambda/python:3.11",
+                        "-c",
+                        (
+                            "set -euxo pipefail && "
+                            "yum install -y git && "
+                            "pip install --no-cache-dir --only-binary=:all: "
+                            "-r /var/task/requirements.txt -t /var/task && "
+                            "ls -lh /var/task"
+                        ),
+                    ],
+                    stderr=subprocess.STDOUT,
+                    check=True
+                )
+            except Exception as e:
+                logging.exception(e)
+                raise e
+        
+        zip_path = temp_dir_path.parent / file_name
+        logging.info(f"Packaging Lambda: {code_file_path} → {file_name} with dependencies: {dependencies}. full path: {zip_path}")
+        subprocess.run(["zip", "-r", str(zip_path), "."], cwd=temp_dir_path, check=True)
+        logging.info(f"Uploading {code_file_path} package.  {zip_path} → {file_name} ({zip_path.stat().st_size / (1024 * 1024):.2f}MB)")
+        
+        return zip_path

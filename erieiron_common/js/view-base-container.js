@@ -172,18 +172,12 @@ BaseContainerView = ErieView.extend({
     },
 
     init_page(target_el) {
-        getServerCommsManager()
-            .on("signed_waveform_urls_generated", this.set_waveform_urls.bind(this))
-        ;
-
         const content_title = $(".main_content").attr("title");
         if (content_title) {
             document.title = "Erie Iron, LLC - " + content_title;
         } else {
             document.title = "Erie Iron, LLC";
         }
-
-        this.swizzle_waveform_urls();
 
         $(".erie_toggle-active").data("is_on", true);
 
@@ -241,118 +235,6 @@ BaseContainerView = ErieView.extend({
         if ($("#modal_cookie_consent").length) {
             $("#modal_cookie_consent").show();
         }
-    },
-
-    async set_waveform_urls(resp, map_id_to_el, map_id_to_src) {
-        if (!map_id_to_el) {
-            map_id_to_el = {};
-            $(".waveform-placeholder").each((idx, el) => {
-                const waveform_id = $(el).data("waveform_id");
-                if (!map_id_to_el[waveform_id]) {
-                    map_id_to_el[waveform_id] = [];
-                }
-                map_id_to_el[waveform_id].push(el);
-            });
-        }
-
-        if (!map_id_to_src) {
-            map_id_to_src = await local_db_get("waveform_url_cache", "map_id_to_src");
-        }
-
-        Object.keys(resp).forEach((waveform_id) => {
-            const waveform_url = resp[waveform_id];
-            if (is_cloudfront_url_valid(waveform_url)) {
-                const els = map_id_to_el[waveform_id];
-                if (els) {
-                    els.forEach(el => {
-                        el.src = waveform_url;
-                        $(el).data("waveform_url", waveform_url).removeClass("visually-hidden");
-                    });
-                }
-            }
-        });
-
-
-        $(".waveform-placeholder").each((idx, el) => {
-            const waveform_id = $(el).data("waveform_id");
-
-            if (el.src && !is_cloudfront_url_valid(map_id_to_src[waveform_id])) {
-                map_id_to_src[waveform_id] = el.src;
-            }
-        });
-        local_db_put("waveform_url_cache", "map_id_to_src", map_id_to_src);
-    },
-
-    async swizzle_waveform_urls() {
-
-        const formData = new FormData();
-        const map_id_to_el = {};
-
-        const map_id_to_src = await local_db_get("waveform_url_cache", "map_id_to_src");
-        const cached_image_load_promises = [];
-
-
-        function add_to_download_list(el) {
-            const waveform_id = $(el).data("waveform_id");
-            if (!map_id_to_el[waveform_id]) {
-                map_id_to_el[waveform_id] = [];
-            }
-
-            map_id_to_el[waveform_id].push(el);
-            formData.append("id", waveform_id);
-        }
-
-        // Timeout-wrapped image loader
-        function load_with_timeout(el, url, timeout_ms = 3000) {
-            const waveform_id = $(el).data("waveform_id");
-            return new Promise((resolve, reject) => {
-                let timed_out = false;
-
-                const timeout = setTimeout(() => {
-                    timed_out = true;
-                    add_to_download_list(el);
-                    reject(new Error("timeout"));
-                }, timeout_ms);
-
-                el.onload = () => {
-                    clearTimeout(timeout);
-                    if (!timed_out) {
-                        resolve();
-                    }
-                };
-
-                el.onerror = () => {
-                    clearTimeout(timeout);
-                    if (!timed_out) {
-                        add_to_download_list(el);
-                        reject(new Error("load error"));
-                    }
-                };
-
-                $(el).data("waveform_url", url).removeClass("visually-hidden");
-                el.src = url;
-            });
-        }
-
-        $(".waveform-placeholder").each((idx, el) => {
-            const waveform_id = $(el).data("waveform_id");
-            const cached_url = map_id_to_src[waveform_id];
-
-
-            if (is_cloudfront_url_valid(cached_url)) {
-                cached_image_load_promises.push(load_with_timeout(el, cached_url));
-            } else {
-                add_to_download_list(el);
-            }
-        });
-
-        await Promise.allSettled(cached_image_load_promises);
-
-        if (formData.getAll("id").length) {
-            const resp = await getServerCommsManager().server_request($("body").data("waveform_url"), formData);
-            this.set_waveform_urls(resp, map_id_to_el);
-        }
-
     },
 
     hide_notification_bubbles() {

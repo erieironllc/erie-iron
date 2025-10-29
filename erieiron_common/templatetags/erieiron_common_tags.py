@@ -155,12 +155,7 @@ def json_to_pre(json_content, filter_def=None, use_default_wrapper=True, make_pr
 def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pre=False, apply_md=False):
     if not json_content:
         return ""
-    
-    if common.is_list_like(json_content):
-        return mark_safe("\n".join([
-            json_to_pre(j, use_default_wrapper=False, make_pre=make_pre, apply_md=apply_md) for j in json_content
-        ]))
-    
+   
     only_fields = []
     exclude_fields = []
     keys = []
@@ -188,6 +183,11 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pr
                     return mark_safe(f"""
                         <li>{json_content}</li>
                     """)
+        
+        if common.is_list_like(json_content):
+            return mark_safe("\n".join([
+                json_to_pre(j, use_default_wrapper=False, make_pre=make_pre, apply_md=apply_md) for j in json_content
+            ]))
         
         parts = []
         keys = keys or json_content.keys()
