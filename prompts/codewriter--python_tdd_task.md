@@ -50,5 +50,5 @@ You receive:
     1. evaluate the current test code to see if it fully asserts the acceptance criteria
     2. if it does not fully assert the acceptance criteria, add tests to fully assert the acceptance criters
     3. If it uses mock objects or violates any of the Forbidden Actions or other guidlines, correct these issues
-- You may recieve the **Manual Debugging Steps**.  If you recieve this, do the following
+- You may recieve the **Manual Debugging Steps** (field name `debug_steps`).  If you recieve this, do the following
     1. Write a test that uses the debugging steps as a template.  Execute the debugging step and assert the output as much as practical.

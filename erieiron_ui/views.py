@@ -2312,7 +2312,7 @@ def action_submit_bug_report(request, business_id):
         Task.objects.create(
             id=task_id,
             initiative=selected_initiative,
-            task_type=TaskType.CODING_APPLICATION,
+            task_type=TaskType.HUMAN_WORK,
             status=TaskStatus.NOT_STARTED,
             description=parsed_data.get('description'),
             risk_notes=parsed_data.get('risk_notes', ''),
@@ -2355,7 +2355,7 @@ def action_submit_bug_report_initiative(request, initiative_id):
         Task.objects.create(
             id=f"task_bug_report_{initiative.business.service_token}_{common.gen_random_token(8)}",
             initiative=initiative,
-            task_type=TaskType.CODING_APPLICATION,
+            task_type=TaskType.HUMAN_WORK,
             status=TaskStatus.NOT_STARTED,
             description=parsed_data.get('description', f'Bug report: {bug_description[:100]}'),
             risk_notes=parsed_data.get('risk_notes', ''),

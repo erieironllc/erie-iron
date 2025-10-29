@@ -13,7 +13,21 @@ INITIATIVE_TAB_DEFINITIONS = [
         "availability_fn": views._initiative_tab_available_overview,
         "context_fn": views._initiative_tab_context_overview,
     },
+    {
+        "slug": "bug-report",
+        "label": "Report a Bug",
+        "template": "initiative/tabs/bug_report.html",
+        "availability_fn": views._initiative_tab_available_bug_report,
+        "context_fn": views._initiative_tab_context_bug_report,
+    },
     TAB_DIVIDER,
+    {
+        "slug": "user-documentation",
+        "label": "User Documentation",
+        "template": "initiative/tabs/user_documentation.html",
+        "availability_fn": views._initiative_tab_available_user_documentation,
+        "context_fn": views._initiative_tab_context_user_documentation,
+    },
     {
         "slug": "requirements",
         "label": "Requirements",
@@ -29,11 +43,11 @@ INITIATIVE_TAB_DEFINITIONS = [
         "context_fn": views._initiative_tab_context_architecture,
     },
     {
-        "slug": "user-documentation",
-        "label": "User Documentation",
-        "template": "initiative/tabs/user_documentation.html",
-        "availability_fn": views._initiative_tab_available_user_documentation,
-        "context_fn": views._initiative_tab_context_user_documentation,
+        "slug": "infrastructure-stacks",
+        "label": "Infrastructure Stacks",
+        "template": "initiative/tabs/infrastructure_stacks.html",
+        "availability_fn": views._initiative_tab_available_infrastructure_stacks,
+        "context_fn": views._initiative_tab_context_infrastructure_stacks,
     },
     {
         "slug": "tasks",
@@ -41,13 +55,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "template": "initiative/tabs/tasks.html",
         "availability_fn": views._initiative_tab_available_tasks,
         "context_fn": views._initiative_tab_context_tasks,
-    },
-    {
-        "slug": "infrastructure-stacks",
-        "label": "Infrastructure Stacks",
-        "template": "initiative/tabs/infrastructure_stacks.html",
-        "availability_fn": views._initiative_tab_available_infrastructure_stacks,
-        "context_fn": views._initiative_tab_context_infrastructure_stacks,
     },
     # {
     #     "slug": "processes",
@@ -70,13 +77,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "template": "initiative/tabs/llm_spend.html",
         "availability_fn": views._initiative_tab_available_llm_spend,
         "context_fn": views._initiative_tab_context_llm_spend,
-    },
-    {
-        "slug": "bug-report",
-        "label": "Report Bug",
-        "template": "initiative/tabs/bug_report.html",
-        "availability_fn": views._initiative_tab_available_bug_report,
-        "context_fn": views._initiative_tab_context_bug_report,
     },
     {
         "slug": "edit",
@@ -335,7 +335,7 @@ BUSINESS_TAB_DEFINITIONS = [
     },
     {
         "slug": "bug-report",
-        "label": "Report Bug",
+        "label": "Report a Bug",
         "template": "business/tabs/bug_report.html"
     },
     {

@@ -3419,6 +3419,14 @@ def write_task_tdd_test(config: SelfDriverConfig):
     config.iterate_if_necessary()
     task = config.task
     
+    goal_data = {
+        "GOAL": task.description,
+        "acceptance_criteria": task.completion_criteria,
+        "risk_notes": task.risk_notes,
+    }
+    if task.debug_steps:
+        goal_data['debug_steps'] = task.debug_steps
+        
     test_file_path = write_test(
         config,
         description="Write initial test",
@@ -3426,11 +3434,7 @@ def write_task_tdd_test(config: SelfDriverConfig):
         system_prompt_name="codewriter--python_tdd_task.md",
         user_messages=LlmMessage.user_from_data(
             "**Please one-shot write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
-            {
-                "GOAL": task.description,
-                "acceptance_criteria": task.completion_criteria,
-                "risk_notes": task.risk_notes
-            }
+            goal_data
         )
     )
     
