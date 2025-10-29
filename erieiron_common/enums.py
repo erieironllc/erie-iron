@@ -512,7 +512,7 @@ class CredentialService(ErieEnum):
             return self.title()
 
 
-class DockerPlatform(ErieEnum):
+class ContainerPlatform(ErieEnum):
     FARGATE = "linux/amd64"
     LAMBDA = "linux/arm64"
 
@@ -534,3 +534,6 @@ class InfrastructureStackType(ErieEnum):
             return "infrastructure-application.yaml"
         else:
             raise Exception(f"unhandled stack type {self}")
+
+class InitiativeNames(ErieEnum):
+    OPERATIONAL_TASKS = "Operational Tasks"

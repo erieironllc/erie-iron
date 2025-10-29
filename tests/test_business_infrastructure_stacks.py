@@ -1,8 +1,9 @@
 import pytest
 from django.urls import reverse
 
-from erieiron_autonomous_agent.models import Business, Initiative, InfrastructureStack
-from erieiron_common.enums import AwsEnv, BusinessIdeaSource, InfrastructureStackType, Level
+from erieiron_autonomous_agent.models import Business, Initiative, InfrastructureStack, Task
+from erieiron_autonomous_agent.enums import TaskStatus, TaskType
+from erieiron_common.enums import AwsEnv, BusinessIdeaSource, InfrastructureStackType, Level, InitiativeType
 
 
 @pytest.mark.django_db
@@ -73,3 +74,60 @@ def test_business_infrastructure_stacks_tab_lists_all_stacks(client):
     assert response.context["stack_count"] == 2
     assert response.context["initiative_stack_count"] == 1
     assert response.context["business_scoped_stack_count"] == 1
+
+
+@pytest.mark.django_db
+def test_production_push_creates_operational_task(client):
+    business = Business.objects.create(
+        name="Biz",
+        source=BusinessIdeaSource.HUMAN.value,
+        service_token="biztoken",
+    )
+
+    response = client.post(
+        reverse("action_business_production_push", args=[business.id]),
+        follow=False,
+    )
+
+    assert response.status_code == 302
+
+    initiative = Initiative.objects.get(business=business, title="Operational Tasks")
+    task = Task.objects.get(initiative=initiative)
+
+    assert task.task_type == TaskType.PRODUCTION_DEPLOYMENT
+    assert task.status == TaskStatus.NOT_STARTED
+    assert "Production push requested" in task.description
+    assert task.requires_test is False
+
+
+@pytest.mark.django_db
+def test_production_push_reuses_operational_initiative(client):
+    business = Business.objects.create(
+        name="Biz",
+        source=BusinessIdeaSource.HUMAN.value,
+        service_token="biztoken",
+    )
+
+    initiative = Initiative.objects.create(
+        id="ops-initiative",
+        business=business,
+        title="Operational Tasks",
+        description="Ops backlog",
+        priority=Level.MEDIUM.value,
+        initiative_type=InitiativeType.ENGINEERING,
+        requires_unit_tests=False,
+    )
+
+    response = client.post(
+        reverse("action_business_production_push", args=[business.id]),
+        follow=False,
+    )
+
+    assert response.status_code == 302
+
+    initiative.refresh_from_db()
+
+    tasks = list(Task.objects.filter(initiative=initiative))
+    assert len(tasks) == 1
+    assert tasks[0].task_type == TaskType.PRODUCTION_DEPLOYMENT
+    assert Initiative.objects.filter(business=business, title="Operational Tasks").count() == 1

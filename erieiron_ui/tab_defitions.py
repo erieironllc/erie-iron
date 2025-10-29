@@ -327,11 +327,23 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_overview,
     },
     {
+        "slug": "bug-report",
+        "label": "Bug Report",
+        "template": "business/tabs/bug_report.html"
+    },
+    {
         "slug": "business-plan",
         "label": "Business Plan",
         "template": "business/tabs/business_plan.html",
         "availability_fn": views._tab_available_business_plan,
         "context_fn": views._tab_context_business_plan,
+    },
+    {
+        "slug": "product-initiatives",
+        "label": "Product Initiatives",
+        "template": "business/tabs/product_initiatives.html",
+        "availability_fn": views._tab_available_product_initiatives,
+        "context_fn": views._tab_context_product_initiatives,
     },
     TAB_DIVIDER,
     {
@@ -362,12 +374,6 @@ BUSINESS_TAB_DEFINITIONS = [
         "availability_fn": views._tab_available_board_guidance,
         "context_fn": views._tab_context_board_guidance,
     },
-    TAB_DIVIDER,
-    {
-        "slug": "bug-report",
-        "label": "Bug Report",
-        "template": "business/tabs/bug_report.html"
-    },
     {
         "slug": "ceo-guidance",
         "label": "CEO Guidance",
@@ -375,6 +381,7 @@ BUSINESS_TAB_DEFINITIONS = [
         "availability_fn": views._tab_available_ceo_guidance,
         "context_fn": views._tab_context_ceo_guidance,
     },
+    TAB_DIVIDER,
     {
         "slug": "architecture",
         "label": "Architecture",
@@ -388,13 +395,6 @@ BUSINESS_TAB_DEFINITIONS = [
         "template": "business/tabs/infrastructure_stacks.html",
         "availability_fn": views._tab_available_infrastructure_stacks,
         "context_fn": views._tab_context_infrastructure_stacks,
-    },
-    {
-        "slug": "product-initiatives",
-        "label": "Product Initiatives",
-        "template": "business/tabs/product_initiatives.html",
-        "availability_fn": views._tab_available_product_initiatives,
-        "context_fn": views._tab_context_product_initiatives,
     },
     {
         "slug": "codefiles",

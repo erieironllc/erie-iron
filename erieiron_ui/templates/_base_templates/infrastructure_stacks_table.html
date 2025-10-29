@@ -19,7 +19,7 @@
                     <td data-sort-value="{{ stack.stack_type_label|default:'' }}">{{ stack.stack_type_label }}</td>
                     <td data-sort-value="{{ stack.scope_label|default:'' }}">
                         {% if stack.initiative_id %}
-                            <a href="{% url 'view_initiative' stack.initiative_id %}">
+                            <a href="{% url 'view_initiative_tab' 'infrastructure-stacks' stack.initiative_id %}">
                                 {{ stack.initiative_title|default:stack.scope_label }}
                             </a>
                         {% else %}

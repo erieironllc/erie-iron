@@ -151,24 +151,7 @@ def define_tasks_for_initiative(initiative_id):
         Task.objects.filter(id=verification_task.id).update(
             status=TaskStatus.BLOCKED
         )
-    
-    production_deploy_task, created = Task.objects.update_or_create(
-        id=f"{initiative.id}--production_deployment",
-        defaults={
-            "initiative": initiative,
-            "status": TaskStatus.NOT_STARTED,
-            "description": f"Deploy {initiative.title} to production",
-            "completion_criteria": "Initiative is deployed to the production environment",
-            "execution_schedule": TaskExecutionSchedule.NOT_APPLICABLE,
-            "task_type": TaskType.PRODUCTION_DEPLOYMENT
-        }
-    )
-    
     new_task_ids.append(verification_task.pk)
-    production_deploy_task.depends_on.set(Task.objects.filter(id__in=new_task_ids))
-    Task.objects.filter(id=production_deploy_task.id).update(
-        status=TaskStatus.BLOCKED
-    )
     
     return new_task_ids
 

@@ -1,4 +1,11 @@
 <div class="tab-pane-content">
+    <div class="d-flex justify-content-end mb-3">
+        <form method="post" action="{% url 'action_business_production_push' business.id %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-warning">Production Push</button>
+        </form>
+    </div>
+
     {% if stack_count %}
         <p class="text-muted small">
             Tracking {{ stack_count }} stack{{ stack_count|pluralize }} across

@@ -46,7 +46,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils, domain_manager, cloudformation_utils, cloudformation_log_reader, ErieIronJSONEncoder
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket
 from erieiron_common.cloudformation_utils import get_stack_outputs, CloudFormationStackObsolete, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, get_resource_configs, CloudformationResourceType, get_physical_resources, CloudFormationException
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, DockerPlatform, InfrastructureStackType
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -1296,7 +1296,7 @@ def validate_plan(config: SelfDriverConfig, planning_data):
             continue
         
         if "docker-compose" in code_file_path:
-            raise BadPlan(f"All services must be defined in the existing Dockerfile. You may **never** use docker compose", planning_data)
+            raise BadPlan(f"All services must be defined in the existing Dockerfile. You may **never** use container orchestration tools like docker-compose", planning_data)
         
         if code_file_path.startswith("erieiron_common"):
             raise BadPlan(f"You may not add or edit any file in erieiron_common.  These are readonly library files.", planning_data)
@@ -1418,81 +1418,81 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     config.log(f"Ensured Route53 alias for {domain_name} targets {dns_name}")
 
 
-def build_docker_image(
+def build_container_image(
         config: SelfDriverConfig,
-        docker_env: dict,
-        docker_file: Path
+        container_env: dict,
+        container_file: Path
 ) -> str:
-    exec_docker_prune()
+    exec_container_prune()
     
     current_iteration = config.current_iteration
     self_driving_task = current_iteration.self_driving_task
     
-    docker_image_tag_parts = [
+    container_image_tag_parts = [
         self_driving_task.business.name,
         self_driving_task.id,
         current_iteration.version_number
     ]
     
-    # force a new docker image tag to make sure cloudformation updates
+    # force a new container image tag to make sure cloudformation updates
     # if config.one_off_action:
-    #     docker_image_tag_parts.append(str(time.time())[-5:])
+    #     container_image_tag_parts.append(str(time.time())[-5:])
     
-    docker_image_tag = sanitize_aws_name(docker_image_tag_parts, max_length=128)
+    container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     
-    config.log(f"\n\n\n\n======== Begining DOCKER Build for tag {docker_image_tag} ")
+    config.log(f"\n\n\n\n======== Begining PODMAN Build for tag {container_image_tag} ")
     
-    config.log(f"Building docker image for platform: {DockerPlatform.FARGATE}")
-    docker_build_cmd = common.strings([
-        "docker",
+    config.log(f"Building container image for platform: {ContainerPlatform.FARGATE}")
+    container_build_cmd = common.strings([
+        "podman",
         "build",
-        "--platform", DockerPlatform.FARGATE,
+        "--platform", ContainerPlatform.FARGATE,
         "--build-arg", f"ERIEIRON_PUBLIC_COMMON_SHA={ERIEIRON_PUBLIC_COMMON_VERSION}",
-        "-t", docker_image_tag,
-        "-f", docker_file,
-        docker_file.parent
+        "-t", container_image_tag,
+        "-f", container_file,
+        container_file.parent
     ])
     
-    config.log(f"\n\nstarting docker build with the command:\n{' '.join(docker_build_cmd)}\n\n")
+    config.log(f"\n\nstarting podman build with the command:\n{' '.join(container_build_cmd)}\n\n")
     build_process = subprocess.Popen(
-        docker_build_cmd,
+        container_build_cmd,
         stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True,
-        env=docker_env
+        env=container_env
     )
     
     while build_process.poll() is None:
         time.sleep(1)
     
     if build_process.returncode != 0:
-        raise Exception(f"Docker build failed with return code: {build_process.returncode}")
+        raise Exception(f"Podman build failed with return code: {build_process.returncode}")
     
-    env_flags = " ".join(build_env_flags(docker_env))
+    env_flags = " ".join(build_env_flags(container_env))
     config.log(f"""
 =========================================================
-if you want to debug the docker container, run this 
+if you want to debug the container, run this 
 
-docker run --rm -it \
-  --platform {DockerPlatform.FARGATE} \
+podman run --rm -it \
+  --platform {ContainerPlatform.FARGATE} \
   -v {config.sandbox_root_dir}:/app \
   -w /app \
   {env_flags} \
-  {docker_image_tag} \
+  {container_image_tag} \
   /bin/bash
 
 =========================================================
         """)
     
-    return docker_image_tag
+    return container_image_tag
 
 
-def exec_docker_prune():
+def exec_container_prune():
     try:
-        subprocess.run(["docker", "system", "prune", "-f"], check=True)
+        subprocess.run(["podman", "system", "prune", "-f"], check=True)
     except Exception as e:
         logging.exception(e)
-        raise AgentBlocked("unable to run docker prune - is docker running?")
+        raise AgentBlocked("unable to run podman prune - is podman running?")
 
 
 def get_aws_region():
@@ -1535,7 +1535,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         "STACK_IDENTIFIER": stack_application.stack_namespace_token,
         "FOUNDATION_STACK_IDENTIFIER": stack_foundation.stack_namespace_token,
         
-        "DOCKER_BUILDKIT": "1",
+        "BUILDAH_FORMAT": "docker",
         "PATH": os.getenv("PATH")
     }
     
@@ -1583,7 +1583,7 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     # Pre-pull the ARM64 Lambda Python image before building dependencies
     subprocess.run(
         [
-            "docker", "pull", "--platform", DockerPlatform.LAMBDA,
+            "podman", "pull", "--platform", ContainerPlatform.LAMBDA,
             "public.ecr.aws/lambda/python:3.11"
         ],
         check=True,
@@ -1619,8 +1619,8 @@ def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
                 try:
                     subprocess.run(
                         [
-                            "docker", "run", "--rm",
-                            "--platform", DockerPlatform.LAMBDA,
+                            "podman", "run", "--rm",
+                            "--platform", ContainerPlatform.LAMBDA,
                             "--entrypoint", "/bin/bash",
                             "-v", f"{temp_dir_path}:/var/task",
                             "public.ecr.aws/lambda/python:3.11",
@@ -1783,7 +1783,7 @@ def get_infrastructure_yaml_code(config, cf_template: InfrastructureStackType):
 
 def push_image_to_ecr(
         config: SelfDriverConfig,
-        docker_image_tag: str
+        container_image_tag: str
 ):
     region = config.aws_env.get_aws_region()
     ecr_client = boto3.client("ecr", region_name=region)
@@ -1792,7 +1792,7 @@ def push_image_to_ecr(
     repo_name = sanitize_aws_name(config.business.service_token)
     ecr_repo_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}"
     
-    full_image_uri = f"{ecr_repo_uri}:{docker_image_tag}"
+    full_image_uri = f"{ecr_repo_uri}:{container_image_tag}"
     config.log(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
     
     try:
@@ -1804,7 +1804,7 @@ def push_image_to_ecr(
     ecr_arn = repo_desc["repositories"][0]["repositoryArn"]
     
     subprocess.run(
-        ["docker", "tag", docker_image_tag, full_image_uri],
+        ["podman", "tag", container_image_tag, full_image_uri],
         check=True,
         stdout=config.log_f,
         stderr=subprocess.STDOUT
@@ -1816,7 +1816,7 @@ def push_image_to_ecr(
     env.pop("HTTPS_PROXY", None)
     env.pop("https_proxy", None)
     subprocess.run(
-        ["docker", "push", full_image_uri],
+        ["podman", "push", full_image_uri],
         check=True,
         stdout=config.log_f,
         stderr=subprocess.STDOUT,
@@ -1827,21 +1827,21 @@ def push_image_to_ecr(
     return full_image_uri, ecr_arn
 
 
-def run_docker_command(
+def run_container_command(
         config: SelfDriverConfig,
         command_args: list[str],
-        docker_env: dict,
-        docker_image: str
+        container_env: dict,
+        container_image_tag: str
 ) -> None:
     command_args = common.ensure_list(command_args)
     
     cmd = [
-        "docker", "run", "--rm",
-        "--platform", DockerPlatform.FARGATE,
+        "podman", "run", "--rm",
+        "--platform", ContainerPlatform.FARGATE,
         "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
-        *build_env_flags(docker_env),
-        docker_image,
+        *build_env_flags(container_env),
+        container_image_tag,
         "python", "manage.py",
         *common.safe_strs(command_args)
     ]
@@ -1850,16 +1850,16 @@ def run_docker_command(
     config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
     
-    # Capture docker run start time
+    # Capture podman run start time
     process = subprocess.Popen(
         cmd,
         stdout=config.log_f,
-        env=docker_env,
+        env=container_env,
         stderr=subprocess.STDOUT,
         text=True
     )
     
-    config.log(f"Docker {command_args[-1]} execution started with PID {process.pid}")
+    config.log(f"Podman {command_args[-1]} execution started with PID {process.pid}")
     
     # Wait for completion
     while process.poll() is None:
@@ -1896,28 +1896,28 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
-        docker_env = build_env(
+        container_env = build_env(
             config
         )
         
         logging_start_epoch = int(time.time())
-        docker_image_tag = build_iteration(
+        container_image_tag = build_iteration(
             config,
-            docker_env
+            container_env
         )
         
         logging_start_epoch = int(time.time())
         deploy_iteration(
             config,
-            docker_env,
-            docker_image_tag
+            container_env,
+            container_image_tag
         )
         
         logging_start_epoch = int(time.time())
         execute_iteration(
             config,
-            docker_env,
-            docker_image_tag
+            container_env,
+            container_image_tag
         )
         
         config.log("Docker execution finished")
@@ -1937,7 +1937,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
             logging_start_epoch
         )
         
-        exec_docker_prune()
+        exec_container_prune()
         
         config.business.snapshot_code(
             config.current_iteration,
@@ -1967,8 +1967,8 @@ def extract_cloudformation_logs(config: SelfDriverConfig, logging_start_epoch: i
 
 def execute_iteration(
         config: SelfDriverConfig,
-        docker_env: dict,
-        docker_image_tag: str
+        container_env: dict,
+        container_image_tag: str
 ):
     config.set_phase(SdaPhase.EXECUTION)
     
@@ -1977,11 +1977,11 @@ def execute_iteration(
     self_driving_task = config.self_driving_task
     
     if TaskType.CODING_ML.eq(task_type):
-        run_docker_command(
+        run_container_command(
             config=config,
-            docker_env=docker_env,
+            container_env=container_env,
             command_args=self_driving_task.main_name,
-            docker_image=docker_image_tag
+            container_image_tag=container_image_tag
         )
         config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
     elif task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
@@ -1995,27 +1995,27 @@ def execute_iteration(
         
         output_file = task_io_dir / f"{task.id}-output.json"
         
-        run_docker_command(
+        run_container_command(
             config=config,
-            docker_env=docker_env,
+            container_env=container_env,
             command_args=[
                 self_driving_task.main_name,
                 "--input_file", input_file,
                 "--output_file", output_file
             ],
-            docker_image=docker_image_tag
+            container_image_tag=container_image_tag
         )
     elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION, TaskType.INITIATIVE_VERIFICATION]:
         run_automated_tests(
             config,
-            docker_env,
-            docker_image_tag
+            container_env,
+            container_image_tag
         )
     else:
         logging.info(f"nothing to execute for task type {task_type}")
 
 
-def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image_tag: str):
+def run_automated_tests(config: SelfDriverConfig, container_env: dict, container_image_tag: str):
     import random
     import time
     random.seed(time.time())
@@ -2054,11 +2054,11 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
     if first_tests:
         config.log(f"Running task's automated test first: {first_tests}")
         try:
-            run_docker_command(
+            run_container_command(
                 config=config,
-                docker_env=docker_env,
+                container_env=container_env,
                 command_args=["test", "--keepdb", "--noinput", *first_tests],
-                docker_image=docker_image_tag
+                container_image_tag=container_image_tag
             )
             config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
         except ExecutionException as e:
@@ -2075,11 +2075,11 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
     for i in range(3):
         time.sleep(random.uniform(0.5, 1.5))
         try:
-            run_docker_command(
+            run_container_command(
                 config=config,
-                docker_env=docker_env,
+                container_env=container_env,
                 command_args=["test", "--keepdb", "--noinput"],
-                docker_image=docker_image_tag
+                container_image_tag=container_image_tag
             )
             config.log(f"Test suite PASS on run {i + 1} of 3.")
             results.append(True)
@@ -2110,8 +2110,8 @@ def run_automated_tests(config: SelfDriverConfig, docker_env: dict, docker_image
 
 def deploy_iteration(
         config: SelfDriverConfig,
-        docker_env: dict,
-        docker_image_tag: str
+        container_env: dict,
+        container_image_tag: str
 ):
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
@@ -2129,7 +2129,7 @@ def deploy_iteration(
         try:
             full_image_uri, ecr_arn = push_image_to_ecr(
                 config,
-                docker_image_tag
+                container_image_tag
             )
             break
         except Exception as e:
@@ -2138,7 +2138,7 @@ def deploy_iteration(
                 logging.info(f"failed to push to ECR on attempt {i + 1}")
                 time.sleep(5)
             else:
-                raise AgentBlocked(f"task {task.id} is failing to push {docker_image_tag} to ECR. {e}")
+                raise AgentBlocked(f"task {task.id} is failing to push {container_image_tag} to ECR. {e}")
     
     try:
         empty_stack_buckets(
@@ -2152,31 +2152,31 @@ def deploy_iteration(
     foundation_outputs = deploy_cloudformation_stack(
         config=config,
         stack_type=InfrastructureStackType.FOUNDATION,
-        docker_env=docker_env
+        container_env=container_env
     )
     
     add_rds_vals_to_env(
         config.business,
-        docker_env,
+        container_env,
         foundation_outputs
     )
     
     manage_db(
         config,
-        docker_env,
-        docker_image_tag
+        container_env,
+        container_image_tag
     )
     
     validate_web_container(
         config,
-        docker_env,
-        docker_image_tag
+        container_env,
+        container_image_tag
     )
     
     app_outputs = deploy_cloudformation_stack(
         config=config,
         stack_type=InfrastructureStackType.APPLICATION,
-        docker_env=docker_env,
+        container_env=container_env,
         web_container_image=full_image_uri,
         ecr_arn=ecr_arn,
         lambda_datas=lambda_datas,
@@ -2186,7 +2186,7 @@ def deploy_iteration(
     ensure_lb_alias_record(config)
 
 
-def add_rds_vals_to_env(business: Business, docker_env: dict, foundation_outputs: dict):
+def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outputs: dict):
     if not foundation_outputs:
         raise BadPlan("Foundation stack lacks RDS outputs required for environment configuration")
     
@@ -2202,7 +2202,7 @@ def add_rds_vals_to_env(business: Business, docker_env: dict, foundation_outputs
     if not secret_arn_env_var:
         raise BadPlan("Business is missing required RDS credential definition or secret_arn_env_var")
     
-    docker_env[secret_arn_env_var] = rds_secret_arn
+    container_env[secret_arn_env_var] = rds_secret_arn
     
     output_varname_to_envname = {
         "RdsInstanceDBName": "ERIEIRON_DB_NAME",
@@ -2213,10 +2213,10 @@ def add_rds_vals_to_env(business: Business, docker_env: dict, foundation_outputs
         output_var_value = foundation_outputs.get(output_var_name)
         if not output_var_value:
             raise BadPlan(f"Cloudformation stack lacks an output variable value for the required output variable named '{output_var_name}'")
-        docker_env[env_name] = output_var_value
+        container_env[env_name] = output_var_value
 
 
-def build_iteration(config, docker_env):
+def build_iteration(config, container_env):
     config.set_phase(SdaPhase.BUILD)
     
     iteration = config.current_iteration
@@ -2228,18 +2228,18 @@ def build_iteration(config, docker_env):
         docker_file
     )
     
-    docker_image_tag = build_docker_image(
+    container_image_tag = build_container_image(
         config,
-        docker_env,
+        container_env,
         docker_file
     )
     
     SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-        docker_tag=docker_image_tag
+        docker_tag=container_image_tag
     )
     iteration.refresh_from_db(fields=["docker_tag"])
     
-    return docker_image_tag
+    return container_image_tag
 
 
 def template_modified_this_iteration(
@@ -2280,22 +2280,22 @@ def is_lambdas_modified(config: SelfDriverConfig):
 
 def manage_db(
         config: SelfDriverConfig,
-        docker_env: dict,
-        docker_image_tag: str
+        container_env: dict,
+        container_image_tag: str
 ):
     try:
-        run_docker_command(
+        run_container_command(
             config=config,
-            docker_env=docker_env,
+            container_env=container_env,
             command_args=["makemigrations", "--noinput"],
-            docker_image=docker_image_tag
+            container_image_tag=container_image_tag
         )
         
-        run_docker_command(
+        run_container_command(
             config=config,
-            docker_env=docker_env,
+            container_env=container_env,
             command_args=["migrate"],
-            docker_image=docker_image_tag
+            container_image_tag=container_image_tag
         )
     except Exception as e:
         if "DuplicateDatabase" in str(e):
@@ -2306,8 +2306,8 @@ def manage_db(
 
 def validate_web_container(
         config: SelfDriverConfig,
-        docker_env: dict,
-        docker_image_tag: str
+        container_env: dict,
+        container_image_tag: str
 ):
     import socket
     
@@ -2326,16 +2326,16 @@ def validate_web_container(
             [
                 "docker", "run", "--rm",
                 "-e", f"HTTP_LISTENER_PORT={port}",
-                "--platform", DockerPlatform.FARGATE,
+                "--platform", ContainerPlatform.FARGATE,
                 "-p", f"{port}:{port}",
                 "-v", f"{config.sandbox_root_dir}:/app",
                 "-w", "/app",
-                *build_env_flags(docker_env),
-                docker_image_tag
+                *build_env_flags(container_env),
+                container_image_tag
             ],
             stdout=config.log_f,
             stderr=subprocess.STDOUT,
-            env=docker_env,
+            env=container_env,
             text=True
         )
         
@@ -2799,7 +2799,7 @@ def push_cloudformation(
         web_container_image: str,
         ecr_arn,
         lambda_datas,
-        docker_env: dict
+        container_env: dict
 ):
     cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
     cfn_file = config.sandbox_root_dir / stack.get_template_name()
@@ -2807,7 +2807,7 @@ def push_cloudformation(
     
     cloudformation_params = get_stack_parameters(
         config,
-        docker_env=docker_env,
+        container_env=container_env,
         cfn_file=cfn_file,
         web_container_image=web_container_image,
         ecr_arn=ecr_arn,
@@ -4900,15 +4900,15 @@ def get_relevant_code_files(
 
 def sync_stack_identity(
         config: SelfDriverConfig,
-        docker_env: dict,
+        container_env: dict,
         cloudformation_params: dict = None
 ):
     stack_foundation, stack_application = get_stacks(config)
     
-    docker_env["STACK_NAME"] = stack_application.stack_name
-    docker_env["STACK_IDENTIFIER"] = docker_env["TASK_NAMESPACE"] = stack_application.stack_namespace_token
-    docker_env["FOUNDATION_STACK_NAME"] = stack_foundation.stack_name
-    docker_env["FOUNDATION_STACK_IDENTIFIER"] = stack_foundation.stack_namespace_token
+    container_env["STACK_NAME"] = stack_application.stack_name
+    container_env["STACK_IDENTIFIER"] = container_env["TASK_NAMESPACE"] = stack_application.stack_namespace_token
+    container_env["FOUNDATION_STACK_NAME"] = stack_foundation.stack_name
+    container_env["FOUNDATION_STACK_IDENTIFIER"] = stack_foundation.stack_namespace_token
     
     if cloudformation_params:
         cloudformation_params["FoundationStackIdentifier"] = stack_foundation.stack_namespace_token
@@ -4935,7 +4935,7 @@ def deploy_cloudformation_stack(
         config: SelfDriverConfig,
         *,
         stack_type: InfrastructureStackType,
-        docker_env: dict,
+        container_env: dict,
         web_container_image: str | None = None,
         ecr_arn: str | None = None,
         lambda_datas: list | None = None,
@@ -4957,7 +4957,7 @@ def deploy_cloudformation_stack(
                     web_container_image=web_container_image,
                     ecr_arn=ecr_arn,
                     lambda_datas=lambda_datas,
-                    docker_env=docker_env
+                    container_env=container_env
                 )
             
             finally:
@@ -4977,7 +4977,7 @@ def deploy_cloudformation_stack(
             
             sync_stack_identity(
                 config,
-                docker_env,
+                container_env,
                 previous_stack_outputs
             )
             
@@ -5071,7 +5071,7 @@ def validate_parameters(
 def get_stack_parameters(
         config: SelfDriverConfig,
         *,
-        docker_env: dict,
+        container_env: dict,
         cfn_file: Path,
         web_container_image: str | None,
         ecr_arn: str | None,
@@ -5184,7 +5184,7 @@ def get_stack_parameters(
     for svc_name, svc_spec in planning_required_creds.items():
         cfn_param = svc_spec.get("secret_arn_cfn_parameter")
         envvar_name = svc_spec.get("secret_arn_env_var")
-        arn_value = docker_env.get(envvar_name)
+        arn_value = container_env.get(envvar_name)
         if cfn_param and arn_value:
             arn_param_bindings.append((cfn_param, envvar_name, arn_value))
     
@@ -5235,7 +5235,7 @@ def get_stack_parameters(
             "description": "Missing required secret ARN CloudFormation parameter(s).",
             "file": cfn_file.name,
             "missing_secret_params": missing_secret_params,
-            "available_env_vars": docker_env,
+            "available_env_vars": container_env,
             "message": "Ensure credential_manager returned ARNs for these secrets and that they were passed into get_stack_parameters(envvar_secretarn_list=...)"
         }, indent=4), config.current_iteration.planning_json)
     
@@ -5338,7 +5338,7 @@ def ecr_authenticate_for_dockerfile(config: SelfDriverConfig, dockerfile):
 
 def ecr_login(config: SelfDriverConfig, ecr_repo_uri):
     region = parse_region_from_ecr_uri(ecr_repo_uri)
-    cmd = f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {ecr_repo_uri}"
+    cmd = f"aws ecr get-login-password --region {region} | podman login --username AWS --password-stdin {ecr_repo_uri.split('/')[0]}"
     print(cmd)
     subprocess.run(
         cmd,

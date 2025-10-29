@@ -33,7 +33,7 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv, InitiativeType
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv, InitiativeType, InitiativeNames
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
@@ -2481,6 +2481,49 @@ def action_add_initiative_from_brief(request, business_id):
     
     messages.success(request, f'Initiative "{initiative.title}" created successfully!')
     return redirect(reverse('view_initiative', args=[initiative.id]))
+
+
+@require_POST
+def action_business_production_push(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
+
+    initiative, _ = Initiative.objects.get_or_create(
+        business=business,
+        title=InitiativeNames.OPERATIONAL_TASKS,
+        defaults={
+            "id": str(uuid.uuid4()),
+            "description": "Operational continuity tasks and production deployments.",
+            "priority": Level.MEDIUM,
+            "initiative_type": InitiativeType.ENGINEERING,
+            "requires_unit_tests": False,
+        }
+    )
+
+    task = Task.objects.create(
+        id=f"task_production_push_{business.service_token}_{common.gen_random_token(8)}",
+        initiative=initiative,
+        task_type=TaskType.PRODUCTION_DEPLOYMENT,
+        status=TaskStatus.NOT_STARTED,
+        description=(
+            "Production push requested on "
+            f"{formats.date_format(timezone.now(), 'DATETIME_FORMAT')}"
+        ),
+        risk_notes="",
+        completion_criteria=["Deployment completed successfully in production."],
+        comment_requests=[],
+        attachments=[],
+        input_fields={},
+        output_fields=[],
+        requires_test=False,
+        created_by=getattr(request.user, "username", None) or "system",
+    )
+
+    messages.success(
+        request,
+        f"Production push task queued in '{initiative.title}'."
+    )
+
+    return redirect(reverse('view_task', args=[task.id]))
 
 
 def action_dowork_initiative(request, initiative_id):
