@@ -1,0 +1,109 @@
+{% load erieiron_common_tags %}
+<div id="div_iac_logs">
+    {% with logs=iteration.iac_logs %}
+        {% if logs %}
+            {% if logs.schema == 'opentofu/v1' %}
+                <div class="mb-3">
+                    <h5 class="mb-1">OpenTofu Deployment Logs</h5>
+                    {% if logs.deployment_window_start %}
+                        <div class="text-muted small">Deployment window started {{ logs.deployment_window_start }}</div>
+                    {% endif %}
+                </div>
+                {% if logs.stacks %}
+                    {% for stack_name, stack_data in logs.stacks.items %}
+                        <div class="card mb-4">
+                            <div class="card-header d-flex flex-column flex-md-row justify-content-between align-items-md-center">
+                                <div>
+                                    <h6 class="mb-0">{{ stack_name }}</h6>
+                                    {% if stack_data.stack_type and stack_data.stack_type != stack_name %}
+                                        <div class="text-muted small">{{ stack_data.stack_type }}</div>
+                                    {% endif %}
+                                </div>
+                                <span class="badge bg-info text-dark mt-2 mt-md-0">OpenTofu</span>
+                            </div>
+                            <div class="card-body">
+                                {% if stack_data.plan_summary %}
+                                    <h6 class="text-uppercase small text-muted">Plan Summary</h6>
+                                    <div class="row gx-2 gy-1 mb-3">
+                                        {% for key, value in stack_data.plan_summary.items %}
+                                            <div class="col-auto">
+                                                <span class="badge bg-light text-dark border">{{ key|title }}: {{ value }}</span>
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+
+                                {% if stack_data.plan_results %}
+                                    <h6>Command Runs</h6>
+                                    <div class="mb-3">
+                                        {% for result in stack_data.plan_results %}
+                                            <details class="mb-2" {% if result.returncode and result.returncode != 0 %}open{% endif %}>
+                                                <summary class="small fw-semibold">
+                                                    {{ result.stage|default:"command" }} · exit {{ result.returncode|default:0 }}{% if result.duration_seconds %} · {{ result.duration_seconds }}s{% endif %}
+                                                </summary>
+                                                <div class="small text-muted mb-1">
+                                                    {{ result.started_at }} → {{ result.completed_at }}
+                                                </div>
+                                                {% if result.command %}
+                                                    <div class="small text-muted mb-1">Command: <code>{{ result.command }}</code></div>
+                                                {% endif %}
+                                                {% if result.stdout %}
+                                                    <div class="pre small">{{ result.stdout }}</div>
+                                                {% endif %}
+                                                {% if result.stderr %}
+                                                    <div class="pre small text-danger">{{ result.stderr }}</div>
+                                                {% endif %}
+                                                {% if result.extra %}
+                                                    <div class="mt-1">
+                                                        <div class="text-muted small">Extra</div>
+                                                        <div class="pre small">{{ result.extra|pprint_json }}</div>
+                                                    </div>
+                                                {% endif %}
+                                            </details>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+
+                                {% if stack_data.outputs %}
+                                    <details class="mb-2">
+                                        <summary class="fw-semibold">Outputs</summary>
+                                        <div class="pre small">{{ stack_data.outputs|pprint_json }}</div>
+                                    </details>
+                                {% endif %}
+
+                                {% if stack_data.tfvars %}
+                                    <details class="mb-2">
+                                        <summary class="fw-semibold">TFVars</summary>
+                                        <div class="pre small">{{ stack_data.tfvars|pprint_json }}</div>
+                                    </details>
+                                {% endif %}
+
+                                {% if stack_data.error %}
+                                    <div class="alert alert-danger small">
+                                        <div class="fw-semibold mb-1">OpenTofu Error</div>
+                                        <div class="pre mb-2">{{ stack_data.error|pprint_json }}</div>
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+
+                {% if logs.exceptions %}
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">Extracted Exceptions</h6>
+                            {% include "_copy_clipboard_btn.html" with target_el="#div_iac_extracted_exceptions" %}
+                        </div>
+                        <div id="div_iac_extracted_exceptions" class="pre small">{{ logs.exceptions }}</div>
+                    </div>
+                {% endif %}
+            {% else %}
+                {% comment %}Fallback rendering for legacy CloudFormation payloads{% endcomment %}
+                {% include "iteration/tabs/legacy_cloudformation_logs.html" %}
+            {% endif %}
+        {% else %}
+            <div class="text-muted">No IaC logs available for this iteration.</div>
+        {% endif %}
+    {% endwith %}
+</div>

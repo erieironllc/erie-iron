@@ -2,7 +2,9 @@ import textwrap
 
 from django.core.management.base import BaseCommand
 
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
+    get_self_driving_coder_agent_module,
+)
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SdaInitialAction
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Initiative, Task
@@ -46,4 +48,5 @@ class Command(BaseCommand):
         SDA for task id {task_id}
 
         """))
-        self_driving_coder_agent.execute(task_id, SdaInitialAction.valid_or(options.get("action")))
+        agent = get_self_driving_coder_agent_module()
+        agent.execute(task_id, SdaInitialAction.valid_or(options.get("action")))

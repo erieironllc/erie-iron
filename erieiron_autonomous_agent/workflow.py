@@ -1,6 +1,6 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
 from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, task_manager, worker_human
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents.agent_dispatch import get_self_driving_coder_agent_module
 from erieiron_common.enums import PubSubMessageType as T
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
@@ -50,9 +50,11 @@ def board_workflow(pubsub_manager: PubSubManager):
         T.ANALYSIS_ADDED
     )
     
+    agent = get_self_driving_coder_agent_module()
+
     pubsub_manager.on(
         T.RESET_TASK_TEST,
-        self_driving_coder_agent.on_reset_task_test
+        agent.on_reset_task_test
     )
 
 
@@ -99,7 +101,7 @@ def business_workflow(pubsub_manager: PubSubManager):
     
     # pubsub_manager.on(
     #     T.INITIATIVE_DEPLOY_REQUESTED,
-    #     self_driving_coder_agent.deploy_to_production
+    #     get_self_driving_coder_agent_module().deploy_to_production
     # )
 
     # Task Manager

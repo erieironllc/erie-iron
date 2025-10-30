@@ -1,13 +1,12 @@
 {% load erieiron_common_tags %}
-<div id="div_cloudformation_logs">
-    {% if iteration.cloudformation_logs %}
-        {% with logs=iteration.cloudformation_logs %}
-            {% if logs.stacks %}
-                <div class="mb-4">
-                    <h5>CloudFormation Stacks</h5>
-                    {% for stack_name, stack_data in logs.stacks.items %}
-                        {% if stack_data.cloudformation.events or stack_data.cloudtrail.events or stack_data.cloudformation.failure_events or stack_data.cloudformation.status_counts or stack_data.cloudwatch.stack_logs %}
-                            <div class="card mb-3">
+<div class="legacy-cloudformation-logs">
+    {% if logs %}
+        {% if logs.stacks %}
+            <div class="mb-4">
+                <h5>CloudFormation Stacks</h5>
+                {% for stack_name, stack_data in logs.stacks.items %}
+                    {% if stack_data.cloudformation.events or stack_data.cloudtrail.events or stack_data.cloudformation.failure_events or stack_data.cloudformation.status_counts or stack_data.cloudwatch.stack_logs %}
+                        <div class="card mb-3">
                                 <div class="card-header">
                                     <h6 class="mb-0">{{ stack_name }}</h6>
                                 </div>
@@ -86,33 +85,32 @@
                         {% endif %}
                     {% endfor %}
                 </div>
-            {% endif %}
+        {% endif %}
 
-            {% if logs.lambda_logs %}
-                <div class="mb-4">
-                    <h5>Lambda Logs</h5>
-                    <div class="card">
-                        <div class="card-body">
-                            <div class="pre">{{ logs.lambda_logs.logs }}</div>
-                        </div>
+        {% if logs.lambda_logs %}
+            <div class="mb-4">
+                <h5>Lambda Logs</h5>
+                <div class="card">
+                    <div class="card-body">
+                        <div class="pre">{{ logs.lambda_logs.logs }}</div>
                     </div>
                 </div>
-            {% endif %}
+            </div>
+        {% endif %}
 
-            {% if logs.exceptions %}
-                <div class="mb-4">
-                    <div class="d-flex justify-content-between">
-                        <h5>Extracted Exceptions</h5>
-                        {% include "_copy_clipboard_btn.html" with target_el="#div_extracted_exceptions" %}
-                    </div>
-                    <div class="card">
-                        <div class="card-body">
-                            <div id="div_extracted_exceptions" class="pre">{{ logs.exceptions }}</div>
-                        </div>
+        {% if logs.exceptions %}
+            <div class="mb-4">
+                <div class="d-flex justify-content-between">
+                    <h5>Extracted Exceptions</h5>
+                    {% include "_copy_clipboard_btn.html" with target_el="#div_legacy_extracted_exceptions" %}
+                </div>
+                <div class="card">
+                    <div class="card-body">
+                        <div id="div_legacy_extracted_exceptions" class="pre">{{ logs.exceptions }}</div>
                     </div>
                 </div>
-            {% endif %}
-        {% endwith %}
+            </div>
+        {% endif %}
     {% else %}
         <div class="text-muted">No CloudFormation logs available for this iteration.</div>
     {% endif %}

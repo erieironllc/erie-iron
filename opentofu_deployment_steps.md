@@ -8,6 +8,13 @@ Erie Iron uses a **two-tier deployment model**:
 1. **Foundation Stack**: Core infrastructure (VPC, RDS, ECS cluster, ECR repositories)
 2. **Application Stack**: Application services (ECS services, load balancer, domain configuration)
 
+### Automation Integration
+
+- The autonomous agent selects the IaC backend via the `SELF_DRIVING_IAC_PROVIDER` setting (default `opentofu`). Set this environment variable to `cloudformation` to run the legacy provider.
+- `InfrastructureStack.stack_arn` now stores a serialized state descriptor (workspace name, path, and state file) so UI and downstream systems can locate OpenTofu workspaces without AWS-specific identifiers.
+- The business and initiative infrastructure tabs now surface provider-neutral "IaC Logs" that render OpenTofu command output, plan summaries, and captured exceptions alongside legacy CloudFormation fallbacks.
+- Follow-up cleanups: migrate the `SelfDrivingTaskIteration.cloudformation_logs` column to `iac_logs` once all consumers are switched, and schedule retirement of unused CloudFormation helpers after OpenTofu reaches full parity.
+
 ## Prerequisites
 
 ### 1. Install Required Tools

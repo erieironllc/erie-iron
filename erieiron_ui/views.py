@@ -17,9 +17,13 @@ from django.utils import timezone, formats
 from django.utils.html import escape
 from django.views.decorators.http import require_POST
 
+import settings
+
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import on_reset_task_test
+from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
+    get_self_driving_coder_agent_module,
+)
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import (
     Business,
@@ -1050,27 +1054,43 @@ def _build_infrastructure_stack_entries(
         env_enum = AwsEnv.valid_or(getattr(stack, "aws_env", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
         
-        cloudformation_url = None
-        if stack.stack_arn:
-            cloudformation_url = (
-                f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={quote(stack.stack_arn, safe='')}"
-            )
-        elif stack.stack_name:
-            stack_name_encoded = quote(stack.stack_name, safe='')
-            cloudformation_url = (
-                f"https://{region}.console.aws.amazon.com/cloudformation/home"
-                f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
-            )
-        
+        metadata = stack.get_iac_state_metadata() if hasattr(stack, "get_iac_state_metadata") else {}
+        provider = stack.iac_provider if hasattr(stack, "iac_provider") else getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
+        provider = (provider or "unknown").lower()
+
+        console_url = metadata.get("console_url")
+        if provider == "cloudformation" and not console_url:
+            if stack.stack_arn:
+                console_url = (
+                    f"https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId={quote(stack.stack_arn, safe='')}"
+                )
+            elif stack.stack_name:
+                stack_name_encoded = quote(stack.stack_name, safe='')
+                console_url = (
+                    f"https://{region}.console.aws.amazon.com/cloudformation/home"
+                    f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
+                )
+
         logs_url = (
             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
             f"?region={region}#logsV2:log-groups$3FlogGroupNameFilter$3D{quote(stack.stack_namespace_token, safe='')}"
         )
-        
+
         scope_label = scope_label_fn(stack) if scope_label_fn else (
             "Initiative" if stack.initiative_id else "Business"
         )
-        
+
+        state_label = metadata.get("state_label")
+        if not state_label:
+            if provider == "opentofu":
+                state_label = metadata.get("workspace_name") or metadata.get("state_locator") or stack.stack_namespace_token
+            else:
+                state_label = metadata.get("state_locator") or stack.stack_name
+
+        state_locator = stack.iac_state_locator if hasattr(stack, "iac_state_locator") else metadata.get("state_locator")
+        if not state_locator:
+            state_locator = stack.stack_namespace_token
+
         entries.append(
             {
                 "id": str(stack.id),
@@ -1082,13 +1102,17 @@ def _build_infrastructure_stack_entries(
                 "stack_type_value": stack.stack_type,
                 "aws_env_label": env_enum.label() if env_enum else (stack.aws_env or "Unknown"),
                 "aws_env_value": stack.aws_env,
-                "cloudformation_url": cloudformation_url,
+                "iac_console_url": console_url,
                 "cloudwatch_logs_url": logs_url,
                 "stack_namespace_token": stack.stack_namespace_token,
                 "stack_arn": stack.stack_arn,
                 "created_timestamp": stack.created_timestamp,
                 "updated_timestamp": stack.updated_timestamp,
                 "scope_label": scope_label,
+                "iac_provider": provider,
+                "iac_state_label": state_label,
+                "iac_state_locator": state_locator,
+                "iac_state_metadata": metadata,
             }
         )
     
@@ -1617,15 +1641,18 @@ def _iteration_tab_context_evaluation(iteration: SelfDrivingTaskIteration, **_):
     return {}
 
 
-def _iteration_tab_available_cloudformation_logs(iteration: SelfDrivingTaskIteration, **_):
-    return bool(iteration.cloudformation_logs)
+def _iteration_tab_available_iac_logs(iteration: SelfDrivingTaskIteration, **_):
+    logs = getattr(iteration, "iac_logs", None)
+    if logs:
+        return True
+    return bool(getattr(iteration, "cloudformation_logs", None))
 
 
 def _iteration_tab_available_codelog(iteration: SelfDrivingTaskIteration, **_):
     return getattr(iteration, "log_content_coding") or getattr(iteration, "log_content_execution")
 
 
-def _iteration_tab_context_cloudformation_logs(iteration: SelfDrivingTaskIteration, **_):
+def _iteration_tab_context_iac_logs(iteration: SelfDrivingTaskIteration, **_):
     return {}
 
 
@@ -2088,7 +2115,8 @@ def action_task_regenerate_test(request, task_id):
     #     PubSubMessageType.RESET_TASK_TEST,
     #     task_id
     # )
-    on_reset_task_test(task_id)
+    agent = get_self_driving_coder_agent_module()
+    agent.on_reset_task_test(task_id)
     
     return redirect(reverse('view_task_tab', args=['testcode', task_id]))
 

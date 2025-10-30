@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from django.urls import reverse
 
@@ -36,20 +38,29 @@ def test_infrastructure_stacks_tab_lists_stacks(client):
         output_fields=[],
     )
 
-    stack_with_arn = InfrastructureStack.objects.create(
+    tofu_metadata = {
+        "provider": "opentofu",
+        "workspace_name": "demo-app",
+        "workspace_dir": "/workspaces/demo-app",
+        "state_file": "/workspaces/demo-app/terraform.tfstate",
+        "state_locator": "opentofu://workspace/demo-app",
+    }
+
+    stack_with_opentofu = InfrastructureStack.objects.create(
         business=business,
         initiative=initiative,
         stack_namespace_token="stk1a",
         stack_name="stk1a-init-application",
-        stack_arn="arn:aws:cloudformation:us-west-2:123456789012:stack/stk1a-init-application/1a2b3c",
+        stack_arn=json.dumps(tofu_metadata, sort_keys=True),
         aws_env=AwsEnv.DEV.value,
         stack_type=InfrastructureStackType.APPLICATION.value,
     )
-    stack_without_arn = InfrastructureStack.objects.create(
+    stack_with_cf = InfrastructureStack.objects.create(
         business=business,
         initiative=initiative,
         stack_namespace_token="stk1f",
         stack_name="stk1f-init-foundation",
+        stack_arn="arn:aws:cloudformation:us-west-2:123456789012:stack/stk1f-init-foundation/abc",
         aws_env=AwsEnv.DEV.value,
         stack_type=InfrastructureStackType.FOUNDATION.value,
     )
@@ -61,16 +72,20 @@ def test_infrastructure_stacks_tab_lists_stacks(client):
     assert response.status_code == 200
     stack_entries = {entry["stack_namespace_token"]: entry for entry in response.context["stack_entries"]}
 
-    assert set(stack_entries) == {stack_with_arn.stack_namespace_token, stack_without_arn.stack_namespace_token}
+    assert set(stack_entries) == {stack_with_opentofu.stack_namespace_token, stack_with_cf.stack_namespace_token}
 
-    entry_with_arn = stack_entries[stack_with_arn.stack_namespace_token]
-    assert entry_with_arn["cloudformation_url"].startswith(
+    entry_with_tofu = stack_entries[stack_with_opentofu.stack_namespace_token]
+    assert entry_with_tofu["iac_provider"] == "opentofu"
+    assert entry_with_tofu["iac_console_url"] is None
+    assert entry_with_tofu["iac_state_locator"] == tofu_metadata["state_locator"]
+    assert stack_with_opentofu.stack_namespace_token in entry_with_tofu["cloudwatch_logs_url"]
+
+    entry_with_cf = stack_entries[stack_with_cf.stack_namespace_token]
+    assert entry_with_cf["iac_provider"] == "cloudformation"
+    assert entry_with_cf["iac_state_locator"] == stack_with_cf.stack_arn
+    assert entry_with_cf["iac_console_url"].startswith(
         "https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId="
     )
-    assert stack_with_arn.stack_namespace_token in entry_with_arn["cloudwatch_logs_url"]
-
-    entry_without_arn = stack_entries[stack_without_arn.stack_namespace_token]
-    assert "filteringStatus=active" in entry_without_arn["cloudformation_url"]
-    assert stack_without_arn.stack_namespace_token in entry_without_arn["cloudwatch_logs_url"]
+    assert stack_with_cf.stack_namespace_token in entry_with_cf["cloudwatch_logs_url"]
 
     assert response.context["child_task_count"] == 1

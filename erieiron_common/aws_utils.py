@@ -1296,7 +1296,6 @@ def empty_s3_bucket(bucket_name: str, *, delete_bucket: bool = False):
         # Check if bucket exists before trying to empty it
         s3_client.head_bucket(Bucket=bucket_name)
     except Exception as e:
-        logging.info(f"S3 bucket {bucket_name} does not exists ({e}), skipping...")
         return
     
     # Empty the bucket by deleting all objects and versions

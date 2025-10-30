@@ -281,11 +281,11 @@ ITERATION_TAB_DEFINITIONS = [
         "context_fn": views._iteration_tab_context_codelog,
     },
     {
-        "slug": "cloudformation",
-        "label": "CloudFormation Logs",
-        "template": "iteration/tabs/cloudformation_logs.html",
-        "availability_fn": views._iteration_tab_available_cloudformation_logs,
-        "context_fn": views._iteration_tab_context_cloudformation_logs,
+        "slug": "iac",
+        "label": "IaC Logs",
+        "template": "iteration/tabs/iac_logs.html",
+        "availability_fn": views._iteration_tab_available_iac_logs,
+        "context_fn": views._iteration_tab_context_iac_logs,
     },
     {
         "slug": "evaluation",

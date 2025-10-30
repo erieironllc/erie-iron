@@ -1,5 +1,6 @@
 import difflib
 # Load model once at startup
+import json
 import logging
 import os
 import subprocess
@@ -7,7 +8,7 @@ import tempfile
 import textwrap
 from datetime import timedelta
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 from django.db import models, transaction
 from django.db.models import Sum, Q
@@ -17,6 +18,9 @@ from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
 
 import settings
+from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
+    get_self_driving_coder_agent_module,
+)
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus, BusinessOperationType
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
@@ -488,7 +492,8 @@ class Initiative(BaseErieIronModel):
     
     def write_user_documentation(self):
         from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import get_existing_test_context_messages
+        agent_module = get_self_driving_coder_agent_module()
+        get_existing_test_context_messages = agent_module.get_existing_test_context_messages
         
         self.user_documentation = llm_chat(
             "Log Extraction",
@@ -552,7 +557,54 @@ class InfrastructureStack(BaseErieIronModel):
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
-    
+
+    def get_iac_state_metadata(self) -> dict[str, Any]:
+        raw_value = self.stack_arn
+        if not raw_value:
+            return {}
+
+        if isinstance(raw_value, dict):
+            return raw_value
+
+        if isinstance(raw_value, str):
+            trimmed = raw_value.strip()
+            if trimmed.startswith("{"):
+                try:
+                    parsed = json.loads(trimmed)
+                except json.JSONDecodeError:
+                    return {"provider": "unknown", "state_locator": raw_value}
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"provider": "unknown", "state_locator": raw_value}
+            if trimmed.startswith("arn:"):
+                return {"provider": "cloudformation", "state_locator": raw_value}
+            if trimmed.startswith("opentofu://"):
+                return {"provider": "opentofu", "state_locator": raw_value}
+            return {"provider": "unknown", "state_locator": raw_value}
+
+        return {"provider": "unknown", "state_locator": str(raw_value)}
+
+    @property
+    def iac_state_locator(self) -> str | None:
+        metadata = self.get_iac_state_metadata()
+        return (
+            metadata.get("state_locator")
+            or metadata.get("state_file")
+            or metadata.get("workspace_dir")
+            or metadata.get("workspace_name")
+            or self.stack_arn
+        )
+
+    @property
+    def iac_provider(self) -> str:
+        metadata = self.get_iac_state_metadata()
+        provider = metadata.get("provider")
+        if provider:
+            return str(provider).lower()
+        if self.stack_arn and str(self.stack_arn).startswith("arn:"):
+            return "cloudformation"
+        return getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
+
     @staticmethod
     def get(
             initiative: Initiative,
@@ -1049,7 +1101,15 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     routing_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     strategic_unblocking_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     timestamp = models.DateTimeField(auto_now_add=True)
-    
+
+    @property
+    def iac_logs(self):
+        return self.cloudformation_logs
+
+    @iac_logs.setter
+    def iac_logs(self, value):
+        self.cloudformation_logs = value
+
     def get_all_log_content(self):
         return "\n\n".join(common.filter_none([
             self.log_content_init,

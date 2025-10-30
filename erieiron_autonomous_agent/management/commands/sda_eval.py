@@ -1,7 +1,9 @@
 from django.core.management.base import BaseCommand
 
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
+    get_self_driving_coder_agent_module,
+)
 
 
 class Command(BaseCommand):
@@ -17,7 +19,8 @@ class Command(BaseCommand):
         sd_iteration = SelfDrivingTaskIteration.objects.get(id=options.get("iteration_id"))
         self_driving_task = sd_iteration.self_driving_task
 
-        self_driving_coder_agent.execute_eval(
+        agent = get_self_driving_coder_agent_module()
+        agent.execute_eval(
             config_file=self_driving_task.config_path,
             task_id=self_driving_task.task_id
         )

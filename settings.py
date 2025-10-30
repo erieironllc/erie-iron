@@ -20,6 +20,7 @@ AWS_ACCOUNT_ID = "782005355493"
 AWS_DEFAULT_REGION_NAME = "us-west-2"
 LLM_API_KEYS_SECRET_ARN = "arn:aws:secretsmanager:us-west-2:782005355493:secret:LLM_API_KEYS-B1Bn3t"
 STRIPE_WEBHOOK_SECRET_ARN = "TODO"
+SELF_DRIVING_IAC_PROVIDER = os.getenv("SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
 DOMAIN_CONTACT_INFO = {
     "FirstName": "ErieIron",
     "LastName": "LLC",

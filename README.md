@@ -130,6 +130,12 @@ PubSubManager.publish(
 )
 ```
 
+## Autonomous Agent IaC Provider
+
+- Toggle the IaC backend used by the autonomous agent with the `SELF_DRIVING_IAC_PROVIDER` environment variable (defaults to `opentofu`; set to `cloudformation` for the legacy path).
+- When OpenTofu is active, infrastructure stack records persist workspace metadata (workspace name, directory, and state file) in `InfrastructureStack.stack_arn` so downstream systems can resolve deployment state without CloudFormation ARNs.
+- The UI now surfaces an "IaC Logs" tab that renders OpenTofu plan/apply output alongside a fallback view for historical CloudFormation payloads.
+
 ## License
 
 This project is licensed under the MIT License.

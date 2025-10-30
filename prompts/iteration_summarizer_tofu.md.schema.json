@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Iteration Summarizer Output Schema",
+  "type": "object",
+  "properties": {
+    "goal_achieved": {
+      "type": "boolean",
+      "description": "Indicates whether the iteration achieved the stated GOAL."
+    },
+    "is_stagnating": {
+      "type": "boolean",
+      "description": "True if recent iterations show stagnation (repeated similar failures or lack of progress toward the goal), false otherwise."
+    },
+    "blocked": {
+      "type": "boolean",
+      "description": "Indicates if you think the agent is blocked and needs human help"
+    },
+    "summary": {
+      "type": "string",
+      "description": "A high-level summary of the iteration's execution and test results."
+    },
+    "error": {
+      "type": "object",
+      "description": "Details of a critical infrastructure, deployment, or compilation error that blocked execution.",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "description": "Brief, planner-ready title of the error."
+        },
+        "logs": {
+          "type": "string",
+          "description": "Relevant log excerpt including surrounding lines and stack trace."
+        }
+      },
+      "required": ["summary", "logs"],
+      "additionalProperties": false
+    },
+    "test_errors": {
+      "type": "array",
+      "description": "List of test failures or errors encountered during automated testing.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Short, planner-ready title of the test failure or error."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "the path of the failing test's file, verified for accuracy"
+          },
+          "logs": {
+            "type": "string",
+            "description": "Full relevant log excerpt for the test failure or error."
+          }
+        },
+        "required": ["summary", "logs", "file_name"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["goal_achieved", "summary"],
+  "additionalProperties": false,
+  "anyOf": [
+    { "required": ["error"] },
+    { "required": ["test_errors"] }
+  ]
+}

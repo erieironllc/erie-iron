@@ -27,14 +27,26 @@
                         {% endif %}
                     </td>
                     <td data-sort-value="{{ stack.aws_env_label|default:'' }}">{{ stack.aws_env_label }}</td>
-                    <td data-sort-value="{{ stack.stack_name|default:'' }}">
-                        {% if stack.cloudformation_url %}
-                            <a href="{{ stack.cloudformation_url }}" target="_blank" rel="noopener">
+                    <td data-sort-value="{{ stack.stack_name|default:'' }} {{ stack.iac_state_label|default:'' }}">
+                        <div>
+                            {% if stack.iac_console_url %}
+                                <a href="{{ stack.iac_console_url }}" target="_blank" rel="noopener">
+                                    {{ stack.stack_name|default:"(unnamed stack)" }}
+                                </a>
+                            {% else %}
                                 {{ stack.stack_name|default:"(unnamed stack)" }}
-                            </a>
-                        {% else %}
-                            {{ stack.stack_name|default:"(unnamed stack)" }}
-                        {% endif %}
+                            {% endif %}
+                        </div>
+                        <div class="small text-muted">
+                            {% if stack.iac_provider %}
+                                <span class="badge bg-light text-dark border me-1">{{ stack.iac_provider|default:""|title }}</span>
+                            {% endif %}
+                            {% if stack.iac_state_label %}
+                                <code>{{ stack.iac_state_label }}</code>
+                            {% elif stack.iac_state_locator %}
+                                <code>{{ stack.iac_state_locator }}</code>
+                            {% endif %}
+                        </div>
                     </td>
                     <td data-sort-value="{% if stack.cloudwatch_logs_url %}1{% else %}0{% endif %}">
                         {% if stack.cloudwatch_logs_url %}

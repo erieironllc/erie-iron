@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from django.urls import reverse
 
@@ -22,12 +24,20 @@ def test_business_infrastructure_stacks_tab_lists_all_stacks(client):
         priority=Level.HIGH.value,
     )
 
+    initiative_stack_metadata = {
+        "provider": "opentofu",
+        "workspace_name": "app-dev",
+        "workspace_dir": "/workspaces/app-dev",
+        "state_file": "/workspaces/app-dev/terraform.tfstate",
+        "state_locator": "opentofu://workspace/app-dev",
+    }
+
     initiative_stack = InfrastructureStack.objects.create(
         business=business,
         initiative=initiative,
         stack_namespace_token="stk-aa",
         stack_name="stk-aa-customer-portal",
-        stack_arn="arn:aws:cloudformation:us-west-2:123456789012:stack/stk-aa-customer-portal/4d5e6f",
+        stack_arn=json.dumps(initiative_stack_metadata, sort_keys=True),
         aws_env=AwsEnv.DEV.value,
         stack_type=InfrastructureStackType.APPLICATION.value,
     )
@@ -36,6 +46,7 @@ def test_business_infrastructure_stacks_tab_lists_all_stacks(client):
         business=business,
         stack_namespace_token="stk-bb",
         stack_name="stk-bb-shared",
+        stack_arn="arn:aws:cloudformation:us-west-2:123456789012:stack/stk-bb-shared/1",
         aws_env=AwsEnv.PRODUCTION.value,
         stack_type=InfrastructureStackType.FOUNDATION.value,
     )
@@ -59,14 +70,17 @@ def test_business_infrastructure_stacks_tab_lists_all_stacks(client):
     assert initiative_entry["scope_label"] == initiative.title
     assert initiative_entry["initiative_id"] == initiative.id
     assert initiative_entry["initiative_title"] == initiative.title
-    assert initiative_entry["cloudformation_url"].startswith(
-        "https://console.aws.amazon.com/cloudformation/home#/stacks/stackinfo?stackId="
-    )
+    assert initiative_entry["iac_provider"] == "opentofu"
+    assert initiative_entry["iac_console_url"] is None
+    assert initiative_entry["iac_state_locator"] == initiative_stack_metadata["state_locator"]
+    assert initiative_entry["iac_state_metadata"]["workspace_dir"] == initiative_stack_metadata["workspace_dir"]
 
     business_entry = stack_entries[business_stack.stack_namespace_token]
     assert business_entry["scope_label"] == "Business"
     assert business_entry["initiative_title"] is None
-    assert "filteringStatus=active" in business_entry["cloudformation_url"]
+    assert business_entry["iac_provider"] == "cloudformation"
+    assert business_entry["iac_state_locator"] == business_stack.stack_arn
+    assert "stackinfo?stackId=" in business_entry["iac_console_url"]
 
     assert initiative_entry["stack_namespace_token"] in initiative_entry["cloudwatch_logs_url"]
     assert business_entry["stack_namespace_token"] in business_entry["cloudwatch_logs_url"]

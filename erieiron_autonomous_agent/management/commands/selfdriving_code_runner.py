@@ -14,7 +14,9 @@ from erieiron_common.enums import TaskType
 
 from django.core.management.base import BaseCommand
 
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent
+from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
+    get_self_driving_coder_agent_module,
+)
 
 
 class Command(BaseCommand):
@@ -32,7 +34,8 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        self_driving_coder_agent.execute(
+        agent = get_self_driving_coder_agent_module()
+        agent.execute(
             config_file=options.get("config"),
             task_id=options.get("task_id")
         )
