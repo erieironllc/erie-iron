@@ -22,7 +22,7 @@ from erieiron_autonomous_agent.models import (
     Initiative, InfrastructureStack,
 )
 from erieiron_common import common, ErieIronJSONEncoder
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, AwsEnv, InfrastructureStackType
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.23"
@@ -119,9 +119,9 @@ class SelfDriverConfig:
         ]
         
         if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
-            self.aws_env = AwsEnv.PRODUCTION
+            self.env_type = EnvironmentType.PRODUCTION
         else:
-            self.aws_env = AwsEnv.DEV
+            self.env_type = EnvironmentType.DEV
         
         self.current_iteration: SelfDrivingTaskIteration = self_driving_task.get_most_recent_iteration()
         if self.current_iteration:
@@ -140,7 +140,7 @@ class SelfDriverConfig:
         return [
             s.stack_name
             for s in InfrastructureStack.objects
-            .filter(initiative=self.initiative, aws_env=self.aws_env)
+            .filter(initiative=self.initiative, env_type=self.env_type)
             .order_by("created_timestamp")
         ]
     

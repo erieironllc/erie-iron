@@ -10,7 +10,7 @@ import boto3
 import yaml
 
 from erieiron_common import common
-from erieiron_common.enums import AwsEnv, CloudformationResourceType
+from erieiron_common.enums import EnvironmentType, CloudformationResourceType
 
 STACK_STATUS_NO_STACK = "NO_STACK"
 DEV_STACK_TOKEN_LENGTH = 6
@@ -287,8 +287,8 @@ def enforce_route53_alias_guardrail(template_body: str) -> None:
         raise Exception("\n".join(message_lines))
 
 
-def get_stack_outputs(stack_name, aws_env: AwsEnv) -> dict:
-    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+def get_stack_outputs(stack_name, env_type: EnvironmentType) -> dict:
+    cf_client = boto3.client("cloudformation", region_name=env_type.get_aws_region())
     
     try:
         stack_descriptions = cf_client.describe_stacks(StackName=stack_name).get("Stacks")
@@ -308,7 +308,7 @@ def get_stack_outputs(stack_name, aws_env: AwsEnv) -> dict:
 
 def cloudformation_wait(
         stack_names: list[str],
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         *,
         timeout=20 * 60,
         poll_interval=10,
@@ -317,7 +317,7 @@ def cloudformation_wait(
     for stack_name in common.ensure_list(stack_names):
         _wait_for_single_stack(
             stack_name,
-            aws_env=aws_env,
+            env_type=env_type,
             timeout=timeout,
             poll_interval=poll_interval,
             throw_on_fail=throw_on_fail
@@ -326,14 +326,14 @@ def cloudformation_wait(
 
 def _wait_for_single_stack(
         stack_name: str,
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         *,
         timeout: int,
         poll_interval: int,
         throw_on_fail: bool
 ) -> None:
-    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
-    ecs_client = boto3.client("ecs", region_name=aws_env.get_aws_region())
+    cf_client = boto3.client("cloudformation", region_name=env_type.get_aws_region())
+    ecs_client = boto3.client("ecs", region_name=env_type.get_aws_region())
     
     # Determine CloudFormation update start time
     stack_update_start = get_cloudformation_update_starttime(cf_client, stack_name)
@@ -366,7 +366,7 @@ def _wait_for_single_stack(
         try:
             assert_no_ecs_errors(
                 stack_name,
-                aws_env,
+                env_type,
                 stack_update_start
             )
         except Exception as e:
@@ -386,11 +386,11 @@ def _wait_for_single_stack(
         assert_cloudformation_stack_valid(stack_name, cf_client)
 
 
-def cancel_stack_push(stack_name: str, aws_env: AwsEnv, wait_time=0):
+def cancel_stack_push(stack_name: str, env_type: EnvironmentType, wait_time=0):
     def _cancel_or_delete():
         try:
             time.sleep(wait_time)
-            cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+            cf_client = boto3.client("cloudformation", region_name=env_type.get_aws_region())
             stack = cf_client.describe_stacks(StackName=stack_name)["Stacks"][0]
             status = stack.get("StackStatus", "")
             if status.startswith("UPDATE_"):
@@ -488,9 +488,9 @@ def assert_cloudformation_stack_valid(stack_name, cf_client):
 
 def get_stack_status(
         stack_name: str,
-        aws_env: AwsEnv
+        env_type: EnvironmentType
 ) -> str:
-    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    cf_client = boto3.client("cloudformation", region_name=env_type.get_aws_region())
     
     try:
         return common.first(cf_client.describe_stacks(StackName=stack_name)['Stacks'])['StackStatus']
@@ -498,38 +498,38 @@ def get_stack_status(
         return STACK_STATUS_NO_STACK
 
 
-def is_stack_exists(stack_names, aws_env: AwsEnv) -> bool:
+def is_stack_exists(stack_names, env_type: EnvironmentType) -> bool:
     for stack_name in common.ensure_list(stack_names):
-        if get_stack_status(stack_name, aws_env) == STACK_STATUS_NO_STACK:
+        if get_stack_status(stack_name, env_type) == STACK_STATUS_NO_STACK:
             return False
     
     return True
 
 
-def is_stack_operational(stack_names, aws_env: AwsEnv) -> bool:
+def is_stack_operational(stack_names, env_type: EnvironmentType) -> bool:
     for stack_name in common.ensure_list(stack_names):
-        if get_stack_status(stack_name, aws_env) not in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]:
+        if get_stack_status(stack_name, env_type) not in ["CREATE_COMPLETE", "UPDATE_COMPLETE"]:
             return False
     
     return True
 
 
-def get_stack_statuses(stack_names, aws_env: AwsEnv):
+def get_stack_statuses(stack_names, env_type: EnvironmentType):
     return {
-        stack_name: get_stack_status(stack_name, aws_env)
+        stack_name: get_stack_status(stack_name, env_type)
         for stack_name in common.ensure_list(stack_names)
     }
 
 
-def prepare_stack_for_update(*, stack_name, aws_env: AwsEnv):
-    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+def prepare_stack_for_update(*, stack_name, env_type: EnvironmentType):
+    cf_client = boto3.client("cloudformation", region_name=env_type.get_aws_region())
     
-    if not is_stack_exists(stack_name, aws_env):
+    if not is_stack_exists(stack_name, env_type):
         return stack_name
     
     for i in range(3):
         try:
-            status = get_stack_status(stack_name, aws_env)
+            status = get_stack_status(stack_name, env_type)
             if status not in [
                 "CREATE_COMPLETE",
                 "UPDATE_COMPLETE",
@@ -541,7 +541,7 @@ def prepare_stack_for_update(*, stack_name, aws_env: AwsEnv):
                     status=status
                 )
             
-            cloudformation_wait(stack_name, aws_env)
+            cloudformation_wait(stack_name, env_type)
             return stack_name
         except cf_client.exceptions.ClientError as e:
             if "does not exist" in str(e):
@@ -613,10 +613,10 @@ def get_resource_configs(
 
 def get_physical_resources(
         stack_names: list[str],
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         resource_type: CloudformationResourceType
 ) -> dict:
-    cf_client = boto3.client("cloudformation", region_name=aws_env.get_aws_region())
+    cf_client = boto3.client("cloudformation", region_name=env_type.get_aws_region())
     
     resources = {}
     
@@ -630,8 +630,8 @@ def get_physical_resources(
     return resources
 
 
-def assert_no_ecs_errors(stack_name, aws_env: AwsEnv, stack_update_start):
-    ecs_client = boto3.client("ecs", region_name=aws_env.get_aws_region())
+def assert_no_ecs_errors(stack_name, env_type: EnvironmentType, stack_update_start):
+    ecs_client = boto3.client("ecs", region_name=env_type.get_aws_region())
     
     for service in get_ecs_services(ecs_client, stack_name, active_only=True):
         service_name = service['serviceName']
@@ -639,7 +639,7 @@ def assert_no_ecs_errors(stack_name, aws_env: AwsEnv, stack_update_start):
         failures = [d for d in service.get("deployments", []) if d.get("rolloutState") == "FAILED"]
         if failures:
             logging.error(f"ECS deployment failed for {service_name}: {failures}.  canceling the update (takes a minute to cancel)")
-            cancel_stack_push(stack_name, aws_env, wait_time=60)
+            cancel_stack_push(stack_name, env_type, wait_time=60)
             raise Exception(f"ECS service {service_name} deployment failed")
         
         for task in get_new_tasks(ecs_client, service, stack_update_start, failed_tasks=True):
@@ -648,5 +648,5 @@ def assert_no_ecs_errors(stack_name, aws_env: AwsEnv, stack_update_start):
             
             if last_status in ("STOPPED", "DEPROVISIONING"):
                 logging.error(f"ECS task failure detected (started after stack update): {stopped_reason}.  canceling the update (takes a minute to cancel)")
-                cancel_stack_push(stack_name, aws_env, wait_time=60)
+                cancel_stack_push(stack_name, env_type, wait_time=60)
                 raise Exception(f"ECS service {service_name} deployment failed")

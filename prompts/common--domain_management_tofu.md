@@ -33,7 +33,7 @@ Any change outside of these scenarios (new hosted zones, records for a different
 
 ### Email usage
 - SES resources (receipt rules, MX/TXT/DKIM records, forwarding Lambdas) must compose addresses using `!Ref DomainName` / `os.getenv("DOMAIN_NAME")`.
-- OpenTofu stacks (`infrastructure.yaml` and `infrastructure-application.yaml`) must provision the SES receipt rule set and rules needed for inbound email, using names derived from `!Ref StackIdentifier` and `!Ref DomainName`.
+- OpenTofu stacks (`opentofu/foundation/stack.tf` and/or `opentofu/application/stack.tf`) must provision the SES receipt rule set and rules needed for inbound email, using names derived from `!Ref StackIdentifier` and `!Ref DomainName`.
 - The same templates must include a custom resource (e.g., `Custom::ActivateSesRuleSet`) that calls `ses:SetActiveReceiptRuleSet` so the stack-owned rule set becomes active after creation and clears back to `""` on deletion.
 - Automated tests must send from `{DOMAIN_NAME}` addresses to the SES mailbox simulator (never to real inboxes).
 - When a task includes email receipt handling, at least one acceptance test must send an email through SES and assert that the configured receipt rule delivers it to the expected downstream target (S3, Lambda, SNS, etc.) so the rule is exercised end to end.

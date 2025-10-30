@@ -14,11 +14,11 @@ from erieiron_common import common
 from erieiron_common.aws_utils import client
 from erieiron_common.cloudformation_utils import get_physical_resources
 from erieiron_common.date_utils import to_utc
-from erieiron_common.enums import AwsEnv, CloudformationResourceType
+from erieiron_common.enums import EnvironmentType, CloudformationResourceType
 
 
 def read_cloudformation_stack_activity(
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         stack_names: list[str],
         start_time: float,
         fetch_lambda_logs=False
@@ -40,7 +40,7 @@ def read_cloudformation_stack_activity(
     
     for stack_name in stack_names:
         stack_activity = collect_stack_activity_sections(
-            aws_env.get_aws_region(),
+            env_type.get_aws_region(),
             stack_name,
             deployment_start_datetime
         )
@@ -54,7 +54,7 @@ def read_cloudformation_stack_activity(
         try:
             lambda_logs = extract_cloudwatch_lambda_logs(
                 stack_names=stack_names,
-                aws_env=aws_env,
+                env_type=env_type,
                 deployment_start_datetime=deployment_start_datetime
             )
             if lambda_logs:
@@ -1016,7 +1016,7 @@ def extract_cloudwatch_stack_logs_for_window(
 
 def extract_cloudwatch_lambda_logs(
         stack_names: list[str],
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         deployment_start_datetime: datetime.datetime,
         max_groups: int = 50
 ) -> str:
@@ -1028,7 +1028,7 @@ def extract_cloudwatch_lambda_logs(
     try:
         lambda_resources = get_physical_resources(
             stack_names,
-            aws_env,
+            env_type,
             CloudformationResourceType.LAMBDA_FUNCTION
         )
     except Exception as exc:
@@ -1059,7 +1059,7 @@ def extract_cloudwatch_lambda_logs(
         )
     log_group_names = sorted_log_groups[:max_groups]
     
-    logs = boto3.client("logs", region_name=aws_env.get_aws_region())
+    logs = boto3.client("logs", region_name=env_type.get_aws_region())
     
     # Apply a 60-second buffer before deployment start to ensure we capture all relevant events
     # This matches the buffer logic used in collect_recent_events and get_cloudwatch_errors

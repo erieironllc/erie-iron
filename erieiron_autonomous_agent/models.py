@@ -18,9 +18,6 @@ from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
 
 import settings
-from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
-    get_self_driving_coder_agent_module,
-)
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus, BusinessOperationType
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
@@ -33,7 +30,7 @@ from erieiron_common.enums import (
     GoalStatus,
     BusinessIdeaSource,
     TaskType,
-    AwsEnv,
+    EnvironmentType,
     InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity,
 )
 from erieiron_common.git_utils import GitWrapper
@@ -342,10 +339,10 @@ class Business(BaseErieIronModel):
                         instructions
                     )
     
-    def get_secrets_root_key(self, aws_env: AwsEnv):
+    def get_secrets_root_key(self, env_type: EnvironmentType):
         from erieiron_common import aws_utils
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
-        return f"z/{project_name}/{aws_env.value}"
+        return f"z/{project_name}/{env_type.value}"
 
 
 class BusinessAnalysis(BaseErieIronModel):
@@ -492,8 +489,7 @@ class Initiative(BaseErieIronModel):
     
     def write_user_documentation(self):
         from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-        agent_module = get_self_driving_coder_agent_module()
-        get_existing_test_context_messages = agent_module.get_existing_test_context_messages
+        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import get_existing_test_context_messages
         
         self.user_documentation = llm_chat(
             "Log Extraction",
@@ -508,7 +504,7 @@ class Initiative(BaseErieIronModel):
                     {self.architecture}
                 """),
                 get_existing_test_context_messages(
-                    self, 
+                    self,
                     title="Automated Tests"
                 ),
                 textwrap.dedent(f"""
@@ -553,19 +549,19 @@ class InfrastructureStack(BaseErieIronModel):
     stack_namespace_token = models.TextField(unique=True)
     stack_name = models.TextField(unique=True)
     stack_arn = models.TextField(null=True)
-    aws_env = models.TextField(choices=AwsEnv.choices())
+    env_type = models.TextField(choices=EnvironmentType.choices())
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     def get_iac_state_metadata(self) -> dict[str, Any]:
         raw_value = self.stack_arn
         if not raw_value:
             return {}
-
+        
         if isinstance(raw_value, dict):
             return raw_value
-
+        
         if isinstance(raw_value, str):
             trimmed = raw_value.strip()
             if trimmed.startswith("{"):
@@ -581,20 +577,20 @@ class InfrastructureStack(BaseErieIronModel):
             if trimmed.startswith("opentofu://"):
                 return {"provider": "opentofu", "state_locator": raw_value}
             return {"provider": "unknown", "state_locator": raw_value}
-
+        
         return {"provider": "unknown", "state_locator": str(raw_value)}
-
+    
     @property
     def iac_state_locator(self) -> str | None:
         metadata = self.get_iac_state_metadata()
         return (
-            metadata.get("state_locator")
-            or metadata.get("state_file")
-            or metadata.get("workspace_dir")
-            or metadata.get("workspace_name")
-            or self.stack_arn
+                metadata.get("state_locator")
+                or metadata.get("state_file")
+                or metadata.get("workspace_dir")
+                or metadata.get("workspace_name")
+                or self.stack_arn
         )
-
+    
     @property
     def iac_provider(self) -> str:
         metadata = self.get_iac_state_metadata()
@@ -604,29 +600,29 @@ class InfrastructureStack(BaseErieIronModel):
         if self.stack_arn and str(self.stack_arn).startswith("arn:"):
             return "cloudformation"
         return getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
-
+    
     @staticmethod
     def get(
             initiative: Initiative,
             stack_type: InfrastructureStackType,
-            aws_env: AwsEnv,
+            env_type: EnvironmentType,
             assert_create=False
     ) -> 'InfrastructureStack':
         from erieiron_common import domain_manager
         from erieiron_common.aws_utils import sanitize_aws_name
         
-        if AwsEnv.PRODUCTION.eq(aws_env):
+        if EnvironmentType.PRODUCTION.eq(env_type):
             stack = InfrastructureStack.objects.filter(
-                business_id=initiative.business_id, 
-                initiative__isnull=True, 
-                stack_type=stack_type, 
-                aws_env=aws_env
+                business_id=initiative.business_id,
+                initiative__isnull=True,
+                stack_type=stack_type,
+                env_type=env_type
             ).first()
         else:
             stack = InfrastructureStack.objects.filter(
-                initiative=initiative, 
-                stack_type=stack_type, 
-                aws_env=aws_env
+                initiative=initiative,
+                stack_type=stack_type,
+                env_type=env_type
             ).first()
         if stack:
             if assert_create:
@@ -645,7 +641,7 @@ class InfrastructureStack(BaseErieIronModel):
         if not stack_namespace_token:
             raise Exception(f"unable to find a unique stack_namespace_token")
         
-        if AwsEnv.PRODUCTION.eq(aws_env):
+        if EnvironmentType.PRODUCTION.eq(env_type):
             stack_name = sanitize_aws_name([
                 stack_namespace_token,
                 initiative.business.service_token,
@@ -660,16 +656,16 @@ class InfrastructureStack(BaseErieIronModel):
         
         stack = InfrastructureStack.objects.create(
             business=initiative.business,
-            initiative=initiative if not AwsEnv.PRODUCTION.eq(aws_env) else None,
+            initiative=initiative if not EnvironmentType.PRODUCTION.eq(env_type) else None,
             stack_type=stack_type,
             stack_name=stack_name,
             stack_namespace_token=stack_namespace_token,
-            aws_env=aws_env
+            env_type=env_type
         )
         
         if (
                 InfrastructureStackType.FOUNDATION.eq(stack_type)
-                and AwsEnv.DEV.eq(aws_env)
+                and EnvironmentType.DEV.eq(env_type)
         ):
             new_sub_domain = sanitize_aws_name(stack_name, 63)
             new_domain = f"{new_sub_domain}.{initiative.business.domain}"
@@ -688,17 +684,17 @@ class InfrastructureStack(BaseErieIronModel):
     
     @transaction.atomic
     def tombstone(self) -> 'InfrastructureStack':
-        aws_env = self.aws_env
+        env_type = self.env_type
         initiative = self.initiative
         stack_type = self.stack_type
         
-        if AwsEnv.PRODUCTION.eq(aws_env):
+        if EnvironmentType.PRODUCTION.eq(env_type):
             raise Exception(f"cannot tombstone a production stack")
         
         try:
             import boto3
             logging.info(f"Deleting tombstoned stack {self.stack_name}")
-            cf_client = boto3.client("cloudformation", region_name=AwsEnv(aws_env).get_aws_region())
+            cf_client = boto3.client("cloudformation", region_name=EnvironmentType(env_type).get_aws_region())
             cf_client.delete_stack(StackName=self.stack_name)
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
@@ -710,7 +706,7 @@ class InfrastructureStack(BaseErieIronModel):
         return InfrastructureStack.get(
             initiative=initiative,
             stack_type=stack_type,
-            aws_env=aws_env,
+            env_type=env_type,
             assert_create=True
         )
     
@@ -746,7 +742,7 @@ class Task(BaseErieIronModel):
     task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_APPLICATION, null=False)
     status = models.TextField(null=False, choices=TaskStatus.choices())
     debug_steps = models.TextField(null=True)
-
+    
     validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
     description = models.TextField()
     depends_on = models.ManyToManyField(
@@ -1101,15 +1097,15 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     routing_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     strategic_unblocking_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     timestamp = models.DateTimeField(auto_now_add=True)
-
+    
     @property
     def iac_logs(self):
         return self.cloudformation_logs
-
+    
     @iac_logs.setter
     def iac_logs(self, value):
         self.cloudformation_logs = value
-
+    
     def get_all_log_content(self):
         return "\n\n".join(common.filter_none([
             self.log_content_init,
@@ -1304,7 +1300,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 "cloudformation_logs": self.cloudformation_logs or "N/A",
                 "sysout": self.log_content_execution or "N/A"
             })
-            
+        
         return d
     
     def get_all_code_versions(self):

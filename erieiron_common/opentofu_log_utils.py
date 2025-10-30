@@ -8,15 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from erieiron_common import common
-
 LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
 class OpenTofuRunResult:
     """Captures the stdout/stderr streams for a tofu CLI invocation."""
-
+    
     stage: str
     command: Sequence[str]
     returncode: int
@@ -25,7 +23,7 @@ class OpenTofuRunResult:
     stdout: str
     stderr: str
     extra: Mapping[str, Any] | None = field(default_factory=dict)
-
+    
     def to_dict(self) -> dict[str, Any]:
         return {
             "stage": self.stage,
@@ -45,7 +43,7 @@ def summarize_plan_changes(plan_json: Mapping[str, Any]) -> Mapping[str, int]:
     summary: dict[str, int] = {"create": 0, "update": 0, "delete": 0, "replace": 0, "no-op": 0}
     if not isinstance(resource_changes, list):
         return summary
-
+    
     for change in resource_changes:
         if not isinstance(change, Mapping):
             continue

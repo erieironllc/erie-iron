@@ -231,7 +231,7 @@ class PubSubMessageType(ErieEnum):
     BUSINESS_GUIDANCE_UPDATED = auto()
     
     BUSINESS_BOOTSTRAP_REQUESTED = auto()
-
+    
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     RESOURCE_PLANNING_REQUESTED = auto()
@@ -355,7 +355,7 @@ class LlmModel(ErieEnum):
     OPENAI_GPT_5 = "gpt-5"
     OPENAI_GPT_5_MINI = "gpt-5-mini"
     OPENAI_GPT_5_NANO = "gpt-5-nano"
-
+    
     # OPENAI_GPT_4_5 = "gpt-4.5"
     # OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE = "gpt-4.5-preview-2025-02-27"
     
@@ -476,7 +476,7 @@ class InitiativeType(ErieEnum):
     SALES = auto()
 
 
-class AwsEnv(ErieEnum):
+class EnvironmentType(ErieEnum):
     DEV = "dev"
     PRODUCTION = "production"
     
@@ -527,6 +527,14 @@ class InfrastructureStackType(ErieEnum):
     FOUNDATION = auto()
     APPLICATION = auto()
     
+    def get_opentofu_config(self) -> str:
+        if InfrastructureStackType.FOUNDATION.eq(self):
+            return "./opentofu/foundation/stack.tf"
+        elif InfrastructureStackType.APPLICATION.eq(self):
+            return "./opentofu/application/stack.tf"
+        else:
+            raise Exception(f"unhandled stack type {self}")
+    
     def get_template_name(self) -> str:
         if InfrastructureStackType.FOUNDATION.eq(self):
             return "infrastructure.yaml"
@@ -534,6 +542,7 @@ class InfrastructureStackType(ErieEnum):
             return "infrastructure-application.yaml"
         else:
             raise Exception(f"unhandled stack type {self}")
+
 
 class InitiativeNames(ErieEnum):
     OPERATIONAL_TASKS = "Operational Tasks"

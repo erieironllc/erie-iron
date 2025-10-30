@@ -5,7 +5,7 @@ from django.urls import reverse
 
 from erieiron_autonomous_agent.models import Business, Initiative, InfrastructureStack, Task
 from erieiron_autonomous_agent.enums import TaskStatus, TaskType
-from erieiron_common.enums import AwsEnv, BusinessIdeaSource, InfrastructureStackType, Level, InitiativeType
+from erieiron_common.enums import EnvironmentType, BusinessIdeaSource, InfrastructureStackType, Level, InitiativeType
 
 
 @pytest.mark.django_db
@@ -38,7 +38,7 @@ def test_business_infrastructure_stacks_tab_lists_all_stacks(client):
         stack_namespace_token="stk-aa",
         stack_name="stk-aa-customer-portal",
         stack_arn=json.dumps(initiative_stack_metadata, sort_keys=True),
-        aws_env=AwsEnv.DEV.value,
+        env_type=EnvironmentType.DEV.value,
         stack_type=InfrastructureStackType.APPLICATION.value,
     )
 
@@ -47,7 +47,7 @@ def test_business_infrastructure_stacks_tab_lists_all_stacks(client):
         stack_namespace_token="stk-bb",
         stack_name="stk-bb-shared",
         stack_arn="arn:aws:cloudformation:us-west-2:123456789012:stack/stk-bb-shared/1",
-        aws_env=AwsEnv.PRODUCTION.value,
+        env_type=EnvironmentType.PRODUCTION.value,
         stack_type=InfrastructureStackType.FOUNDATION.value,
     )
 

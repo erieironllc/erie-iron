@@ -13,6 +13,7 @@ botocore
 cachetools
 cfn-lint
 python-hcl2>=4.3.0
+python-decouple>=3.8
 cryptography>=3.4
 django-ratelimit
 django-stubs

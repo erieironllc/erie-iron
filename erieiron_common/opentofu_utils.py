@@ -7,230 +7,357 @@ import os
 import shlex
 import subprocess
 import tempfile
+import textwrap
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
-from erieiron_common import aws_utils, common
-from erieiron_common.enums import InfrastructureStackType
+import hcl2
 
-LOGGER = logging.getLogger(__name__)
-_TOFU_BIN = os.environ.get("OPENTOFU_BIN", "tofu")
-
-try:  # pragma: no cover - import guarded for clarity during package installation
-    import hcl2  # type: ignore
-except ImportError as exc:  # pragma: no cover - surfaces configuration errors quickly
-    hcl2 = None
-    HCL2_IMPORT_ERROR = exc
-else:  # pragma: no cover - attribute only set when import succeeds
-    HCL2_IMPORT_ERROR = None
+import settings
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import BadPlan
+from erieiron_autonomous_agent.models import InfrastructureStack
+from erieiron_common import common, opentofu_log_utils
+from erieiron_common.enums import InfrastructureStackType, EnvironmentType
+from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandError, OpenTofuException
+from erieiron_common.opentofu_log_utils import OpenTofuRunResult
 
 
-class OpenTofuException(Exception):
-    """Base exception for OpenTofu helper errors."""
-
-
-class OpenTofuCommandError(OpenTofuException):
-    """Raised when an OpenTofu CLI invocation fails."""
-
-    def __init__(self, message: str, result: "OpenTofuCommandResult"):
-        super().__init__(message)
-        self.result = result
-
-
-class OpenTofuStackObsolete(OpenTofuException):
-    """Raised when a stack must be rotated before continuing."""
-
-
-@dataclass(frozen=True)
-class OpenTofuModuleEntry:
-    """Describes the location of a module on disk."""
-
-    stack_type: InfrastructureStackType
-    module_path: Path
-    workdir: Path
-    entrypoint: Path
-    exists: bool
-
-
-@dataclass(frozen=True)
-class OpenTofuStackConfig:
-    """Captures module + workspace metadata for a stack instance."""
-
-    stack_type: InfrastructureStackType
-    module: OpenTofuModuleEntry
-    workspace_name: str
-    workspace_dir: Path
-
-
-@dataclass(frozen=True)
-class OpenTofuVariable:
-    """Represents a declared variable within an OpenTofu module."""
-
-    name: str
-    required: bool
-    default: Any
-    type_expression: Any
-    description: str | None
-    sensitive: bool
-    source_file: str | None = None
-
-
-@dataclass
-class OpenTofuCommandResult:
-    """Represents the outcome of a tofu CLI command."""
-
-    command: Sequence[str]
-    cwd: Path
-    started_at: datetime
-    completed_at: datetime
-    returncode: int
-    stdout: str
-    stderr: str
-    duration_seconds: float = field(init=False)
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
+class OpenTofuStackManager:
+    def __init__(
             self,
-            "duration_seconds",
-            max((self.completed_at - self.started_at).total_seconds(), 0.0),
+            stack: InfrastructureStack,
+            sandbox_root_dir: Path,
+            container_env: dict
+    ):
+        self.stack = stack
+        self.sandbox_root_dir = sandbox_root_dir
+        self.container_env = container_env
+        self.stack_type = InfrastructureStackType(self.stack.stack_type)
+        self.module_file = get_swizzled_module_file(stack, sandbox_root_dir)
+        self.module_dir = self.module_file.parent
+        self.tf_env = self.build_opentofu_env()
+        
+        self.full_env: MutableMapping[str, str] = os.environ.copy()
+        self.full_env.update(self.container_env)
+        self.full_env.update(self.tf_env)
+        
+        self.stage = "init"
+        self.run_results: list[OpenTofuRunResult] = []
+    
+    def record(self, stage: str, result: OpenTofuCommandResult) -> None:
+        self.stage = stage
+        self.run_results.append(
+            opentofu_log_utils.OpenTofuRunResult(
+                stage=stage,
+                command=result.command,
+                returncode=result.returncode,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                extra=result.extra,
+            )
         )
-
-    def loggable_dict(self) -> dict[str, Any]:
-        return {
-            "command": " ".join(shlex.quote(part) for part in self.command),
-            "cwd": str(self.cwd),
-            "returncode": self.returncode,
-            "duration_seconds": self.duration_seconds,
-            "stdout": self.stdout.strip(),
-            "stderr": self.stderr.strip(),
-            "extra": self.extra,
-        }
-
-
-def get_modules_root(repo_root: Path) -> Path:
-    modules_root = repo_root / "opentofu"
-    modules_root.mkdir(parents=True, exist_ok=True)
-    return modules_root
-
-
-def resolve_module_entry(repo_root: Path, stack_type: InfrastructureStackType) -> OpenTofuModuleEntry:
-    modules_root = get_modules_root(repo_root)
-    module_token = stack_type.value.lower()
-    folder_candidate = modules_root / module_token
-    file_candidate = modules_root / f"{module_token}.tf"
-
-    if folder_candidate.is_dir():
-        entrypoint = folder_candidate / "main.tf"
-        exists = entrypoint.exists() or any(folder_candidate.glob("*.tf"))
-        if not entrypoint.exists():
-            entrypoint = folder_candidate
-        return OpenTofuModuleEntry(
-            stack_type=stack_type,
-            module_path=folder_candidate,
-            workdir=folder_candidate,
-            entrypoint=entrypoint,
-            exists=exists,
+    
+    @staticmethod
+    def validate_required_variables(
+            module_variables: Mapping[str, OpenTofuVariable],
+            provided_values: Mapping[str, Any],
+    ) -> list[str]:
+        missing: list[str] = []
+        for name, variable in module_variables.items():
+            if not variable.required:
+                continue
+            if name in provided_values:
+                continue
+            missing.append(name)
+        return missing
+    
+    def normalize_outputs(self, raw_outputs: Mapping[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for key, value in raw_outputs.items():
+            if isinstance(value, Mapping) and "value" in value:
+                normalized[key] = value.get("value")
+            else:
+                normalized[key] = value
+        return normalized
+    
+    def run_tofu_command(
+            self,
+            stage: str,
+            args: Sequence[str],
+            *,
+            input_data: str | None = None,
+            timeout: int | None = None,
+    ) -> OpenTofuCommandResult:
+        self.stage = stage
+        workdir = str(self.get_workspace_dir())
+        command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *args]
+        started_at = common.get_now()
+        logging.debug("Running OpenTofu command", extra={"command": command, "cwd": str(workdir)})
+        try:
+            completed_process = subprocess.run(
+                command,
+                cwd=workdir,
+                input=input_data,
+                text=True,
+                capture_output=True,
+                env=self.full_env,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            completed_at = common.get_now()
+            result = OpenTofuCommandResult(
+                command=command,
+                cwd=workdir,
+                started_at=started_at,
+                completed_at=completed_at,
+                returncode=-1,
+                stdout=exc.stdout or "",
+                stderr=exc.stderr or "",
+            )
+            raise OpenTofuCommandError(
+                f"OpenTofu command timed out after {timeout}s: {' '.join(command)}",
+                result,
+            ) from exc
+        
+        completed_at = common.get_now()
+        result = OpenTofuCommandResult(
+            command=command,
+            cwd=workdir,
+            started_at=started_at,
+            completed_at=completed_at,
+            returncode=completed_process.returncode,
+            stdout=completed_process.stdout or "",
+            stderr=completed_process.stderr or "",
         )
-
-    if file_candidate.exists():
-        return OpenTofuModuleEntry(
-            stack_type=stack_type,
-            module_path=file_candidate,
-            workdir=modules_root,
-            entrypoint=file_candidate,
-            exists=True,
+        
+        print(f"""
+        
+        
+        {completed_process.stderr}
+        
+        
+        """)
+        
+        if result.returncode != 0:
+            logging.error("OpenTofu command failed", extra=result.loggable_dict())
+            raise OpenTofuCommandError(
+                f"OpenTofu command failed with exit code {result.returncode}",
+                result,
+            )
+        
+        logging.debug("OpenTofu command completed", extra=result.loggable_dict())
+        self.record(stage, result)
+        return result
+    
+    def init_workspace(
+            self,
+            *,
+            backend_config: Mapping[str, str] | None = None,
+            timeout: int | None = None,
+            upgrade: bool = False,
+    ) -> OpenTofuCommandResult:
+        args = ["init", "-input=false", "-no-color"]
+        
+        if upgrade:
+            args.append("-upgrade")
+        
+        for key, value in sorted((backend_config or {}).items()):
+            args.append(f"-backend-config={key}={value}")
+        
+        return self.run_tofu_command(
+            "init",
+            args,
+            timeout=timeout
         )
-
-    # Create a directory placeholder so future iterations have a canonical location.
-    folder_candidate.mkdir(parents=True, exist_ok=True)
-    return OpenTofuModuleEntry(
-        stack_type=stack_type,
-        module_path=folder_candidate,
-        workdir=folder_candidate,
-        entrypoint=folder_candidate,
-        exists=False,
-    )
-
-
-def compute_workspace_name(stack_namespace_token: str, stack_type: InfrastructureStackType) -> str:
-    base = aws_utils.sanitize_aws_name(stack_namespace_token, max_length=40)
-    suffix = aws_utils.sanitize_aws_name(stack_type.value.lower(), max_length=20)
-    return aws_utils.sanitize_aws_name(f"{base}-{suffix}", max_length=63)
-
-
-def get_workspace_root(repo_root: Path) -> Path:
-    workspace_root = get_modules_root(repo_root) / "workspaces"
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    return workspace_root
-
-
-def ensure_workspace(repo_root: Path, stack_namespace_token: str, stack_type: InfrastructureStackType) -> OpenTofuStackConfig:
-    module_entry = resolve_module_entry(repo_root, stack_type)
-    workspace_name = compute_workspace_name(stack_namespace_token, stack_type)
-    workspace_dir = get_workspace_root(repo_root) / workspace_name
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-    return OpenTofuStackConfig(
-        stack_type=stack_type,
-        module=module_entry,
-        workspace_name=workspace_name,
-        workspace_dir=workspace_dir,
-    )
-
-
-def ensure_workspaces(repo_root: Path, stack_namespace_map: Mapping[InfrastructureStackType, str]) -> dict[InfrastructureStackType, OpenTofuStackConfig]:
-    configs: dict[InfrastructureStackType, OpenTofuStackConfig] = {}
-    for stack_type, namespace in stack_namespace_map.items():
-        if not namespace:
-            continue
-        configs[stack_type] = ensure_workspace(repo_root, namespace, stack_type)
-    return configs
-
-
-def discover_modules(repo_root: Path) -> dict[InfrastructureStackType, OpenTofuModuleEntry]:
-    return {
-        stack_type: resolve_module_entry(repo_root, stack_type)
-        for stack_type in InfrastructureStackType
-    }
-
-
-def _assert_hcl2_available() -> None:
-    if hcl2 is None:  # pragma: no cover - executed only when dependency missing
-        raise OpenTofuException(
-            "python-hcl2 is required to parse OpenTofu modules but could not be imported"
-        ) from HCL2_IMPORT_ERROR
-
-
-def _iter_module_tf_files(module: OpenTofuModuleEntry) -> Iterable[Path]:
-    if module.entrypoint.is_file() and module.entrypoint.suffix == ".tf":
-        yield module.entrypoint
-    if module.workdir.is_dir():
-        for tf_path in sorted(module.workdir.glob("*.tf")):
-            if tf_path != module.entrypoint:
-                yield tf_path
-
-
-def load_module_variables(module: OpenTofuModuleEntry) -> dict[str, OpenTofuVariable]:
-    """Parse all Terraform variable blocks within the module."""
-
-    _assert_hcl2_available()
-    variables: dict[str, OpenTofuVariable] = {}
-
-    for tf_path in _iter_module_tf_files(module):
+    
+    def plan(
+            self,
+            *,
+            var_files: Iterable[Path] | None = None,
+            timeout: int | None = None,
+            destroy: bool = False,
+            refresh: bool = True,
+            json_output: bool = True,
+            plan_output_path: Path | None = None,
+    ) -> OpenTofuCommandResult:
+        temp_dir: tempfile.TemporaryDirectory[str] | None = None
+        plan_path: Path | None = None
+        try:
+            if json_output:
+                if plan_output_path is not None:
+                    plan_path = plan_output_path
+                    plan_path.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    temp_dir = tempfile.TemporaryDirectory()
+                    plan_path = Path(temp_dir.name) / "plan.tfplan"
+            
+            args = ["plan", "-input=false", "-no-color"]
+            if plan_path:
+                args.extend(["-out", str(plan_path)])
+            if destroy:
+                args.append("-destroy")
+            if not refresh:
+                args.append("-refresh=false")
+            for vf in common.ensure_list(var_files):
+                args.extend(["-var-file", str(vf)])
+            
+            result = self.run_tofu_command(
+                "plan",
+                args,
+                timeout=timeout
+            )
+            
+            if json_output and plan_path and plan_path.exists():
+                show_result = self.run_tofu_command(
+                    "show",
+                    ["show", "-json", str(plan_path)],
+                    timeout=timeout,
+                )
+                try:
+                    plan_json = json.loads(show_result.stdout or "{}")
+                except json.JSONDecodeError as exc:
+                    raise OpenTofuCommandError(
+                        "Failed to decode OpenTofu plan JSON",
+                        show_result,
+                    ) from exc
+                change_summary = self.summarize_plan_changes(plan_json)
+                result.extra["plan_path"] = str(plan_path)
+                result.extra["plan_json"] = plan_json
+                result.extra["plan_change_summary"] = change_summary
+                result.extra["show_result"] = show_result.loggable_dict()
+            return result
+        finally:
+            if temp_dir:
+                temp_dir.cleanup()
+    
+    def apply(
+            self,
+            *,
+            timeout: int | None = None,
+            auto_approve: bool = True,
+            plan_path: Path | None = None,
+            retries: int = 0,
+            retry_backoff_seconds: float = 5.0,
+    ) -> OpenTofuCommandResult:
+        args = ["apply", "-input=false", "-no-color"]
+        if auto_approve:
+            args.append("-auto-approve")
+        if plan_path:
+            args.append(str(plan_path))
+        
+        attempt = 0
+        exc: OpenTofuCommandError | None = None
+        while attempt <= max(retries, 0):
+            try:
+                return self.run_tofu_command(
+                    "apply",
+                    args,
+                    timeout=timeout
+                )
+            except OpenTofuCommandError as error:
+                exc = error
+                attempt += 1
+                if attempt > max(retries, 0):
+                    break
+                logging.warning(
+                    "OpenTofu apply failed; retrying",
+                    extra={
+                        "attempt": attempt,
+                        "retries": retries,
+                        "command": " ".join(shlex.quote(part) for part in args),
+                        "workspace": self.get_workspace_name(),
+                    },
+                )
+                time.sleep(retry_backoff_seconds * attempt)
+        if exc:
+            raise exc
+        raise OpenTofuCommandError(
+            "OpenTofu apply failed without raising an exception",
+            OpenTofuCommandResult(
+                command=[settings.TOFU_BIN, *args],
+                cwd=self.get_workspace_dir(),
+                started_at=common.get_now(),
+                completed_at=common.get_now(),
+                returncode=-1,
+                stdout="",
+                stderr="apply aborted without execution",
+            ),
+        )
+    
+    def output_json(
+            self,
+            *,
+            timeout: int | None = None,
+    ) -> dict[str, Any]:
+        result = self.run_tofu_command(
+            self.stage,
+            ["output", "-json"],
+            timeout=timeout,
+        )
+        try:
+            outputs = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise OpenTofuCommandError("Failed to decode OpenTofu outputs", result) from exc
+        result.extra["outputs"] = outputs
+        return outputs
+    
+    def summarize_plan_changes(self, plan_json: Mapping[str, Any]) -> Mapping[str, int]:
+        resource_changes = plan_json.get("resource_changes")
+        summary: dict[str, int] = {"create": 0, "update": 0, "delete": 0, "replace": 0, "no-op": 0}
+        if not isinstance(resource_changes, list):
+            return summary
+        
+        for change in resource_changes:
+            if not isinstance(change, Mapping):
+                continue
+            change_actions = change.get("change", {}).get("actions", [])
+            if not isinstance(change_actions, list):
+                continue
+            actions = tuple(action.lower() for action in change_actions)
+            if actions == ("create", "delete") or actions == ("delete", "create"):
+                summary["replace"] += 1
+            for action in actions:
+                if action in summary:
+                    summary[action] += 1
+        return summary
+    
+    def get_workspace_name(self):
+        from erieiron_common import aws_utils
+        
+        base = aws_utils.sanitize_aws_name(self.stack.stack_namespace_token, max_length=40)
+        suffix = aws_utils.sanitize_aws_name(self.stack.stack_type.lower(), max_length=20)
+        return aws_utils.sanitize_aws_name(f"{base}-{suffix}", max_length=63)
+    
+    def get_workspace_dir(self) -> Path:
+        workspace_dir = self.sandbox_root_dir / "opentofu" / "workspaces" / self.get_workspace_name()
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        return workspace_dir
+    
+    def get_state_file(self):
+        return str(self.get_workspace_dir() / "terraform.tfstate"),
+    
+    def get_state_locator(self):
+        return f"opentofu://workspace/{self.get_workspace_name()}"
+    
+    @staticmethod
+    def get_stack_variables(stack: InfrastructureStack, sandbox_root_dir: Path) -> dict[str, OpenTofuVariable]:
+        tf_path = get_swizzled_module_file(stack, sandbox_root_dir)
+        
         try:
             with tf_path.open("r", encoding="utf-8") as tf_file:
-                parsed = hcl2.load(tf_file)  # type: ignore[arg-type]
-        except FileNotFoundError:
-            continue
-        except Exception as exc:  # pragma: no cover - defensive error surfacing
+                parsed_terraform = hcl2.load(tf_file)  # type: ignore[arg-type]
+        except Exception as exc:
+            logging.exception(exc)
             raise OpenTofuException(
                 f"Failed to parse Terraform file '{tf_path}'"
             ) from exc
-
-        for variable_block in parsed.get("variable", []) or []:
+        
+        variables: dict[str, OpenTofuVariable] = {}
+        for variable_block in parsed_terraform.get("variable", []) or []:
             if not isinstance(variable_block, dict):
                 continue
             for var_name, attributes in variable_block.items():
@@ -246,309 +373,88 @@ def load_module_variables(module: OpenTofuModuleEntry) -> dict[str, OpenTofuVari
                     sensitive=bool(attrs.get("sensitive")),
                     source_file=str(tf_path),
                 )
-
-    return variables
-
-
-def get_tfvars_path(stack_config: OpenTofuStackConfig, filename: str | None = None) -> Path:
-    suffix = filename or f"{stack_config.stack_type.value.lower()}.auto.tfvars.json"
-    return stack_config.workspace_dir / suffix
-
-
-def write_tfvars_file(
-    stack_config: OpenTofuStackConfig,
-    variables: Mapping[str, Any],
-    *,
-    filename: str | None = None,
-) -> Path:
-    tfvars_path = get_tfvars_path(stack_config, filename=filename)
-    tfvars_path.parent.mkdir(parents=True, exist_ok=True)
-    common.write_json(tfvars_path, variables)
-    return tfvars_path
-
-
-def validate_required_variables(
-    module_variables: Mapping[str, OpenTofuVariable],
-    provided_values: Mapping[str, Any],
-) -> list[str]:
-    missing: list[str] = []
-    for name, variable in module_variables.items():
-        if not variable.required:
-            continue
-        if name in provided_values:
-            continue
-        missing.append(name)
-    return missing
-
-
-def normalize_outputs(raw_outputs: Mapping[str, Any]) -> dict[str, Any]:
-    normalized: dict[str, Any] = {}
-    for key, value in raw_outputs.items():
-        if isinstance(value, Mapping) and "value" in value:
-            normalized[key] = value.get("value")
-        else:
-            normalized[key] = value
-    return normalized
-
-
-def _build_env(env: Mapping[str, str] | None) -> MutableMapping[str, str]:
-    base_env: MutableMapping[str, str] = os.environ.copy()
-    if env:
-        base_env.update(env)
-    return base_env
-
-
-def _run_tofu_command(
-    args: Sequence[str],
-    *,
-    workdir: Path,
-    env: Mapping[str, str] | None = None,
-    input_data: str | None = None,
-    timeout: int | None = None,
-) -> OpenTofuCommandResult:
-    command = [_TOFU_BIN, *args]
-    started_at = datetime.utcnow()
-    LOGGER.debug("Running OpenTofu command", extra={"command": command, "cwd": str(workdir)})
-    try:
-        completed_process = subprocess.run(
-            command,
-            cwd=str(workdir),
-            input=input_data,
-            text=True,
-            capture_output=True,
-            env=_build_env(env),
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        completed_at = datetime.utcnow()
-        result = OpenTofuCommandResult(
-            command=command,
-            cwd=workdir,
-            started_at=started_at,
-            completed_at=completed_at,
-            returncode=-1,
-            stdout=exc.stdout or "",
-            stderr=exc.stderr or "",
-        )
-        raise OpenTofuCommandError(
-            f"OpenTofu command timed out after {timeout}s: {' '.join(command)}",
-            result,
-        ) from exc
-
-    completed_at = datetime.utcnow()
-    result = OpenTofuCommandResult(
-        command=command,
-        cwd=workdir,
-        started_at=started_at,
-        completed_at=completed_at,
-        returncode=completed_process.returncode,
-        stdout=completed_process.stdout or "",
-        stderr=completed_process.stderr or "",
-    )
-
-    if result.returncode != 0:
-        LOGGER.error("OpenTofu command failed", extra=result.loggable_dict())
-        raise OpenTofuCommandError(
-            f"OpenTofu command failed with exit code {result.returncode}",
-            result,
-        )
-
-    LOGGER.debug("OpenTofu command completed", extra=result.loggable_dict())
-    return result
-
-
-def init_workspace(
-    config: OpenTofuStackConfig,
-    *,
-    backend_config: Mapping[str, str] | None = None,
-    env: Mapping[str, str] | None = None,
-    timeout: int | None = None,
-    upgrade: bool = False,
-) -> OpenTofuCommandResult:
-    args = ["init", "-input=false", "-no-color"]
-    if upgrade:
-        args.append("-upgrade")
-    for key, value in sorted((backend_config or {}).items()):
-        args.append(f"-backend-config={key}={value}")
-    return _run_tofu_command(args, workdir=config.module.workdir, env=env, timeout=timeout)
-
-
-def plan(
-    config: OpenTofuStackConfig,
-    *,
-    var_files: Iterable[Path] | None = None,
-    env: Mapping[str, str] | None = None,
-    timeout: int | None = None,
-    destroy: bool = False,
-    refresh: bool = True,
-    json_output: bool = True,
-    plan_output_path: Path | None = None,
-) -> OpenTofuCommandResult:
-    temp_dir: tempfile.TemporaryDirectory[str] | None = None
-    plan_path: Path | None = None
-    try:
-        if json_output:
-            if plan_output_path is not None:
-                plan_path = plan_output_path
-                plan_path.parent.mkdir(parents=True, exist_ok=True)
-            else:
-                temp_dir = tempfile.TemporaryDirectory()
-                plan_path = Path(temp_dir.name) / "plan.tfplan"
-
-        args = ["plan", "-input=false", "-no-color"]
-        if plan_path:
-            args.extend(["-out", str(plan_path)])
-        if destroy:
-            args.append("-destroy")
-        if not refresh:
-            args.append("-refresh=false")
-        for vf in common.ensure_list(var_files):
-            args.extend(["-var-file", str(vf)])
-
-        result = _run_tofu_command(args, workdir=config.module.workdir, env=env, timeout=timeout)
-
-        if json_output and plan_path and plan_path.exists():
-            show_result = _run_tofu_command(
-                ["show", "-json", str(plan_path)],
-                workdir=config.module.workdir,
-                env=env,
-                timeout=timeout,
-            )
-            try:
-                plan_json = json.loads(show_result.stdout or "{}")
-            except json.JSONDecodeError as exc:
-                raise OpenTofuCommandError(
-                    "Failed to decode OpenTofu plan JSON",
-                    show_result,
-                ) from exc
-            change_summary = summarize_plan_changes(plan_json)
-            result.extra["plan_path"] = str(plan_path)
-            result.extra["plan_json"] = plan_json
-            result.extra["plan_change_summary"] = change_summary
-            result.extra["show_result"] = show_result.loggable_dict()
-        return result
-    finally:
-        if temp_dir:
-            temp_dir.cleanup()
-
-
-def apply(
-    config: OpenTofuStackConfig,
-    *,
-    env: Mapping[str, str] | None = None,
-    timeout: int | None = None,
-    auto_approve: bool = True,
-    plan_path: Path | None = None,
-    retries: int = 0,
-    retry_backoff_seconds: float = 5.0,
-) -> OpenTofuCommandResult:
-    args = ["apply", "-input=false", "-no-color"]
-    if auto_approve:
-        args.append("-auto-approve")
-    if plan_path:
-        args.append(str(plan_path))
-
-    attempt = 0
-    exc: OpenTofuCommandError | None = None
-    while attempt <= max(retries, 0):
+        
+        return variables
+    
+    def write_tfvars_file(
+            self,
+            variables: Mapping[str, Any],
+            *,
+            filename: str | None = None,
+    ) -> Path:
+        suffix = filename or f"{self.stack.stack_type.lower()}.auto.tfvars.json"
+        tfvars_path = self.get_workspace_dir() / suffix
+        tfvars_path.parent.mkdir(parents=True, exist_ok=True)
+        common.write_json(tfvars_path, variables)
+        return tfvars_path
+    
+    def build_opentofu_env(self) -> dict[str, str]:
+        env: dict[str, str] = {
+            key: str(value)
+            for key, value in os.environ.items()
+        }
+        for key, value in self.container_env.items():
+            if value is None:
+                continue
+            env[str(key)] = str(value)
+        
+        workspace_dir = self.get_workspace_dir()
+        tf_data_dir = workspace_dir / ".terraform-data"
+        tf_plugin_cache = workspace_dir / "plugin-cache"
+        tf_data_dir.mkdir(parents=True, exist_ok=True)
+        tf_plugin_cache.mkdir(parents=True, exist_ok=True)
+        
+        env.setdefault("TF_IN_AUTOMATION", "true")
+        env.setdefault("TF_INPUT", "false")
+        env["TF_DATA_DIR"] = str(tf_data_dir)
+        env.setdefault("TF_PLUGIN_CACHE_DIR", str(tf_plugin_cache))
+        env["TF_WORKSPACE"] = self.get_workspace_name()
+        return env
+    
+    def validate_stack(self):
         try:
-            return _run_tofu_command(args, workdir=config.module.workdir, env=env, timeout=timeout)
-        except OpenTofuCommandError as error:
-            exc = error
-            attempt += 1
-            if attempt > max(retries, 0):
-                break
-            LOGGER.warning(
-                "OpenTofu apply failed; retrying",
-                extra={
-                    "attempt": attempt,
-                    "retries": retries,
-                    "command": " ".join(shlex.quote(part) for part in args),
-                    "workspace": config.workspace_name,
-                },
-            )
-            time.sleep(retry_backoff_seconds * attempt)
-    if exc:
-        raise exc
-    raise OpenTofuCommandError(
-        "OpenTofu apply failed without raising an exception",
-        OpenTofuCommandResult(
-            command=[_TOFU_BIN, *args],
-            cwd=config.module.workdir,
-            started_at=datetime.utcnow(),
-            completed_at=datetime.utcnow(),
-            returncode=-1,
-            stdout="",
-            stderr="apply aborted without execution",
-        ),
+            self.run_tofu_command("validate", ["tofu", "fmt", "-check"])
+        except subprocess.CalledProcessError as exc:
+            return BadPlan(textwrap.dedent(f"""
+                OpenTofu formatting failed for {self.stack.stack_type} module.
+                stdout:
+                {exc.stdout or '<empty>'}
+
+                stderr:
+                {exc.stderr or '<empty>'}
+            """))
+        
+        try:
+            self.run_tofu_command("validate", ["tofu", "validate"])
+        except subprocess.CalledProcessError as exc:
+            return BadPlan(textwrap.dedent(f"""
+                OpenTofu validate failed for {self.stack.stack_type} module.
+                stdout:
+                {exc.stdout or '<empty>'}
+
+                stderr:
+                {exc.stderr or '<empty>'}
+            """))
+
+
+def get_swizzled_module_file(
+        stack: InfrastructureStack,
+        sandbox_root_dir: Path
+):
+    tf_path = common.assert_exists(
+        sandbox_root_dir / InfrastructureStackType(stack.stack_type).get_opentofu_config()
     )
-
-
-def output_json(
-    config: OpenTofuStackConfig,
-    *,
-    env: Mapping[str, str] | None = None,
-    timeout: int | None = None,
-) -> dict[str, Any]:
-    result = _run_tofu_command(
-        ["output", "-json"],
-        workdir=config.module.workdir,
-        env=env,
-        timeout=timeout,
-    )
-    try:
-        outputs = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        raise OpenTofuCommandError("Failed to decode OpenTofu outputs", result) from exc
-    result.extra["outputs"] = outputs
-    return outputs
-
-
-def summarize_plan_changes(plan_json: Mapping[str, Any]) -> Mapping[str, int]:
-    resource_changes = plan_json.get("resource_changes")
-    summary: dict[str, int] = {"create": 0, "update": 0, "delete": 0, "replace": 0, "no-op": 0}
-    if not isinstance(resource_changes, list):
-        return summary
-
-    for change in resource_changes:
-        if not isinstance(change, Mapping):
-            continue
-        change_actions = change.get("change", {}).get("actions", [])
-        if not isinstance(change_actions, list):
-            continue
-        actions = tuple(action.lower() for action in change_actions)
-        if actions == ("create", "delete") or actions == ("delete", "create"):
-            summary["replace"] += 1
-        for action in actions:
-            if action in summary:
-                summary[action] += 1
-    return summary
-
-
-__all__ = [
-    "OpenTofuException",
-    "OpenTofuCommandError",
-    "OpenTofuStackObsolete",
-    "OpenTofuCommandResult",
-    "OpenTofuModuleEntry",
-    "OpenTofuStackConfig",
-    "OpenTofuVariable",
-    "compute_workspace_name",
-    "discover_modules",
-    "ensure_workspace",
-    "ensure_workspaces",
-    "get_modules_root",
-    "get_workspace_root",
-    "get_tfvars_path",
-    "load_module_variables",
-    "init_workspace",
-    "plan",
-    "apply",
-    "output_json",
-    "resolve_module_entry",
-    "summarize_plan_changes",
-    "validate_required_variables",
-    "write_tfvars_file",
-    "normalize_outputs",
-]
+    
+    with tf_path.open("r", encoding="utf-8") as f:
+        contents = f.read()
+    
+    prevent_destroy = EnvironmentType.PRODUCTION.eq(stack.env_type)
+    new_contents = contents.replace("ERIE_IRON_RETAIN_RESOURCES", "true" if prevent_destroy else "false")
+    
+    temp_dir = tempfile.mkdtemp(prefix="opentofu_swizzle_")
+    swizzled_path = Path(temp_dir) / tf_path.name
+    
+    with swizzled_path.open("w", encoding="utf-8") as f:
+        f.write(new_contents)
+    
+    return swizzled_path

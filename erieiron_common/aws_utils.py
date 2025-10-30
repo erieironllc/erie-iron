@@ -820,8 +820,8 @@ def _describe_availability_zones(region: str) -> list[str]:
     return sorted(filter(None, zones)) or [f"{region}a"]
 
 
-def ensure_shared_vpc_exists(aws_env) -> SharedVpcContext:
-    region = aws_env.get_aws_region()
+def ensure_shared_vpc_exists(env_type) -> SharedVpcContext:
+    region = env_type.get_aws_region()
     ec2_resource = boto3.resource("ec2", region_name=region)
     ec2_client = boto3.client("ec2", region_name=region)
     
@@ -1080,13 +1080,13 @@ def ensure_shared_vpc_exists(aws_env) -> SharedVpcContext:
 
 
 def ensure_shared_rds_security_group(
-        aws_env=None,
+        env_type=None,
         developer_cidr: str | None = None
 ) -> str:
     shared_vpc = get_shared_vpc()
     
-    if aws_env is not None:
-        region = aws_env.get_aws_region()
+    if env_type is not None:
+        region = env_type.get_aws_region()
     else:
         region = get_aws_region()
     ec2_client = boto3.client("ec2", region_name=region)

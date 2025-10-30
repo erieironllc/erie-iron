@@ -24,7 +24,6 @@ from erieiron_public import agent_tools
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import (
-    SelfDriverConfig as BaseSelfDriverConfig,
     CodeReviewException,
     TASK_DESC_CODE_WRITING,
     BadPlan,
@@ -41,7 +40,7 @@ from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import (
     SdaInitialAction,
     sentence_transformer_model,
     DatabaseMigrationException,
-    FailingTestException,
+    FailingTestException, SelfDriverConfig,
 )
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
@@ -63,137 +62,12 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils, domain_manager, opentofu_utils, opentofu_log_utils, ErieIronJSONEncoder
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda
 from erieiron_common.cloudformation_utils import get_resource_configs, CloudformationResourceType, get_physical_resources
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-
-
-class SelfDriverConfig(BaseSelfDriverConfig):
-    """OpenTofu-aware SelfDriverConfig that inventories IaC artifacts."""
-
-    _BASE_ENV_KEYS: tuple[str, ...] = (
-        "DOMAIN_NAME",
-        "AWS_DEFAULT_REGION",
-        "AWS_ACCOUNT_ID",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "LLM_API_KEYS_SECRET_ARN",
-        "STACK_NAME",
-        "FOUNDATION_STACK_NAME",
-        "TASK_NAMESPACE",
-        "STACK_IDENTIFIER",
-        "FOUNDATION_STACK_IDENTIFIER",
-        "BUILDAH_FORMAT",
-    )
-
-    def __init__(self, self_driving_task: SelfDrivingTask, one_off_action=None):
-        super().__init__(self_driving_task, one_off_action)
-        self.opentofu_modules = opentofu_utils.discover_modules(self.sandbox_root_dir)
-        self.opentofu_module_variables: dict[
-            InfrastructureStackType, dict[str, opentofu_utils.OpenTofuVariable]
-        ] = {
-            stack_type: opentofu_utils.load_module_variables(module_entry)
-            for stack_type, module_entry in self.opentofu_modules.items()
-        }
-        self.infrastructure_stacks: dict[InfrastructureStackType, InfrastructureStack] = {}
-        self.opentofu_stack_configs: dict[
-            InfrastructureStackType, opentofu_utils.OpenTofuStackConfig
-        ] = {}
-        self.infrastructure_inventory: dict[str, Any] = {}
-
-        # Ensure workspaces exist and capture the latest stack metadata immediately.
-        get_stacks(self)
-
-    def _refresh_opentofu_state(
-        self,
-        stack_map: Mapping[InfrastructureStackType, "InfrastructureStack"],
-    ) -> None:
-        self.infrastructure_stacks = {
-            stack_type: stack
-            for stack_type, stack in stack_map.items()
-            if stack is not None
-        }
-
-        namespace_map = {
-            stack_type: stack.stack_namespace_token
-            for stack_type, stack in self.infrastructure_stacks.items()
-        }
-        self.opentofu_stack_configs = opentofu_utils.ensure_workspaces(
-            self.sandbox_root_dir,
-            namespace_map,
-        )
-
-        self._persist_infrastructure_metadata()
-        self.infrastructure_inventory = self._build_infrastructure_inventory()
-
-    def _persist_infrastructure_metadata(self) -> None:
-        for stack_type, stack in self.infrastructure_stacks.items():
-            if stack is None:
-                continue
-            stack_config = self.opentofu_stack_configs.get(stack_type)
-            if not stack_config:
-                continue
-
-            metadata = {
-                "provider": "opentofu",
-                "stack_type": stack_type.value,
-                "workspace_name": stack_config.workspace_name,
-                "workspace_dir": str(stack_config.workspace_dir),
-                "state_file": str(stack_config.workspace_dir / "terraform.tfstate"),
-                "state_locator": f"opentofu://workspace/{stack_config.workspace_name}",
-            }
-            serialized = json.dumps(metadata, sort_keys=True)
-            if stack.stack_arn != serialized:
-                InfrastructureStack.objects.filter(id=stack.id).update(stack_arn=serialized)
-                stack.stack_arn = serialized
-
-    def _build_infrastructure_inventory(self) -> dict[str, Any]:
-        cloudformation_templates = [str(path) for path in self.cloudformation_configs]
-        stack_names = {
-            stack_type.value: stack.stack_name
-            for stack_type, stack in self.infrastructure_stacks.items()
-        }
-        stack_tokens = {
-            stack_type.value: stack.stack_namespace_token
-            for stack_type, stack in self.infrastructure_stacks.items()
-        }
-        modules_summary = {
-            stack_type.value: {
-                "exists": entry.exists,
-                "entrypoint": str(entry.entrypoint),
-                "workdir": str(entry.workdir),
-                "variable_count": len(self.opentofu_module_variables.get(stack_type, {})),
-            }
-            for stack_type, entry in self.opentofu_modules.items()
-        }
-        workspaces_summary = {
-            stack_type.value: {
-                "workspace_name": config.workspace_name,
-                "path": str(config.workspace_dir),
-            }
-            for stack_type, config in self.opentofu_stack_configs.items()
-        }
-
-        credential_env_keys = {
-            cred_def.get("secret_arn_env_var")
-            for cred_def in (self.business.required_credentials or {}).values()
-            if isinstance(cred_def, dict) and cred_def.get("secret_arn_env_var")
-        }
-        env_keys = sorted(
-            set(self._BASE_ENV_KEYS)
-            | {key for key in credential_env_keys if key}
-        )
-
-        return {
-            "cloudformation_templates": cloudformation_templates,
-            "stack_names": stack_names,
-            "stack_namespace_tokens": stack_tokens,
-            "opentofu_modules": modules_summary,
-            "opentofu_workspaces": workspaces_summary,
-            "environment_variables": env_keys,
-        }
+from erieiron_common.opentofu_helpers import OpenTofuException
+from erieiron_common.opentofu_utils import OpenTofuStackManager
 
 
 def execute(
@@ -850,82 +724,28 @@ def get_guidance_msg(config: SelfDriverConfig):
 
 
 def validate_infrastructure(config, normalized_changed):
-    impacted_modules: list[tuple[InfrastructureStackType, opentofu_utils.OpenTofuModuleEntry]] = []
+    impacted_modules: list[tuple[InfrastructureStackType, InfrastructureStack]] = []
     sandbox_root = config.sandbox_root_dir
-
-    for stack_type, module_entry in config.opentofu_modules.items():
-        try:
-            module_rel = module_entry.module_path.relative_to(sandbox_root)
-        except ValueError:
-            continue
-        module_rel_str = str(module_rel)
-        module_prefix = module_rel_str + ("/" if module_entry.module_path.is_dir() else "")
-        if any(
-            path == module_rel_str or path.startswith(module_prefix)
-            for path in normalized_changed
-        ):
-            impacted_modules.append((stack_type, module_entry))
-
-    if not impacted_modules:
-        return None
-
+    
     container_env = build_env(config)
-
-    for stack_type, module_entry in impacted_modules:
-        stack_config = config.opentofu_stack_configs.get(stack_type)
-        if not stack_config:
-            continue
-
-        tf_env = _build_opentofu_env(config, stack_config, container_env)
-
-        try:
-            subprocess.run(
-                ["tofu", "fmt", "-check"],
-                cwd=str(module_entry.workdir),
-                env=tf_env,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-        except subprocess.CalledProcessError as exc:
-            return BadPlan(textwrap.dedent(f"""
-                OpenTofu formatting failed for {stack_type.value} module.
-                stdout:
-                {exc.stdout or '<empty>'}
-
-                stderr:
-                {exc.stderr or '<empty>'}
-            """))
-
-        try:
-            subprocess.run(
-                ["tofu", "validate"],
-                cwd=str(module_entry.workdir),
-                env=tf_env,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-        except subprocess.CalledProcessError as exc:
-            return BadPlan(textwrap.dedent(f"""
-                OpenTofu validate failed for {stack_type.value} module.
-                stdout:
-                {exc.stdout or '<empty>'}
-
-                stderr:
-                {exc.stderr or '<empty>'}
-            """))
-
+    
+    for stack_type in InfrastructureStackType:
+        stack = InfrastructureStack.get(config.initiative, stack_type, config.env_type)
+        opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, container_env)
+        opentofu_stack_manager.validate_stack()
+    
     return None
 
 
 def validate_all_changed_files(config, normalized_changed, planning_data):
     """Validate all changed files using appropriate validators"""
     validation_errors = []
-
-    infra_error = validate_infrastructure(config, normalized_changed)
-    if infra_error:
-        return infra_error
+    
+    try:
+        validate_infrastructure(config, normalized_changed)
+    except Exception as e:
+        logging.exception(e)
+        validation_errors.append(e)
     
     # Build a lookup from file paths to their validator information
     validator_lookup = {}
@@ -1536,7 +1356,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
 
 
 def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
-    if AwsEnv.PRODUCTION.eq(config.aws_env):
+    if EnvironmentType.PRODUCTION.eq(config.env_type):
         domain_name = config.business.domain
     else:
         domain_name = config.initiative.domain
@@ -1547,7 +1367,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
     
     load_balancer_arn = None
-    for lb_arn, resource in get_physical_resources(config.get_stack_names(), config.aws_env, CloudformationResourceType.ELB_LOADBALANCER).items():
+    for lb_arn, resource in get_physical_resources(config.get_stack_names(), config.env_type, CloudformationResourceType.ELB_LOADBALANCER).items():
         if resource.get("ResourceStatus", "").endswith("DELETE_COMPLETE"):
             continue
         
@@ -1559,7 +1379,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         config.log(f"No Application Load Balancer found in stacks {config.get_stack_names()}; skipping DNS alias update")
         return
     
-    elbv2_client = boto3.client("elbv2", region_name=config.aws_env.get_aws_region())
+    elbv2_client = boto3.client("elbv2", region_name=config.env_type.get_aws_region())
     try:
         lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
         load_balancers = lb_resp.get("LoadBalancers", []) or []
@@ -1688,8 +1508,8 @@ def get_env_var_names(config: SelfDriverConfig) -> str:
 
 
 def build_env(config: SelfDriverConfig) -> dict:
-    aws_env = config.aws_env
-    aws_region = aws_env.get_aws_region()
+    env_type = config.env_type
+    aws_region = env_type.get_aws_region()
     
     aws_credentials = botocore.session.Session(
         profile=os.environ.get("AWS_PROFILE")
@@ -1697,7 +1517,7 @@ def build_env(config: SelfDriverConfig) -> dict:
     
     stack_foundation, stack_application = get_stacks(config)
     
-    if AwsEnv.PRODUCTION.eq(config.aws_env):
+    if EnvironmentType.PRODUCTION.eq(config.env_type):
         domain_name = config.business.domain
     else:
         domain_name = config.initiative.domain
@@ -1730,7 +1550,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         secret_arn_env_var = cred_def.get("secret_arn_env_var")
         secrent_arn = credential_manager.manage_credentials(
             config,
-            aws_env,
+            env_type,
             credential_service_name,
             cred_def
         )
@@ -1757,6 +1577,8 @@ def build_env_flags(env):
 
 
 def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
+    return []
+    
     s3 = aws_utils.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
@@ -1923,7 +1745,7 @@ def push_image_to_ecr(
         config: SelfDriverConfig,
         container_image_tag: str
 ):
-    region = config.aws_env.get_aws_region()
+    region = config.env_type.get_aws_region()
     ecr_client = boto3.client("ecr", region_name=region)
     account_id = aws_utils.client("sts").get_caller_identity()["Account"]
     
@@ -2041,18 +1863,18 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         container_env = build_env(
             config
         )
-
+        
         container_image_tag = build_iteration(
             config,
             container_env
         )
-
+        
         deployment_logs = deploy_iteration(
             config,
             container_env,
             container_image_tag
         )
-
+        
         execute_iteration(
             config,
             container_env,
@@ -2064,7 +1886,8 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         raise e
     except AgentBlocked as e:
         raise e
-    except opentofu_utils.OpenTofuException as e:
+    except OpenTofuException as e:
+        logging.exception(e)
         config.log(f"OpenTofu deployment error: {e}")
     except FailingTestException as e:
         config.log(f"Tests are failing.  **review sysout logs for details**")
@@ -2096,7 +1919,7 @@ def store_opentofu_logs(
         "deployment_window_start": datetime.fromtimestamp(deployment_start_epoch, tz=dt_timezone.utc).isoformat(),
         "stacks": deployment_logs,
     }
-
+    
     log_payload["exceptions"] = extract_exception(
         config,
         log_content="""
@@ -2108,7 +1931,7 @@ def store_opentofu_logs(
             payload=json.dumps(log_payload, indent=4, cls=ErieIronJSONEncoder)
         )
     )
-
+    
     config.current_iteration.iac_logs = log_payload
     config.current_iteration.save(update_fields=["cloudformation_logs"])
 
@@ -2345,7 +2168,7 @@ def deploy_iteration(
 def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outputs: dict):
     if not foundation_outputs:
         raise BadPlan("Foundation infrastructure stack lacks RDS outputs required for environment configuration")
-
+    
     rds_secret_arn = foundation_outputs.get("RdsMasterSecretArn")
     if not rds_secret_arn:
         raise BadPlan("Infrastructure stack lacks an output named RdsMasterSecretArn")
@@ -2637,7 +2460,7 @@ def evaluate_iteration(
     
     if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) and not stack_errors and stack_logs:
         raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
-
+    
     allow_goal_achieved, goal_achieved_reason = compute_goal_achievement_gate(
         config.task_type,
         config.current_iteration.version_number,
@@ -2853,7 +2676,7 @@ def _wait_for_ses_dkim_success(
     Raises AgentBlocked with context on timeout or terminal DKIM failure.
     """
     poll_interval_seconds = max(int(poll_interval_seconds or 5), 5)
-    region = (config.aws_env.get_aws_region() or "us-west-2").strip()
+    region = (config.env_type.get_aws_region() or "us-west-2").strip()
     
     config.log(
         f"Waiting for SES DKIM SUCCESS for {domain_name} in region {region} "
@@ -2943,16 +2766,15 @@ def _wait_for_ses_dkim_success(
         time.sleep(poll_interval_seconds)
 
 
-
 def build_opentofu_plan_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
     iteration_to_modify = config.iteration_to_modify
     if not iteration_to_modify:
         return []
-
+    
     iteration_logs = common.get(iteration_to_modify, ["cloudformation_logs", "stacks"])
     if not isinstance(iteration_logs, Mapping) or not iteration_logs:
         return []
-
+    
     stack_summaries: list[dict[str, Any]] = []
     for stack_name, stack_log in iteration_logs.items():
         if not isinstance(stack_log, Mapping):
@@ -2964,10 +2786,10 @@ def build_opentofu_plan_context_messages(config: SelfDriverConfig, title=None) -
             "stack": stack_name,
             "plan_summary": plan_summary,
         })
-
+    
     if not stack_summaries:
         return []
-
+    
     return LlmMessage.user_from_data(
         title or "OpenTofu Plan Summary",
         {"stacks": stack_summaries}
@@ -3462,7 +3284,7 @@ def write_task_tdd_test(config: SelfDriverConfig):
     }
     if task.debug_steps:
         goal_data['debug_steps'] = task.debug_steps
-        
+    
     test_file_path = write_test(
         config,
         description="Write initial test",
@@ -4624,12 +4446,12 @@ def get_goal_msg(config, description):
     previous_logs = {}
     if config.iteration_to_modify:
         previous_logs = common.get(config.iteration_to_modify, ["cloudformation_logs", "stacks"]) or {}
-
+    
     has_deployment_error = any(
         isinstance(stack_log, Mapping) and stack_log.get("error")
         for stack_log in previous_logs.values()
     )
-
+    
     if has_deployment_error:
         goal = textwrap.dedent(f"""
             The previous iteration failed at the OpenTofu deployment stage.   
@@ -4661,7 +4483,6 @@ def get_goal_msg(config, description):
         """)
     
     return LlmMessage.user_from_data(description, d)
-
 
 
 def get_relevant_code_files(
@@ -4890,56 +4711,20 @@ def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, Infrastru
     stack_application = InfrastructureStack.get(
         config.initiative,
         InfrastructureStackType.APPLICATION,
-        config.aws_env
+        config.env_type
     )
-
+    
     stack_foundation = InfrastructureStack.get(
         config.initiative,
         InfrastructureStackType.FOUNDATION,
-        config.aws_env
+        config.env_type
     )
-
-    refresh = getattr(config, "_refresh_opentofu_state", None)
-    if callable(refresh):
-        refresh(
-            {
-                InfrastructureStackType.FOUNDATION: stack_foundation,
-                InfrastructureStackType.APPLICATION: stack_application,
-            }
-        )
-
+    
     return stack_foundation, stack_application
 
 
-def _build_opentofu_env(
-        config: SelfDriverConfig,
-        stack_config: opentofu_utils.OpenTofuStackConfig,
-        container_env: Mapping[str, Any]
-) -> dict[str, str]:
-    env: dict[str, str] = {
-        key: str(value)
-        for key, value in os.environ.items()
-    }
-    for key, value in container_env.items():
-        if value is None:
-            continue
-        env[str(key)] = str(value)
-
-    tf_data_dir = stack_config.workspace_dir / ".terraform-data"
-    tf_plugin_cache = stack_config.workspace_dir / "plugin-cache"
-    tf_data_dir.mkdir(parents=True, exist_ok=True)
-    tf_plugin_cache.mkdir(parents=True, exist_ok=True)
-
-    env.setdefault("TF_IN_AUTOMATION", "true")
-    env.setdefault("TF_INPUT", "false")
-    env["TF_DATA_DIR"] = str(tf_data_dir)
-    env.setdefault("TF_PLUGIN_CACHE_DIR", str(tf_plugin_cache))
-    env["TF_WORKSPACE"] = stack_config.workspace_name
-    return env
-
-
 def check_ses_quota(config: SelfDriverConfig):
-    ses_client = boto3.client("ses", region_name=config.aws_env.get_aws_region())
+    ses_client = boto3.client("ses", region_name=config.env_type.get_aws_region())
     quota = ses_client.get_send_quota()
     sent = float(quota.get("SentLast24Hours", 0))
     max_send = float(quota.get("Max24HourSend", 0))
@@ -4961,7 +4746,7 @@ def manage_ses_domain_settings(
     domain_name = str(tfvars_payload.get("DomainName") or "").strip()
     if not domain_name:
         return
-
+    
     check_ses_quota(config)
     _wait_for_ses_dkim_success(config, domain_name)
 
@@ -4976,115 +4761,83 @@ def deploy_opentofu_stack(
         lambda_datas: list | None = None,
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    stack_config = config.opentofu_stack_configs.get(stack_type)
-    if not stack_config:
-        raise AgentBlocked(json.dumps({
-            "description": "Missing OpenTofu workspace configuration",
-            "stack_type": stack_type.value
-        }, indent=4))
-
-    module_entry = stack_config.module
-    if not getattr(module_entry, "exists", False):
-        raise AgentBlocked(json.dumps({
-            "description": "OpenTofu module has no configuration files",
-            "stack_type": stack_type.value,
-            "module_directory": str(module_entry.module_path),
-            "hint": "Create the Terraform files (e.g., main.tf) for this stack before running plan/apply."
-        }, indent=4))
-
+    stack = InfrastructureStack.get(
+        config.initiative,
+        stack_type,
+        config.env_type
+    )
+    
+    opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, container_env)
+    
     tfvars_payload = build_tfvars_payload(
         config,
-        stack_type=stack_type,
+        stack,
         container_env=container_env,
         web_container_image=web_container_image,
         ecr_arn=ecr_arn,
         lambda_datas=lambda_datas,
         previous_stack_outputs=previous_stack_outputs
     )
-
-    tfvars_path = opentofu_utils.write_tfvars_file(stack_config, tfvars_payload)
-    tf_env = _build_opentofu_env(config, stack_config, container_env)
-
-    plan_output_path = stack_config.workspace_dir / "current.plan"
-    run_results: list[opentofu_log_utils.OpenTofuRunResult] = []
+    
     plan_summary: Mapping[str, Any] | None = None
     outputs: dict[str, Any] = {}
-
-    def _record(stage: str, result: opentofu_utils.OpenTofuCommandResult) -> None:
-        run_results.append(
-            opentofu_log_utils.OpenTofuRunResult(
-                stage=stage,
-                command=result.command,
-                returncode=result.returncode,
-                started_at=result.started_at,
-                completed_at=result.completed_at,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                extra=result.extra,
-            )
-        )
-
-    current_stage = "init"
+    
     try:
-        init_result = opentofu_utils.init_workspace(
-            stack_config,
-            env=tf_env,
+        init_result = opentofu_stack_manager.init_workspace()
+        
+        tfvars_path = opentofu_stack_manager.write_tfvars_file(
+            tfvars_payload
         )
-        _record(current_stage, init_result)
-
-        current_stage = "plan"
-        plan_result = opentofu_utils.plan(
-            stack_config,
+        
+        plan_output_path = opentofu_stack_manager.get_workspace_dir() / "current.plan"
+        
+        plan_result = opentofu_stack_manager.plan(
             var_files=[tfvars_path],
-            env=tf_env,
             plan_output_path=plan_output_path,
         )
-        _record(current_stage, plan_result)
         plan_summary = plan_result.extra.get("plan_change_summary")
-
-        current_stage = "apply"
-        apply_result = opentofu_utils.apply(
-            stack_config,
-            env=tf_env,
-            plan_path=plan_output_path,
-        )
-        _record(current_stage, apply_result)
-
-        outputs_raw = opentofu_utils.output_json(
-            stack_config,
-            env=tf_env,
-        )
-        outputs = opentofu_utils.normalize_outputs(outputs_raw)
-
+        
+        apply_result = opentofu_stack_manager.apply(plan_path=plan_output_path)
+        
+        outputs_raw = opentofu_stack_manager.output_json()
+        outputs = opentofu_stack_manager.normalize_outputs(outputs_raw)
+        
         manage_ses_domain_settings(config, tfvars_payload)
-
+        
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
             stack_type=stack_type.value,
             plan_summary=plan_summary,
-            results=[result.to_dict() for result in run_results],
+            results=[result.to_dict() for result in opentofu_stack_manager.run_results],
             outputs=outputs,
             tfvars=tfvars_payload,
         )
-
+        
         config.log(json.dumps(log_payload, indent=2, default=str))
         return outputs, log_payload
     except opentofu_utils.OpenTofuCommandError as exc:
-        _record(current_stage, exc.result)
         error_payload = {
             "message": str(exc),
             "stderr": exc.result.stderr,
             "stdout": exc.result.stdout,
             "command": " ".join(exc.result.command),
         }
+        
+        opentofu_stack_manager.record(
+            opentofu_stack_manager.stage,
+            exc.result
+        )
+        
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
             stack_type=stack_type.value,
             plan_summary=plan_summary,
-            results=[result.to_dict() for result in run_results],
+            results=[result.to_dict() for result in opentofu_stack_manager.run_results],
             outputs=outputs,
             tfvars=tfvars_payload,
             error=error_payload,
         )
+        
         config.log(json.dumps(log_payload, indent=2, default=str))
+        
         raise AgentBlocked(json.dumps({
             "description": f"OpenTofu command failed for {stack_type.value}",
             **error_payload,
@@ -5093,17 +4846,18 @@ def deploy_opentofu_stack(
 
 def build_tfvars_payload(
         config: SelfDriverConfig,
+        stack: InfrastructureStack,
         *,
-        stack_type: InfrastructureStackType,
         container_env: dict,
         web_container_image: str | None,
         ecr_arn: str | None,
         lambda_datas: list | None,
         previous_stack_outputs: dict | None = None
 ) -> dict[str, Any]:
-    module_variables = config.opentofu_module_variables.get(stack_type, {})
+    stack_type = InfrastructureStackType(stack.stack_type)
+    stack_variables = OpenTofuStackManager.get_stack_variables(stack, config.sandbox_root_dir)
     forbidden_variables = {"DBName", "DBPassword"}
-    forbidden_in_module = forbidden_variables.intersection(module_variables.keys())
+    forbidden_in_module = forbidden_variables.intersection(stack_variables.keys())
     if forbidden_in_module:
         raise BadPlan(
             json.dumps({
@@ -5114,26 +4868,26 @@ def build_tfvars_payload(
             }, indent=4),
             config.current_iteration.planning_json
         )
-
+    
     stack_foundation, stack_application = get_stacks(config)
-    aws_env = config.aws_env
-    secrets_key = config.business.get_secrets_root_key(aws_env)
-
+    env_type = config.env_type
+    secrets_key = config.business.get_secrets_root_key(env_type)
+    
     developer_cidr = common.get_ip_address()
     shared_vpc = aws_utils.get_shared_vpc()
-
+    
     payload: dict[str, Any] = {
         "StackIdentifier": stack_application.stack_namespace_token,
         "FoundationStackIdentifier": stack_foundation.stack_namespace_token,
         "ClientIpForRemoteAccess": developer_cidr,
-        "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
+        "DeletePolicy": "Retain" if EnvironmentType.PRODUCTION.eq(env_type) else "Delete",
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         **get_admin_credentials(
-            aws_env,
+            env_type,
             secrets_key
         )
     }
-
+    
     if previous_stack_outputs:
         payload.update({
             **previous_stack_outputs,
@@ -5142,13 +4896,13 @@ def build_tfvars_payload(
             "RdsEndpointPort": previous_stack_outputs.get("RdsInstancePort"),
             "DatabaseName": previous_stack_outputs.get("RdsInstanceDBName"),
         })
-
+    
     if ecr_arn:
         payload["ECRRepositoryArn"] = ecr_arn
-
+    
     if web_container_image:
         payload["WebContainerImage"] = web_container_image
-
+    
     business = config.business
     if business.web_container_cpu is not None:
         payload["WebContainerCpu"] = business.web_container_cpu
@@ -5156,8 +4910,8 @@ def build_tfvars_payload(
         payload["WebContainerMemory"] = business.web_container_memory
     if business.web_desired_count is not None:
         payload["WebDesiredCount"] = business.web_desired_count
-
-    domain_name = config.business.domain if AwsEnv.PRODUCTION.eq(config.aws_env) else config.initiative.domain
+    
+    domain_name = config.business.domain if EnvironmentType.PRODUCTION.eq(config.env_type) else config.initiative.domain
     if not domain_name:
         raise AgentBlocked(
             json.dumps({
@@ -5165,11 +4919,11 @@ def build_tfvars_payload(
                 "stack_type": stack_type.value
             }, indent=4)
         )
-
+    
     payload["DomainName"] = domain_name
     payload["DomainHostedZoneId"] = config.business.route53_hosted_zone_id
     payload["AlbCertificateArn"] = config.business.domain_certificate_arn
-
+    
     payload["VpcId"] = shared_vpc.vpc_id
     if shared_vpc.cidr_block:
         payload.setdefault("VpcCidr", shared_vpc.cidr_block)
@@ -5180,31 +4934,31 @@ def build_tfvars_payload(
         payload["PrivateSubnet1Id"] = shared_vpc.private_subnet_ids[0]
         payload["PrivateSubnet2Id"] = shared_vpc.private_subnet_ids[1]
     payload["SecurityGroupId"] = aws_utils.SHARED_RDS_SECURITY_GROUP_ID
-
+    
     for lambda_data in lambda_datas or []:
         param_name = lambda_data.get('s3_key_param')
         param_value = lambda_data.get('s3_key_name')
         if param_name and param_value:
             payload[param_name] = param_value
-
+    
     planning_required_creds = config.business.required_credentials or {}
     missing_secret_params: list[str] = []
     for svc_spec in planning_required_creds.values():
         variable_name = (
-            svc_spec.get("secret_arn_variable")
-            or svc_spec.get("secret_arn_cfn_parameter")
+                svc_spec.get("secret_arn_variable")
+                or svc_spec.get("secret_arn_cfn_parameter")
         )
         envvar_name = svc_spec.get("secret_arn_env_var")
         if not variable_name:
             continue
-        if variable_name not in module_variables:
+        if variable_name not in stack_variables:
             continue
         arn_value = container_env.get(envvar_name) if envvar_name else None
         if arn_value:
             payload[variable_name] = arn_value
         else:
             missing_secret_params.append(variable_name)
-
+    
     if missing_secret_params:
         raise BadPlan(json.dumps({
             "description": "Missing required secret ARN variables for Terraform module",
@@ -5213,26 +4967,17 @@ def build_tfvars_payload(
             "available_env_vars": container_env,
             "hint": "Ensure credential_manager returned the ARN and that the module variable names align with business.required_credentials"
         }, indent=4), config.current_iteration.planning_json)
-
+    
     provided_values = {
         key: value
         for key, value in payload.items()
         if value not in [None, ""]
     }
-
-    module_variable_names = set(module_variables.keys())
+    
+    module_variable_names = set(stack_variables.keys())
     if module_variable_names:
-        undefined_variables = sorted(set(provided_values) - module_variable_names)
-        if undefined_variables:
-            raise BadPlan(json.dumps({
-                "description": "Terraform module is missing variable declarations required by the automation",
-                "stack_type": stack_type.value,
-                "missing_variable_declarations": undefined_variables,
-                "hint": "Update the module's variable blocks to accept these values or adjust the automation to stop providing them."
-            }, indent=4), config.current_iteration.planning_json)
-
-        missing_variables = opentofu_utils.validate_required_variables(
-            module_variables,
+        missing_variables = OpenTofuStackManager.validate_required_variables(
+            stack_variables,
             provided_values
         )
         if missing_variables:
@@ -5241,7 +4986,7 @@ def build_tfvars_payload(
                 "stack_type": stack_type.value,
                 "missing_variables": sorted(missing_variables)
             }, indent=4), config.current_iteration.planning_json)
-
+    
     return provided_values
 
 
@@ -5346,7 +5091,7 @@ def empty_stack_buckets(
         config: SelfDriverConfig, *,
         delete_bucket=True
 ):
-    if not AwsEnv.DEV.eq(config.aws_env):
+    if not EnvironmentType.DEV.eq(config.env_type):
         return
     
     bucket_definitions = get_stack_buckets(config)

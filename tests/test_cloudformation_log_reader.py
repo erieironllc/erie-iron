@@ -2,7 +2,7 @@ import datetime
 import time
 
 from erieiron_common import cloudformation_log_reader, common
-from erieiron_common.enums import AwsEnv
+from erieiron_common.enums import EnvironmentType
 
 
 def test_read_cloudformation_stack_activity_returns_full_sections(monkeypatch):
@@ -45,7 +45,7 @@ def test_read_cloudformation_stack_activity_returns_full_sections(monkeypatch):
     )
 
     rendered = cloudformation_log_reader.read_cloudformation_stack_activity(
-        AwsEnv.DEV,
+        EnvironmentType.DEV,
         "sample-stack",
         time.time()
     )

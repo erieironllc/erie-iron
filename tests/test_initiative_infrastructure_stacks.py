@@ -5,7 +5,7 @@ from django.urls import reverse
 
 from erieiron_autonomous_agent.enums import TaskStatus, TaskType
 from erieiron_autonomous_agent.models import Business, Initiative, InfrastructureStack, Task
-from erieiron_common.enums import AwsEnv, BusinessIdeaSource, InfrastructureStackType, Level
+from erieiron_common.enums import EnvironmentType, BusinessIdeaSource, InfrastructureStackType, Level
 
 
 @pytest.mark.django_db
@@ -52,7 +52,7 @@ def test_infrastructure_stacks_tab_lists_stacks(client):
         stack_namespace_token="stk1a",
         stack_name="stk1a-init-application",
         stack_arn=json.dumps(tofu_metadata, sort_keys=True),
-        aws_env=AwsEnv.DEV.value,
+        env_type=EnvironmentType.DEV.value,
         stack_type=InfrastructureStackType.APPLICATION.value,
     )
     stack_with_cf = InfrastructureStack.objects.create(
@@ -61,7 +61,7 @@ def test_infrastructure_stacks_tab_lists_stacks(client):
         stack_namespace_token="stk1f",
         stack_name="stk1f-init-foundation",
         stack_arn="arn:aws:cloudformation:us-west-2:123456789012:stack/stk1f-init-foundation/abc",
-        aws_env=AwsEnv.DEV.value,
+        env_type=EnvironmentType.DEV.value,
         stack_type=InfrastructureStackType.FOUNDATION.value,
     )
 

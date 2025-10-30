@@ -61,4 +61,4 @@ Treat every IAM warning or error emitted by OpenTofu or CodeBuild as a likely ro
 - Pay special attention to IAM diffs—role replacements can trigger service disruptions if trust or attached policies change.
 
 ### Governance Decision Gate (optional)
-If organizational policy forbids certain IAM changes, emit `blocked` with `category: "permissions"` and include the exact policy JSON so it can be applied out of band. Otherwise, follow this contract and keep IAM changes inside the appropriate OpenTofu stack (`infrastructure.yaml` for foundation roles, `infrastructure-application.yaml` for delivery roles).
+If organizational policy forbids certain IAM changes, emit `blocked` with `category: "permissions"` and include the exact policy JSON so it can be applied out of band. Otherwise, follow this contract and keep IAM changes inside the appropriate OpenTofu stack (`opentofu/foundation/stack.tf` for foundation roles, `opentofu/application/stack.tf` for delivery roles).

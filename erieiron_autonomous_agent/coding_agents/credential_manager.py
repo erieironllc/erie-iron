@@ -6,7 +6,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import AgentBlocked, SelfDriverConfig
 from erieiron_autonomous_agent.models import Business, Task
 from erieiron_common import aws_utils, common
-from erieiron_common.enums import CredentialService, AwsEnv
+from erieiron_common.enums import CredentialService, EnvironmentType
 
 DISALLOWED_RDS_PASSWORD_CHARS = set('/@" ')
 ALLOWED_RDS_SPECIALS = ''.join(ch for ch in string.punctuation if ch not in DISALLOWED_RDS_PASSWORD_CHARS)
@@ -47,7 +47,7 @@ def get_existing_service_schema_desc() -> str:
 
 def manage_credentials(
         config: SelfDriverConfig,
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         credential_service_name: str,
         cred_def: dict
 ) -> str:
@@ -68,7 +68,7 @@ def manage_credentials(
 Need a human to set this up
 
 Business:  {business.name} ({business.id})
-Env:  {aws_env}
+Env:  {env_type}
 
 Secret Def:
 {json.dumps(cred_def, indent=4)}
@@ -76,7 +76,7 @@ Secret Def:
     
     aws_secret_key, secret_dict = get_credential_secret(
         business,
-        aws_env,
+        env_type,
         task,
         credential_service_name
     )
@@ -121,13 +121,13 @@ Secret Def:
 
 def get_aws_role_name(
         config: SelfDriverConfig,
-        env: AwsEnv
+        env: EnvironmentType
 ):
     business = config.business
     task = config.task
     
     role_name = f"{business.service_token}-{env}"
-    if AwsEnv.PRODUCTION.DEV.eq(env):
+    if EnvironmentType.PRODUCTION.DEV.eq(env):
         chars_avail = 63 - len(role_name)
         if chars_avail > 5:
             task_suffix = f"-{task.id[0:chars_avail]}"
@@ -143,14 +143,14 @@ def get_aws_role_name(
 
 def get_credential_secret(
         business: Business,
-        aws_env: AwsEnv,
+        env_type: EnvironmentType,
         task: Task,
         credential_service_name: str
 ):
     aws_secret_key = [
-        business.get_secrets_root_key(aws_env)
+        business.get_secrets_root_key(env_type)
     ]
-    if aws_env not in [AwsEnv.PRODUCTION]:
+    if env_type not in [EnvironmentType.PRODUCTION]:
         aws_secret_key.append(task.id)
     aws_secret_key.append(credential_service_name)
     

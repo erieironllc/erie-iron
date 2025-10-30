@@ -46,6 +46,6 @@ This section is authoritative. All other sections must not restate these rules.
 
 ### Examples:
   **Stripe API Key:**
-  - Parameter in `infrastructure-application.yaml`: `StripeSecretsArn`
+  - Parameter in `opentofu/application/stack.tf`: `StripeSecretsArn`
   - OpenTofu grants access to the secret ARN for the relevant Lambda functions
   - Runtime code fetches the Stripe API key at invocation time securely by fetching the Strip API key secret via the key defined in StripeSecretsArn 

@@ -44,7 +44,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils, domain_manager, cloudformation_utils, cloudformation_log_reader, ErieIronJSONEncoder
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda
 from erieiron_common.cloudformation_utils import get_stack_outputs, CloudFormationStackObsolete, get_stack, cloudformation_wait, get_stack_status, STACK_STATUS_NO_STACK, is_stack_exists, is_stack_operational, get_stack_statuses, extract_cloudformation_params, prepare_stack_for_update, get_resource_configs, CloudformationResourceType, get_physical_resources, CloudFormationException
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, AwsEnv, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -1351,7 +1351,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
 
 
 def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
-    if AwsEnv.PRODUCTION.eq(config.aws_env):
+    if EnvironmentType.PRODUCTION.eq(config.env_type):
         domain_name = config.business.domain
     else:
         domain_name = config.initiative.domain
@@ -1362,7 +1362,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
     
     load_balancer_arn = None
-    for lb_arn, resource in get_physical_resources(config.get_stack_names(), config.aws_env, CloudformationResourceType.ELB_LOADBALANCER).items():
+    for lb_arn, resource in get_physical_resources(config.get_stack_names(), config.env_type, CloudformationResourceType.ELB_LOADBALANCER).items():
         if resource.get("ResourceStatus", "").endswith("DELETE_COMPLETE"):
             continue
         
@@ -1374,7 +1374,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         config.log(f"No Application Load Balancer found in stacks {config.get_stack_names()}; skipping DNS alias update")
         return
     
-    elbv2_client = boto3.client("elbv2", region_name=config.aws_env.get_aws_region())
+    elbv2_client = boto3.client("elbv2", region_name=config.env_type.get_aws_region())
     try:
         lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
         load_balancers = lb_resp.get("LoadBalancers", []) or []
@@ -1503,8 +1503,8 @@ def get_env_var_names(config: SelfDriverConfig) -> str:
 
 
 def build_env(config: SelfDriverConfig) -> dict:
-    aws_env = config.aws_env
-    aws_region = aws_env.get_aws_region()
+    env_type = config.env_type
+    aws_region = env_type.get_aws_region()
     
     aws_credentials = botocore.session.Session(
         profile=os.environ.get("AWS_PROFILE")
@@ -1512,7 +1512,7 @@ def build_env(config: SelfDriverConfig) -> dict:
     
     stack_foundation, stack_application = get_stacks(config)
     
-    if AwsEnv.PRODUCTION.eq(config.aws_env):
+    if EnvironmentType.PRODUCTION.eq(config.env_type):
         domain_name = config.business.domain
     else:
         domain_name = config.initiative.domain
@@ -1545,7 +1545,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         secret_arn_env_var = cred_def.get("secret_arn_env_var")
         secrent_arn = credential_manager.manage_credentials(
             config,
-            aws_env,
+            env_type,
             credential_service_name,
             cred_def
         )
@@ -1738,7 +1738,7 @@ def push_image_to_ecr(
         config: SelfDriverConfig,
         container_image_tag: str
 ):
-    region = config.aws_env.get_aws_region()
+    region = config.env_type.get_aws_region()
     ecr_client = boto3.client("ecr", region_name=region)
     account_id = aws_utils.client("sts").get_caller_identity()["Account"]
     
@@ -1903,7 +1903,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
 
 def extract_cloudformation_logs(config: SelfDriverConfig, logging_start_epoch: int):
     cloudformation_logs = cloudformation_log_reader.read_cloudformation_stack_activity(
-        config.aws_env,
+        config.env_type,
         config.get_stack_names(),
         logging_start_epoch
     )
@@ -2413,10 +2413,10 @@ def evaluate_iteration(
             - Base this determination only on the current logs—do not consider prior iterations.
         """)
     
-    aws_env = config.aws_env
+    env_type = config.env_type
     stack_operational = is_stack_operational(
         config.get_stack_names(),
-        config.aws_env
+        config.env_type
     )
     
     if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) and stack_operational:
@@ -2462,7 +2462,7 @@ def evaluate_iteration(
             LlmMessage.user_from_data(
                 "Cloudformation Status",
                 {
-                    "stack_status": get_stack_statuses(config.get_stack_names(), config.aws_env),
+                    "stack_status": get_stack_statuses(config.get_stack_names(), config.env_type),
                     "allow_goal_achieved": allow_goal_achieved,
                     "allow_goal_achieved_justification": goal_achieved_reason
                 }
@@ -2642,7 +2642,7 @@ def _wait_for_ses_dkim_success(
     Raises AgentBlocked with context on timeout or terminal DKIM failure.
     """
     poll_interval_seconds = max(int(poll_interval_seconds or 5), 5)
-    region = (config.aws_env.get_aws_region() or "us-west-2").strip()
+    region = (config.env_type.get_aws_region() or "us-west-2").strip()
     
     config.log(
         f"Waiting for SES DKIM SUCCESS for {domain_name} in region {region} "
@@ -2736,7 +2736,7 @@ def validate_cloudformation_template(
         config: SelfDriverConfig,
         template_body: str
 ):
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
+    cf_client = boto3.client("cloudformation", region_name=config.env_type.get_aws_region())
     config.log("Validating CloudFormation template before deployment")
     try:
         cf_client.validate_template(TemplateBody=template_body)
@@ -2760,7 +2760,7 @@ def push_cloudformation(
         lambda_datas,
         container_env: dict
 ):
-    cf_client = boto3.client("cloudformation", region_name=config.aws_env.get_aws_region())
+    cf_client = boto3.client("cloudformation", region_name=config.env_type.get_aws_region())
     cfn_file = config.sandbox_root_dir / stack.get_template_name()
     stack_name = stack.stack_name
     
@@ -2783,10 +2783,10 @@ def push_cloudformation(
     #     cfn_file.read_text()
     # )
     
-    config.log(f"preparing {stack_name} for push to {config.aws_env.get_aws_region()} with {cfn_file.name}")
+    config.log(f"preparing {stack_name} for push to {config.env_type.get_aws_region()} with {cfn_file.name}")
     prepare_stack_for_update(
         stack_name=stack_name,
-        aws_env=config.aws_env
+        env_type=config.env_type
     )
     
     disable_lambda_concurrency(
@@ -2794,8 +2794,8 @@ def push_cloudformation(
         stack_name
     )
     
-    config.log(f"pushing {stack_name} to {config.aws_env.get_aws_region()} with {cfn_file.name} ")
-    if get_stack_status(stack_name, config.aws_env) not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
+    config.log(f"pushing {stack_name} to {config.env_type.get_aws_region()} with {cfn_file.name} ")
+    if get_stack_status(stack_name, config.env_type) not in ["DELETE_COMPLETE", STACK_STATUS_NO_STACK]:
         stack_arn = get_stack(stack_name, cf_client).get("StackId")
         config.log(f"Updating existing stack: {stack_name}\n")
         try:
@@ -2826,7 +2826,7 @@ def push_cloudformation(
     
     cloudformation_wait(
         stack_name,
-        config.aws_env,
+        config.env_type,
         throw_on_fail=True
     )
     
@@ -2836,7 +2836,7 @@ def push_cloudformation(
         cfn_file
     )
     
-    config.log(f"CloudFormation stack {stack_name} deployed successfully to {config.aws_env}")
+    config.log(f"CloudFormation stack {stack_name} deployed successfully to {config.env_type}")
     
     return stack_arn
 
@@ -4611,8 +4611,8 @@ def get_goal_msg(config, description):
         """
     test_errors = config.iteration_to_modify.get_unit_test_errors() if config.iteration_to_modify else []
     
-    if is_stack_exists(config.get_stack_names(), config.aws_env):
-        if not is_stack_operational(config.get_stack_names(), config.aws_env):
+    if is_stack_exists(config.get_stack_names(), config.env_type):
+        if not is_stack_operational(config.get_stack_names(), config.env_type):
             goal = textwrap.dedent(f"""
                 The previous iteration failed at the deployment stage.   
 
@@ -4888,13 +4888,13 @@ def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, Infrastru
     stack_application = InfrastructureStack.get(
         config.initiative,
         InfrastructureStackType.APPLICATION,
-        config.aws_env
+        config.env_type
     )
     
     stack_foundation = InfrastructureStack.get(
         config.initiative,
         InfrastructureStackType.FOUNDATION,
-        config.aws_env
+        config.env_type
     )
     
     return stack_foundation, stack_application
@@ -4915,7 +4915,7 @@ def deploy_cloudformation_stack(
         try:
             start_time = time.time()
             try:
-                stack = InfrastructureStack.get(config.initiative, stack_type, config.aws_env)
+                stack = InfrastructureStack.get(config.initiative, stack_type, config.env_type)
                 stack_name = stack.stack_name
                 config.log(f"\n\n\n\n======== Begining cloudformation deploy for {stack_name}.  Attempt {i + 1}")
                 
@@ -4937,9 +4937,9 @@ def deploy_cloudformation_stack(
             
             config.log(f"======== COMPLETED cloudformation deploy for {stack_name} in {push_time_mins:.1f}mins\n\n\n\n")
             
-            return get_stack_outputs(stack_name, config.aws_env)
+            return get_stack_outputs(stack_name, config.env_type)
         except CloudFormationStackObsolete as deleting_exc:
-            if AwsEnv.PRODUCTION.eq(config.aws_env):
+            if EnvironmentType.PRODUCTION.eq(config.env_type):
                 raise deleting_exc
             
             stack = stack.tombstone()
@@ -4962,7 +4962,7 @@ def deploy_cloudformation_stack(
 def check_ses_quota(config: SelfDriverConfig):
     # Check SES send quota before proceeding
     import boto3
-    ses_client = boto3.client("ses", region_name=config.aws_env.get_aws_region())
+    ses_client = boto3.client("ses", region_name=config.env_type.get_aws_region())
     quota = ses_client.get_send_quota()
     sent = float(quota.get("SentLast24Hours", 0))
     max_send = float(quota.get("Max24HourSend", 0))
@@ -5008,7 +5008,7 @@ def manage_ses_domain_settings(
 
 
 def disable_lambda_concurrency(config: SelfDriverConfig, stack_name: str):
-    lambda_client = boto3.client("lambda", region_name=config.aws_env.get_aws_region())
+    lambda_client = boto3.client("lambda", region_name=config.env_type.get_aws_region())
     
     for lambda_data in get_stack_lambdas(config):
         function_name = lambda_data['lambda_name']
@@ -5054,8 +5054,8 @@ def get_stack_parameters(
     - Resolves the RDS Secret ARN from the provided envvar->ARN pairs and planner output
     """
     self_driving_task = config.self_driving_task
-    aws_env = config.aws_env
-    secrets_key = config.business.get_secrets_root_key(aws_env)
+    env_type = config.env_type
+    secrets_key = config.business.get_secrets_root_key(env_type)
     
     required_parameters, parameters_metadata = extract_cloudformation_params(
         cfn_file
@@ -5073,7 +5073,7 @@ def get_stack_parameters(
             config.current_iteration.planning_json
         )
     
-    aws_region = aws_env.get_aws_region()
+    aws_region = env_type.get_aws_region()
     
     developer_cidr = common.get_ip_address()
     shared_vpc = aws_utils.get_shared_vpc()
@@ -5083,12 +5083,12 @@ def get_stack_parameters(
         "StackIdentifier": stack_application.stack_namespace_token,
         "FoundationStackIdentifier": stack_foundation.stack_namespace_token,
         "ClientIpForRemoteAccess": developer_cidr,
-        "DeletePolicy": "Retain" if AwsEnv.PRODUCTION.eq(aws_env) else "Delete",
+        "DeletePolicy": "Retain" if EnvironmentType.PRODUCTION.eq(env_type) else "Delete",
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         
         # Intentionally DO NOT include legacy username/password params; use ARN pattern instead
         **get_admin_credentials(
-            aws_env,
+            env_type,
             secrets_key
         )
     }
@@ -5117,7 +5117,7 @@ def get_stack_parameters(
     if business.web_desired_count:
         known_params["WebDesiredCount"] = business.web_desired_count
     
-    if AwsEnv.PRODUCTION.eq(config.aws_env):
+    if EnvironmentType.PRODUCTION.eq(config.env_type):
         domain_name = config.business.domain
     else:
         domain_name = config.initiative.domain
@@ -5163,7 +5163,7 @@ def get_stack_parameters(
             known_params[param_name] = arn
     
     # Optionally pull additional params from a shared secret JSON at `secrets_key`
-    aws_secrets_client = boto3.client("secretsmanager", region_name=aws_env.get_aws_region())
+    aws_secrets_client = boto3.client("secretsmanager", region_name=env_type.get_aws_region())
     try:
         response = aws_secrets_client.get_secret_value(SecretId=secrets_key)
         secret_params = json.loads(response.get("SecretString", "{}") or "{}")
@@ -5359,7 +5359,7 @@ def empty_stack_buckets(
         config: SelfDriverConfig, *,
         delete_bucket=True
 ):
-    if not AwsEnv.DEV.eq(config.aws_env):
+    if not EnvironmentType.DEV.eq(config.env_type):
         return
     
     bucket_definitions = get_stack_buckets(config)

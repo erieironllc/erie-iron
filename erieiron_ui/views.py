@@ -37,7 +37,7 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, AwsEnv, InitiativeType, InitiativeNames
+from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
@@ -678,7 +678,7 @@ def _tab_context_infrastructure_stacks(business: Business) -> dict:
         business.infrastructurestack_set
         .select_related("initiative")
         .all()
-        .order_by("aws_env", "stack_type", "created_timestamp")
+        .order_by("env_type", "stack_type", "created_timestamp")
     )
     stack_entries = _build_infrastructure_stack_entries(
         stacks_qs,
@@ -1046,12 +1046,12 @@ def _build_infrastructure_stack_entries(
         *,
         scope_label_fn: Callable[[InfrastructureStack], str] | None = None,
 ) -> list[dict]:
-    default_region = AwsEnv.DEV.get_aws_region()
+    default_region = EnvironmentType.DEV.get_aws_region()
     entries: list[dict] = []
     
     for stack in stacks:
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
-        env_enum = AwsEnv.valid_or(getattr(stack, "aws_env", None), None)
+        env_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
         
         metadata = stack.get_iac_state_metadata() if hasattr(stack, "get_iac_state_metadata") else {}
@@ -1100,8 +1100,8 @@ def _build_infrastructure_stack_entries(
                 "stack_name": stack.stack_name,
                 "stack_type_label": stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown"),
                 "stack_type_value": stack.stack_type,
-                "aws_env_label": env_enum.label() if env_enum else (stack.aws_env or "Unknown"),
-                "aws_env_value": stack.aws_env,
+                "aws_env_label": env_enum.label() if env_enum else (stack.env_type or "Unknown"),
+                "aws_env_value": stack.env_type,
                 "iac_console_url": console_url,
                 "cloudwatch_logs_url": logs_url,
                 "stack_namespace_token": stack.stack_namespace_token,
@@ -1135,7 +1135,7 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
         initiative.cloudformation_stacks
         .select_related("initiative")
         .all()
-        .order_by("aws_env", "stack_type", "created_timestamp")
+        .order_by("env_type", "stack_type", "created_timestamp")
     )
     stack_entries = _build_infrastructure_stack_entries(
         stacks_qs,

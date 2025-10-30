@@ -2,7 +2,7 @@
 
 When drafting a plan that touches infrastructure:
 
-- Identify which OpenTofu module(s) require changes (foundation vs application). Limit the scope to only the necessary files under `opentofu/`.
+- Identify which OpenTofu module(s) require changes (foundation vs application). Limit the scope to the canonical files `opentofu/foundation/stack.tf` and `opentofu/application/stack.tf`.
 - Call out new or modified variables, outputs, and resources. Specify how values will flow from tfvars into modules and back out to application code.
 - Highlight safety checks: required `tofu fmt`, `tofu validate`, and plan review before apply. Note any drift detection or workspace rotation steps.
 - Enumerate AWS resources affected (ECS, RDS, IAM, Route53, etc.) and the blast radius for each. Include rollback considerations when resources are replaced.
