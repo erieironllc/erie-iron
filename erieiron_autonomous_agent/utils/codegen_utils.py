@@ -6,30 +6,20 @@ import black
 import torch
 from numpy import ndarray
 from transformers import AutoTokenizer, AutoModel
-from tree_sitter import Language, Parser
+from tree_sitter import Parser
+from tree_sitter_languages import get_language
 
 tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
 model = AutoModel.from_pretrained("microsoft/codebert-base")
 
-TREE_SITTER_LIB_PATH = 'build/my-languages.so'
-Language.build_library(
-    TREE_SITTER_LIB_PATH,
-    [
-        'vendor/tree-sitter-python',
-        'vendor/tree-sitter-javascript'
-    ]
-)
-
-LANGUAGES = {
-    '.py': ('python', 'tree-sitter-python'),
-    '.js': ('javascript', 'tree-sitter-javascript'),
+LANGUAGE_NAMES = {
+    '.py': 'python',
+    '.js': 'javascript',
 }
 
-LANG_OBJS = {}
-for ext, (lang_name, _) in LANGUAGES.items():
-    LANG_OBJS[ext] = Language(TREE_SITTER_LIB_PATH, lang_name)
+LANG_OBJS = {ext: get_language(language) for ext, language in LANGUAGE_NAMES.items()}
 
-PARSERS = {ext: Parser() for ext in LANGUAGES}
+PARSERS = {ext: Parser() for ext in LANGUAGE_NAMES}
 for ext in PARSERS:
     PARSERS[ext].set_language(LANG_OBJS[ext])
 
@@ -77,7 +67,7 @@ def walk_tree(node, language):
 
 def extract_methods_from_file(file_path):
     ext = os.path.splitext(file_path)[1]
-    if ext not in LANGUAGES:
+    if ext not in LANGUAGE_NAMES:
         raise ValueError(f"Unsupported file extension: {ext}")
     
     with open(file_path, 'rb') as f:
@@ -88,7 +78,7 @@ def extract_methods_from_file(file_path):
 
 def extract_methods(ext, source_code):
     source_code = source_code.encode("utf-8") if isinstance(source_code, str) else source_code
-    language_name, _ = LANGUAGES[ext]
+    language_name = LANGUAGE_NAMES[ext]
     parser = PARSERS[ext]
     tree = parser.parse(source_code)
     method_nodes = walk_tree(tree.root_node, language_name)
