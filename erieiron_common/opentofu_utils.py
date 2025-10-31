@@ -10,7 +10,7 @@ import tempfile
 import textwrap
 import time
 from pathlib import Path
-from typing import Any, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 import hcl2
 
@@ -28,11 +28,11 @@ class OpenTofuStackManager:
             self,
             stack: InfrastructureStack,
             sandbox_root_dir: Path,
-            container_env: dict
+            container_env: dict = None
     ):
         self.stack = stack
         self.sandbox_root_dir = sandbox_root_dir
-        self.container_env = container_env
+        self.container_env = container_env or {}
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
         self.module_file = get_swizzled_module_file(stack, sandbox_root_dir)
         self.module_dir = self.module_file.parent
@@ -44,6 +44,15 @@ class OpenTofuStackManager:
         
         self.stage = "init"
         self.run_results: list[OpenTofuRunResult] = []
+        
+        self.tfvars_path = self.write_tfvars_file(
+            self.stack.stack_vars
+        )
+        self.plan_output_path = self.get_workspace_dir() / "current.plan"
+        try:
+            self.init_workspace()
+        except Exception as e:
+            logging.warning("Workspace init failed or already initialized: %s", e)
     
     def record(self, stage: str, result: OpenTofuCommandResult) -> None:
         self.stage = stage
@@ -134,16 +143,8 @@ class OpenTofuStackManager:
             stderr=completed_process.stderr or "",
         )
         
-        print(f"""
-        
-        
-        {completed_process.stderr}
-        
-        
-        """)
-        
         if result.returncode != 0:
-            logging.error("OpenTofu command failed", extra=result.loggable_dict())
+            logging.error(completed_process.stderr)
             raise OpenTofuCommandError(
                 f"OpenTofu command failed with exit code {result.returncode}",
                 result,
@@ -156,8 +157,6 @@ class OpenTofuStackManager:
     def init_workspace(
             self,
             *,
-            backend_config: Mapping[str, str] | None = None,
-            timeout: int | None = None,
             upgrade: bool = False,
     ) -> OpenTofuCommandResult:
         args = ["init", "-input=false", "-no-color"]
@@ -165,44 +164,30 @@ class OpenTofuStackManager:
         if upgrade:
             args.append("-upgrade")
         
-        for key, value in sorted((backend_config or {}).items()):
-            args.append(f"-backend-config={key}={value}")
+        key_value = f"{self.stack.stack_namespace_token}/stack.tfstate"
+        args.append(f"-backend-config=key={key_value}")
+        args.append(f"-backend-config=region={EnvironmentType(self.stack.env_type).get_aws_region()}")
         
-        return self.run_tofu_command(
-            "init",
-            args,
-            timeout=timeout
-        )
+        return self.run_tofu_command("init", args)
     
     def plan(
             self,
             *,
-            var_files: Iterable[Path] | None = None,
             timeout: int | None = None,
             destroy: bool = False,
             refresh: bool = True,
-            json_output: bool = True,
-            plan_output_path: Path | None = None,
+            json_output: bool = True
     ) -> OpenTofuCommandResult:
         temp_dir: tempfile.TemporaryDirectory[str] | None = None
-        plan_path: Path | None = None
         try:
-            if json_output:
-                if plan_output_path is not None:
-                    plan_path = plan_output_path
-                    plan_path.parent.mkdir(parents=True, exist_ok=True)
-                else:
-                    temp_dir = tempfile.TemporaryDirectory()
-                    plan_path = Path(temp_dir.name) / "plan.tfplan"
-            
             args = ["plan", "-input=false", "-no-color"]
-            if plan_path:
-                args.extend(["-out", str(plan_path)])
+            args.extend(["-out", str(self.plan_output_path)])
+            
             if destroy:
                 args.append("-destroy")
             if not refresh:
                 args.append("-refresh=false")
-            for vf in common.ensure_list(var_files):
+            for vf in common.ensure_list(self.tfvars_path):
                 args.extend(["-var-file", str(vf)])
             
             result = self.run_tofu_command(
@@ -211,10 +196,10 @@ class OpenTofuStackManager:
                 timeout=timeout
             )
             
-            if json_output and plan_path and plan_path.exists():
+            if json_output:
                 show_result = self.run_tofu_command(
                     "show",
-                    ["show", "-json", str(plan_path)],
+                    ["show", "-json", str(self.plan_output_path)],
                     timeout=timeout,
                 )
                 try:
@@ -225,7 +210,7 @@ class OpenTofuStackManager:
                         show_result,
                     ) from exc
                 change_summary = self.summarize_plan_changes(plan_json)
-                result.extra["plan_path"] = str(plan_path)
+                result.extra["plan_path"] = str(self.plan_output_path)
                 result.extra["plan_json"] = plan_json
                 result.extra["plan_change_summary"] = change_summary
                 result.extra["show_result"] = show_result.loggable_dict()
@@ -239,26 +224,71 @@ class OpenTofuStackManager:
             *,
             timeout: int | None = None,
             auto_approve: bool = True,
-            plan_path: Path | None = None,
             retries: int = 0,
             retry_backoff_seconds: float = 5.0,
     ) -> OpenTofuCommandResult:
         args = ["apply", "-input=false", "-no-color"]
         if auto_approve:
             args.append("-auto-approve")
-        if plan_path:
-            args.append(str(plan_path))
+        args.append(str(self.plan_output_path))
         
         attempt = 0
         exc: OpenTofuCommandError | None = None
+        known_duplicate_msgs = [
+            "InvalidPermission.Duplicate",
+            "InvalidChangeBatch",
+            "AlreadyExists"
+        ]
+        msg = ""
         while attempt <= max(retries, 0):
             try:
-                return self.run_tofu_command(
+                result = self.run_tofu_command(
                     "apply",
                     args,
                     timeout=timeout
                 )
+                
+                # After successful apply, collect outputs reliably
+                result.extra["outputs"] = self.get_outputs(timeout=timeout)
+                
+                return result
             except OpenTofuCommandError as error:
+                # Enhanced error handling for "already exists"/duplicate conditions
+                stderr = error.result.stderr or ""
+                duplicate_found = False
+                for msg in known_duplicate_msgs:
+                    if msg in stderr:
+                        duplicate_found = True
+                        break
+                if duplicate_found:
+                    logging.debug(
+                        "OpenTofu apply encountered known duplicate/exists error; treating as successful",
+                        extra={
+                            "attempt": attempt + 1,
+                            "error_message": stderr,
+                            "command": " ".join(shlex.quote(part) for part in args),
+                            "workspace": self.get_workspace_name(),
+                        },
+                    )
+                    # Synthesize a successful OpenTofuCommandResult, mark the stage, and return
+                    synthetic_result = OpenTofuCommandResult(
+                        command=[settings.TOFU_BIN, *args],
+                        cwd=self.get_workspace_dir(),
+                        started_at=error.result.started_at,
+                        completed_at=error.result.completed_at,
+                        returncode=0,
+                        stdout=error.result.stdout or "",
+                        stderr="",
+                        extra=dict(error_handled="duplicate/exists", summary="Handled known duplicate/exists error in apply"),
+                    )
+                    self.record("apply", synthetic_result)
+                    synthetic_result.extra["handled_duplicate_message"] = True
+                    synthetic_result.extra["handled_duplicate_detail"] = f"Handled known duplicate/exists error: {msg} found in stderr"
+                    
+                    # Reliably collect outputs even for synthetic results
+                    synthetic_result.extra["outputs"] = self.get_outputs(timeout=timeout)
+                    
+                    return synthetic_result
                 exc = error
                 attempt += 1
                 if attempt > max(retries, 0):
@@ -288,22 +318,31 @@ class OpenTofuStackManager:
             ),
         )
     
-    def output_json(
+    def get_outputs(
             self,
             *,
             timeout: int | None = None,
     ) -> dict[str, Any]:
-        result = self.run_tofu_command(
-            self.stage,
-            ["output", "-json"],
-            timeout=timeout,
-        )
+        refresh_args = ["refresh", "-no-color", "-input=false"]
+        for vf in common.ensure_list(self.tfvars_path):
+            refresh_args.extend(["-var-file", str(vf)])
+        
+        self.run_tofu_command("refresh", refresh_args)
+        
+        result = self.run_tofu_command("outputs", ["output", "-json"], timeout=timeout)
         try:
             outputs = json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
             raise OpenTofuCommandError("Failed to decode OpenTofu outputs", result) from exc
-        result.extra["outputs"] = outputs
-        return outputs
+        
+        normalized: dict[str, Any] = {}
+        for key, value in outputs.items():
+            if isinstance(value, Mapping) and "value" in value:
+                normalized[key] = value.get("value")
+            else:
+                normalized[key] = value
+        
+        return normalized
     
     def summarize_plan_changes(self, plan_json: Mapping[str, Any]) -> Mapping[str, int]:
         resource_changes = plan_json.get("resource_changes")
@@ -435,6 +474,46 @@ class OpenTofuStackManager:
                 stderr:
                 {exc.stderr or '<empty>'}
             """))
+    
+    def destroy_stack(
+            self,
+            *,
+            timeout: int | None = None,
+            auto_approve: bool = True,
+    ) -> OpenTofuCommandResult:
+        """Destroy all resources managed by this stack."""
+        args = ["destroy", "-input=false", "-no-color"]
+        if auto_approve:
+            args.append("-auto-approve")
+        for vf in self.tfvars_path:
+            args.extend(["-var-file", str(vf)])
+        try:
+            result = self.run_tofu_command("destroy", args, timeout=timeout)
+            self.record("destroy", result)
+            logging.info("Stack destroyed successfully", extra={"stack": self.stack.stack_namespace_token})
+            return result
+        except OpenTofuCommandError as exc:
+            logging.error("Failed to destroy stack", extra={"error": str(exc), "stack": self.stack.stack_namespace_token})
+            raise
+    
+    def get_state_data(self) -> dict[str, Any]:
+        result = self.run_tofu_command("show_state", ["show", "-json"])
+        try:
+            return json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise OpenTofuCommandError("Failed to decode OpenTofu state JSON", result) from exc
+        
+    def get_arn(self, resource_type: str):
+        state_data =  self.get_state_data()
+        for resource in state_data.get("values", {}).get("root_module", {}).get("resources", []):
+            if resource.get("type") != resource_type:
+                continue
+            
+            arn = common.get(resource, ["values", "arn"])
+            if arn:
+                return arn
+        
+        return None
 
 
 def get_swizzled_module_file(

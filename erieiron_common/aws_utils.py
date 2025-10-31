@@ -1269,7 +1269,7 @@ def get_shared_vpc() -> SharedVpcContext:
                         expected_cidr = subnet_specs[idx][1]
                         if expected_name not in name_to_id and cidr_block == expected_cidr:
                             name_to_id[expected_name] = subnet_id
-                            logging.warning("Resolved missing subnet %s by CIDR match (%s -> %s)", expected_name, cidr_block, subnet_id)
+                            # logging.warning("Resolved missing subnet %s by CIDR match (%s -> %s)", expected_name, cidr_block, subnet_id)
                 still_missing = [name for name in expected_names if name not in name_to_id]
                 if still_missing:
                     raise RuntimeError(

@@ -1555,7 +1555,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         if env.get(k) is None:
             env.pop(k, None)
     
-    return env
+    return {k: str(v) for k, v in env.items()}
 
 
 def build_env_flags(env):
@@ -3426,7 +3426,7 @@ def write_task_tdd_test(config: SelfDriverConfig):
     }
     if task.debug_steps:
         goal_data['debug_steps'] = task.debug_steps
-        
+    
     test_file_path = write_test(
         config,
         description="Write initial test",

@@ -546,3 +546,8 @@ class InfrastructureStackType(ErieEnum):
 
 class InitiativeNames(ErieEnum):
     OPERATIONAL_TASKS = "Operational Tasks"
+
+
+class BuildStep(ErieEnum):
+    LAMBDAS = auto()
+    CONTAINERS = auto()

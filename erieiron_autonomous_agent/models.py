@@ -31,7 +31,7 @@ from erieiron_common.enums import (
     BusinessIdeaSource,
     TaskType,
     EnvironmentType,
-    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity,
+    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity, BuildStep,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -551,6 +551,8 @@ class InfrastructureStack(BaseErieIronModel):
     stack_arn = models.TextField(null=True)
     env_type = models.TextField(choices=EnvironmentType.choices())
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
+    stack_vars = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
+    sandbox_root_dir = models.TextField(null=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
     
@@ -683,7 +685,7 @@ class InfrastructureStack(BaseErieIronModel):
         return stack
     
     @transaction.atomic
-    def tombstone(self) -> 'InfrastructureStack':
+    def tombstone(self, sandbox_root_dir: Path) -> 'InfrastructureStack':
         env_type = self.env_type
         initiative = self.initiative
         stack_type = self.stack_type
@@ -691,11 +693,10 @@ class InfrastructureStack(BaseErieIronModel):
         if EnvironmentType.PRODUCTION.eq(env_type):
             raise Exception(f"cannot tombstone a production stack")
         
+        from erieiron_common.opentofu_utils import OpenTofuStackManager
+        opentofu_stack_manager = OpenTofuStackManager(self, self.sandbox_root_dir)
         try:
-            import boto3
-            logging.info(f"Deleting tombstoned stack {self.stack_name}")
-            cf_client = boto3.client("cloudformation", region_name=EnvironmentType(env_type).get_aws_region())
-            cf_client.delete_stack(StackName=self.stack_name)
+            opentofu_stack_manager.destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
         

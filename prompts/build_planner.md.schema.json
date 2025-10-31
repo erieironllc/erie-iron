@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Build Planner Schema",
+  "description": "Validation schema for the build_planner.md prompt. Determines which components need to be rebuilt based on modified files.",
+  "type": "object",
+  "properties": {
+    "LAMBDAS": {
+      "type": "boolean",
+      "description": "True if any Lambda code was modified in this iteration; false otherwise."
+    },
+    "CONTAINERS": {
+      "type": "boolean",
+      "description": "True if any code other than Lambda or OpenTofu Terraform configurations was modified; false otherwise."
+    }
+  },
+  "required": ["LAMBDAS", "CONTAINERS"],
+  "additionalProperties": false,
+  "examples": [
+    {
+      "LAMBDAS": true,
+      "CONTAINERS": true
+    },
+    {
+      "LAMBDAS": true,
+      "CONTAINERS": false
+    },
+    {
+      "LAMBDAS": false,
+      "CONTAINERS": true
+    },
+    {
+      "LAMBDAS": false,
+      "CONTAINERS": false
+    }
+  ]
+}

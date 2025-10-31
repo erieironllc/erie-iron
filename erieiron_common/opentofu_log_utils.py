@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from erieiron_common import common
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -34,6 +36,7 @@ class OpenTofuRunResult:
             "duration_seconds": max((self.completed_at - self.started_at).total_seconds(), 0.0),
             "stdout": self.stdout,
             "stderr": self.stderr,
+            "outputs": common.get(self.extra, "outputs"),
             "extra": self.extra or {},
         }
 
@@ -64,7 +67,6 @@ def build_opentofu_log_payload(
         stack_type: str,
         plan_summary: Mapping[str, Any] | None,
         results: Sequence[Mapping[str, Any]],
-        outputs: Mapping[str, Any] | None,
         tfvars: Mapping[str, Any] | None,
         error: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -72,7 +74,7 @@ def build_opentofu_log_payload(
         "stack_type": stack_type,
         "plan_summary": plan_summary or {},
         "plan_results": list(results),
-        "outputs": outputs or {},
+        "outputs": common.get(results, "outputs"),
         "tfvars": tfvars or {},
         "error": error or {},
     }
@@ -83,10 +85,3 @@ def write_log_payload(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str))
 
-
-__all__ = [
-    "OpenTofuRunResult",
-    "build_opentofu_log_payload",
-    "summarize_plan_changes",
-    "write_log_payload",
-]

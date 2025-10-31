@@ -1,4 +1,5 @@
 import pprint
+from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
@@ -12,4 +13,4 @@ class Command(BaseCommand):
     def handle(self, env_type=None, *args, **options):
         stacks:list[InfrastructureStack] = list(InfrastructureStack.objects.all())
         for stack in stacks:
-            stack.tombstone()
+            stack.tombstone(Path("/var/folders/fm/58h_5c2978z6qtvscgt0lpkm0000gn/T/tmpre_a9kkh"))

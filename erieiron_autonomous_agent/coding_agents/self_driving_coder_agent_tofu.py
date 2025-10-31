@@ -61,8 +61,8 @@ from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, opentofu_utils, opentofu_log_utils, ErieIronJSONEncoder
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda
-from erieiron_common.cloudformation_utils import get_resource_configs, CloudformationResourceType, get_physical_resources
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType
+from erieiron_common.cloudformation_utils import get_resource_configs, CloudformationResourceType
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -1367,11 +1367,9 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
     
     load_balancer_arn = None
-    for lb_arn, resource in get_physical_resources(config.get_stack_names(), config.env_type, CloudformationResourceType.ELB_LOADBALANCER).items():
-        if resource.get("ResourceStatus", "").endswith("DELETE_COMPLETE"):
-            continue
-        
-        load_balancer_arn = lb_arn
+    for stack in get_stacks(config):
+        opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, build_env(config))
+        load_balancer_arn = opentofu_stack_manager.get_arn("aws_lb")
         if load_balancer_arn:
             break
     
@@ -1557,7 +1555,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         env[secret_arn_env_var] = secrent_arn
     
     for k in list(env.keys()):
-        if env.get(k) is None:
+        if k.startswith("__") or env.get(k) is None:
             env.pop(k, None)
     
     return env
@@ -1576,9 +1574,7 @@ def build_env_flags(env):
     return env_flags
 
 
-def deploy_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
-    return []
-    
+def build_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
     s3 = aws_utils.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
@@ -1741,6 +1737,36 @@ def get_infrastructure_yaml_code(config, cf_template: InfrastructureStackType):
     return infrastructure_code_version.code if infrastructure_code_version else None
 
 
+def latest_tag_from_ecr(config: SelfDriverConfig) -> str:
+    region = config.env_type.get_aws_region()
+    ecr_client = boto3.client("ecr", region_name=region)
+    account_id = aws_utils.client("sts").get_caller_identity()["Account"]
+    
+    repo_name = sanitize_aws_name(config.business.service_token)
+    
+    try:
+        ecr_client.describe_repositories(repositoryNames=[repo_name])
+    except ecr_client.exceptions.RepositoryNotFoundException:
+        raise RuntimeError(f"ECR repository {repo_name} not found")
+    
+    try:
+        response = ecr_client.describe_images(
+            repositoryName=repo_name,
+            maxResults=50
+        )
+        
+        if not response.get('imageDetails'):
+            raise RuntimeError(f"No images found in ECR repository {repo_name}")
+        
+        latest_image = max(response['imageDetails'], key=lambda x: x['imagePushedAt'])
+        
+        return latest_image['imageDigest']
+    
+    except Exception as e:
+        config.log(f"Error retrieving latest image from ECR: {e}")
+        raise
+
+
 def push_image_to_ecr(
         config: SelfDriverConfig,
         container_image_tag: str
@@ -1806,7 +1832,7 @@ def run_container_command(
         *build_env_flags(container_env),
         container_image_tag,
         "python", "manage.py",
-        *common.safe_strs(command_args)
+        *command_args
     ]
     
     config.log("\n" + "=" * 50 + "\n")
@@ -1815,7 +1841,7 @@ def run_container_command(
     
     # Capture podman run start time
     process = subprocess.Popen(
-        cmd,
+        common.strings(cmd),
         stdout=stdout,
         env=container_env,
         stderr=subprocess.STDOUT,
@@ -1864,7 +1890,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
             config
         )
         
-        container_image_tag = build_iteration(
+        container_image_tag, lambda_datas = build_iteration(
             config,
             container_env
         )
@@ -1872,7 +1898,8 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         deployment_logs = deploy_iteration(
             config,
             container_env,
-            container_image_tag
+            container_image_tag,
+            lambda_datas
         )
         
         execute_iteration(
@@ -1885,6 +1912,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     except NeedPlan as e:
         raise e
     except AgentBlocked as e:
+        logging.exception(e)
         raise e
     except OpenTofuException as e:
         logging.exception(e)
@@ -2085,19 +2113,12 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
 def deploy_iteration(
         config: SelfDriverConfig,
         container_env: dict,
-        container_image_tag: str
+        container_image_tag: str,
+        lambda_datas: list
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
-    lambda_datas = None
     deployment_logs: dict[str, Any] = {}
-    try:
-        lambda_datas = deploy_lambda_packages(config)
-    except BadPlan as bpe:
-        raise bpe
-    except Exception as e:
-        config.log(e)
-        raise AgentBlocked(f"task {task.id} is failing to push lambdas to s3. {e}")
     
     ecr_arn = full_image_uri = None
     for i in range(3):
@@ -2114,15 +2135,15 @@ def deploy_iteration(
                 time.sleep(5)
             else:
                 raise AgentBlocked(f"task {task.id} is failing to push {container_image_tag} to ECR. {e}")
-    
-    try:
-        empty_stack_buckets(
-            config,
-            delete_bucket=False
-        )
-    except Exception as e:
-        config.log(e)
-        raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
+        
+        try:
+            empty_stack_buckets(
+                config,
+                delete_bucket=False
+            )
+        except Exception as e:
+            config.log(e)
+            raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
     
     foundation_outputs, foundation_log = deploy_opentofu_stack(
         config=config,
@@ -2192,33 +2213,70 @@ def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outp
         output_var_value = foundation_outputs.get(output_var_name)
         if not output_var_value:
             raise BadPlan(f"Infrastructure stack lacks an output value for the required output named '{output_var_name}'")
-        container_env[env_name] = output_var_value
+        container_env[env_name] = str(output_var_value)
+
+
+def get_iteration_files_msg(current_iteration):
+    return LlmMessage.user_from_data(
+        "Modified Files", [
+            cv.code_file.file_path
+            for cv in current_iteration.codeversion_set.all()
+        ], "modified_file")
 
 
 def build_iteration(config, container_env):
     config.set_phase(SdaPhase.BUILD)
     
+    required_build_steps = llm_chat(
+        "Plan Build Steps",
+        [
+            get_sys_prompt("build_planner.md"),
+            get_iteration_files_msg(config.current_iteration),
+        ],
+        output_schema="build_planner.md.schema.json",
+        model=LlmModel.OPENAI_GPT_5_NANO,
+        tag_entity=config.current_iteration,
+        reasoning_effort=LlmReasoningEffort.LOW
+    ).json()
+    
+    # TODO take this out
+    # required_build_steps = {
+    #     BuildStep.CONTAINERS.value: False,
+    #     BuildStep.LAMBDAS.value: False
+    # }
+    
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
-    docker_file = config.sandbox_root_dir / "Dockerfile"
     
-    ecr_authenticate(
-        config,
-        docker_file
-    )
+    if not config.iteration_to_modify.docker_tag or required_build_steps.get(BuildStep.CONTAINERS.value):
+        docker_file = config.sandbox_root_dir / "Dockerfile"
+        
+        ecr_authenticate(
+            config,
+            docker_file
+        )
+        
+        container_image_tag = build_container_image(
+            config,
+            container_env,
+            docker_file
+        )
+    else:
+        container_image_tag = config.iteration_to_modify.docker_tag
     
-    container_image_tag = build_container_image(
-        config,
-        container_env,
-        docker_file
-    )
+    if required_build_steps.get(BuildStep.LAMBDAS.value):
+        lambda_datas = build_lambda_packages(
+            config
+        )
+    else:
+        lambda_datas = []
     
     SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
         docker_tag=container_image_tag
     )
     iteration.refresh_from_db(fields=["docker_tag"])
     
-    return container_image_tag
+    return container_image_tag, lambda_datas
 
 
 def template_modified_this_iteration(
@@ -2277,6 +2335,7 @@ def manage_db(
             container_image_tag=container_image_tag
         )
     except Exception as e:
+        logging.exception(e)
         if "DuplicateDatabase" in str(e):
             raise AgentBlocked(e.__dict__)
         else:
@@ -4767,8 +4826,6 @@ def deploy_opentofu_stack(
         config.env_type
     )
     
-    opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, container_env)
-    
     tfvars_payload = build_tfvars_payload(
         config,
         stack,
@@ -4779,28 +4836,20 @@ def deploy_opentofu_stack(
         previous_stack_outputs=previous_stack_outputs
     )
     
+    stack.stack_vars = tfvars_payload
+    stack.sandbox_root_dir = config.sandbox_root_dir
+    stack.save()
+    
+    opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, container_env)
+    
     plan_summary: Mapping[str, Any] | None = None
-    outputs: dict[str, Any] = {}
     
     try:
-        init_result = opentofu_stack_manager.init_workspace()
-        
-        tfvars_path = opentofu_stack_manager.write_tfvars_file(
-            tfvars_payload
-        )
-        
-        plan_output_path = opentofu_stack_manager.get_workspace_dir() / "current.plan"
-        
-        plan_result = opentofu_stack_manager.plan(
-            var_files=[tfvars_path],
-            plan_output_path=plan_output_path,
-        )
+        plan_result = opentofu_stack_manager.plan()
         plan_summary = plan_result.extra.get("plan_change_summary")
         
-        apply_result = opentofu_stack_manager.apply(plan_path=plan_output_path)
-        
-        outputs_raw = opentofu_stack_manager.output_json()
-        outputs = opentofu_stack_manager.normalize_outputs(outputs_raw)
+        apply_result = opentofu_stack_manager.apply()
+        outputs = apply_result.extra["outputs"]
         
         manage_ses_domain_settings(config, tfvars_payload)
         
@@ -4808,7 +4857,6 @@ def deploy_opentofu_stack(
             stack_type=stack_type.value,
             plan_summary=plan_summary,
             results=[result.to_dict() for result in opentofu_stack_manager.run_results],
-            outputs=outputs,
             tfvars=tfvars_payload,
         )
         
@@ -4831,7 +4879,6 @@ def deploy_opentofu_stack(
             stack_type=stack_type.value,
             plan_summary=plan_summary,
             results=[result.to_dict() for result in opentofu_stack_manager.run_results],
-            outputs=outputs,
             tfvars=tfvars_payload,
             error=error_payload,
         )

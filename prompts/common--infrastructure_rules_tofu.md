@@ -1,5 +1,28 @@
 ## Infrastructure-Specific Planning Requirements
 
+### Terraform Header Requirement
+- Every `stack.tf` file must begin with the following header block:
+  ```hcl
+  terraform {
+    required_version = ">= 1.6.0"
+    
+    backend "s3" {
+      bucket         = "erieiron-opentofu-state"
+      dynamodb_table = "opentofu-locks"
+      encrypt        = true
+    }
+    
+    required_providers {
+      aws = {
+        source  = "hashicorp/aws"
+        version = "~> 5.0"
+      }
+    }
+  }
+  ```
+- This block standardizes backend configuration, provider versioning, and ensures consistent setup across all Erie Iron OpenTofu stacks.
+- Do **not** modify the bucket, region, or provider source/version unless explicitly authorized by the infrastructure maintainer.
+
 - Default the AWS region to us-west-2 unless specifically instructed otherwise
 - Provisioning plans must prioritize cost-efficiency and security:
   - When choosing AWS services (e.g., App Runner vs ECS vs Lambda), select the **least expensive** option that satisfies load and runtime needs.
@@ -85,8 +108,14 @@
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the OpenTofu configuration must pass these in from the `${AWS::Region}` variable.
 
-### SES
 - If `DomainName` is managed in Route53 in the same AWS account, publish SES verification TXT/DKIM/MX records from `opentofu/foundation/stack.tf` and place the ALB-facing alias records in `opentofu/application/stack.tf` using the task subdomain described above. All DNS automation for the provided `DomainName` must live in the stacks—no manual zone edits.
+
+- **Route53 TXT Record Quoting Rule**  
+  - When defining TXT records in OpenTofu (for DMARC, SPF, SES verification, etc.), do **not** include extra inner quotes within the `records` value.  
+  - Correct form: `records = ["v=DMARC1; p=quarantine; rua=mailto:postmaster@${var.DomainName}"]`  
+  - Incorrect form (causes `InvalidCharacterString`): `records = ["\"v=DMARC1; p=quarantine; rua=mailto:postmaster@${var.DomainName}\""]`  
+  - Terraform automatically wraps TXT record strings in quotes when applying, so inner quoting leads to double-quoted invalid values.
+
 - Email ingestion requirements mean the stacks must provision an `AWS::SES::ReceiptRuleSet` (namespaced with `!Ref StackIdentifier`) and one or more `AWS::SES::ReceiptRule` resources that deliver to the task-specific targets (S3 buckets, Lambdas, SNS). Do not leave the rule set empty.
 - Include a `Custom::ActivateSesRuleSet` (or equivalent Lambda-backed custom resource) that calls `ses:SetActiveReceiptRuleSet` with the stack-owned rule set on create/update so it becomes the account's active set. On delete, the same custom resource must clear the active rule set back to `""` before OpenTofu deletes the receipt rule set. Wire explicit `DependsOn` relationships so activation waits for the rule set and rules to exist and deactivation happens before the rule set is removed.
 - If `DomainName` is not in Route53, return `blocked` with `category: "infra_boundary"` and instructions to onboard the domain to Route53 instead of scheduling HUMAN_WORK.
@@ -95,12 +124,20 @@
 - Must: Clear SES active rule set before delete.
 - Forbidden: Deleting an SES rule set while it is still active.
 
+
 ### Dynamic Resource Key Guardrail
 - Never use a `for_each` or `count` that depends on values known only after apply (for example, `.id`, `.arn`, `.dns_name`, `.domain_validation_options`, `.dkim_tokens`, etc.). These cause "Invalid for_each argument" errors because OpenTofu cannot determine the resource keys during plan time.
 - The `for_each` keys must always be deterministic at plan time.
 - When values are not known until apply:
   - Use a static key list (e.g. `["0", "1", "2"]`) or a map of known keys to placeholder values.
   - Or split the deployment into two stages: first create the producing resource, then create the dependent ones.
+
+  - **General Rule for Dependent Resource Creation**
+    - Never derive `for_each` or `count` values from attributes that are computed only after apply, such as `.id`, `.arn`, `.dns_name`, `.domain_validation_options`, `.dkim_tokens`, or any resource-specific token list.
+    - This includes all SES, ACM, ALB, Lambda, IAM, and ECS resource types that generate tokens or IDs asynchronously.
+    - When such attributes are required (for example, DKIM tokens or ACM validation records), use a static placeholder map or deterministic index keys, as shown in the DKIM example below.
+    - If unsure whether a value is known at plan time, treat it as unknown and plan a two-phase apply instead (produce → consume).
+
 - Common offenders include: `aws_ses_domain_dkim`, `aws_acm_certificate`, `aws_lb`, `aws_lambda_function`, `aws_iam_role`, and `aws_ecs_service`.
 - Example (DKIM-specific pattern):
 
@@ -124,7 +161,27 @@
     ```
 - This ensures deterministic planning and prevents "Invalid for_each argument" errors in any resource where output-based iteration would otherwise occur.
 
-### OpenTofu File Enforcement
+### Sensitive Output Rule
+- Outputs that include secrets or private data must be marked with `sensitive = true`.
+- This flag hides secret values from CLI output, state files, and dependent stacks.
+- Mark an output as sensitive if it includes:
+  - Secret ARNs, secret names, passwords, access tokens, or keys.
+  - Any value retrieved from Secrets Manager or SSM Parameter Store that contains credentials.
+- Examples that **must** include `sensitive = true`:
+  ```hcl
+  output "RdsMasterSecretArn" {
+    value       = try(aws_db_instance.primary.master_user_secret[0].secret_arn, null)
+    sensitive   = true
+  }
+  ```
+- Examples that **should not** include `sensitive = true`:
+  - Identifiers (e.g., `RdsInstanceIdentifier`)
+  - Hostnames or endpoints (e.g., `RdsInstanceEndpoint`)
+  - Ports, DB names, or zone IDs
+- Overuse of `sensitive` complicates debugging by hiding harmless values.
+- **Rule:** mark only genuinely secret data as sensitive, not general identifiers or connection metadata.
+
+-### OpenTofu File Enforcement
 - Keep OpenTofu definitions inside the two stack templates—persistent resources in `opentofu/foundation/stack.tf`, application delivery resources in `opentofu/application/stack.tf`.
 - Inline IAM policy attachments (e.g., `AWS::IAM::Policy` targeting stack-defined roles) belong next to the role in whichever template owns it; runtime code must not create or modify IAM.
 - **When attaching IAM policies:**  
