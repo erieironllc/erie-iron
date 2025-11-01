@@ -289,14 +289,3 @@
 {{ llm_spend_task_series|json_script:"llm-spend-task-data" }}
 {{ llm_spend_iteration_series|json_script:"llm-spend-iteration-data" }}
 {{ llm_spend_title_series|json_script:"llm-spend-title-data" }}
-
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const rangeSelect = document.getElementById('llm-spend-range-select');
-        if (rangeSelect) {
-            rangeSelect.addEventListener('change', function () {
-                rangeSelect.form?.submit();
-            });
-        }
-    });
-</script>

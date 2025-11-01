@@ -1,48 +1,132 @@
 {% load erieiron_common_tags %}
 
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
+    <div>
+        <h2 class="h5 mb-1">PubSub Messages</h2>
+    </div>
+    <div class="ms-auto">
+        <button type="button"
+                class="btn {% if filters_applied %}btn-primary{% else %}btn-outline-primary{% endif %}"
+                data-bs-toggle="modal"
+                data-bs-target="#pubsubFilterModal">
+            <i class="bi bi-funnel me-2"></i>Filter
+        </button>
+    </div>
+</div>
+<hr>
+
+{% if filters_applied %}
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <span class="text-muted small me-1">Active filters:</span>
+        {% for message_type in selected_message_types %}
+            {% for option in message_type_options %}
+                {% if option.value == message_type %}
+                    <span class="badge bg-primary">{{ option.label }}</span>
+                {% endif %}
+            {% endfor %}
+        {% endfor %}
+        {% for status in selected_statuses %}
+            {% for option in status_options %}
+                {% if option.value == status %}
+                    <span class="badge bg-secondary">{{ option.label }}</span>
+                {% endif %}
+            {% endfor %}
+        {% endfor %}
+        <a class="btn btn-link btn-sm text-decoration-none" href="{% url 'view_businesses_tab' 'pubsub-messages' %}">Clear</a>
+    </div>
+{% endif %}
+
 {% if pubsub_messages %}
-    <div class="erie_infinite_scroll" 
-         data-fetch_url="{% url 'fetch_pubsub_messages' %}"
-         data-sort_by="created_at"
-         data-has_more="{% if pubsub_messages|length == 20 %}true{% else %}false{% endif %}"
-         data-page_number="0">
+    <div>
         <table class="table table-borderless table-hover table-condensed table-striped">
             <thead>
             <tr>
+                <th>Status</th>
                 <th>Message</th>
                 <th>Type</th>
                 <th>Environment</th>
                 <th>Priority</th>
-                <th>Status</th>
-                <th>Retry Count</th>
                 <th>Created</th>
             </tr>
             </thead>
-            <tbody>
+            <tbody class="erie_infinite_scroll"
+                   data-fetch_url="{% url 'fetch_pubsub_messages' %}"
+                   data-sort_by="created_at"
+                   data-has_more="{% if has_more %}true{% else %}false{% endif %}"
+                   data-page_number="0"
+                   data-message_types="{{ selected_message_types|join:',' }}"
+                   data-statuses="{{ selected_statuses|join:',' }}">
             {% for message in pubsub_messages %}
-                <tr class="pubsub-message-row" data-message-id="{{ message.id }}">
-                    <td>
-                        <a href="{% url 'view_pubsub_message_details' message.id %}">{{ message.id|short_id }}</a>
-                    </td>
-                    <td>{{ message.message_type|label }}</td>
-                    <td>{{ message.env }}</td>
-                    <td>
-                        <span class="badge {% if message.priority == 'HIGH' %}bg-danger{% elif message.priority == 'NORMAL' %}bg-secondary{% else %}bg-light text-dark{% endif %}">
-                            {{ message.priority }}
-                        </span>
-                    </td>
-                    <td>
-                        <span class="badge {% if message.status == 'PROCESSED' %}bg-success{% elif message.status == 'PROCESSING' %}bg-warning{% elif message.status == 'FAILED' %}bg-danger{% else %}bg-secondary{% endif %}">
-                            {{ message.status }}
-                        </span>
-                    </td>
-                    <td>{{ message.retry_count }}</td>
-                    <td>{{ message.created_at|date:"m/d/Y h:i:s a" }}</td>
-                </tr>
+                {% include 'pubsub/_message_card.html' %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 {% else %}
-    <p class="text-muted">No PubSub messages found.</p>
+    <p class="text-muted">
+        {% if filters_applied %}
+            No PubSub messages match the selected filters.
+        {% else %}
+            No PubSub messages found.
+        {% endif %}
+    </p>
 {% endif %}
+
+<div class="modal fade" id="pubsubFilterModal" tabindex="-1" aria-labelledby="pubsubFilterModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="get" action="">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="pubsubFilterModalLabel">Filter</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-4">
+                        <div class="col-12 col-md-6">
+                            <label for="filter-message-types" class="form-label">Message Types</label>
+                            {% if message_type_options %}
+                                <select id="filter-message-types"
+                                        name="message_types"
+                                        class="form-select"
+                                        size="8"
+                                        multiple>
+                                    {% for option in message_type_options %}
+                                        <option value="{{ option.value }}" {% if option.value in selected_message_types %}selected{% endif %}>{{ option.label }}</option>
+                                    {% endfor %}
+                                </select>
+                                <div class="form-text">Hold Ctrl (Windows) or ⌘ (Mac) to select multiple types.</div>
+                            {% else %}
+                                <p class="text-muted small mb-0">No message types available.</p>
+                            {% endif %}
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <label for="filter-statuses" class="form-label">Status</label>
+                            {% if status_options %}
+                                <select id="filter-statuses"
+                                        name="statuses"
+                                        class="form-select"
+                                        size="6"
+                                        multiple>
+                                    {% for option in status_options %}
+                                        <option value="{{ option.value }}" {% if option.value in selected_statuses %}selected{% endif %}>{{ option.label }}</option>
+                                    {% endfor %}
+                                </select>
+                                <div class="form-text">Hold Ctrl (Windows) or ⌘ (Mac) to select multiple statuses.</div>
+                            {% else %}
+                                <p class="text-muted small mb-0">No statuses available.</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    {% if filters_applied %}
+                        <a class="btn btn-link text-danger text-decoration-none me-auto"
+                           href="{% url 'view_businesses_tab' 'pubsub-messages' %}">Clear filters</a>
+                    {% endif %}
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Apply Filters</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

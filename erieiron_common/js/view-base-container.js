@@ -783,6 +783,22 @@ BaseContainerView = ErieView.extend({
         const sort_by = el.data("sort_by");
         const fetch_url = el.data("fetch_url");
 
+        const get_filter_params = () => {
+            const params = {};
+            const message_types = default_string(el.data("message_types"));
+            const statuses = default_string(el.data("statuses"));
+
+            if (is_not_empty(message_types)) {
+                params["message_types"] = message_types;
+            }
+
+            if (is_not_empty(statuses)) {
+                params["statuses"] = statuses;
+            }
+
+            return params;
+        };
+
         let loading = false;
         let has_next = parse_bool(el.data("has_more"));
 
@@ -792,13 +808,15 @@ BaseContainerView = ErieView.extend({
 
             const next_page = el.data("page_number") + 1;
 
+            const payload = Object.assign({
+                "page_size": PAGE_SIZE,
+                "page_number": next_page,
+                "sort_by": sort_by
+            }, get_filter_params());
+
             erie_server().exec_server_post(
                 fetch_url,
-                {
-                    "page_size": PAGE_SIZE,
-                    "page_number": next_page,
-                    "sort_by": sort_by
-                },
+                payload,
                 (resp) => {
                     const page_content = $(resp).filter((idx, e) => e.innerHTML);
                     const count_returned = page_content.length;

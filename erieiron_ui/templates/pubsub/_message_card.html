@@ -1,57 +1,21 @@
 {% load erieiron_common_tags %}
 
-<div class="pubsub-message-card" data-message-id="{{ message.id }}">
-    <div class="pubsub-message-card__top">
-        <div class="pubsub-message-card__identity">
-            <span class="pubsub-message-card__label">ID</span>
-            <a class="pubsub-message-card__id" href="{% url 'view_pubsub_message_details' message.id %}">
-                {{ message.id|short_id }}
-            </a>
-        </div>
-        <span class="pubsub-message-card__status badge {% if message.status == 'PROCESSED' %}bg-success{% elif message.status == 'PROCESSING' %}bg-warning{% elif message.status == 'FAILED' %}bg-danger{% else %}bg-secondary{% endif %}">
+
+<tr class="pubsub-message-row" data-message-id="{{ message.id }}">
+    <td>
+        <span class="badge {% if message.status == 'PROCESSED' %}bg-success{% elif message.status == 'PROCESSING' %}bg-warning{% elif message.status == 'FAILED' %}bg-danger{% else %}bg-secondary{% endif %}">
             {{ message.status }}
         </span>
-    </div>
-
-    <div class="pubsub-message-card__meta">
-        <div class="pubsub-message-card__meta-item" title="{{ message.message_type|label }}">
-            <span class="pubsub-message-card__meta-label">Type</span>
-            <span class="pubsub-message-card__meta-value">{{ message.message_type|label }}</span>
-        </div>
-        <div class="pubsub-message-card__meta-item" title="{{ message.namespace }}">
-            <span class="pubsub-message-card__meta-label">Namespace</span>
-            <span class="pubsub-message-card__meta-value">{{ message.namespace|truncatechars:32 }}</span>
-        </div>
-        <div class="pubsub-message-card__meta-item">
-            <span class="pubsub-message-card__meta-label">Environment</span>
-            <span class="pubsub-message-card__meta-value">{{ message.env }}</span>
-        </div>
-        <div class="pubsub-message-card__meta-item">
-            <span class="pubsub-message-card__meta-label">Priority</span>
-            <span class="pubsub-message-card__meta-value">
-                <span class="badge {% if message.priority == 'HIGH' %}bg-danger{% elif message.priority == 'NORMAL' %}bg-secondary{% else %}bg-light text-dark{% endif %}">{{ message.priority }}</span>
-            </span>
-        </div>
-        <div class="pubsub-message-card__meta-item">
-            <span class="pubsub-message-card__meta-label">Retry Count</span>
-            <span class="pubsub-message-card__meta-value">{{ message.retry_count }}</span>
-        </div>
-        <div class="pubsub-message-card__meta-item">
-            <span class="pubsub-message-card__meta-label">Created</span>
-            <span class="pubsub-message-card__meta-value">{{ message.created_at|date:"m/d/Y h:i:s a" }}</span>
-        </div>
-    </div>
-
-    <div class="pubsub-message-card__footer">
-        <div class="pubsub-message-card__actions">
-            {% if message.status != 'PROCESSED' and message.status != 'PROCESSING' %}
-                <form method="post" class="pubsub-message-card__action" action="{% url 'action_retry_pubsub_message' message.id %}">
-                    {% csrf_token %}
-                    <input type="hidden" name="next" value="{{ redirect_target|default:request.get_full_path }}">
-                    <button type="submit" class="btn btn-sm btn-outline-warning">Retry</button>
-                </form>
-            {% endif %}
-            <a class="btn btn-sm btn-primary" href="{% url 'view_pubsub_message_details' message.id %}">View</a>
-        </div>
-    </div>
-</div>
+    </td>
+    <td>
+        <a href="{% url 'view_pubsub_message_details' message.id %}">{{ message.id|short_id }}</a>
+    </td>
+    <td>{{ message.message_type|label }}</td>
+    <td>{{ message.env }}</td>
+    <td>
+        <span class="badge {% if message.priority == 'HIGH' %}bg-danger{% elif message.priority == 'NORMAL' %}bg-secondary{% else %}bg-light text-dark{% endif %}">
+            {{ message.priority }}
+        </span>
+    </td>
+    <td>{{ message.created_at|date:"m/d/Y h:i:s a" }}</td>
+</tr>

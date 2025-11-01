@@ -1,9 +1,48 @@
-<div class="tab-pane-content">
-    <h1>{{ business.name }}</h1>
-    <div>{{ business.summary|default_if_none:"" }}</div>
+<div class="business-overview ">
+    <header class="business-overview__header ">
+        <div class="d-flex justify-content-between align-items-start flex-wrap w-100">
+            <div class="business-overview__intro">
+                <div class="d-flex justify-content-between">
+                    <div class="business-overview__chips">
+                        <span class="business-overview__chip text-bg-primary">{{ business.get_status_display }}</span>
+                        <span class="business-overview__chip text-bg-info">{{ business.get_operation_type_display }}</span>
+                    </div>
+                    <div class="d-flex justify-content-end gap-3">
+                        {% if business.github_repo_url %}
+                            <div class="business-overview__domain ">
+                                <a href="{{ business.github_repo_url }}" target=_blank
+                                   class="bi bi-box-arrow-up-right business-overview__chip text-bg-light text-dark text-decoration-none">
+                                    GitHub
+                                </a>
+                            </div>
+                        {% endif %}
+                        {% if business.domain %}
+                            <div class="business-overview__domain ">
+                                <a href="https://{{ business.domain }}" target=_blank
+                                   class="bi bi-box-arrow-up-right business-overview__chip text-bg-light text-dark text-decoration-none">
+                                    {{ business.domain }}
+                                </a>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <h1 class="mt-4 business-overview__title">{{ business.name }}</h1>
+                <p class="business-overview__summary">{{ business.summary|default_if_none:"" }}</p>
+
+            </div>
+
+        </div>
+    </header>
+
     {% if business.raw_idea %}
-    <hr>
-    <h5>The Pitch</h5>
-    <div>{{ business.raw_idea|linebreaksbr }}</div>
+        <section class="business-overview__section">
+            <div class="business-overview__section-header">
+                <h5 class="business-overview__section-title">The Pitch</h5>
+            </div>
+            <div class="business-overview__section-body">
+                <div class="business-overview__pitch">{{ business.raw_idea|linebreaksbr }}</div>
+            </div>
+        </section>
     {% endif %}
 </div>

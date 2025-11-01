@@ -18,13 +18,15 @@
 
         <div class="pubsub-details-page__actions">
             {% if message.status != 'PROCESSING' %}
-                <form method="post" action="{% url 'action_retry_pubsub_message' message.id %}" class="pubsub-details-page__action">
+                <form method="post" action="{% url 'action_retry_pubsub_message' message.id %}"
+                      class="pubsub-details-page__action">
                     {% csrf_token %}
                     <input type="hidden" name="next" value="{{ request.get_full_path }}">
                     <button type="submit" class="btn btn-outline-warning">Retry</button>
                 </form>
             {% endif %}
-            <form method="post" action="{% url 'action_delete_pubsub_message' message.id %}" class="pubsub-details-page__action"
+            <form method="post" action="{% url 'action_delete_pubsub_message' message.id %}"
+                  class="pubsub-details-page__action"
                   onsubmit="return confirm('Are you sure you want to delete this message?');">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-outline-danger">Delete</button>
@@ -36,6 +38,10 @@
         <div class="pubsub-details-card">
             <h6 class="pubsub-details-card__title">Message Information</h6>
             <div class="pubsub-details-card__body">
+                <div class="pubsub-details-card__item" title="{{ message.message_type|label }}">
+                    <span class="pubsub-details-card__label">Message Type</span>
+                    <span class="pubsub-details-card__value">{{ message.message_type }}</span>
+                </div>
                 <div class="pubsub-details-card__item">
                     <span class="pubsub-details-card__label">ID</span>
                     <span class="pubsub-details-card__value"><code>{{ message.id }}</code></span>
@@ -43,10 +49,6 @@
                 <div class="pubsub-details-card__item" title="{{ message.namespace }}">
                     <span class="pubsub-details-card__label">Namespace</span>
                     <span class="pubsub-details-card__value">{{ message.namespace }}</span>
-                </div>
-                <div class="pubsub-details-card__item" title="{{ message.message_type|label }}">
-                    <span class="pubsub-details-card__label">Message Type</span>
-                    <span class="pubsub-details-card__value">{{ message.message_type|label }}</span>
                 </div>
                 <div class="pubsub-details-card__item">
                     <span class="pubsub-details-card__label">Retry Count</span>
@@ -102,18 +104,27 @@
 
     {% if message.error_message %}
         <div class="pubsub-details-card pubsub-details-card--error">
-            <h6 class="pubsub-details-card__title">Error Message</h6>
+            <div class="d-flex justify-content-between">
+                <h6 class="pubsub-details-card__title">Error Message</h6>
+                {% include "_copy_clipboard_btn.html" with target_el="#pre_msg_err" %}
+            </div>
             <div class="pubsub-details-card__body">
-                <pre class="pubsub-details-card__pre pubsub-details-card__pre--error">{{ message.error_message }}</pre>
+                <pre id="pre_msg_err"
+                     class="pubsub-details-card__pre pubsub-details-card__pre--error">{{ message.error_message }}</pre>
             </div>
         </div>
     {% endif %}
 
     <div class="pubsub-details-card pubsub-details-card--payload">
-        <h6 class="pubsub-details-card__title">Message Payload</h6>
+        <div class="d-flex justify-content-between">
+            <h6 class="pubsub-details-card__title">Message Payload</h6>
+            {% if payload_json %}
+                {% include "_copy_clipboard_btn.html" with target_el="#pre_msg_payload" %}
+            {% endif %}
+        </div>
         <div class="pubsub-details-card__body">
             {% if payload_json %}
-                <pre class="pubsub-details-card__pre"><code>{{ payload_json }}</code></pre>
+                <pre id="pre_msg_payload" class="pubsub-details-card__pre"><code>{{ payload_json }}</code></pre>
             {% else %}
                 <p class="text-muted mb-0">No payload data</p>
             {% endif %}

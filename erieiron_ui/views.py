@@ -1,4 +1,5 @@
 import difflib
+import inspect
 import json
 import logging
 import pprint
@@ -11,7 +12,7 @@ from urllib.parse import quote
 
 import jwt
 from django.contrib import messages
-from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect
+from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect, HttpRequest
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone, formats
@@ -38,7 +39,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage
@@ -201,11 +202,61 @@ def _businesses_tab_available_pubsub_messages(_: Business) -> bool:
     return PubSubMessage.objects.exists()
 
 
-def _businesses_tab_context_pubsub_messages(_: Business) -> dict:
+def _businesses_tab_context_pubsub_messages(_: Business, request: HttpRequest | None = None) -> dict:
+    page_size = 20
+
+    selected_message_types = []
+    selected_statuses = []
+    if request:
+        selected_message_types = [value for value in request.GET.getlist("message_types") if value]
+        selected_statuses = [value for value in request.GET.getlist("statuses") if value]
+
+    qs = PubSubMessage.objects.all()
+    if selected_message_types:
+        qs = qs.filter(message_type__in=selected_message_types)
+    if selected_statuses:
+        qs = qs.filter(status__in=selected_statuses)
+
+    qs = qs.order_by("-created_at")
+    page_candidates = list(qs[:page_size + 1])
+    has_more = len(page_candidates) > page_size
+    pubsub_messages = page_candidates[:page_size]
+
+    total_count = qs.count()
+
+    raw_message_types = PubSubMessage.objects.order_by("message_type").values_list("message_type", flat=True).distinct()
+    message_type_options = []
+    for message_type in raw_message_types:
+        if not message_type:
+            continue
+        if PubSubMessageType.valid(message_type):
+            label = PubSubMessageType(message_type).label()
+        else:
+            label = message_type.replace("_", " ").title()
+        message_type_options.append({
+            "value": message_type,
+            "label": label
+        })
+
+    message_type_options.sort(key=lambda option: option["label"].lower())
+
+    status_options = [{
+        "value": status.value,
+        "label": status.label()
+    } for status in PubSubMessageStatus]
+
+    filters_applied = bool(selected_message_types or selected_statuses)
+
     return {
-        "pubsub_messages": PubSubMessage.objects.all().order_by("-created_at")[:20],
-        "total_count": PubSubMessage.objects.count(),
+        "pubsub_messages": pubsub_messages,
+        "total_count": total_count,
         "pubsub_messages_redirect": reverse('view_businesses_tab', args=['pubsub-messages']),
+        "message_type_options": message_type_options,
+        "status_options": status_options,
+        "selected_message_types": selected_message_types,
+        "selected_statuses": selected_statuses,
+        "filters_applied": filters_applied,
+        "has_more": has_more,
     }
 
 
@@ -715,7 +766,12 @@ def view_businesses(request, tab: str = 'portfolio'):
     if tab_slug == 'llm-spend':
         context.update(_businesses_tab_context_llm_spend(erieiron_business, request=request))
     else:
-        context.update(tab_definition["context_fn"](erieiron_business))
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(erieiron_business, request=request))
+        else:
+            context.update(context_fn(erieiron_business))
     
     breadcrumbs = [
         (reverse(view_businesses), erieiron_business.name)
@@ -854,6 +910,93 @@ def _tab_available_ceo_guidance(business: Business) -> bool:
 def _tab_context_ceo_guidance(business: Business) -> dict:
     return {
         "business_ceo_directives": business.businessceodirective_set.all().order_by("-created_timestamp")
+    }
+
+
+def _tab_available_analysis(business: Business) -> bool:
+    return (business.businessanalysis_set.exists() or 
+            business.businesslegalanalysis_set.exists() or 
+            business.businesscapacityanalysis_set.exists() or 
+            business.businessguidance_set.exists() or 
+            business.businessceodirective_set.exists())
+
+
+def _tab_context_analysis(business: Business) -> dict:
+    business_analysis_list = list(
+        business.businessanalysis_set.all().order_by("-created_timestamp")
+    )
+    business_legal_analysis_list = list(
+        business.businesslegalanalysis_set.all().order_by("-created_timestamp")
+    )
+    business_capacity_analysis_list = list(
+        business.businesscapacityanalysis_set.all().order_by("-created_timestamp")
+    )
+    business_guidance_list = list(
+        business.businessguidance_set.all().order_by("-created_timestamp")
+    )
+    business_ceo_directives = list(
+        business.businessceodirective_set.all().order_by("-created_timestamp")
+    )
+
+    analysis_entries = []
+
+    for business_analysis in business_analysis_list:
+        analysis_entries.append(
+            {
+                "type": "business_analysis",
+                "record": business_analysis,
+                "created_timestamp": business_analysis.created_timestamp,
+            }
+        )
+
+    for business_legal_analysis in business_legal_analysis_list:
+        analysis_entries.append(
+            {
+                "type": "business_legal_analysis",
+                "record": business_legal_analysis,
+                "created_timestamp": business_legal_analysis.created_timestamp,
+            }
+        )
+
+    for business_capacity_analysis in business_capacity_analysis_list:
+        analysis_entries.append(
+            {
+                "type": "business_capacity_analysis",
+                "record": business_capacity_analysis,
+                "created_timestamp": business_capacity_analysis.created_timestamp,
+            }
+        )
+
+    for business_guidance in business_guidance_list:
+        analysis_entries.append(
+            {
+                "type": "business_guidance",
+                "record": business_guidance,
+                "created_timestamp": business_guidance.created_timestamp,
+            }
+        )
+
+    for ceo_directive in business_ceo_directives:
+        analysis_entries.append(
+            {
+                "type": "business_ceo_directive",
+                "record": ceo_directive,
+                "created_timestamp": ceo_directive.created_timestamp,
+            }
+        )
+
+    analysis_entries.sort(
+        key=lambda entry: entry["created_timestamp"],
+        reverse=True,
+    )
+
+    return {
+        "business_analysis_list": business_analysis_list,
+        "business_legal_analysis_list": business_legal_analysis_list,
+        "business_capacity_analysis_list": business_capacity_analysis_list,
+        "business_guidance_list": business_guidance_list,
+        "business_ceo_directives": business_ceo_directives,
+        "analysis_entries": analysis_entries,
     }
 
 
@@ -2875,6 +3018,7 @@ def action_find_business(request):
     
     business = Business.objects.create(
         name=f"{Constants.NEW_BUSINESS_NAME_PREFIX} {common.get_now()}",
+        status=BusinessStatus.IDEA,
         source=BusinessIdeaSource.BUSINESS_FINDER_AGENT
     )
     
@@ -3051,10 +3195,12 @@ def action_update_business(request, business_id):
         web_desired_count = max(1, rget_int(request, 'web_desired_count', business.web_desired_count or 1))
         allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
         needs_domain = request.POST.get('needs_domain') == 'on'
-        
+        domain = rget(request, 'domain', '').strip()
+
         # Prepare update data
         update_data = {
             'name': name,
+            'domain': domain or None,
             'summary': summary or None,
             'raw_idea': raw_idea or None,
             'value_prop': value_prop or None,
@@ -3794,10 +3940,22 @@ def fetch_pubsub_messages(request):
     page_size = int(request.POST.get('page_size', 20))
     page_number = int(request.POST.get('page_number', 0))
     sort_by = request.POST.get('sort_by', 'created_at')
-    
+
+    message_types_raw = request.POST.get('message_types', '')
+    statuses_raw = request.POST.get('statuses', '')
+
+    message_types = [value for value in message_types_raw.split(',') if value]
+    statuses = [value for value in statuses_raw.split(',') if value]
+
     offset = page_number * page_size
-    messages = PubSubMessage.objects.all().order_by(f"-{sort_by}")[offset:offset + page_size]
-    
+    messages_qs = PubSubMessage.objects.all()
+    if message_types:
+        messages_qs = messages_qs.filter(message_type__in=message_types)
+    if statuses:
+        messages_qs = messages_qs.filter(status__in=statuses)
+
+    messages = messages_qs.order_by(f"-{sort_by}")[offset:offset + page_size]
+
     context = {
         "pubsub_messages": messages,
         "redirect_target": reverse('view_businesses_tab', args=['pubsub-messages']),
@@ -3812,7 +3970,7 @@ def action_delete_pubsub_message(request, message_id):
     message.delete()
     
     messages.success(request, f"PubSub message {str(message_id)[:8]} deleted successfully.")
-    return redirect('view_businesses_tab', tab='pubsub-messages')
+    return redirect(reverse('view_businesses_tab', args=['pubsub-messages']))
 
 
 @require_POST

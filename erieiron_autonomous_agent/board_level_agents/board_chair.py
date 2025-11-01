@@ -82,10 +82,10 @@ def process_response(business, business_guidance):
             Business.objects.filter(id=business.id).update(
                 status=BusinessStatus.SHUTDOWN
             )
-        else:
-            Business.objects.filter(id=business.id).update(
-                status=BusinessStatus.ACTIVE
-            )
+        # else:
+        #     Business.objects.filter(id=business.id).update(
+        #         status=BusinessStatus.ACTIVE
+        #     )
 
 
 def on_business_guidance_updated(business_id):

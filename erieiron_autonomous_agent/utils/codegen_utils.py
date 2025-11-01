@@ -1,4 +1,5 @@
 import ast
+import logging
 import os
 import warnings
 
@@ -72,31 +73,97 @@ def extract_methods_from_file(file_path):
 
 
 def extract_methods(ext, source_code):
+    if ext not in LANGUAGE_NAMES:
+        raise ValueError(f"Unsupported file extension: {ext}")
+
+    language_name = LANGUAGE_NAMES[ext]
+    source_text = source_code.decode("utf-8") if isinstance(source_code, bytes) else source_code
+
+    try:
+        return _extract_methods_with_tree_sitter(language_name, source_text)
+    except (TypeError, ImportError, OSError, AttributeError) as exc:
+        logging.warning(
+            "Falling back to non-tree-sitter method extraction for %s: %s",
+            language_name,
+            exc,
+        )
+        return _extract_methods_without_tree_sitter(language_name, source_text)
+
+
+def _extract_methods_with_tree_sitter(language_name, source_text):
     import os
     # Prefer system-installed grammars and avoid vendored binaries if present
     os.environ.setdefault("TREE_SITTER_SKIP_VENDOR", "1")
     from tree_sitter_languages import get_parser
 
-    language_name = LANGUAGE_NAMES[ext]
     parser = get_parser(language_name)
-    
-    source_code = source_code.encode("utf-8") if isinstance(source_code, str) else source_code
-    tree = parser.parse(source_code)
+    source_bytes = source_text.encode("utf-8") if isinstance(source_text, str) else source_text
+    tree = parser.parse(source_bytes)
     method_nodes = walk_tree(tree.root_node, language_name)
-    
+
     method_info = []
     for node in method_nodes:
         method_info.append({
             'name': get_method_name(node, language_name),
-            'signature': get_method_signature(source_code, node, language_name),
-            'parameters': get_method_parameters(source_code, node, language_name),
+            'signature': get_method_signature(source_bytes, node, language_name),
+            'parameters': get_method_parameters(source_bytes, node, language_name),
             'start_line': node.start_point[0] + 1,
             'end_line': node.end_point[0] + 1,
-            'code': get_node_text(source_code, node),
+            'code': get_node_text(source_bytes, node),
             'language': language_name
         })
-    
+
     return method_info
+
+
+def _extract_methods_without_tree_sitter(language_name, source_text):
+    if language_name == 'python':
+        return _extract_python_methods_with_ast(source_text)
+
+    logging.warning(
+        "Method extraction for language %s requires tree-sitter; returning no methods",
+        language_name,
+    )
+    return []
+
+
+def _extract_python_methods_with_ast(source_text: str):
+    try:
+        module = ast.parse(source_text)
+    except SyntaxError as exc:
+        logging.warning("Unable to parse python source for method extraction: %s", exc)
+        return []
+
+    methods = []
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parameters = ast.unparse(node.args) if hasattr(ast, "unparse") else ""
+            prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+            start_line = getattr(node, "lineno", None)
+            end_line = getattr(node, "end_lineno", start_line)
+            code_segment = ast.get_source_segment(source_text, node)
+            if code_segment is None and start_line is not None and end_line is not None:
+                code_segment = _get_source_by_lines(source_text, start_line, end_line)
+
+            methods.append({
+                'name': node.name,
+                'signature': f"{prefix} {node.name}({parameters})",
+                'parameters': parameters,
+                'start_line': start_line,
+                'end_line': end_line,
+                'code': code_segment or "",
+                'language': 'python'
+            })
+
+    return methods
+
+
+def _get_source_by_lines(source_text: str, start_line: int, end_line: int):
+    lines = source_text.splitlines(keepends=True)
+    # ast end_lineno is inclusive, make sure indices are within bounds
+    start_idx = max(start_line - 1, 0)
+    end_idx = min(end_line, len(lines))
+    return "".join(lines[start_idx:end_idx])
 
 
 def get_method_name(node, language):

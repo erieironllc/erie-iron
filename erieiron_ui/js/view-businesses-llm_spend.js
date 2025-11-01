@@ -1,17 +1,8 @@
-(function ($) {
+(function (global, $) {
     const COLOR_PALETTE = [
         '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
         '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'
     ];
-
-    let totalSeries = [];
-    let vendorSeries = [];
-    let businessSeries = [];
-    let initiativeSeries = [];
-    let taskSeries = [];
-    let iterationSeries = [];
-    let titleSeries = [];
-    let bucketType = 'day';
 
     const TOOLTIP_ID = 'llm-spend-tooltip';
     const TOOLTIP_STYLE_ID = 'llm-spend-tooltip-style';
@@ -90,14 +81,19 @@
         tooltip.classList.add('visible');
     }
 
-    function formatTooltipContent(dateMs, segment) {
+    function formatTooltipContent(dateMs, segment, bucketType) {
         const date = new Date(dateMs);
-        const dateLabel = formatBucketLabel(date, true);
+        const dateLabel = formatBucketLabel(date, bucketType, true);
         const value = formatCurrency(segment.value);
         const total = formatCurrency(segment.totalForDay || segment.value);
 
         const label = segment.seriesLabel || 'Total';
-        const totalLabel = bucketType === 'hour' ? 'Hourly Total' : bucketType === 'week' ? 'Weekly Total' : 'Daily Total';
+        let totalLabel = 'Daily Total';
+        if (bucketType === 'hour') {
+            totalLabel = 'Hourly Total';
+        } else if (bucketType === 'week') {
+            totalLabel = 'Weekly Total';
+        }
 
         return `
             <div class="tooltip-title">${dateLabel}</div>
@@ -130,7 +126,7 @@
             }
 
             const rect = canvas.getBoundingClientRect();
-            const ratio = layout.pixelRatio || window.devicePixelRatio || 1;
+            const ratio = layout.pixelRatio || global.devicePixelRatio || 1;
             const x = (event.clientX - rect.left) * ratio;
             const y = (event.clientY - rect.top) * ratio;
 
@@ -146,7 +142,7 @@
                 return;
             }
 
-            const content = formatTooltipContent(hitSegment.dateMs, hitSegment);
+            const content = formatTooltipContent(hitSegment.dateMs, hitSegment, layout.bucketType || 'day');
             showTooltip(content, event.clientX, event.clientY);
         });
 
@@ -154,7 +150,6 @@
             hideTooltip();
         });
     }
-
 
     function parseJsonScript(id) {
         const el = document.getElementById(id);
@@ -192,15 +187,17 @@
         return prefix + absVal.toFixed(decimals);
     }
 
-    function formatBucketLabel(dateObj, forTooltip = false) {
+    function formatBucketLabel(dateObj, bucketType, forTooltip = false) {
         if (!(dateObj instanceof Date) || Number.isNaN(dateObj.getTime())) {
             return '';
         }
-        if (bucketType === 'hour') {
+
+        const type = bucketType || 'day';
+        if (type === 'hour') {
             const hourLabel = dateObj.toLocaleTimeString(undefined, {hour: 'numeric'});
             return forTooltip ? dateObj.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric'}) : hourLabel;
         }
-        if (bucketType === 'week') {
+        if (type === 'week') {
             const base = dateObj.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
             return forTooltip ? `Week of ${base}` : base;
         }
@@ -208,8 +205,8 @@
         return dateObj.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
     }
 
-    function formatDateLabel(dateObj) {
-        return formatBucketLabel(dateObj);
+    function formatDateLabel(dateObj, bucketType) {
+        return formatBucketLabel(dateObj, bucketType);
     }
 
     function getCanvasContext(canvas) {
@@ -222,7 +219,7 @@
             return null;
         }
 
-        const ratio = window.devicePixelRatio || 1;
+        const ratio = global.devicePixelRatio || 1;
         const displayWidth = canvas.clientWidth || (canvas.parentElement ? canvas.parentElement.clientWidth : 600) || 600;
         const displayHeight = canvas.clientHeight || 300;
 
@@ -312,6 +309,7 @@
             return;
         }
 
+        const bucketType = options.bucketType || 'day';
         const padding = options.padding || {top: 24, right: 24, bottom: 48, left: 80};
         const {ctx, width, height, pixelRatio} = context;
         const plotWidth = Math.max(width - padding.left - padding.right, 0);
@@ -332,6 +330,7 @@
                 segments: [],
                 totalsByDate: new Map(),
                 pixelRatio,
+                bucketType,
             });
             return;
         }
@@ -382,7 +381,7 @@
             ctx.lineTo(centerX, height - padding.bottom + 6);
             ctx.stroke();
 
-            ctx.fillText(formatDateLabel(new Date(ms)), centerX, height - padding.bottom + 20);
+            ctx.fillText(formatDateLabel(new Date(ms), bucketType), centerX, height - padding.bottom + 20);
         });
 
         const layoutSegments = [];
@@ -427,221 +426,243 @@
             segments: layoutSegments,
             totalsByDate: totalsByDateMap,
             pixelRatio,
+            bucketType,
         });
     }
 
-    function initializeData() {
-        const metaEl = document.getElementById('llm-spend-meta');
-        if (metaEl) {
-            bucketType = metaEl.dataset.bucket || 'day';
-        } else {
-            bucketType = 'day';
+    function makeDebounce(fn, wait) {
+        if (typeof global !== 'undefined' && typeof global.debounce === 'function') {
+            return global.debounce(fn, wait);
         }
 
-        const totalData = parseJsonScript('llm-spend-total-data');
-        totalSeries = Array.isArray(totalData) && totalData.length ? [{
-            label: 'Total',
-            points: totalData.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })),
-            total: totalData.reduce((sum, point) => sum + toNumber(point.total), 0),
-            color: COLOR_PALETTE[0],
-        }] : [];
-
-        const vendorData = parseJsonScript('llm-spend-vendor-data');
-        vendorSeries = Array.isArray(vendorData) ? vendorData.map((entry, idx) => {
-            const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })) : [];
-            const label = ((entry.vendor || '')).toString();
-            const color = COLOR_PALETTE[idx % COLOR_PALETTE.length];
-            const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
-
-            return {
-                label: label.charAt(0).toUpperCase() + label.slice(1),
-                points,
-                total,
-                color,
-            };
-        }) : [];
-
-        const businessData = parseJsonScript('llm-spend-business-data');
-        businessSeries = Array.isArray(businessData) ? businessData.map((entry, idx) => {
-            const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })) : [];
-            const label = ((entry.business || '')).toString();
-            const color = COLOR_PALETTE[(idx + 2) % COLOR_PALETTE.length];
-            const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
-
-            return {
-                label: label || 'Unassigned',
-                points,
-                total,
-                color,
-            };
-        }) : [];
-
-        const initiativeData = parseJsonScript('llm-spend-initiative-data');
-        initiativeSeries = Array.isArray(initiativeData) ? initiativeData.map((entry, idx) => {
-            const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })) : [];
-            const label = ((entry.initiative || '')).toString();
-            const color = COLOR_PALETTE[(idx + 3) % COLOR_PALETTE.length];
-            const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
-
-            return {
-                label: label || 'Initiative',
-                points,
-                total,
-                color,
-            };
-        }) : [];
-
-        const taskData = parseJsonScript('llm-spend-task-data');
-        taskSeries = Array.isArray(taskData) ? taskData.map((entry, idx) => {
-            const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })) : [];
-            const label = ((entry.task || '')).toString();
-            const color = COLOR_PALETTE[(idx + 4) % COLOR_PALETTE.length];
-            const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
-
-            return {
-                label: label || 'Task',
-                points,
-                total,
-                color,
-            };
-        }) : [];
-
-        const iterationData = parseJsonScript('llm-spend-iteration-data');
-        iterationSeries = Array.isArray(iterationData) ? iterationData.map((entry, idx) => {
-            const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })) : [];
-            const label = ((entry.iteration || '')).toString();
-            const color = COLOR_PALETTE[(idx + 5) % COLOR_PALETTE.length];
-            const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
-
-            return {
-                label: label || 'Iteration',
-                points,
-                total,
-                color,
-            };
-        }) : [];
-
-        const titleData = parseJsonScript('llm-spend-title-data');
-        titleSeries = Array.isArray(titleData) ? titleData.map((entry, idx) => {
-            const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
-                date: point.date,
-                total: toNumber(point.total),
-            })) : [];
-            const label = ((entry.title || '')).toString();
-            const color = COLOR_PALETTE[(idx + 6) % COLOR_PALETTE.length];
-            const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
-
-            return {
-                label: label || 'Untitled',
-                points,
-                total,
-                color,
-            };
-        }) : [];
-    }
-
-    function renderCharts() {
-        const totalCanvas = document.getElementById('llm-spend-total-chart');
-        const totalLegend = document.getElementById('llm-spend-total-legend');
-        if (totalCanvas) {
-            renderStackedBarChart(totalCanvas, totalSeries, {legendEl: totalLegend});
-        }
-
-        const initiativeCanvas = document.getElementById('llm-spend-initiative-chart');
-        const initiativeLegend = document.getElementById('llm-spend-initiative-legend');
-        if (initiativeCanvas) {
-            renderStackedBarChart(initiativeCanvas, initiativeSeries, {legendEl: initiativeLegend, colorOffset: 2});
-        }
-
-        const taskCanvas = document.getElementById('llm-spend-task-chart');
-        const taskLegend = document.getElementById('llm-spend-task-legend');
-        if (taskCanvas) {
-            renderStackedBarChart(taskCanvas, taskSeries, {legendEl: taskLegend, colorOffset: 3});
-        }
-
-        const iterationCanvas = document.getElementById('llm-spend-iteration-chart');
-        const iterationLegend = document.getElementById('llm-spend-iteration-legend');
-        if (iterationCanvas) {
-            renderStackedBarChart(iterationCanvas, iterationSeries, {legendEl: iterationLegend, colorOffset: 4});
-        }
-
-        const businessCanvas = document.getElementById('llm-spend-business-chart');
-        const businessLegend = document.getElementById('llm-spend-business-legend');
-        if (businessCanvas) {
-            renderStackedBarChart(businessCanvas, businessSeries, {legendEl: businessLegend, colorOffset: 5});
-        }
-
-        const vendorCanvas = document.getElementById('llm-spend-vendor-chart');
-        const vendorLegend = document.getElementById('llm-spend-vendor-legend');
-        if (vendorCanvas) {
-            renderStackedBarChart(vendorCanvas, vendorSeries, {legendEl: vendorLegend, colorOffset: 6});
-        }
-
-        const titleCanvas = document.getElementById('llm-spend-title-chart');
-        const titleLegend = document.getElementById('llm-spend-title-legend');
-        if (titleCanvas) {
-            renderStackedBarChart(titleCanvas, titleSeries, {legendEl: titleLegend, colorOffset: 7});
-        }
-    }
-
-    function chartsPresent() {
-        return Boolean(
-            document.getElementById('llm-spend-total-chart') ||
-            document.getElementById('llm-spend-vendor-chart') ||
-            document.getElementById('llm-spend-business-chart') ||
-            document.getElementById('llm-spend-initiative-chart') ||
-            document.getElementById('llm-spend-task-chart') ||
-            document.getElementById('llm-spend-iteration-chart') ||
-            document.getElementById('llm-spend-title-chart')
-        );
-    }
-
-    function boot() {
-        if (!chartsPresent()) {
-            return;
-        }
-
-        initializeData();
-        renderCharts();
-    }
-
-    const makeDebounce = (typeof window !== 'undefined' && typeof window.debounce === 'function')
-        ? (fn, wait) => window.debounce(fn, wait)
-        : (fn, wait) => {
-            let timeoutId;
-            return function (...args) {
-                clearTimeout(timeoutId);
-                timeoutId = setTimeout(() => fn.apply(this, args), wait);
-            };
+        let timeoutId;
+        return (...args) => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => fn(...args), wait);
         };
+    }
 
-    const debouncedRender = makeDebounce(renderCharts, 200);
+    const BusinessesLlmSpendView = ErieView.extend({
+        el: 'body',
+
+        events: {
+            'change #llm-spend-range-select': 'handleRangeChange'
+        },
+
+        init_view: function () {
+            this.bucketType = 'day';
+            this.series = {
+                total: [],
+                vendor: [],
+                business: [],
+                initiative: [],
+                task: [],
+                iteration: [],
+                title: [],
+            };
+
+            this.windowNamespace = '.llmSpendView';
+            this.boundHandlePageNav = this.handlePageNav.bind(this);
+            this.navListenerAttached = false;
+            this.debouncedRender = makeDebounce(() => {
+                this.renderCharts();
+            }, 200);
+
+            this.ensureNavListener();
+            this.boot();
+        },
+
+        boot: function () {
+            this.teardownListeners();
+            if (!this.chartsPresent()) {
+                return;
+            }
+
+            this.initializeData();
+            this.renderCharts();
+            this.bindListeners();
+        },
+
+        bindListeners: function () {
+            this.ensureNavListener();
+            $(window).on('resize' + this.windowNamespace, this.debouncedRender);
+        },
+
+        teardownListeners: function () {
+            $(window).off('resize' + this.windowNamespace, this.debouncedRender);
+        },
+
+        handlePageNav: function () {
+            this.boot();
+            this.debouncedRender();
+        },
+
+        ensureNavListener: function () {
+            if (!this.navListenerAttached) {
+                document.addEventListener('on_page_nav', this.boundHandlePageNav);
+                this.navListenerAttached = true;
+            }
+        },
+
+        handleRangeChange: function (event) {
+            const select = event.currentTarget;
+            if (select && select.form) {
+                select.form.submit();
+            }
+            if (typeof last_stop === 'function') {
+                return last_stop(event);
+            }
+            return false;
+        },
+
+        chartsPresent: function () {
+            return Boolean(
+                document.getElementById('llm-spend-total-chart') ||
+                document.getElementById('llm-spend-vendor-chart') ||
+                document.getElementById('llm-spend-business-chart') ||
+                document.getElementById('llm-spend-initiative-chart') ||
+                document.getElementById('llm-spend-task-chart') ||
+                document.getElementById('llm-spend-iteration-chart') ||
+                document.getElementById('llm-spend-title-chart')
+            );
+        },
+
+        initializeData: function () {
+            const metaEl = document.getElementById('llm-spend-meta');
+            this.bucketType = metaEl ? (metaEl.dataset.bucket || 'day') : 'day';
+
+            this.series.total = this.buildTotalSeries(parseJsonScript('llm-spend-total-data'));
+            this.series.vendor = this.buildEntriesSeries(parseJsonScript('llm-spend-vendor-data'), {
+                fallbackLabel: 'Vendor',
+                colorOffset: 0,
+                labelAccessor: (entry) => {
+                    const raw = (entry.vendor || '').toString();
+                    if (!raw) {
+                        return 'Vendor';
+                    }
+                    return raw.charAt(0).toUpperCase() + raw.slice(1);
+                },
+            });
+            this.series.business = this.buildEntriesSeries(parseJsonScript('llm-spend-business-data'), {
+                fallbackLabel: 'Unassigned',
+                colorOffset: 2,
+                labelAccessor: (entry) => (entry.business || '').toString() || 'Unassigned',
+            });
+            this.series.initiative = this.buildEntriesSeries(parseJsonScript('llm-spend-initiative-data'), {
+                fallbackLabel: 'Initiative',
+                colorOffset: 3,
+                labelAccessor: (entry) => (entry.initiative || '').toString() || 'Initiative',
+            });
+            this.series.task = this.buildEntriesSeries(parseJsonScript('llm-spend-task-data'), {
+                fallbackLabel: 'Task',
+                colorOffset: 4,
+                labelAccessor: (entry) => (entry.task || '').toString() || 'Task',
+            });
+            this.series.iteration = this.buildEntriesSeries(parseJsonScript('llm-spend-iteration-data'), {
+                fallbackLabel: 'Iteration',
+                colorOffset: 5,
+                labelAccessor: (entry) => (entry.iteration || '').toString() || 'Iteration',
+            });
+            this.series.title = this.buildEntriesSeries(parseJsonScript('llm-spend-title-data'), {
+                fallbackLabel: 'Untitled',
+                colorOffset: 6,
+                labelAccessor: (entry) => (entry.title || '').toString() || 'Untitled',
+            });
+        },
+
+        buildTotalSeries: function (data) {
+            if (!Array.isArray(data) || data.length === 0) {
+                return [];
+            }
+
+            const points = data.map((point) => ({
+                date: point.date,
+                total: toNumber(point.total),
+            }));
+
+            const total = points.reduce((sum, point) => sum + point.total, 0);
+
+            return [{
+                label: 'Total',
+                points,
+                total,
+                color: COLOR_PALETTE[0],
+            }];
+        },
+
+        buildEntriesSeries: function (data, options) {
+            if (!Array.isArray(data)) {
+                return [];
+            }
+
+            const opts = options || {};
+            const colorOffset = opts.colorOffset || 0;
+            const fallbackLabel = opts.fallbackLabel || '';
+            const accessor = typeof opts.labelAccessor === 'function' ? opts.labelAccessor : null;
+
+            return data.map((entry, idx) => {
+                const points = Array.isArray(entry.points) ? entry.points.map((point) => ({
+                    date: point.date,
+                    total: toNumber(point.total),
+                })) : [];
+
+                const computedLabel = accessor ? accessor(entry, idx) : ((entry.label || '')).toString();
+                const label = computedLabel || fallbackLabel;
+                const color = COLOR_PALETTE[(idx + colorOffset) % COLOR_PALETTE.length];
+                const total = entry.total !== undefined ? toNumber(entry.total) : points.reduce((sum, point) => sum + point.total, 0);
+
+                return {
+                    label,
+                    points,
+                    total,
+                    color,
+                };
+            });
+        },
+
+        renderCharts: function () {
+            const charts = [
+                {canvasId: 'llm-spend-total-chart', legendId: 'llm-spend-total-legend', series: this.series.total, colorOffset: 0},
+                {canvasId: 'llm-spend-initiative-chart', legendId: 'llm-spend-initiative-legend', series: this.series.initiative, colorOffset: 2},
+                {canvasId: 'llm-spend-task-chart', legendId: 'llm-spend-task-legend', series: this.series.task, colorOffset: 3},
+                {canvasId: 'llm-spend-iteration-chart', legendId: 'llm-spend-iteration-legend', series: this.series.iteration, colorOffset: 4},
+                {canvasId: 'llm-spend-business-chart', legendId: 'llm-spend-business-legend', series: this.series.business, colorOffset: 5},
+                {canvasId: 'llm-spend-vendor-chart', legendId: 'llm-spend-vendor-legend', series: this.series.vendor, colorOffset: 6},
+                {canvasId: 'llm-spend-title-chart', legendId: 'llm-spend-title-legend', series: this.series.title, colorOffset: 7},
+            ];
+
+            charts.forEach(({canvasId, legendId, series, colorOffset}) => {
+                const canvas = document.getElementById(canvasId);
+                if (!canvas) {
+                    return;
+                }
+
+                const legendEl = legendId ? document.getElementById(legendId) : null;
+                renderStackedBarChart(canvas, series, {
+                    legendEl,
+                    colorOffset,
+                    bucketType: this.bucketType,
+                });
+            });
+        },
+
+        remove: function () {
+            this.teardownListeners();
+            if (this.navListenerAttached) {
+                document.removeEventListener('on_page_nav', this.boundHandlePageNav);
+                this.navListenerAttached = false;
+            }
+            return Backbone.View.prototype.remove.apply(this, arguments);
+        },
+    });
+
+    global.BusinessesLlmSpendView = BusinessesLlmSpendView;
 
     $(document).ready(() => {
-        boot();
-        $(window).on('resize.llmSpend', debouncedRender);
+        if (!global.businessesLlmSpendView) {
+            global.businessesLlmSpendView = new BusinessesLlmSpendView();
+        } else if (typeof global.businessesLlmSpendView.boot === 'function') {
+            global.businessesLlmSpendView.boot();
+        }
     });
-
-    document.addEventListener('on_page_nav', () => {
-        boot();
-        debouncedRender();
-    });
-})(jQuery);
+})(window, jQuery);
