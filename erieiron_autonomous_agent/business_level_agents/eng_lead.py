@@ -65,13 +65,13 @@ def on_task_blocked(payload, msg):
             "eng_lead--unblocker.md",
             "eng_lead.md",
             "common--general_coding_rules.md",
-            "common--agent_provided_functionality.md",
+            "common--agent_provided_functionality_tofu.md",
             "common--llm_chat.md",
-            "common--iam_role.md",
-            "common--forbidden_actions.md",
-            "common--environment_variables.md",
-            "common--infrastructure_rules.md",
-            "common--credentials_architecture.md"
+            "common--iam_role_tofu.md",
+            "common--forbidden_actions_tofu.md",
+            "common--environment_variables_tofu.md",
+            "common--infrastructure_rules_tofu.md",
+            "common--credentials_architecture_tofu.md"
         ],
         payload,
         output_schema="eng_lead.md.schema.json",
@@ -116,13 +116,13 @@ def define_tasks_for_initiative(initiative_id):
         [
             "eng_lead.md",
             "common--general_coding_rules.md",
-            "common--agent_provided_functionality.md",
+            "common--agent_provided_functionality_tofu.md",
             "common--llm_chat.md",
-            "common--iam_role.md",
-            "common--forbidden_actions.md",
-            "common--environment_variables.md",
-            "common--infrastructure_rules.md",
-            "common--credentials_architecture.md"
+            "common--iam_role_tofu.md",
+            "common--forbidden_actions_tofu.md",
+            "common--environment_variables_tofu.md",
+            "common--infrastructure_rules_tofu.md",
+            "common--credentials_architecture_tofu.md"
         ],
         chat_data,
         output_schema="eng_lead.md.schema.json",
@@ -420,14 +420,14 @@ def write_business_architecture(business):
                 [
                     "system_architect.md",
                     "common--general_coding_rules.md",
-                    "common--agent_provided_functionality.md",
+                    "common--agent_provided_functionality_tofu.md",
                     "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--domain_management.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--infrastructure_rules.md",
-                    "common--credentials_architecture.md"
+                    "common--iam_role_tofu.md",
+                    "common--domain_management_tofu.md",
+                    "common--forbidden_actions_tofu.md",
+                    "common--environment_variables_tofu.md",
+                    "common--infrastructure_rules_tofu.md",
+                    "common--credentials_architecture_tofu.md"
                 ],
                 replacements=[
                     ("<env_vars>", ", ".join(DEFAULT_ENV_VARS))
@@ -462,14 +462,14 @@ def write_initiative_architecture(initiative: Initiative):
                 [
                     "system_architect.md",
                     "common--general_coding_rules.md",
-                    "common--agent_provided_functionality.md",
+                    "common--agent_provided_functionality_tofu.md",
                     "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--domain_management.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--infrastructure_rules.md",
-                    "common--credentials_architecture.md"
+                    "common--iam_role_tofu.md",
+                    "common--domain_management_tofu.md",
+                    "common--forbidden_actions_tofu.md",
+                    "common--environment_variables_tofu.md",
+                    "common--infrastructure_rules_tofu.md",
+                    "common--credentials_architecture_tofu.md"
                 ],
                 replacements=[
                     ("<env_vars>", ", ".join(DEFAULT_ENV_VARS))
@@ -504,12 +504,12 @@ def identify_required_credentials(business: Business):
                     "codeplanner--initial_credentials.md",
                     "codeplanner--common.md",
                     "common--general_coding_rules.md",
-                    "common--agent_provided_functionality.md",
+                    "common--agent_provided_functionality_tofu.md",
                     "common--llm_chat.md",
-                    "common--iam_role.md",
-                    "common--forbidden_actions.md",
-                    "common--environment_variables.md",
-                    "common--credentials_architecture.md"
+                    "common--iam_role_tofu.md",
+                    "common--forbidden_actions_tofu.md",
+                    "common--environment_variables_tofu.md",
+                    "common--credentials_architecture_tofu.md"
                 ], replacements=[
                     ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
                     ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
@@ -541,4 +541,3 @@ def identify_required_credentials(business: Business):
         }
     )
     business.refresh_from_db(fields=["required_credentials"])
-

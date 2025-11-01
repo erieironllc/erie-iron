@@ -12,7 +12,7 @@
 - `self_driving_coder_agent.py` handles template validation, stack parameter resolution, deployment retries, and log extraction (e.g., `deploy_cloudformation_stack` at lines ~4809-4895 and `validate_cloudformation_template` at ~2667-2759).
 - Deployment flows assume two stacks per initiative (`InfrastructureStackType.FOUNDATION` and `InfrastructureStackType.APPLICATION`) and mirror their identities into Docker environments (`sync_stack_identity`, lines ~4720-4789).
 - Supporting utilities (`cloudformation_utils`, `cloudformation_log_reader`, `get_stack_parameters`, etc.) mediate retries, status checks, and parameter metadata extracted from CloudFormation templates.
-- LLM prompts and evaluation logic explicitly reference “CloudFormation” semantics (e.g., prompt assets `codewriter--aws_cloudformation_coder.md`, evaluation guidance near lines ~2323-2345, and telemetry structures that store `cloudformation_logs`).
+- LLM prompts and evaluation logic explicitly reference “CloudFormation” semantics (e.g., prompt assets `codewriter--aws_cloudformation_coder_tofu.md`, evaluation guidance near lines ~2323-2345, and telemetry structures that store `cloudformation_logs`).
 
 ## Migration Objectives
 - Replace CloudFormation-specific deployment, validation, and logging with OpenTofu equivalents while keeping agent workflows (plan → build → deploy → evaluate) intact.
@@ -79,7 +79,7 @@
 - For truly cloud-agnostic PostgreSQL, optionally support containerized Postgres (e.g., on Kubernetes, Nomad) controlled by separate modules, enabling workload portability without abandoning managed services where they fit best.
 
 ### Prompt & UX Adjustments
-- Update LLM prompt assets (`prompts/codewriter--aws_cloudformation_coder.md`, etc.) to reflect OpenTofu vocab, modules, and best practices.
+- Update LLM prompt assets (`prompts/codewriter--aws_cloudformation_coder_tofu.md`, etc.) to reflect OpenTofu vocab, modules, and best practices.
 - Adjust evaluation instructions (lines ~2323-2345) so success criteria revolve around successful `tofu apply` and zero diffs.
 - Provide guardrails around `locals`, `for_each`, and module usage to prevent agent confusion.
 

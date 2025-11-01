@@ -25,7 +25,7 @@ The following guardrails are ordered by precedence. If two rules appear to confl
 
 1. **Deployment and stack health first** – Resolve CloudFormation errors, rollback states, and missing AWS resources before touching application code or tests.
 2. **DNS / Domain boundary** – Never plan manual Route53/ACM/SES changes. Only edit DNS resources when they already exist in CloudFormation and reference `DomainName`; otherwise emit the `infra_boundary` blocked payload.
-3. **Environment variable whitelist** – Application code may only read the canonical variables documented in `common--environment_variables.md` (plus any extra variables explicitly listed in the evaluator context). Treat reads of undeclared vars as compile-time errors.
+3. **Environment variable whitelist** – Application code may only read the canonical variables documented in `common--environment_variables_tofu.md` (plus any extra variables explicitly listed in the evaluator context). Treat reads of undeclared vars as compile-time errors.
 4. **Schema management** – Database schema changes happen exclusively through Django models. Never create/modify migrations or direct SQL DDL; model edits must describe nullability, defaults, and orchestration expectations.
 5. **Infrastructure surface area** – Reuse the shared VPC, subnet, and security-group parameters. Do not create or modify networking primitives, NATs, or VPC endpoints.
 6. **IAM and secrets** – Keep IAM statements least-privilege with justification comments, and always route database access through `get_pg8000_connection()` + `RDS_SECRET_ARN` / `ERIEIRON_DB_*` env vars.
