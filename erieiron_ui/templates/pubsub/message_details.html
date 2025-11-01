@@ -17,10 +17,6 @@
         </div>
 
         <div class="pubsub-details-page__actions">
-            <div class="pubsub-details-page__timestamps">
-                <span class="pubsub-details-page__timestamp-label">Created</span>
-                <span class="pubsub-details-page__timestamp-value">{{ message.created_at|date:"m/d/Y h:i:s a" }}</span>
-            </div>
             {% if message.status != 'PROCESSING' %}
                 <form method="post" action="{% url 'action_retry_pubsub_message' message.id %}" class="pubsub-details-page__action">
                     {% csrf_token %}

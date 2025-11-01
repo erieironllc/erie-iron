@@ -72,17 +72,15 @@ def extract_methods_from_file(file_path):
 
 
 def extract_methods(ext, source_code):
-    from tree_sitter import Parser
-    from tree_sitter_languages import get_language
-    LANG_OBJS = {ext: get_language(language) for ext, language in LANGUAGE_NAMES.items()}
-    
-    PARSERS = {ext: Parser() for ext in LANGUAGE_NAMES}
-    for ext in PARSERS:
-        PARSERS[ext].set_language(LANG_OBJS[ext])
+    import os
+    # Prefer system-installed grammars and avoid vendored binaries if present
+    os.environ.setdefault("TREE_SITTER_SKIP_VENDOR", "1")
+    from tree_sitter_languages import get_parser
+
+    language_name = LANGUAGE_NAMES[ext]
+    parser = get_parser(language_name)
     
     source_code = source_code.encode("utf-8") if isinstance(source_code, str) else source_code
-    language_name = LANGUAGE_NAMES[ext]
-    parser = PARSERS[ext]
     tree = parser.parse(source_code)
     method_nodes = walk_tree(tree.root_node, language_name)
     

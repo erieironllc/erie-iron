@@ -1,4 +1,5 @@
 <div class="tab-pane-content">
+    <h1>{{ business.name }}</h1>
     <div>{{ business.summary|default_if_none:"" }}</div>
     {% if business.raw_idea %}
     <hr>

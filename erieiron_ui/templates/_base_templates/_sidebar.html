@@ -1,10 +1,12 @@
 {% load erieiron_common_tags %}
-<div class="list-group sidebar-tabs-scroll pb-5" role="tablist">
-    <h3 style="white-space: nowrap;">{{ sidebar_title }}</h3>
+<div class="list-group sidebar-tabs-scroll sidebar-modern shadow-lg" role="tablist">
+    <div class="d-flex align-items-center justify-content-between px-3 mb-3">
+        <h3 class="sidebar-modern__title mb-0">{{ sidebar_title }}</h3>
+    </div>
     {% for tab in tabs|dedupe_divers %}
         {% if tab.is_divider %}
-            <div class="list-group-item disabled text-center">
-                <hr class="my-2">
+            <div class="list-group-item disabled text-center sidebar-modern__divider">
+                <hr class="my-0">
             </div>
         {% else %}
             <a class="
@@ -23,9 +25,9 @@
                {% endif %}
             
             >
-                {{ tab.label }}
+                <span class="sidebar-modern__label">{{ tab.label }}</span>
                 {% if tab.badge %}
-                    <span class="badge bg-danger ms-1">{{ tab.badge }}</span>
+                    <span class="badge text-bg-danger ms-2">{{ tab.badge }}</span>
                 {% endif %}
             </a>
         {% endif %}
