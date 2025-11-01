@@ -17,7 +17,7 @@ def on_business_guidance_updated(business_id):
 
     business = Business.objects.get(id=business_id)
     
-    if BusinessStatus.IDEA.eq(business.status):
+    if BusinessStatus.ACTIVE.neq(business.status):
         logging.info(f"skipping ceo guidance generation - status = {business.status}")
         return
 

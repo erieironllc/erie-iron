@@ -7,6 +7,7 @@ from pathlib import Path
 from erieiron_common import settings_utils
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
 
 DEBUG = True
 

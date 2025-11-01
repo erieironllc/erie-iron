@@ -21,17 +21,11 @@
   </div>
 </div>
 <script>
-document.addEventListener('scroll', () => {
-    const messageContainer = document.getElementById('fixed-message-container');
-    if (messageContainer) messageContainer.style.display = 'none';
-});
-
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        const messageContainer = document.getElementById('fixed-message-container');
-        if (messageContainer) messageContainer.style.display = 'none';
-    }
-});
+setTimeout(()=>{
+    $("#fixed-message-container").fadeOut(()=>{
+        $("#fixed-message-container").hide();
+    })
+}, 1500);
 </script>
 {% endif %}
 

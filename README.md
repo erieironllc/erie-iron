@@ -143,4 +143,4 @@ This project is licensed under the MIT License.
 ## Support
 
 - Issues: https://github.com/erieironllc/erieiron/issues
-- Email: tech@erieiron.com
+- Email: tech@erieironllc.com

@@ -61,8 +61,8 @@ sqlparse
 svgwrite
 tf2onnx
 tiktoken
-tree_sitter_languages>=1.10.2
-tree-sitter>=0.20.1,<0.22
+tree_sitter_languages
+tree-sitter==0.25.2
 torch>=2.6
 torchvggish
 transformers

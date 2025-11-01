@@ -22,6 +22,7 @@ urlpatterns = [
     path("_business/delete/<uuid:business_id>", views.action_delete_business, name="action_delete_business"),
     path("_business/submit_bug_report/<uuid:business_id>", views.action_submit_bug_report, name="action_submit_bug_report"),
     path("_initiative/submit_bug_report/<str:initiative_id>", views.action_submit_bug_report_initiative, name="action_submit_bug_report_initiative"),
+    path("_initiative/submit_task/<str:initiative_id>", views.action_submit_initiative_task, name="action_submit_initiative_task"),
     path("business/<uuid:business_id>", views.view_business, name="view_business"),
     path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
     
@@ -59,8 +60,14 @@ urlpatterns = [
     path("iteration/<uuid:iteration_id>/logs", views.view_iteration_logs, name="view_iteration_logs"),
     path("iteration/<slug:tab>/<str:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration_tab"),
     path("iteration/<uuid:iteration_id>", views.view_self_driver_iteration, name="view_self_driver_iteration"),
-
+    
     path("lesson/toggle/<uuid:lesson_id>", views.action_toggle_lesson_validity, name="action_toggle_lesson_validity"),
+    
+    path("pubsub/message/<uuid:message_id>", views.view_pubsub_message_details, name="view_pubsub_message_details"),
+    
+    path("_pubsub/fetch_messages", views.fetch_pubsub_messages, name="fetch_pubsub_messages"),
+    path("_pubsub/delete/<uuid:message_id>", views.action_delete_pubsub_message, name="action_delete_pubsub_message"),
+    path("_pubsub/retry/<uuid:message_id>", views.action_retry_pubsub_message, name="action_retry_pubsub_message"),
     
     path("codefile/<uuid:codefile_id>", views.view_codefile, name="view_codefile"),
     path("stack/<uuid:stack_id>", views.view_stack, name="view_stack"),

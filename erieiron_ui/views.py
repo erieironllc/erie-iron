@@ -21,7 +21,6 @@ from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 
 import settings
-
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
@@ -42,6 +41,7 @@ from erieiron_common.aws_utils import aws_console_url_from_arn
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
+from erieiron_common.models import PubSubMessage
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
 logger = logging.getLogger(__name__)
@@ -62,40 +62,40 @@ def _resolve_post_login_redirect(request, candidate: str | None) -> str:
     fallback = reverse("view_home")
     if not candidate:
         return fallback
-
+    
     if url_has_allowed_host_and_scheme(candidate, {request.get_host()}, ["http", "https"]):
         return candidate
-
+    
     if candidate.startswith("/"):
         return candidate
-
+    
     return fallback
 
 
 def _credentials_match(email: str, password: str) -> bool:
     return (
-        email == settings.SIMPLE_AUTH_ALLOWED_EMAIL
-        and password == settings.SIMPLE_AUTH_ALLOWED_PASSWORD
+            email == settings.SIMPLE_AUTH_ALLOWED_EMAIL
+            and password == settings.SIMPLE_AUTH_ALLOWED_PASSWORD
     )
 
 
 def view_login(request):
     next_param = request.GET.get("next") or request.POST.get("next")
-
+    
     if getattr(request, "simple_auth_authenticated", False):
         destination = _resolve_post_login_redirect(request, next_param)
         return HttpResponseRedirect(destination)
-
+    
     context = {
         "page_title": "Sign in • ErieIron",
         "next": next_param or "",
         "prefill_email": request.POST.get("email", "").strip(),
     }
-
+    
     if request.method == "POST":
         email = (request.POST.get("email") or "").strip()
         password = request.POST.get("password") or ""
-
+        
         if _credentials_match(email, password):
             token = _build_simple_auth_token(email)
             destination = _resolve_post_login_redirect(request, next_param)
@@ -109,9 +109,9 @@ def view_login(request):
                 samesite="Lax",
             )
             return response
-
+        
         messages.error(request, "Invalid email or password.")
-
+    
     return render(request, "login.html", context)
 
 
@@ -119,6 +119,7 @@ def action_logout(request):
     response = HttpResponseRedirect(reverse("view_login"))
     response.delete_cookie(settings.SIMPLE_AUTH_COOKIE_NAME)
     return response
+
 
 LLM_SPEND_RANGE_DEFAULT = "15d"
 LLM_SPEND_RANGE_OPTIONS = [
@@ -138,16 +139,25 @@ def healthcheck(request):
     return JsonResponse({"ok": True})
 
 
-def _businesses_tab_available_portfolio(_: Business) -> bool:
-    return True
 
 
 def _businesses_tab_context_portfolio(erieiron_business: Business) -> dict:
     ei_business = Business.get_erie_iron_business()
+    
+    portfolio_businesses = defaultdict(list)
+    for b in Business.objects.exclude(id=ei_business.id).order_by("name"):
+        portfolio_businesses[BusinessStatus(b.status)].append(b)
+        
+    
     return {
+        "operation_type_choices": BusinessOperationType.choices(),
+        "operation_type_default": BusinessOperationType.ERIE_IRON_AUTONOMOUS.value,
         "businesses": [
             ei_business,
-            *Business.objects.exclude(id=ei_business.id).order_by("created_at")
+            *portfolio_businesses[BusinessStatus.ACTIVE],
+            *portfolio_businesses[BusinessStatus.IDEA],
+            *portfolio_businesses[BusinessStatus.PAUSED],
+            *portfolio_businesses[BusinessStatus.SHUTDOWN]
         ]
     }
 
@@ -162,14 +172,7 @@ def _businesses_tab_context_capacity(erieiron_business: Business) -> dict:
     }
 
 
-def _businesses_tab_available_initiatives(erieiron_business: Business) -> bool:
-    return erieiron_business.initiative_set.exists()
 
-
-def _businesses_tab_context_initiatives(erieiron_business: Business) -> dict:
-    return {
-        "initiatives": erieiron_business.initiative_set.all().order_by("created_timestamp"),
-    }
 
 
 def _businesses_tab_available_lessons(_: Business) -> bool:
@@ -192,6 +195,26 @@ def _businesses_tab_context_tools(_: Business) -> dict:
         "operation_type_choices": BusinessOperationType.choices(),
         "operation_type_default": BusinessOperationType.ERIE_IRON_AUTONOMOUS.value,
     }
+
+
+def _businesses_tab_available_pubsub_messages(_: Business) -> bool:
+    return PubSubMessage.objects.exists()
+
+
+def _businesses_tab_context_pubsub_messages(_: Business) -> dict:
+    return {
+        "pubsub_messages": PubSubMessage.objects.all().order_by("-created_at")[:20],
+        "total_count": PubSubMessage.objects.count(),
+        "pubsub_messages_redirect": reverse('view_businesses_tab', args=['pubsub-messages']),
+    }
+
+
+def _businesses_tab_available_logout(_: Business) -> bool:
+    return True
+
+
+def _businesses_tab_context_logout(_: Business) -> dict:
+    return {}
 
 
 def _resolve_llm_vendor(llm_model: str | None) -> str:
@@ -642,8 +665,16 @@ def _build_businesses_tabs(erieiron_business: Business) -> list[dict]:
             continue
         
         slug = definition["slug"]
-        available = definition["availability_fn"](erieiron_business)
-        if slug == "portfolio":
+        if "availability_fn" in definition:
+            available = definition["availability_fn"](erieiron_business)
+        else:
+            available = True
+            
+        if definition.get("url_name"):
+            url = reverse(definition["url_name"])
+        elif definition.get("url"):
+            url = definition["url"]
+        elif slug == "portfolio":
             url = reverse('view_businesses')
         else:
             url = reverse('view_businesses_tab', args=[slug])
@@ -1078,7 +1109,7 @@ def _initiative_tab_context_user_documentation(initiative: Initiative) -> dict:
 
 
 def _initiative_tab_available_tasks(initiative: Initiative) -> bool:
-    return initiative.tasks.exists()
+    return True
 
 
 def _initiative_tab_context_tasks(initiative: Initiative) -> dict:
@@ -1144,7 +1175,7 @@ def _build_infrastructure_stack_entries(
         metadata = stack.get_iac_state_metadata() if hasattr(stack, "get_iac_state_metadata") else {}
         provider = stack.iac_provider if hasattr(stack, "iac_provider") else getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
         provider = (provider or "unknown").lower()
-
+        
         console_url = metadata.get("console_url")
         if provider == "cloudformation" and not console_url:
             if stack.stack_arn:
@@ -1157,27 +1188,27 @@ def _build_infrastructure_stack_entries(
                     f"https://{region}.console.aws.amazon.com/cloudformation/home"
                     f"?region={region}#stacks?filteringStatus=active&filteringText={stack_name_encoded}"
                 )
-
+        
         logs_url = (
             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
             f"?region={region}#logsV2:log-groups$3FlogGroupNameFilter$3D{quote(stack.stack_namespace_token, safe='')}"
         )
-
+        
         scope_label = scope_label_fn(stack) if scope_label_fn else (
             "Initiative" if stack.initiative_id else "Business"
         )
-
+        
         state_label = metadata.get("state_label")
         if not state_label:
             if provider == "opentofu":
                 state_label = metadata.get("workspace_name") or metadata.get("state_locator") or stack.stack_namespace_token
             else:
                 state_label = metadata.get("state_locator") or stack.stack_name
-
+        
         state_locator = stack.iac_state_locator if hasattr(stack, "iac_state_locator") else metadata.get("state_locator")
         if not state_locator:
             state_locator = stack.stack_namespace_token
-
+        
         entries.append(
             {
                 "id": str(stack.id),
@@ -1294,7 +1325,11 @@ def _build_initiative_tabs(initiative: Initiative) -> list[dict]:
             continue
         
         slug = definition["slug"]
-        available = definition["availability_fn"](initiative)
+        if "availability_fn" in definition:
+            available = definition["availability_fn"](initiative)
+        else:
+            available = True
+        
         if slug == "overview":
             url = reverse('view_initiative', args=[initiative.id])
         else:
@@ -1617,7 +1652,7 @@ def _task_tab_context_edit(task, business, self_driving_task: SelfDrivingTask) -
     
     if self_driving_task:
         initiative = self_driving_task.task.initiative
-        
+    
     return {
         "sandbox_path": sandbox_path,
         "task_status_choices": TaskStatus.choices(),
@@ -2484,6 +2519,79 @@ def action_submit_bug_report_initiative(request, initiative_id):
         return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
 
 
+def action_submit_initiative_task(request, initiative_id):
+    if request.method != 'POST':
+        raise Exception()
+    
+    initiative = get_object_or_404(Initiative, id=initiative_id)
+    
+    raw_task_request = rget(request, 'task_request', '').strip()
+    
+    if not raw_task_request:
+        messages.error(request, 'Please provide task details.')
+        return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
+    
+    try:
+        parsed_data = system_agent_llm_interface.llm_chat(
+            description=f"Parse initiative task request for {initiative.title}",
+            messages=[
+                get_sys_prompt("eng_lead--task_ingester.md"),
+                LlmMessage.user_from_data("Task Request", raw_task_request)
+            ],
+            output_schema="eng_lead--task_ingester.md.schema.json",
+            tag_entity=initiative,
+            model=LlmModel.OPENAI_GPT_5_MINI,
+            verbosity=LlmVerbosity.MEDIUM
+        ).json()
+        
+        description = (parsed_data.get('description') or raw_task_request).strip()
+        completion_criteria = parsed_data.get('completion_criteria') or []
+        completion_criteria = [
+            str(item).strip()
+            for item in common.ensure_list(completion_criteria)
+            if str(item).strip()
+        ]
+        if not completion_criteria:
+            completion_criteria = ['The task request has been fulfilled as described.']
+        
+        raw_risk_notes = parsed_data.get('risk_notes', '')
+        if isinstance(raw_risk_notes, (list, tuple)):
+            risk_notes = "\n".join(
+                str(item).strip()
+                for item in raw_risk_notes
+                if str(item).strip()
+            )
+        else:
+            risk_notes = str(raw_risk_notes or '').strip()
+        
+        raw_task_type = str(parsed_data.get('task_type', '') or '').strip()
+        task_type = TaskType.valid_or(raw_task_type, TaskType.HUMAN_WORK)
+        if raw_task_type and task_type == TaskType.HUMAN_WORK and raw_task_type != TaskType.HUMAN_WORK:
+            logger.warning(
+                "LLM returned invalid task_type '%s' for initiative %s; defaulting to HUMAN_WORK",
+                raw_task_type,
+                initiative.id,
+            )
+        
+        Task.objects.create(
+            id=f"{parsed_data.get('task_id')}_{common.gen_random_token(8)}",
+            initiative=initiative,
+            task_type=task_type,
+            status=TaskStatus.NOT_STARTED,
+            description=description,
+            risk_notes=risk_notes,
+            completion_criteria=completion_criteria
+        )
+        
+        messages.success(request, 'Task submitted successfully! It has been added to this initiative.')
+        return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
+    
+    except Exception as e:
+        logger.exception(e)
+        messages.error(request, f'Error submitting task: {str(e)}')
+        return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
+
+
 def action_add_initiative(request):
     if request.method != 'POST':
         raise Exception()
@@ -2550,19 +2658,55 @@ def action_add_initiative_from_brief(request, business_id):
             ),
             LlmMessage.user_from_data("Initiative Brief", brief)
         ],
+        output_schema="initiative--parse_brief.md.schema.json",
         tag_entity=business,
         model=LlmModel.OPENAI_GPT_5,
         verbosity=LlmVerbosity.MEDIUM
     ).json()
     
+    def _normalize_identifier(raw_value: str) -> str:
+        cleaned = (raw_value or "").lower()
+        if not cleaned:
+            return ""
+        
+        normalized_chars = [
+            char if char.isalnum() or char == '_'
+            else '_'
+            for char in cleaned
+        ]
+        candidate = ''.join(normalized_chars)
+        normalized = '_'.join(segment for segment in candidate.split('_') if segment)
+        return normalized[:200]
+    
     title = (parsed_payload.get('title') or 'New Initiative').strip()
     description = (parsed_payload.get('description') or brief).strip()
+    desired_identifier = _normalize_identifier(parsed_payload.get('initiative_id', ''))
+    fallback_identifier = _normalize_identifier(title) or _normalize_identifier(business.name)
+    if not fallback_identifier:
+        fallback_identifier = _normalize_identifier(f"initiative_{common.gen_random_token(6)}")
+    
+    initiative_identifier = desired_identifier or fallback_identifier
+    initiative_identifier = initiative_identifier.rstrip('_')[:200]
+    if not initiative_identifier:
+        initiative_identifier = fallback_identifier
+    
+    base_identifier = initiative_identifier
+    suffix = 1
+    while Initiative.objects.filter(id=initiative_identifier).exists():
+        suffix_str = f"_{suffix}"
+        trimmed_base = base_identifier[: max(1, 200 - len(suffix_str))].rstrip('_')
+        if not trimmed_base:
+            trimmed_base = fallback_identifier[: max(1, 200 - len(suffix_str))]
+            trimmed_base = trimmed_base.rstrip('_') or f"initiative"
+        initiative_identifier = f"{trimmed_base}_{suffix}"
+        suffix += 1
+    
     kpi_entries = [str(k).strip() for k in common.ensure_list(parsed_payload.get('kpis')) if str(k).strip()]
     
     expected_kpi_lift = {kpi: 0.0 for kpi in kpi_entries}
     
     initiative = Initiative.objects.create(
-        id=str(uuid.uuid4()),
+        id=initiative_identifier,
         business=business,
         title=title,
         description=description,
@@ -2713,17 +2857,16 @@ def action_delete_initiative(request, initiative_id):
     if request.method != 'POST':
         raise Exception()
     
+    initiative = get_object_or_404(Initiative, id=initiative_id)
     try:
-        initiative = get_object_or_404(Initiative, id=initiative_id)
         initiative_title = initiative.title
         initiative.delete()
         messages.success(request, f'Initiative "{initiative_title}" deleted successfully!')
-    except Initiative.DoesNotExist:
-        messages.error(request, 'Initiative not found.')
     except Exception as e:
+        logging.exception(e)
         messages.error(request, f'Error deleting initiative: {str(e)}')
     
-    return redirect(reverse('view_businesses_tab', args=['initiatives']))
+    return redirect(reverse('view_business_tab', args=['initiatives', initiative.business_id]))
 
 
 def action_find_business(request):
@@ -2790,7 +2933,7 @@ def action_debug_assistance(request, task_id):
         
         task.debug_steps = debug_steps_html
         task.save()
-
+        
         return {"success": True, "debug_steps": debug_steps_html}
     
     except Task.DoesNotExist:
@@ -3098,13 +3241,13 @@ def action_toggle_lesson_validity(request, lesson_id):
 def view_stack(request, stack_id):
     stack = get_object_or_404(InfrastructureStack, pk=stack_id)
     business = stack.business
-
+    
     tabs = _build_business_tabs(business)
     stack_entry = common.first(_build_infrastructure_stack_entries([stack])) or {}
-
+    
     stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
     env_type_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
-
+    
     stack_type_label = stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown")
     environment_label = env_type_enum.label() if env_type_enum else (stack.env_type or "Unknown")
     scope_label = (
@@ -3112,11 +3255,11 @@ def view_stack(request, stack_id):
         if stack.initiative_id
         else "Business"
     )
-
+    
     def _format_pretty(value):
         if value is None or value == "":
             return ""
-
+        
         if isinstance(value, str):
             stripped = value.strip()
             if not stripped:
@@ -3130,27 +3273,27 @@ def view_stack(request, stack_id):
                 value = parsed
             else:
                 return stripped
-
+        
         try:
             return json.dumps(value, indent=2, sort_keys=True, cls=ErieIronJSONEncoder)
         except (TypeError, ValueError) as exc:
             logging.exception(exc)
             return str(value)
-
+    
     stack_vars_pretty = _format_pretty(stack.stack_vars)
     iac_state_metadata = stack_entry.get("iac_state_metadata")
     iac_state_metadata_pretty = _format_pretty(iac_state_metadata)
-
+    
     raw_resources = stack.resources
     if raw_resources in (None, {}, []):
         normalized_resources: list[Any] = []
     else:
         normalized_resources = common.ensure_list(raw_resources)
-
+    
     stack_resources: list[dict[str, Any]] = []
     for raw_resource in normalized_resources:
         parsed_resource: Any = raw_resource
-
+        
         if isinstance(raw_resource, str):
             trimmed = raw_resource.strip()
             if trimmed.startswith("{") or trimmed.startswith("["):
@@ -3161,7 +3304,7 @@ def view_stack(request, stack_id):
                     parsed_resource = {"raw": raw_resource}
             else:
                 parsed_resource = {"raw": raw_resource}
-
+        
         if not isinstance(parsed_resource, dict):
             stack_resources.append(
                 {
@@ -3178,11 +3321,11 @@ def view_stack(request, stack_id):
                 }
             )
             continue
-
+        
         values = parsed_resource.get("values")
         if not isinstance(values, dict):
             values = {}
-
+        
         arn = values.get("arn")
         console_url = None
         if arn:
@@ -3190,7 +3333,7 @@ def view_stack(request, stack_id):
                 console_url = aws_console_url_from_arn(str(arn))
             except Exception as exc:
                 logging.exception(exc)
-
+        
         stack_resources.append(
             {
                 "address": parsed_resource.get("address") or parsed_resource.get("name"),
@@ -3205,12 +3348,12 @@ def view_stack(request, stack_id):
                 "resource_pretty": _format_pretty(parsed_resource),
             }
         )
-
+    
     grouped_resources_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for resource in stack_resources:
         resource_type = (resource.get("type") or "Unknown").strip() or "Unknown"
         grouped_resources_map[resource_type].append(resource)
-
+    
     resource_groups: list[dict[str, Any]] = []
     for resource_type in sorted(grouped_resources_map.keys(), key=lambda value: value.lower()):
         resources_in_group = grouped_resources_map[resource_type]
@@ -3225,14 +3368,14 @@ def view_stack(request, stack_id):
                 "resources": resources_in_group,
             }
         )
-
+    
     business_url = reverse('view_business', args=[business.id])
     initiative_url = (
         reverse('view_initiative', args=[stack.initiative_id])
         if stack.initiative_id
         else None
     )
-
+    
     context = {
         "business": business,
         "tabs": tabs,
@@ -3249,12 +3392,12 @@ def view_stack(request, stack_id):
         "business_url": business_url,
         "initiative_url": initiative_url,
     }
-
+    
     breadcrumbs = [
         (reverse(view_businesses), Business.get_erie_iron_business().name),
         (business_url, business.name),
     ]
-
+    
     if tabs:
         breadcrumbs.append(
             (
@@ -3269,10 +3412,10 @@ def view_stack(request, stack_id):
                 ),
             )
         )
-
+    
     stack_display_name = stack.stack_name or stack.stack_namespace_token or str(stack.id)
     breadcrumbs.append((reverse('view_stack', args=[stack.id]), stack_display_name))
-
+    
     return send_response(
         request,
         "business/business_base.html",
@@ -3620,3 +3763,67 @@ def view_llm_request(request, llm_request_id):
         },
         breadcrumbs=breadcrumbs
     )
+
+
+def view_pubsub_message_details(request, message_id):
+    message = get_object_or_404(PubSubMessage, id=message_id)
+    
+    return send_response(
+        request,
+        "businesses/businesses_base.html",
+        {
+            "business": Business.get_erie_iron_business(),
+            "tabs": _build_businesses_tabs(Business.get_erie_iron_business()),
+            "message": message,
+            "payload_json": json.dumps(message.payload, indent=2) if message.payload else None,
+            "tab_template": "pubsub/message_details.html",
+            "redirect_target": reverse('view_businesses_tab', args=['pubsub-messages']),
+        },
+        breadcrumbs=[
+            (reverse('view_businesses'), Business.get_erie_iron_business().name),
+            (reverse('view_businesses_tab', args=['pubsub-messages']), 'PubSub Messages'),
+            (None, f'Message {str(message_id)[:8]}'),
+        ]
+    )
+    
+    return send_response(request, "pubsub/message_details.html", context, breadcrumbs=breadcrumbs)
+
+
+@require_POST
+def fetch_pubsub_messages(request):
+    page_size = int(request.POST.get('page_size', 20))
+    page_number = int(request.POST.get('page_number', 0))
+    sort_by = request.POST.get('sort_by', 'created_at')
+    
+    offset = page_number * page_size
+    messages = PubSubMessage.objects.all().order_by(f"-{sort_by}")[offset:offset + page_size]
+    
+    context = {
+        "pubsub_messages": messages,
+        "redirect_target": reverse('view_businesses_tab', args=['pubsub-messages']),
+    }
+    
+    return render(request, "pubsub/message_list_partial.html", context)
+
+
+@require_POST
+def action_delete_pubsub_message(request, message_id):
+    message = get_object_or_404(PubSubMessage, id=message_id)
+    message.delete()
+    
+    messages.success(request, f"PubSub message {str(message_id)[:8]} deleted successfully.")
+    return redirect('view_businesses_tab', tab='pubsub-messages')
+
+
+@require_POST
+def action_retry_pubsub_message(request, message_id):
+    message = get_object_or_404(PubSubMessage, id=message_id)
+    
+    PubSubMessage.reprocess([message.id], message.env)
+    messages.success(request, f"PubSub message {str(message_id)[:8]} has been marked for retry.")
+
+    next_url = request.POST.get('next') or request.META.get('HTTP_REFERER')
+    if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}, request.is_secure()):
+        return HttpResponseRedirect(next_url)
+
+    return HttpResponseRedirect(reverse('view_pubsub_message_details', args=[message_id]))

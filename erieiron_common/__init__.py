@@ -16,7 +16,7 @@ Key modules:
 
 __version__ = '0.1.0'
 __author__ = 'Erie Iron LLC'
-__email__ = 'tech@erieiron.com'
+__email__ = 'tech@erieironllc.com'
 
 from .common import get_now, log_info, log_error
 # Import commonly used components for easier access

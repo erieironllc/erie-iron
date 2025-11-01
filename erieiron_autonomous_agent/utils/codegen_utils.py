@@ -1,13 +1,14 @@
 import ast
 import os
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 from pathlib import Path
 
 import black
 import torch
 from numpy import ndarray
 from transformers import AutoTokenizer, AutoModel
-from tree_sitter import Parser
-from tree_sitter_languages import get_language
 
 tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
 model = AutoModel.from_pretrained("microsoft/codebert-base")
@@ -16,12 +17,6 @@ LANGUAGE_NAMES = {
     '.py': 'python',
     '.js': 'javascript',
 }
-
-LANG_OBJS = {ext: get_language(language) for ext, language in LANGUAGE_NAMES.items()}
-
-PARSERS = {ext: Parser() for ext in LANGUAGE_NAMES}
-for ext in PARSERS:
-    PARSERS[ext].set_language(LANG_OBJS[ext])
 
 
 class CodeCompilationError(Exception):
@@ -77,6 +72,14 @@ def extract_methods_from_file(file_path):
 
 
 def extract_methods(ext, source_code):
+    from tree_sitter import Parser
+    from tree_sitter_languages import get_language
+    LANG_OBJS = {ext: get_language(language) for ext, language in LANGUAGE_NAMES.items()}
+    
+    PARSERS = {ext: Parser() for ext in LANGUAGE_NAMES}
+    for ext in PARSERS:
+        PARSERS[ext].set_language(LANG_OBJS[ext])
+    
     source_code = source_code.encode("utf-8") if isinstance(source_code, str) else source_code
     language_name = LANGUAGE_NAMES[ext]
     parser = PARSERS[ext]

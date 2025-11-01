@@ -6,7 +6,7 @@ import uuid
 from django.db import transaction
 
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.enums import TaskStatus
+from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Initiative, Task, ProductRequirement, Business, SelfDrivingTask
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat, llm_chat, get_sys_prompt
 from erieiron_common import common, domain_manager
@@ -104,6 +104,14 @@ def on_product_initiatives_defined(business_id):
 def define_tasks_for_initiative(initiative_id):
     initiative = Initiative.objects.get(id=initiative_id)
     business = initiative.business
+    
+    if BusinessStatus.ACTIVE.neq(business.status):
+        logging.info(f"skipping creating tasks for {initiative.title}.  The Business is not active")
+        return []
+    
+    if Level.LOW.eq(business.autonomy_level):
+        logging.info(f"skipping creating tasks for {initiative.title}.  The Business is LOW automony")
+        return []
     
     if not initiative.architecture:
         write_initiative_architecture(initiative)
@@ -216,15 +224,15 @@ def process_response(initiative, eng_lead_response):
     
     for task_data in eng_lead_response.get("tasks", []):
         task_id = task_data.get("task_id")
-
+        
         validated_ids = set(task_data.get("validated_requirements", []))
         initiative_req_ids = set(str(req.id) for req in initiative.requirements.all())
         invalid_ids = validated_ids - initiative_req_ids
         if invalid_ids:
             raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
-
+        
         existing_task = Task.objects.filter(id=task_id).first() if task_id else None
-
+        
         defaults = {
             "initiative": initiative,
             "status": TaskStatus.NOT_STARTED,

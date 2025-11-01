@@ -5,19 +5,13 @@ import zipfile
 from pathlib import Path
 
 import settings
-from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
-    get_self_driving_coder_agent_module,
-)
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu import get_goal_msg
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, CodeFile, CodeVersion
+from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat
 from erieiron_common import common, aws_utils, settings_common
 from erieiron_common.enums import TaskType, S3Bucket
 from erieiron_common.llm_apis.llm_interface import LlmMessage
-
-
-_agent_module = get_self_driving_coder_agent_module()
-SelfDriverConfig = _agent_module.SelfDriverConfig
-get_goal_msg = _agent_module.get_goal_msg
-llm_chat = _agent_module.llm_chat
 
 
 def package_ml_artifacts(config: SelfDriverConfig):
@@ -32,7 +26,7 @@ def package_ml_artifacts(config: SelfDriverConfig):
     
     messages = []
     
-    messages.append(get_goal_msg(config))
+    messages.append(get_goal_msg(config, "Goal"))
     
     aval_iterations = []
     for best_iteration in config.self_driving_task.selfdrivingtaskbestiteration_set.filter(iteration__evaluation_json__isnull=False).order_by("timestamp"):
@@ -110,8 +104,8 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     eval_data = llm_chat(
         "Package Artifacts",
         messages,
+        config.current_iteration,
         config.model_code_planning,
-        tag_entity=config.current_iteration,
         code_response=True
     ).json()
     
@@ -149,8 +143,8 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     arch_llm_response = llm_chat(
         "Writeup Summary",
         messages,
-        config.model_code_planning,
-        tag_entity=config.current_iteration,
+        config.current_iteration,
+        config.model_code_planning
     )
     
     planning_model = best_iteration.planning_model

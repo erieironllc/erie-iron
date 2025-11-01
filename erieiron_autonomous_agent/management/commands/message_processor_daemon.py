@@ -1,6 +1,7 @@
 import faulthandler
 import os
 import time
+import warnings
 from datetime import timedelta
 from datetime import timezone
 
@@ -16,6 +17,8 @@ from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePrio
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage
 
+os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
+warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 
 @pubsub_workflow
 def add_noop_handlers(pubsub_manager: PubSubManager):

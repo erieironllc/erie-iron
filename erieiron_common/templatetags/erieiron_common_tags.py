@@ -423,6 +423,14 @@ def times(number):
 
 
 @register.filter
+def short_id(s):
+    s = str(s or "")
+    if "-" in s:
+        return s.split("-")[0]
+    else:
+        return s.split("_")[0]
+
+@register.filter
 def id_safe_str(s):
     return common.strip_non_alphanumeric(common.default_str(s))
 
@@ -456,7 +464,7 @@ def html_safe_id(obj: models.Model):
 @register.filter
 def label(s: str):
     s = s or ""
-    return s.title().replace("_", " ")
+    return s.replace("_", " ").title()
 
 
 @register.filter

@@ -8,9 +8,12 @@ https://docs.djangoproject.com/en/5.1/howto/deployment/wsgi/
 """
 
 import os
+import warnings
 
 from django.core.wsgi import get_wsgi_application
 
+os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 
 application = get_wsgi_application()

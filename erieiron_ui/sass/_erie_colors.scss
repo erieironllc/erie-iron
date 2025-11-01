@@ -28,6 +28,12 @@ $body-color: #EAEAEA;
 $link-color: $primary;
 $link-hover-color: #60A5FA;
 
+// Business status colors
+$business-idea: #9333EA; // purple for ideas/concepts
+$business-active: #059669; // emerald green for active businesses
+$business-paused: #D97706; // amber for paused/on-hold
+$business-shutdown: #DC2626; // red for shutdown businesses
+
 $theme-colors: (
   "primary": $primary,
   "secondary": $secondary,
@@ -36,7 +42,12 @@ $theme-colors: (
   "warning": $warning,
   "danger": $danger,
   "light": $light,
-  "dark": $dark
+  "dark": $dark,
+        
+  "idea": $business-idea,
+  "active": $business-active,
+  "paused": $business-paused,
+  "shutdown": $business-shutdown
 );
 
 $table-bg: $body-bg;

@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import time
+import warnings
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -18,6 +19,7 @@ from erieiron_common.message_queue.resource_manager import get_db_capacity, get_
 from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage, PubSubEnvironment
 from erieiron_common.runtime_config import RuntimeConfig
 
+warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 
 class Command(BaseCommand):
     def __init__(self, **kwargs):

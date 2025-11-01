@@ -32,7 +32,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "slug": "requirements",
         "label": "Requirements",
         "template": "initiative/tabs/requirements.html",
-        "availability_fn": views._initiative_tab_available_requirements,
         "context_fn": views._initiative_tab_context_requirements,
     },
     {
@@ -53,7 +52,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "slug": "tasks",
         "label": "Tasks",
         "template": "initiative/tabs/tasks.html",
-        "availability_fn": views._initiative_tab_available_tasks,
         "context_fn": views._initiative_tab_context_tasks,
     },
     # {
@@ -98,32 +96,8 @@ BUSINESSES_TAB_DEFINITIONS = [
         "slug": "portfolio",
         "label": "Portfolio",
         "template": "businesses/tabs/portfolio.html",
-        "availability_fn": views._businesses_tab_available_portfolio,
         "context_fn": views._businesses_tab_context_portfolio,
     },
-    TAB_DIVIDER,
-    {
-        "slug": "capacity",
-        "label": "Capacity",
-        "template": "businesses/tabs/capacity.html",
-        "availability_fn": views._businesses_tab_available_capacity,
-        "context_fn": views._businesses_tab_context_capacity,
-    },
-    {
-        "slug": "initiatives",
-        "label": "Initiatives",
-        "template": "businesses/tabs/initiatives.html",
-        "availability_fn": views._businesses_tab_available_initiatives,
-        "context_fn": views._businesses_tab_context_initiatives,
-    },
-    {
-        "slug": "lessons",
-        "label": "Lessons",
-        "template": "businesses/tabs/lessons.html",
-        "availability_fn": views._businesses_tab_available_lessons,
-        "context_fn": views._businesses_tab_context_lessons,
-    },
-
     TAB_DIVIDER,
     {
         "slug": "llm-spend",
@@ -133,18 +107,49 @@ BUSINESSES_TAB_DEFINITIONS = [
         "context_fn": views._businesses_tab_context_llm_spend,
     },
     {
+        "slug": "capacity",
+        "label": "Capacity",
+        "template": "businesses/tabs/capacity.html",
+        "availability_fn": views._businesses_tab_available_capacity,
+        "context_fn": views._businesses_tab_context_capacity,
+    },
+    {
+        "slug": "lessons",
+        "label": "Lessons",
+        "template": "businesses/tabs/lessons.html",
+        "availability_fn": views._businesses_tab_available_lessons,
+        "context_fn": views._businesses_tab_context_lessons,
+    },
+
+    {
+        "slug": "pubsub-messages",
+        "label": "PubSub Messages",
+        "template": "businesses/tabs/pubsub_messages.html",
+        "availability_fn": views._businesses_tab_available_pubsub_messages,
+        "context_fn": views._businesses_tab_context_pubsub_messages,
+    },
+    {
         "slug": "tools",
         "label": "Tools",
         "template": "businesses/tabs/tools.html",
         "availability_fn": views._businesses_tab_available_tools,
         "context_fn": views._businesses_tab_context_tools,
     },
+    TAB_DIVIDER,
+    {
+        "slug": "logout",
+        "label": "Log Out",
+        "availability_fn": views._businesses_tab_available_logout,
+        "context_fn": views._businesses_tab_context_logout,
+        "is_action_tab": True,
+        "url_name": "action_logout",
+    },
 ]
 
 BUSINESSES_TAB_MAP = {
     definition["slug"]: definition
     for definition in BUSINESSES_TAB_DEFINITIONS
-    if not definition.get("is_divider")
+    if not definition.get("is_divider") and not definition.get("is_action_tab")
 }
 
 TASK_TAB_DEFINITIONS = [

@@ -1,10 +1,8 @@
 from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
 from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, task_manager, worker_human
-from erieiron_autonomous_agent.coding_agents.agent_dispatch import get_self_driving_coder_agent_module
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
 from erieiron_common.enums import PubSubMessageType as T
-from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
-from erieiron_autonomous_agent.models import Task
 
 
 @pubsub_workflow
@@ -24,7 +22,7 @@ def board_workflow(pubsub_manager: PubSubManager):
         T.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
         board_chair.on_portfolio_reduce_businesses_requested
     )
-
+    
     # Board Business Development
     pubsub_manager.on(
         T.PORTFOLIO_ADD_BUSINESSES_REQUESTED,
@@ -35,14 +33,14 @@ def board_workflow(pubsub_manager: PubSubManager):
         corporate_development_agent.submit_business_opportunity,
         T.ANALYSIS_REQUESTED
     )
-
+    
     # Board Analyst
     pubsub_manager.on(
         T.ANALYSIS_REQUESTED,
         board_analyst.on_analysis_requested,
         T.ANALYSIS_ADDED
     )
-
+    
     # Board Resource Planner
     pubsub_manager.on(
         T.RESOURCE_PLANNING_REQUESTED,
@@ -50,11 +48,9 @@ def board_workflow(pubsub_manager: PubSubManager):
         T.ANALYSIS_ADDED
     )
     
-    agent = get_self_driving_coder_agent_module()
-
     pubsub_manager.on(
         T.RESET_TASK_TEST,
-        agent.on_reset_task_test
+        self_driving_coder_agent_tofu.on_reset_task_test
     )
 
 
@@ -70,7 +66,7 @@ def business_workflow(pubsub_manager: PubSubManager):
         PubSubManager.noop(),
         T.PRODUCT_INITIATIVES_REQUESTED
     )
-
+    
     # Product Lead
     pubsub_manager.on(
         T.PRODUCT_INITIATIVES_REQUESTED,
@@ -81,7 +77,7 @@ def business_workflow(pubsub_manager: PubSubManager):
         product_lead.define_single_initiative,
         T.INITIATIVE_DEFINED
     )
-
+    
     # Eng Lead
     pubsub_manager.on(
         T.INITIATIVE_DEFINED,
@@ -103,7 +99,7 @@ def business_workflow(pubsub_manager: PubSubManager):
     #     T.INITIATIVE_DEPLOY_REQUESTED,
     #     get_self_driving_coder_agent_module().deploy_to_production
     # )
-
+    
     # Task Manager
     pubsub_manager.on(
         T.TASK_UPDATED,
@@ -121,22 +117,21 @@ def business_workflow(pubsub_manager: PubSubManager):
         T.INITIATIVE_GREEN_LIT,
         task_manager.on_initiative_green_lit
     )
-
+    
     # Desiger
     pubsub_manager.on(
         T.DESIGN_WORK_REQUESTED,
         worker_design.do_work,
         T.TASK_UPDATED
     )
-
+    
     # Coder
     pubsub_manager.on(
         T.CODING_WORK_REQUESTED,
         worker_coder.do_work,
         T.TASK_UPDATED
     )
-
-
+    
     # Human
     pubsub_manager.on(
         T.HUMAN_WORK_REQUESTED,
