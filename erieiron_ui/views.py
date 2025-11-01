@@ -15,6 +15,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone, formats
 from django.utils.html import escape
+from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 
 import settings
@@ -3118,6 +3119,26 @@ def view_stack(request, stack_id):
             }
         )
 
+    grouped_resources_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for resource in stack_resources:
+        resource_type = (resource.get("type") or "Unknown").strip() or "Unknown"
+        grouped_resources_map[resource_type].append(resource)
+
+    resource_groups: list[dict[str, Any]] = []
+    for resource_type in sorted(grouped_resources_map.keys(), key=lambda value: value.lower()):
+        resources_in_group = grouped_resources_map[resource_type]
+        resources_in_group.sort(
+            key=lambda item: (item.get("address") or item.get("name") or "").lower()
+        )
+        anchor = slugify(resource_type) or "resource-type"
+        resource_groups.append(
+            {
+                "type": resource_type,
+                "anchor": f"resource-type-{anchor}",
+                "resources": resources_in_group,
+            }
+        )
+
     business_url = reverse('view_business', args=[business.id])
     initiative_url = (
         reverse('view_initiative', args=[stack.initiative_id])
@@ -3137,7 +3158,7 @@ def view_stack(request, stack_id):
         "scope_label": scope_label,
         "stack_vars_pretty": stack_vars_pretty,
         "iac_state_metadata_pretty": iac_state_metadata_pretty,
-        "stack_resources": stack_resources,
+        "resource_groups": resource_groups,
         "business_url": business_url,
         "initiative_url": initiative_url,
     }

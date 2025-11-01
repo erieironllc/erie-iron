@@ -23,6 +23,24 @@
 - This block standardizes backend configuration, provider versioning, and ensures consistent setup across all Erie Iron OpenTofu stacks.
 - Do **not** modify the bucket, region, or provider source/version unless explicitly authorized by the infrastructure maintainer.
 
+### S3 Versioning Rule
+- OpenTofu provider v5.x and above no longer supports defining S3 bucket versioning directly within the `aws_s3_bucket` resource.
+- Instead, versioning must be defined using a separate `aws_s3_bucket_versioning` resource.
+- When adding or modifying S3 bucket resources, always ensure there is a corresponding `aws_s3_bucket_versioning` resource with a matching bucket reference and explicit versioning configuration block:
+  ```hcl
+  resource "aws_s3_bucket_versioning" "example" {
+    bucket = aws_s3_bucket.example.id
+    versioning_configuration {
+      enabled = false
+    }
+    lifecycle {
+      prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    }
+  }
+  ```
+- Do not use the deprecated `versioning {}` block inside `aws_s3_bucket`.
+- The `aws_s3_bucket_versioning` resource must always include a `lifecycle` block consistent with Erie Iron conventions (`prevent_destroy = ERIE_IRON_RETAIN_RESOURCES`).
+
 - Default the AWS region to us-west-2 unless specifically instructed otherwise
 - Provisioning plans must prioritize cost-efficiency and security:
   - When choosing AWS services (e.g., App Runner vs ECS vs Lambda), select the **least expensive** option that satisfies load and runtime needs.

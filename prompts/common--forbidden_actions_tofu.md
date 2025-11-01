@@ -80,4 +80,7 @@ DOMAIN_EDITS_FORBIDDEN = true.
 - **never** plan edits to read-only or generated artifacts, including anything in `venv`, `node_modules`, `.pyc`, `.log`, or other derived/runtime-generated files.
 - **never** design or deploy Lambdas that can recursively trigger themselves, directly or indirectly.
 
-If you detect code that violates any Forbidden Action, you **must** include a concrete plan to remediate it in this iteration.
+### Runtime Shims Prohibitions:
+- Prohibition: **Never** propose import-time monkeypatches, site-level shims, or any change that modifies third-party library behavior at runtime ("runtime monkeypatches"). These are disallowed unless explicitly permitted by the calling context.
+- Approved fix categories (preferred, in order): 1) Dependency/package updates (bump/pin SDKs), 2) Packaging/build/image changes, 3) Configuration changes (container/env/IaC), 4) Application code changes in appropriate modules, 5) Infrastructure/IaC changes.
+- If you detect code that violates any Forbidden Action, you **must** include a concrete plan to remediate it in this iteration.

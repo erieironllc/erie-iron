@@ -95,87 +95,157 @@
             </dl>
         </div>
     </div>
-
-
-    <div class="card">
+    <div class="card" id="resources-top">
         <div class="card-header">Resources</div>
         <div class="card-body">
-            {% if stack_resources %}
-                <div class="row row-cols-1 g-3">
-                    {% for resource in stack_resources %}
-                        <div class="col">
-                            <div class="border rounded p-3 h-100">
-                                <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-start align-items-stretch mb-2">
-                                    <div>
-                                        <h3 class="h6 mb-1">{{ resource.address|default:resource.name|default:"Unnamed resource" }}</h3>
-                                        <div class="small text-muted">
-                                            {{ resource.type|default:"Unknown type" }}
-                                            {% if resource.mode %}
-                                                &middot; {{ resource.mode|title }}
-                                            {% endif %}
-                                            {% if resource.provider %}
-                                                &middot; {{ resource.provider }}
-                                            {% endif %}
-                                            {% if resource.module_address %}
-                                                &middot; {{ resource.module_address }}
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    {% if resource.console_url %}
-                                        <a href="{{ resource.console_url }}"
-                                           class="btn btn-outline-primary btn-sm mt-2 mt-md-0" target="_blank"
-                                           rel="noopener">Open in AWS Console</a>
-                                    {% endif %}
-                                </div>
-
-                                <dl class="row small mb-3">
-                                    <dt class="col-sm-3">ARN</dt>
-                                    <dd class="col-sm-9">
-                                        {% if resource.arn %}
-                                            <code>{{ resource.arn }}</code>
-                                            {% if not resource.console_url %}
-                                                <span class="text-muted">(no console URL available)</span>
-                                            {% endif %}
-                                        {% else %}
-                                            <span class="text-muted">Not provided</span>
-                                        {% endif %}
-                                    </dd>
-                                    <dt class="col-sm-3">Address</dt>
-                                    <dd class="col-sm-9">
-                                        {% if resource.address %}
-                                            <code>{{ resource.address }}</code>
-                                        {% else %}
-                                            <span class="text-muted">Not provided</span>
-                                        {% endif %}
-                                    </dd>
-                                </dl>
-
-                                {% if resource.values_pretty %}
-                                    <details class="small">
-                                        <summary class="mb-2">Values</summary>
-                                        <pre class="mb-0 small">{{ resource.values_pretty }}</pre>
-                                    </details>
-                                {% elif resource.resource_pretty %}
-                                    <pre class="mb-0 small">{{ resource.resource_pretty }}</pre>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endfor %}
-                </div>
-                <div class="card mt-4">
-                    <div class="card-header">Stack Variables</div>
-                    <div class="card-body">
-                        {% if stack_vars_pretty %}
-                            <pre class="mb-0 small">{{ stack_vars_pretty }}</pre>
-                        {% else %}
-                            <p class="text-muted mb-0">No stack variables recorded.</p>
-                        {% endif %}
+            {% if resource_groups %}
+                <div class="mb-4">
+                    <div class="small text-uppercase text-muted fw-semibold mb-2">Jump to type</div>
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for group in resource_groups %}
+                            <a class="btn btn-outline-secondary btn-sm js-resource-scroll"
+                               data-scroll-anchor="{{ group.anchor }}"
+                               href="#{{ group.anchor }}">{{ group.type }}</a>
+                        {% endfor %}
                     </div>
                 </div>
 
+                {% for group in resource_groups %}
+                    <div id="{{ group.anchor }}" class="mb-4">
+                        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center align-items-start mb-3">
+                            <h3 class="h5 mb-2 mb-md-0">{{ group.type }}</h3>
+                            <a href="#resources-top"
+                               class="small text-muted js-resource-scroll"
+                               data-scroll-anchor="resources-top">Back to top</a>
+                        </div>
+                        <div class="row row-cols-1 g-3">
+                            {% for resource in group.resources %}
+                                <div class="col">
+                                    <div class="border rounded p-3 h-100">
+                                        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-start align-items-stretch mb-2">
+                                            <div>
+                                                <h4 class="h6 mb-1">{{ resource.address|default:resource.name|default:"Unnamed resource" }}</h4>
+                                                <div class="small text-muted">
+                                                    {% if resource.mode %}
+                                                        {{ resource.mode|title }}
+                                                    {% endif %}
+                                                    {% if resource.provider %}
+                                                        {% if resource.mode %}&middot;{% endif %} {{ resource.provider }}
+                                                    {% endif %}
+                                                    {% if resource.module_address %}
+                                                        {% if resource.mode or resource.provider %}&middot;{% endif %} {{ resource.module_address }}
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            {% if resource.console_url %}
+                                                <a href="{{ resource.console_url }}" class="btn btn-outline-primary btn-sm mt-2 mt-md-0" target="_blank" rel="noopener">Open in AWS Console</a>
+                                            {% endif %}
+                                        </div>
+
+                                        <dl class="row small mb-3">
+                                            <dt class="col-sm-3">ARN</dt>
+                                            <dd class="col-sm-9">
+                                                {% if resource.arn %}
+                                                    <code>{{ resource.arn }}</code>
+                                                    {% if not resource.console_url %}
+                                                        <span class="text-muted">(no console URL available)</span>
+                                                    {% endif %}
+                                                {% else %}
+                                                    <span class="text-muted">Not provided</span>
+                                                {% endif %}
+                                            </dd>
+                                            <dt class="col-sm-3">Address</dt>
+                                            <dd class="col-sm-9">
+                                                {% if resource.address %}
+                                                    <code>{{ resource.address }}</code>
+                                                {% else %}
+                                                    <span class="text-muted">Not provided</span>
+                                                {% endif %}
+                                            </dd>
+                                        </dl>
+
+                                        {% if resource.values_pretty %}
+                                            <details class="small">
+                                                <summary class="mb-2">Values</summary>
+                                                <pre class="mb-0 small">{{ resource.values_pretty }}</pre>
+                                            </details>
+                                        {% elif resource.resource_pretty %}
+                                            <pre class="mb-0 small">{{ resource.resource_pretty }}</pre>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endfor %}
             {% else %}
                 <p class="text-muted mb-0">No resources have been captured for this stack yet.</p>
             {% endif %}
         </div>
     </div>
+
+    <div class="card mb-4">
+        <div class="card-header">Stack Variables</div>
+        <div class="card-body">
+            {% if stack_vars_pretty %}
+                <pre class="mb-0 small">{{ stack_vars_pretty }}</pre>
+            {% else %}
+                <p class="text-muted mb-0">No stack variables recorded.</p>
+            {% endif %}
+        </div>
+    </div>
 </div>
+
+<script>
+(function () {
+    var container = document.querySelector('.col-main-content');
+    if (!container) {
+        return;
+    }
+
+    container.addEventListener('click', function (event) {
+        var trigger = event.target.closest('.js-resource-scroll');
+        if (!trigger) {
+            return;
+        }
+
+        var anchorId = trigger.getAttribute('data-scroll-anchor');
+        if (!anchorId) {
+            return;
+        }
+
+        var escapeId = function (value) {
+            if (window.CSS && typeof window.CSS.escape === 'function') {
+                return window.CSS.escape(value);
+            }
+            return value.replace(/[^a-zA-Z0-9_\-]/g, function (char) {
+                return '\\' + char;
+            });
+        }(anchorId);
+
+        var target = container.querySelector('#' + escapeId) || document.getElementById(anchorId);
+        if (!target) {
+            return;
+        }
+
+        event.preventDefault();
+
+        var containerRect = container.getBoundingClientRect();
+        var targetRect = target.getBoundingClientRect();
+        var offset = targetRect.top - containerRect.top + container.scrollTop;
+        if (offset < 0) {
+            offset = 0;
+        }
+
+        if (typeof container.scrollTo === 'function') {
+            container.scrollTo({ top: offset, behavior: 'smooth' });
+        } else {
+            container.scrollTop = offset;
+        }
+
+        if (history && typeof history.replaceState === 'function') {
+            history.replaceState(null, '', '#' + anchorId);
+        }
+    });
+})();
+</script>

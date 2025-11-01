@@ -470,7 +470,7 @@ class OpenTofuStackManager:
     
     def validate_stack(self):
         try:
-            self.run_tofu_command("validate", ["tofu", "fmt", "-check"])
+            self.run_tofu_command("validate", ["fmt", "-check"])
         except subprocess.CalledProcessError as exc:
             return BadPlan(textwrap.dedent(f"""
                 OpenTofu formatting failed for {self.stack.stack_type} module.
@@ -482,7 +482,7 @@ class OpenTofuStackManager:
             """))
         
         try:
-            self.run_tofu_command("validate", ["tofu", "validate"])
+            self.run_tofu_command("validate", ["validate"])
         except subprocess.CalledProcessError as exc:
             return BadPlan(textwrap.dedent(f"""
                 OpenTofu validate failed for {self.stack.stack_type} module.

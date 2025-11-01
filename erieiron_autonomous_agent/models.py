@@ -1293,7 +1293,6 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 "pre_planning_routing": self.routing_json,
                 "pre_coding_planning": self.planning_json,
                 "code_changes": code_changes,
-                "deployment_logs": self.log_content_deployment or "N/A",
                 "sysout": self.log_content_execution or "N/A"
             })
         

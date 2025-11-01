@@ -1234,7 +1234,10 @@ def get_strategic_unblocking_data(config):
     return llm_chat(
         "Get Stragic Unblocking Data",
         [
-            get_sys_prompt("codeplanning--strategic_unblocker.md"),
+            get_sys_prompt([
+                "codeplanning--strategic_unblocker.md", 
+                "common--forbidden_actions_tofu.md"
+            ]),
             get_architecture_docs(
                 config.initiative
             ),
@@ -2033,11 +2036,7 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
             )
             config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
         except ExecutionException as e:
-            if "ModuleNotFoundError: No module named" not in str(e):
-                logging.info(f"error running first tests. {e}")
-            else:
-                config.log(f"some of all of {first_tests} FAILED. Skipping full test suite.")
-                raise FailingTestException(f"Some or all of {first_tests} failed. See logs above for details.")
+            raise FailingTestException(f"Some or all of {first_tests} failed. See logs above for details.")
     
     config.log(
         "Running the test suite three times to detect flakiness. "
@@ -2184,11 +2183,15 @@ def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outp
 
 
 def get_iteration_files_msg(current_iteration):
-    return LlmMessage.user_from_data(
-        "Modified Files", [
-            cv.code_file.file_path
-            for cv in current_iteration.codeversion_set.all()
-        ], "modified_file")
+    modified_files = list(current_iteration.codeversion_set.all())
+    if modified_files:
+        return LlmMessage.user_from_data(
+            "Modified Files", [
+                cv.code_file.file_path
+                for cv in modified_files
+            ], "modified_file")
+    else:
+        return "No files modified during this iteration"
 
 
 def build_iteration(config, container_env):
@@ -2207,10 +2210,10 @@ def build_iteration(config, container_env):
     ).json()
     
     # TODO take this out
-    required_build_steps = {
-        BuildStep.CONTAINERS.value: False,
-        BuildStep.LAMBDAS.value: True
-    }
+    # required_build_steps = {
+    #     BuildStep.CONTAINERS.value: False,
+    #     BuildStep.LAMBDAS.value: False
+    # }
     
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
@@ -4799,11 +4802,8 @@ def deploy_opentofu_stack(
         lambda_datas: list | None = None,
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    stack = InfrastructureStack.get(
-        config.initiative,
-        stack_type,
-        config.env_type
-    )
+    stack = config.stacks[stack_type]
+    opentofu_stack_manager = config.stack_managers[stack_type]
     
     tfvars_payload = build_tfvars_payload(
         config,
@@ -4815,11 +4815,10 @@ def deploy_opentofu_stack(
         previous_stack_outputs=previous_stack_outputs
     )
     
-    opentofu_stack_manager = config.stack_managers[stack_type]
-    
     stack.stack_vars = {k:v for k,v in tfvars_payload.items() if "password" not in k.lower()}
     stack.resources = opentofu_stack_manager.get_resources()
     stack.sandbox_root_dir = config.sandbox_root_dir
+    stack.updated_timestamp = common.get_now()
     stack.save()
 
     plan_summary: Mapping[str, Any] | None = None
