@@ -1,0 +1,307 @@
+{% load erieiron_common_tags %}
+{% load humanize %}
+<div>
+    {% for entry in analysis_entries %}
+        {% if entry.type == "business_analysis" %}
+            {% with business_analysis=entry.record %}
+                <div class="business-overview__section-body">
+                    <div class="card my-4">
+                        <div class="card-header d-flex justify-content-between align-content-end">
+                            <small class="text-info-emphasis d-flex align-items-center gap-2">
+                                <i class="bi bi-graph-up" aria-hidden="true"></i>
+                                Business Analysis
+                            </small>
+                            <small class="text-muted">{{ business_analysis.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-4">Final Recommendation Score</dt>
+                                <dd class="col-sm-8">{{ business_analysis.final_recommendation_score_1_to_10 }}</dd>
+
+                                <dt class="col-sm-4">Final Recommendation Justification</dt>
+                                <dd class="col-sm-8">{{ business_analysis.final_recommendation_justification|linebreaks }}</dd>
+
+                                <dt class="col-sm-4">Upfront Investment Needed (USD)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.upfront_investment_estimated_amount_usd|floatformat:0|intcomma }}</dd>
+
+                                <dt class="col-sm-4">TAM Estimate (USD/year)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.total_addressable_market_estimate_usd_per_year|floatformat:0|intcomma }}</dd>
+
+                                <dt class="col-sm-4">TAM Source / Rationale</dt>
+                                <dd class="col-sm-8">{{ business_analysis.total_addressable_market_source_or_rationale|default:"—" }}</dd>
+
+                                <dt class="col-sm-4">Potential Mode</dt>
+                                <dd class="col-sm-8">{{ business_analysis.potential_mode|default:"—" }}</dd>
+
+                                <dt class="col-sm-4">Estimated Monthly Revenue (USD)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.estimated_monthly_revenue_at_steady_state_usd|floatformat:0|intcomma }}</dd>
+
+                                <dt class="col-sm-4">Estimated Time to Profit (months)</dt>
+                                <dd class="col-sm-8">{{ business_analysis.time_to_profit_estimate_months }}</dd>
+
+                                <dt class="col-sm-4">Estimated Monthly Operating Cost (USD)</dt>
+                                <dd class="col-sm-8">
+                                    ${{ business_analysis.estimated_operating_total_cost_per_month_usd|floatformat:0|intcomma }}</dd>
+
+                                {% if business_analysis.use_of_funds_data %}
+                                    <dt class="col-sm-4">Use of Funds</dt>
+                                    <dd class="col-sm-8">{{ business_analysis.use_of_funds_data }}</dd>
+                                {% endif %}
+
+                                {% if business_analysis.macro_trends_data %}
+                                    <dt class="col-sm-4">Macro Trends</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.macro_trends_data %}
+                                                <li>{{ item }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.risks_data %}
+                                    <dt class="col-sm-4">Risks</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.risks_data %}
+                                                <li>{{ item }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.monthly_expenses_data %}
+                                    <dt class="col-sm-4">Monthly Expenses</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.monthly_expenses_data %}
+                                                <li>${{ item.monthly_expense_usd|intcomma }}: {{ item.name }}
+                                                    - {{ item.purpose }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.customer_acquisition_data %}
+                                    <dt class="col-sm-4">Customer Acquisition Strategy</dt>
+                                    <dd class="col-sm-8">{{ business_analysis.customer_acquisition_data }}</dd>
+                                {% endif %}
+
+                                {% if business_analysis.sales_strategy_data %}
+                                    <dt class="col-sm-4">Sales Strategy</dt>
+                                    <dd class="col-sm-8">{{ business_analysis.sales_strategy_data }}</dd>
+                                {% endif %}
+
+                                {% if business_analysis.operating_strategy_data %}
+                                    <dt class="col-sm-4">Operating Strategy</dt>
+                                    <dd class="col-sm-8">{{ business_analysis.operating_strategy_data }}</dd>
+                                {% endif %}
+
+                                {% if business_analysis.cash_flow_timeline_data %}
+                                    <dt class="col-sm-4">Cash Flow Timeline</dt>
+                                    <dd class="col-sm-8">
+                                        <ul class="mb-0">
+                                            {% for item in business_analysis.cash_flow_timeline_data %}
+                                                <li>{{ item }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    </dd>
+                                {% endif %}
+
+                                {% if business_analysis.additional_considerations_data %}
+                                    <dt class="col-sm-4">Additional Considerations</dt>
+                                    <dd class="col-sm-8">{{ business_analysis.additional_considerations_data }}</dd>
+                                {% endif %}
+
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            {% endwith %}
+        {% elif entry.type == "business_legal_analysis" %}
+            {% with business_legal_analysis=entry.record %}
+                <div class="business-overview__section-body">
+                    <div class="card my-4">
+                        <div class="card-header d-flex justify-content-between align-content-end">
+                            <small class="text-info-emphasis d-flex align-items-center gap-2">
+                                <i class="bi bi-shield-check" aria-hidden="true"></i>
+                                Legal Analysis
+                            </small>
+                            <small class="text-muted">{{ business_legal_analysis.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-4">Regulatory Compliance</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.regulatory_compliance|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Licensing Requirements</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.licensing_requirements|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Intellectual Property Considerations</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.intellectual_property_considerations|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Compliance Risks</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.compliance_risks|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Critical Contracts</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.critical_contracts|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Entity Structure Recommendation</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.entity_structure_recommendation|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Entity Structure Justification</dt>
+                                <dd class="col-sm-8">{{ business_legal_analysis.entity_structure_justification|default:"—"|linebreaksbr }}</dd>
+
+                                <dt class="col-sm-4">Required Disclaimers or Terms</dt>
+                                <dd class="col-sm-8">
+                                    {% if business_legal_analysis.required_disclaimers_or_terms %}
+                                        <ul class="mb-0">
+                                            {% for disclaimer in business_legal_analysis.required_disclaimers_or_terms %}
+                                                <li>{{ disclaimer }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% else %}
+                                        <em class="text-muted">None specified</em>
+                                    {% endif %}
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            {% endwith %}
+        {% elif entry.type == "business_capacity_analysis" %}
+            {% with business_capacity_analysis=entry.record %}
+                <div class="business-overview__section-body">
+                    <div class="card my-4">
+                        <div class="card-header d-flex justify-content-between align-content-end">
+                            <small class="text-info-emphasis d-flex align-items-center gap-2">
+                                <i class="bi bi-speedometer" aria-hidden="true"></i>
+                                Capacity Analysis
+                            </small>
+                            <small class="text-muted">{{ business_capacity_analysis.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-4">Cash Capacity</dt>
+                                <dd class="col-sm-8">
+                                    <span class="badge bg-{{ business_capacity_analysis.cash_capacity_status|lower }}">{{ business_capacity_analysis.cash_capacity_status }}</span>
+                                </dd>
+
+                                <dt class="col-sm-4">Compute Capacity</dt>
+                                <dd class="col-sm-8">
+                                    <span class="badge bg-{{ business_capacity_analysis.compute_capacity_status|lower }}">{{ business_capacity_analysis.compute_capacity_status }}</span>
+                                </dd>
+
+                                <dt class="col-sm-4">Human Capacity</dt>
+                                <dd class="col-sm-8">
+                                    <span class="badge bg-{{ business_capacity_analysis.human_capacity_status|lower }}">{{ business_capacity_analysis.human_capacity_status }}</span>
+                                </dd>
+
+                                <dt class="col-sm-4">Overall Recommendation</dt>
+                                <dd class="col-sm-8">
+                                    <span class="badge bg-{{ business_capacity_analysis.recommendation|lower }}">{{ business_capacity_analysis.recommendation }}</span>
+                                </dd>
+
+                                <dt class="col-sm-4">Justification</dt>
+                                <dd class="col-sm-8">{{ business_capacity_analysis.justification|default:"—"|linebreaksbr }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            {% endwith %}
+        {% elif entry.type == "business_guidance" %}
+            {% with board_guidance=entry.record %}
+                <div class="business-overview__section-body">
+                    <div class="card my-4">
+                        <div class="card-header d-flex justify-content-between align-content-end">
+                            <small class="text-info-emphasis d-flex align-items-center gap-2">
+                                <i class="bi bi-people" aria-hidden="true"></i>
+                                Board Guidance
+                            </small>
+                            <small class="text-muted">{{ board_guidance.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-12">Board Guidance</dt>
+                                <dd class="col-sm-12">{{ board_guidance.guidance|default:"—"|linebreaksbr }}</dd>
+
+                                {% with board_guidance.justification|to_json as g %}
+                                    <dt class="mt-3 col-sm-12">KPI Analysis</dt>
+                                    <dd class="col-sm-12">{{ g.kpi_analysis|default:"—"|linebreaksbr }}</dd>
+
+                                    <dt class="mt-3 col-sm-12">Budget Alignment</dt>
+                                    <dd class="col-sm-12">{{ g.budget_alignment|default:"—"|linebreaksbr }}</dd>
+
+                                    <dt class="mt-3 col-sm-12">Legal/Ethical Alignment</dt>
+                                    <dd class="col-sm-12">{{ g.legal_ethics|default:"—"|linebreaksbr }}</dd>
+
+                                    <dt class="mt-3 col-sm-12">Capacity Alignment</dt>
+                                    <dd class="col-sm-12">{{ g.capacity_alignment|default:"—"|linebreaksbr }}</dd>
+
+                                    <dt class="mt-3 col-sm-12">Overall</dt>
+                                    <dd class="col-sm-12">{{ g.overall_summary|default:"—"|linebreaksbr }}</dd>
+                                {% endwith %}
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            {% endwith %}
+        {% elif entry.type == "business_ceo_directive" %}
+            {% with business_ceo_directive=entry.record %}
+                <div class="business-overview__section-body">
+                    <div class="card my-4">
+                        <div class="card-header d-flex justify-content-between">
+                            <small class="text-info-emphasis d-flex align-items-center gap-2">
+                                <i class="bi bi-person-lines-fill" aria-hidden="true"></i>
+                                CEO Guidance: {{ business_ceo_directive.target_agent }}
+                            </small>
+                            <small class="text-muted">{{ business_ceo_directive.created_timestamp }}</small>
+                        </div>
+                        <div class="card-body">
+                            <dl class="row">
+                                <dt class="col-sm-12">{{ business_ceo_directive.directive_summary|linebreaksbr }}</dt>
+
+                                <dt class="mt-3 col-sm-12">Goal Alignment</dt>
+                                <dd class="col-sm-12">
+                                    {% if business_ceo_directive.goal_alignment %}
+                                        <ul class="mb-0">
+                                            {% for goal in business_ceo_directive.goal_alignment %}
+                                                <li>{{ goal }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% else %}
+                                        <em class="text-muted">None specified</em>
+                                    {% endif %}
+                                </dd>
+
+                                <dt class="mt-3 col-sm-12">KPI Targets</dt>
+                                <dd class="col-sm-12">
+                                    {% if business_ceo_directive.kpi_targets %}
+                                        <dl class="row mb-0">
+                                            {% for key, value in business_ceo_directive.kpi_targets.items %}
+                                                <dt class="col-sm-12">{{ key }}:&nbsp;{{ value }}</dt>
+                                            {% endfor %}
+                                        </dl>
+                                    {% else %}
+                                        <em class="text-muted">None specified</em>
+                                    {% endif %}
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            {% endwith %}
+        {% endif %}
+    {% endfor %}
+
+    {% if not analysis_entries %}
+        <section class="business-overview__section">
+            <div class="business-overview__section-body">
+                <em class="text-muted">No analysis data available yet.</em>
+            </div>
+        </section>
+    {% endif %}
+</div>

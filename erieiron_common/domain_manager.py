@@ -25,7 +25,7 @@ def manage_domain(business: Business):
             locked_business = Business.objects.select_for_update().get(pk=business.pk)
             _manage_domain_core(locked_business)
             business.domain = locked_business.domain
-            business.route53_hosted_zone_id = getattr(locked_business, "route53_hosted_zone_id", None)
+            business.route53_hosted_zone_id = locked_business.route53_hosted_zone_id
             return
     
     _manage_domain_core(business)
@@ -43,7 +43,7 @@ def _manage_domain_core(business: Business):
         _persist_business_domain(business)
     
     normalized_domain = _normalize_domain_name(business.domain)
-    if getattr(business, "domain", None) != normalized_domain:
+    if business.domain != normalized_domain:
         business.domain = normalized_domain
         _persist_business_domain(business)
     
@@ -200,13 +200,16 @@ def create_hosted_zone(chosen_domain):
 
 
 def add_dns_records(hosted_zone_id, chosen_domain):
+    route53 = aws_utils.client("route53")
+    
     if not chosen_domain:
         raise Exception(f"chosen_domain is required")
     
     if not hosted_zone_id:
-        raise Exception(f"hosted_zone_id is required")
+        hosted_zone_id = find_hosted_zone_id(route53, chosen_domain)
+        if not hosted_zone_id:
+            raise Exception(f"hosted_zone_id is required")
     
-    route53 = aws_utils.client("route53")
     
     def upsert_record(record):
         try:
@@ -662,7 +665,7 @@ def _resolve_existing_hosted_zone(
 
 def _ensure_business_hosted_zone(business: Business, domain: str) -> str:
     route53_client = aws_utils.client("route53")
-    stored_id = _normalize_hosted_zone_id(getattr(business, "route53_hosted_zone_id", None))
+    stored_id = _normalize_hosted_zone_id(business.route53_hosted_zone_id)
     
     if stored_id and not _hosted_zone_matches(route53_client, stored_id, domain):
         stored_id = None
@@ -690,16 +693,12 @@ def _persist_business_hosted_zone_id(business: Business, hosted_zone_id: str, on
     if not normalized_id:
         return
     
-    current = _normalize_hosted_zone_id(getattr(business, "route53_hosted_zone_id", None))
+    current = _normalize_hosted_zone_id(business.route53_hosted_zone_id)
     if only_if_changed and current == normalized_id:
         return
     
-    setattr(business, "route53_hosted_zone_id", normalized_id)
-    if hasattr(business, "save"):
-        try:
-            business.save(update_fields=["route53_hosted_zone_id"])
-        except TypeError:
-            business.save()
+    business.route53_hosted_zone_id = normalized_id
+    business.save(update_fields=["route53_hosted_zone_id"])
 
 
 def _persist_business_domain(business: Business) -> None:
