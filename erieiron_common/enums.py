@@ -551,3 +551,13 @@ class InitiativeNames(ErieEnum):
 class BuildStep(ErieEnum):
     LAMBDAS = auto()
     CONTAINERS = auto()
+
+
+class SdaPhase(ErieEnum):
+    INIT = auto()
+    PLANNING = auto()
+    CODING = auto()
+    BUILD = auto()
+    DEPLOY = auto()
+    EXECUTION = auto()
+    EVALUATE = auto()

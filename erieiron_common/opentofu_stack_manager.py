@@ -15,7 +15,7 @@ from typing import Any, Mapping, MutableMapping, Sequence
 import hcl2
 
 import settings
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import BadPlan
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
 from erieiron_autonomous_agent.models import InfrastructureStack
 from erieiron_common import common, opentofu_log_utils
 from erieiron_common.enums import InfrastructureStackType, EnvironmentType
@@ -34,7 +34,7 @@ class OpenTofuStackManager:
         self.sandbox_root_dir = sandbox_root_dir
         self.container_env = container_env or {}
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
-        self.module_file = get_swizzled_module_file(stack, sandbox_root_dir)
+        self.module_file = self.get_swizzled_module_file()
         self.module_dir = self.module_file.parent
         self.tf_env = self.build_opentofu_env()
         
@@ -53,6 +53,25 @@ class OpenTofuStackManager:
             self.init_workspace()
         except Exception as e:
             logging.warning("Workspace init failed or already initialized: %s", e)
+    
+    def get_swizzled_module_file(self):
+        tf_path = common.assert_exists(
+            self.sandbox_root_dir / InfrastructureStackType(self.stack.stack_type).get_opentofu_config()
+        )
+        
+        with tf_path.open("r", encoding="utf-8") as f:
+            contents = f.read()
+        
+        prevent_destroy = EnvironmentType.PRODUCTION.eq(self.stack.env_type)
+        new_contents = contents.replace("ERIE_IRON_RETAIN_RESOURCES", "true" if prevent_destroy else "false")
+        
+        temp_dir = tempfile.mkdtemp(prefix="opentofu_swizzle_")
+        swizzled_path = Path(temp_dir) / tf_path.name
+        
+        with swizzled_path.open("w", encoding="utf-8") as f:
+            f.write(new_contents)
+        
+        return swizzled_path
     
     def record(self, stage: str, result: OpenTofuCommandResult) -> None:
         self.stage = stage
@@ -382,9 +401,8 @@ class OpenTofuStackManager:
     def get_state_locator(self):
         return f"opentofu://workspace/{self.get_workspace_name()}"
     
-    @staticmethod
-    def get_stack_variables(stack: InfrastructureStack, sandbox_root_dir: Path) -> dict[str, OpenTofuVariable]:
-        tf_path = get_swizzled_module_file(stack, sandbox_root_dir)
+    def get_stack_variables(self) -> dict[str, OpenTofuVariable]:
+        tf_path = self.module_file
         
         try:
             with tf_path.open("r", encoding="utf-8") as tf_file:
@@ -502,38 +520,37 @@ class OpenTofuStackManager:
             return json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
             raise OpenTofuCommandError("Failed to decode OpenTofu state JSON", result) from exc
-        
-    def get_arn(self, resource_type: str):
-        state_data =  self.get_state_data()
+    
+    def get_resources(self) -> list[str]:
+        return [
+            resource
+            for resource in
+            common.get_list(self.get_state_data(), ["values", "root_module", "resources"])
+        ]
+    
+    def get_arns(self, resource_type: str) -> list[str]:
+        state_data = self.get_state_data()
+        arns = []
         for resource in state_data.get("values", {}).get("root_module", {}).get("resources", []):
             if resource.get("type") != resource_type:
                 continue
             
             arn = common.get(resource, ["values", "arn"])
             if arn:
-                return arn
+                arns.append(arn)
         
-        return None
-
-
-def get_swizzled_module_file(
-        stack: InfrastructureStack,
-        sandbox_root_dir: Path
-):
-    tf_path = common.assert_exists(
-        sandbox_root_dir / InfrastructureStackType(stack.stack_type).get_opentofu_config()
-    )
+        return list(set(arns))
     
-    with tf_path.open("r", encoding="utf-8") as f:
-        contents = f.read()
+    @staticmethod
+    def get_cross_stack_resources(stack_managers: list['OpenTofuStackManager']) -> list[str]:
+        resources = []
+        for stack_manager in stack_managers:
+            resources += stack_manager.get_resources()
+        return resources
     
-    prevent_destroy = EnvironmentType.PRODUCTION.eq(stack.env_type)
-    new_contents = contents.replace("ERIE_IRON_RETAIN_RESOURCES", "true" if prevent_destroy else "false")
-    
-    temp_dir = tempfile.mkdtemp(prefix="opentofu_swizzle_")
-    swizzled_path = Path(temp_dir) / tf_path.name
-    
-    with swizzled_path.open("w", encoding="utf-8") as f:
-        f.write(new_contents)
-    
-    return swizzled_path
+    @staticmethod
+    def get_cross_stack_arns(stack_managers: list['OpenTofuStackManager'], resource_type: str) -> list[str]:
+        arns = []
+        for stack_manager in stack_managers:
+            arns += stack_manager.get_arns(resource_type)
+        return arns

@@ -1391,3 +1391,55 @@ def package_lambda(
         logging.info(f"Uploading {code_file_path} package.  {zip_path} → {file_name} ({zip_path.stat().st_size / (1024 * 1024):.2f}MB)")
         
         return zip_path
+
+
+def aws_console_url_from_arn(arn: str) -> str:
+    match = re.match(r"arn:aws:([^:]+):([^:]*):([^:]*):(.*)", arn)
+    if not match:
+        raise ValueError(f"Invalid ARN: {arn}")
+    
+    service, region, account, resource = match.groups()
+    region_qs = f"?region={region}" if region else ""
+    console_base = "https://console.aws.amazon.com"
+    
+    if service == "s3":
+        # arn:aws:s3:::my-bucket[/key]
+        parts = resource.split("/", 1)
+        bucket = parts[0]
+        return f"https://s3.console.aws.amazon.com/s3/buckets/{bucket}"
+    
+    if service == "ec2":
+        # arn:aws:ec2:us-west-2:123456789012:instance/i-abc
+        if "instance/" in resource:
+            instance_id = resource.split("instance/")[1]
+            return f"{console_base}/ec2/v2/home{region_qs}#InstanceDetails:instanceId={instance_id}"
+    
+    if service == "iam":
+        if "role/" in resource:
+            role_name = resource.split("role/")[1]
+            return f"{console_base}/iam/home#/roles/{role_name}"
+        if "user/" in resource:
+            user_name = resource.split("user/")[1]
+            return f"{console_base}/iam/home#/users/{user_name}"
+    
+    if service == "lambda":
+        func = resource.split(":")[-1]
+        return f"{console_base}/lambda/home{region_qs}#/functions/{func}"
+    
+    if service == "rds":
+        if resource.startswith("db:"):
+            db = resource.split("db:")[1]
+            return f"{console_base}/rds/home{region_qs}#database:id={db}"
+    
+    if service == "logs":
+        if resource.startswith("log-group:"):
+            group = resource.split("log-group:")[1].split(":")[0]
+            encoded = group.replace("/", "%2F")
+            return f"{console_base}/cloudwatch/home{region_qs}#logsV2:log-groups/log-group/{encoded}"
+    
+    if service == "ecs":
+        if "cluster/" in resource:
+            cluster = resource.split("cluster/")[1]
+            return f"{console_base}/ecs/home{region_qs}#/clusters/{cluster}"
+    
+    return f"{console_base}/go/view?arn={arn}"

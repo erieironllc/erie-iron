@@ -6,7 +6,7 @@ import uuid
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, date
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Any
 from urllib.parse import quote
 
 from django.contrib import messages
@@ -21,9 +21,7 @@ import settings
 
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
-from erieiron_autonomous_agent.coding_agents.agent_dispatch import (
-    get_self_driving_coder_agent_module,
-)
+from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import (
     Business,
@@ -36,7 +34,8 @@ from erieiron_autonomous_agent.models import (
 )
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
-from erieiron_common import common, domain_manager
+from erieiron_common import common, domain_manager, ErieIronJSONEncoder
+from erieiron_common.aws_utils import aws_console_url_from_arn
 from erieiron_common.enums import PubSubMessageType, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -2115,8 +2114,7 @@ def action_task_regenerate_test(request, task_id):
     #     PubSubMessageType.RESET_TASK_TEST,
     #     task_id
     # )
-    agent = get_self_driving_coder_agent_module()
-    agent.on_reset_task_test(task_id)
+    self_driving_coder_agent_tofu.on_reset_task_test(task_id)
     
     return redirect(reverse('view_task_tab', args=['testcode', task_id]))
 
@@ -3007,6 +3005,172 @@ def action_toggle_lesson_validity(request, lesson_id):
     except Exception as e:
         messages.error(request, f'Error updating lesson: {str(e)}')
         return redirect(reverse('view_businesses_tab', args=['lessons']))
+
+
+def view_stack(request, stack_id):
+    stack = get_object_or_404(InfrastructureStack, pk=stack_id)
+    business = stack.business
+
+    tabs = _build_business_tabs(business)
+    stack_entry = common.first(_build_infrastructure_stack_entries([stack])) or {}
+
+    stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
+    env_type_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
+
+    stack_type_label = stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown")
+    environment_label = env_type_enum.label() if env_type_enum else (stack.env_type or "Unknown")
+    scope_label = (
+        getattr(stack.initiative, "title", "Initiative")
+        if stack.initiative_id
+        else "Business"
+    )
+
+    def _format_pretty(value):
+        if value is None or value == "":
+            return ""
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return ""
+            if stripped[:1] in {"[", "{"}:
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    logging.exception(exc)
+                    return stripped
+                value = parsed
+            else:
+                return stripped
+
+        try:
+            return json.dumps(value, indent=2, sort_keys=True, cls=ErieIronJSONEncoder)
+        except (TypeError, ValueError) as exc:
+            logging.exception(exc)
+            return str(value)
+
+    stack_vars_pretty = _format_pretty(stack.stack_vars)
+    iac_state_metadata = stack_entry.get("iac_state_metadata")
+    iac_state_metadata_pretty = _format_pretty(iac_state_metadata)
+
+    raw_resources = stack.resources
+    if raw_resources in (None, {}, []):
+        normalized_resources: list[Any] = []
+    else:
+        normalized_resources = common.ensure_list(raw_resources)
+
+    stack_resources: list[dict[str, Any]] = []
+    for raw_resource in normalized_resources:
+        parsed_resource: Any = raw_resource
+
+        if isinstance(raw_resource, str):
+            trimmed = raw_resource.strip()
+            if trimmed.startswith("{") or trimmed.startswith("["):
+                try:
+                    parsed_resource = json.loads(trimmed)
+                except json.JSONDecodeError as exc:
+                    logging.exception(exc)
+                    parsed_resource = {"raw": raw_resource}
+            else:
+                parsed_resource = {"raw": raw_resource}
+
+        if not isinstance(parsed_resource, dict):
+            stack_resources.append(
+                {
+                    "address": None,
+                    "name": None,
+                    "type": None,
+                    "mode": None,
+                    "provider": None,
+                    "module_address": None,
+                    "arn": None,
+                    "console_url": None,
+                    "values_pretty": _format_pretty(parsed_resource),
+                    "resource_pretty": _format_pretty(parsed_resource),
+                }
+            )
+            continue
+
+        values = parsed_resource.get("values")
+        if not isinstance(values, dict):
+            values = {}
+
+        arn = values.get("arn")
+        console_url = None
+        if arn:
+            try:
+                console_url = aws_console_url_from_arn(str(arn))
+            except Exception as exc:
+                logging.exception(exc)
+
+        stack_resources.append(
+            {
+                "address": parsed_resource.get("address") or parsed_resource.get("name"),
+                "name": parsed_resource.get("name"),
+                "type": parsed_resource.get("type"),
+                "mode": parsed_resource.get("mode"),
+                "provider": parsed_resource.get("provider_name") or parsed_resource.get("provider"),
+                "module_address": parsed_resource.get("module_address"),
+                "arn": arn,
+                "console_url": console_url,
+                "values_pretty": _format_pretty(values),
+                "resource_pretty": _format_pretty(parsed_resource),
+            }
+        )
+
+    business_url = reverse('view_business', args=[business.id])
+    initiative_url = (
+        reverse('view_initiative', args=[stack.initiative_id])
+        if stack.initiative_id
+        else None
+    )
+
+    context = {
+        "business": business,
+        "tabs": tabs,
+        "active_tab": "infrastructure-stacks",
+        "tab_template": "business/stack_detail.html",
+        "stack": stack,
+        "stack_entry": stack_entry,
+        "stack_type_label": stack_type_label,
+        "environment_label": environment_label,
+        "scope_label": scope_label,
+        "stack_vars_pretty": stack_vars_pretty,
+        "iac_state_metadata_pretty": iac_state_metadata_pretty,
+        "stack_resources": stack_resources,
+        "business_url": business_url,
+        "initiative_url": initiative_url,
+    }
+
+    breadcrumbs = [
+        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (business_url, business.name),
+    ]
+
+    if tabs:
+        breadcrumbs.append(
+            (
+                reverse('view_business_tab', args=['infrastructure-stacks', business.id]),
+                next(
+                    (
+                        tab.get("label")
+                        for tab in tabs
+                        if tab.get("slug") == 'infrastructure-stacks'
+                    ),
+                    'Infrastructure Stacks'
+                ),
+            )
+        )
+
+    stack_display_name = stack.stack_name or stack.stack_namespace_token or str(stack.id)
+    breadcrumbs.append((reverse('view_stack', args=[stack.id]), stack_display_name))
+
+    return send_response(
+        request,
+        "business/business_base.html",
+        context,
+        breadcrumbs=breadcrumbs,
+    )
 
 
 def view_codefile(request, codefile_id):

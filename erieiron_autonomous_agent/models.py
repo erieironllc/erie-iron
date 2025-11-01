@@ -31,8 +31,7 @@ from erieiron_common.enums import (
     BusinessIdeaSource,
     TaskType,
     EnvironmentType,
-    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity, BuildStep,
-)
+    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity, )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -489,10 +488,10 @@ class Initiative(BaseErieIronModel):
     
     def write_user_documentation(self):
         from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent import get_existing_test_context_messages
+        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu import get_existing_test_context_messages
         
         self.user_documentation = llm_chat(
-            "Log Extraction",
+            "Write User Documentation",
             [
                 get_sys_prompt("initiative--user_documentation_writer.md"),
                 textwrap.dedent(f"""
@@ -552,6 +551,7 @@ class InfrastructureStack(BaseErieIronModel):
     env_type = models.TextField(choices=EnvironmentType.choices())
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     stack_vars = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
+    resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     sandbox_root_dir = models.TextField(null=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
@@ -693,7 +693,7 @@ class InfrastructureStack(BaseErieIronModel):
         if EnvironmentType.PRODUCTION.eq(env_type):
             raise Exception(f"cannot tombstone a production stack")
         
-        from erieiron_common.opentofu_utils import OpenTofuStackManager
+        from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
         opentofu_stack_manager = OpenTofuStackManager(self, self.sandbox_root_dir)
         try:
             opentofu_stack_manager.destroy_stack()
@@ -1091,21 +1091,16 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content_coding = models.TextField(null=True)
     log_content_evaluation = models.TextField(null=True)
     log_content_init = models.TextField(null=True)
-    cloudformation_logs = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    log_content_deployment = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    log_content_cloudwatch = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    exceptions = models.TextField(null=True)
+
     planning_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     evaluation_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     slowest_cloudformation_resources = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     routing_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     strategic_unblocking_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     timestamp = models.DateTimeField(auto_now_add=True)
-    
-    @property
-    def iac_logs(self):
-        return self.cloudformation_logs
-    
-    @iac_logs.setter
-    def iac_logs(self, value):
-        self.cloudformation_logs = value
     
     def get_all_log_content(self):
         return "\n\n".join(common.filter_none([
@@ -1298,7 +1293,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 "pre_planning_routing": self.routing_json,
                 "pre_coding_planning": self.planning_json,
                 "code_changes": code_changes,
-                "cloudformation_logs": self.cloudformation_logs or "N/A",
+                "deployment_logs": self.log_content_deployment or "N/A",
                 "sysout": self.log_content_execution or "N/A"
             })
         
@@ -1605,7 +1600,7 @@ class CodeVersion(BaseErieIronModel):
         self.codemethod_set.all().delete()
         
         ext = os.path.splitext(path)[1]
-        if ext in codegen_utils.LANGUAGES:
+        if ext in codegen_utils.LANGUAGE_NAMES:
             for method_data in extract_methods(ext, self.code):
                 CodeMethod.objects.create(
                     code_version=self,

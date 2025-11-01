@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import pprint
 import time
 import traceback
 import weakref
@@ -9,21 +8,19 @@ from collections import defaultdict
 from enum import auto
 from pathlib import Path
 
+import botocore.session
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from sentence_transformers import SentenceTransformer
 
-from erieiron_autonomous_agent.models import (
-    SelfDrivingTaskIteration,
-    Task,
-    SelfDrivingTask,
-    Business,
-    Initiative, InfrastructureStack,
-)
+import settings
+from erieiron_autonomous_agent.coding_agents import credential_manager
+from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_common import common, ErieIronJSONEncoder
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, CredentialService, SdaPhase
 from erieiron_common.llm_apis.llm_interface import LlmMessage
+from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
 
 ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.23"
 TASK_DESC_CODE_WRITING = "code writing"
@@ -55,32 +52,6 @@ MAP_TASKTYPE_TO_PLANNING_PROMPT = {
 }
 
 ARTIFACTS = "artifacts"
-
-
-class CodeReviewException(Exception):
-    def __init__(self, review_data):
-        self.bad_plan = review_data.get("plan_quality", []) != "VALID"
-        self.review_data = review_data
-        super().__init__("Code Review Failed")
-    
-    def get_issue_dicts(self) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
-        return self.get_file_blockers_dict(), self.get_file_warnings_dict()
-    
-    def get_file_blockers_dict(self) -> dict[str, list[dict]]:
-        d = defaultdict(list)
-        
-        for i in common.ensure_list(self.review_data.get("blocking_issues", [])):
-            d[i['file']].append(i)
-        
-        return d
-    
-    def get_file_warnings_dict(self) -> dict[str, list[dict]]:
-        d = defaultdict(list)
-        
-        for i in common.ensure_list(self.review_data.get("non_blocking_warnings", [])):
-            d[i['file']].append(i)
-        
-        return d
 
 
 class SelfDriverConfig:
@@ -133,8 +104,81 @@ class SelfDriverConfig:
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = artifacts_root
         self.git = self.self_driving_task.get_git()
+        self.deployment_logs = defaultdict(list)
         
+        self.stacks = {
+            stack_type: InfrastructureStack.get(self.initiative, stack_type, self.env_type)
+            for stack_type in [InfrastructureStackType.FOUNDATION, InfrastructureStackType.APPLICATION]
+        }
+        self.all_stack_tokens: list[OpenTofuStackManager] = [s.stack_namespace_token for s in self.stacks.values()]
+
+        self.runtime_env = self.get_runtime_env()
+        self.stack_managers = {
+            stack_type: OpenTofuStackManager(stack, self.sandbox_root_dir, self.runtime_env)
+            for stack_type, stack in self.stacks.items()
+        }
+        self.all_stack_managers: list[OpenTofuStackManager] = self.stack_managers.values()
+
         self.model_code_planning = LlmModel.OPENAI_GPT_5
+    
+    def get_runtime_env(self) -> dict:
+        env_type = self.env_type
+        aws_region = env_type.get_aws_region()
+        
+        aws_credentials = botocore.session.Session(
+            profile=os.environ.get("AWS_PROFILE")
+        ).get_credentials().get_frozen_credentials()
+        
+        stack_foundation = self.stacks[InfrastructureStackType.FOUNDATION]
+        stack_application = self.stacks[InfrastructureStackType.APPLICATION]
+        
+        if EnvironmentType.PRODUCTION.eq(self.env_type):
+            domain_name = self.business.domain
+        else:
+            domain_name = self.initiative.domain
+        
+        env = {
+            "DOMAIN_NAME": domain_name,
+            "AWS_DEFAULT_REGION": settings.AWS_DEFAULT_REGION_NAME,
+            "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
+            "AWS_ACCESS_KEY_ID": aws_credentials.access_key,
+            "AWS_SECRET_ACCESS_KEY": aws_credentials.secret_key,
+            "AWS_SESSION_TOKEN": aws_credentials.token,
+            "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
+            
+            "STACK_NAME": stack_application.stack_name,
+            "FOUNDATION_STACK_NAME": stack_foundation.stack_name,
+            
+            "TASK_NAMESPACE": stack_application.stack_namespace_token,
+            "STACK_IDENTIFIER": stack_application.stack_namespace_token,
+            "FOUNDATION_STACK_IDENTIFIER": stack_foundation.stack_namespace_token,
+            
+            "BUILDAH_FORMAT": "docker",
+            "PATH": os.getenv("PATH")
+        }
+        
+        for credential_service_name, cred_def in self.business.required_credentials.items():
+            if credential_service_name == CredentialService.RDS.value:
+                # OpenTofu and RDS handle the RDS secret - we update this as a special case later
+                continue
+            
+            secret_arn_env_var = cred_def.get("secret_arn_env_var")
+            secrent_arn = credential_manager.manage_credentials(
+                self,
+                env_type,
+                credential_service_name,
+                cred_def
+            )
+            env[secret_arn_env_var] = secrent_arn
+        
+        for k in list(env.keys()):
+            if k.startswith("__") or env.get(k) is None:
+                env.pop(k, None)
+        
+        return env
+    
+    def add_deployment_log(self, stack_type: InfrastructureStackType, log_results: dict):
+        self.deployment_logs[stack_type].append(log_results)
     
     def get_stack_names(self) -> list[str]:
         return [
@@ -176,7 +220,7 @@ class SelfDriverConfig:
         
         self._record_phase_change()
         return log_content
-
+    
     def _record_phase_change(self):
         if not self.self_driving_task:
             return
@@ -318,56 +362,3 @@ class SelfDriverConfig:
             return self.log_path.read_text()
         except Exception:
             return traceback.format_exc()
-
-
-class GoalAchieved(Exception):
-    def __init__(self, planning_data):
-        pprint.pprint(planning_data)
-        self.planning_data = planning_data
-
-
-class DatabaseMigrationException(Exception):
-    ...
-
-
-class AgentBlocked(Exception):
-    def __init__(self, blocked_data):
-        self.blocked_data = blocked_data
-
-
-class NeedPlan(Exception):
-    def __init__(self, msg: str):
-        super().__init__(msg)
-
-
-class FailingTestException(Exception):
-    def __init__(self, extracted_exception: str):
-        super().__init__(extracted_exception)
-
-
-class ExecutionException(Exception):
-    def __init__(self, extracted_exception: str):
-        super().__init__(extracted_exception)
-
-
-class BadPlan(Exception):
-    def __init__(self, msg: str, plan_data: dict = None):
-        if not plan_data:
-            plan_data = {}
-        
-        self.plan_data = plan_data
-        super().__init__(msg)
-
-
-class RetryableException(Exception):
-    ...
-
-
-class SdaPhase(ErieEnum):
-    INIT = auto()
-    PLANNING = auto()
-    CODING = auto()
-    BUILD = auto()
-    DEPLOY = auto()
-    EXECUTION = auto()
-    EVALUATE = auto()

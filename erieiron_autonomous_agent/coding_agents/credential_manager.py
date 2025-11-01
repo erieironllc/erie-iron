@@ -3,7 +3,8 @@ import secrets
 import string
 
 import settings
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import AgentBlocked, SelfDriverConfig
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked
 from erieiron_autonomous_agent.models import Business, Task
 from erieiron_common import aws_utils, common
 from erieiron_common.enums import CredentialService, EnvironmentType

@@ -24,24 +24,17 @@ from erieiron_public import agent_tools
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import (
-    CodeReviewException,
     TASK_DESC_CODE_WRITING,
-    BadPlan,
-    GoalAchieved,
-    RetryableException,
-    AgentBlocked,
     MAP_TASKTYPE_TO_PLANNING_PROMPT,
     SdaPhase,
-    NeedPlan,
-    ExecutionException,
     LAMBDA_PACKAGES_BUCKET,
     ERIEIRON_PUBLIC_COMMON_VERSION,
     USE_CODEX,
     SdaInitialAction,
     sentence_transformer_model,
-    DatabaseMigrationException,
-    FailingTestException, SelfDriverConfig,
+    SelfDriverConfig,
 )
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
     CodeVersion,
@@ -59,15 +52,15 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager, opentofu_utils, opentofu_log_utils, ErieIronJSONEncoder
+from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, ErieIronJSONEncoder, aws_log_reader
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda
 from erieiron_common.cloudformation_utils import get_resource_configs, CloudformationResourceType
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.opentofu_helpers import OpenTofuException
-from erieiron_common.opentofu_utils import OpenTofuStackManager
+from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError
+from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
 
 
 def execute(
@@ -729,10 +722,8 @@ def validate_infrastructure(config, normalized_changed):
     
     container_env = build_env(config)
     
-    for stack_type in InfrastructureStackType:
-        stack = InfrastructureStack.get(config.initiative, stack_type, config.env_type)
-        opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, container_env)
-        opentofu_stack_manager.validate_stack()
+    for stack_manager in config.all_stack_managers:
+        stack_manager.validate_stack()
     
     return None
 
@@ -1366,13 +1357,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     if not domain_name or not hosted_zone_id:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
     
-    load_balancer_arn = None
-    for stack in get_stacks(config):
-        opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, build_env(config))
-        load_balancer_arn = opentofu_stack_manager.get_arn("aws_lb")
-        if load_balancer_arn:
-            break
-    
+    load_balancer_arn = common.first(OpenTofuStackManager.get_cross_stack_arns(config.all_stack_managers, "aws_lb"))
     if not load_balancer_arn:
         config.log(f"No Application Load Balancer found in stacks {config.get_stack_names()}; skipping DNS alias update")
         return
@@ -1862,26 +1847,8 @@ def run_container_command(
         raise ExecutionException(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
 
 
-def extract_exception(config: SelfDriverConfig, log_content: str) -> str:
-    if len(log_content) < 10_000:
-        model = LlmModel.OPENAI_GPT_5_MINI
-    else:
-        model = LlmModel.OPENAI_GPT_5
-    
-    return llm_chat(
-        "Log Extraction",
-        [
-            get_sys_prompt("log_parser_tofu.md"),
-            log_content
-        ],
-        model=model,
-        tag_entity=config.current_iteration
-    ).text
-
-
 def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     deployment_start_epoch = int(time.time())
-    deployment_logs: dict[str, Any] = {}
     try:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
@@ -1895,7 +1862,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
             container_env
         )
         
-        deployment_logs = deploy_iteration(
+        deploy_iteration(
             config,
             container_env,
             container_image_tag,
@@ -1922,9 +1889,8 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     except Exception as e:
         config.log(common.get_stack_trace_as_string(e))
     finally:
-        store_opentofu_logs(
+        store_deploy_and_execution_logs(
             config,
-            deployment_logs,
             deployment_start_epoch
         )
         
@@ -1936,32 +1902,38 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         )
 
 
-def store_opentofu_logs(
+def store_deploy_and_execution_logs(
         config: SelfDriverConfig,
-        deployment_logs: Mapping[str, Any] | None,
         deployment_start_epoch: int
 ) -> None:
-    deployment_logs = deployment_logs or {}
-    log_payload = {
-        "schema": "opentofu/v1",
-        "deployment_window_start": datetime.fromtimestamp(deployment_start_epoch, tz=dt_timezone.utc).isoformat(),
-        "stacks": deployment_logs,
-    }
-    
-    log_payload["exceptions"] = extract_exception(
-        config,
-        log_content="""
-{logs}
-
-{payload}
-""".format(
-            logs=config.get_log_content(),
-            payload=json.dumps(log_payload, indent=4, cls=ErieIronJSONEncoder)
-        )
+    config.current_iteration.log_content_cloudwatch = aws_log_reader.get_cloudwatch_content(
+        config.all_stack_tokens,
+        deployment_start_epoch
     )
     
-    config.current_iteration.iac_logs = log_payload
-    config.current_iteration.save(update_fields=["cloudformation_logs"])
+    deployment_logs = common.get_dict(config.deployment_logs)
+    deploy_errors = []
+    for stack_type, stack_results in deployment_logs.items():
+        for stack_result in stack_results:
+            for plan_result in common.ensure_list(stack_result.get("plan_results", [])):
+                if not plan_result.get("stderr"):
+                    continue
+                deploy_errors.append({
+                    "stack": stack_type,
+                    "stage": plan_result.get("stage"),
+                    "stderr": plan_result.get("stderr")
+                })
+    
+    if not deploy_errors:
+        deploy_errors.append("No deployment errors.  Deploment completed successfully for all stacks")
+    
+    config.current_iteration.log_content_deployment = {
+        "schema": "opentofu/v1",
+        "deployment_window_start": datetime.fromtimestamp(deployment_start_epoch, tz=dt_timezone.utc).isoformat(),
+        "deployment_logs": deployment_logs,
+        "deploy_errors": deploy_errors
+    }
+    config.current_iteration.save(update_fields=["log_content_deployment", "log_content_cloudwatch"])
 
 
 def execute_iteration(
@@ -2118,7 +2090,6 @@ def deploy_iteration(
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
-    deployment_logs: dict[str, Any] = {}
     
     ecr_arn = full_image_uri = None
     for i in range(3):
@@ -2145,12 +2116,11 @@ def deploy_iteration(
             config.log(e)
             raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
     
-    foundation_outputs, foundation_log = deploy_opentofu_stack(
+    foundation_outputs = deploy_opentofu_stack(
         config=config,
         stack_type=InfrastructureStackType.FOUNDATION,
         container_env=container_env,
     )
-    deployment_logs[InfrastructureStackType.FOUNDATION.value] = foundation_log
     
     add_rds_vals_to_env(
         config.business,
@@ -2170,7 +2140,7 @@ def deploy_iteration(
         container_image_tag
     )
     
-    app_outputs, application_log = deploy_opentofu_stack(
+    app_outputs = deploy_opentofu_stack(
         config=config,
         stack_type=InfrastructureStackType.APPLICATION,
         container_env=container_env,
@@ -2179,11 +2149,8 @@ def deploy_iteration(
         lambda_datas=lambda_datas,
         previous_stack_outputs=foundation_outputs
     )
-    deployment_logs[InfrastructureStackType.APPLICATION.value] = application_log
     
     ensure_lb_alias_record(config)
-    
-    return deployment_logs
 
 
 def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outputs: dict):
@@ -2240,10 +2207,10 @@ def build_iteration(config, container_env):
     ).json()
     
     # TODO take this out
-    # required_build_steps = {
-    #     BuildStep.CONTAINERS.value: False,
-    #     BuildStep.LAMBDAS.value: False
-    # }
+    required_build_steps = {
+        BuildStep.CONTAINERS.value: False,
+        BuildStep.LAMBDAS.value: True
+    }
     
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
@@ -2464,42 +2431,55 @@ def assert_tests_green(config: SelfDriverConfig):
         })
 
 
-def compute_goal_achievement_gate(
-        task_type: TaskType,
-        iteration_version: int,
-        has_test: bool,
-        stack_logs: Mapping[str, Any],
-        stack_errors: Mapping[str, Any],
-) -> tuple[bool, str]:
-    if not stack_logs:
+def compute_goal_achievement_gate( config:SelfDriverConfig, ) -> tuple[bool, str]:
+    iteration = config.current_iteration
+    
+    if not iteration.log_content_deployment:
         return False, "OpenTofu plan/apply logs were not captured. You may not declare goal complete."
-    if stack_errors:
+    
+    if common.get(iteration.log_content_deployment, "deploy_errors") and "No deployment errors" not in common.first(common.get(iteration.log_content_deployment, "deploy_errors")):
         return False, "OpenTofu plan/apply reported errors. Resolve them before declaring success."
-    if iteration_version == 1:
+    
+    if config.current_iteration.version_number == 1:
         return False, "We have not written any code yet for this task"
-    if not has_test:
+    
+    if not (config.self_driving_task.test_file_path and (config.sandbox_root_dir / config.self_driving_task.test_file_path).exists()):
         return False, "this task does not yet have an automated test.  Need to write an automated test and make it pass before allowing goal achieved"
+    
     return True, "we've written code and it deployed successfully"
 
 
 def evaluate_iteration(
         config: SelfDriverConfig
 ):
-    iteration = config.current_iteration
-    opentofu_logs = iteration.cloudformation_logs or {}
-    stack_logs: Mapping[str, Any] = common.get(iteration, ["cloudformation_logs", "stacks"]) or {}
-    stack_errors = {
-        stack: log.get("error")
-        for stack, log in stack_logs.items()
-        if isinstance(log, Mapping) and log.get("error")
-    }
-    exceptions_str = json.dumps(stack_errors, indent=2) if stack_errors else None
-    
     log_output = config.set_phase(SdaPhase.EVALUATE)
-    
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
+    
+    iteration = config.current_iteration
+    
+    deploy_errors = common.get(iteration.log_content_deployment, "deploy_errors")
+    runtime_errors = common.get(iteration.log_content_cloudwatch, "errors")
+    
+    logs_data = {
+        "Deployment Errors": deploy_errors,
+        "Runtime Errors (cloudwatch)": runtime_errors
+    }
+    
+    if iteration.log_content_execution:
+        logs_data["Runtime Logs (other)"] = iteration.log_content_execution
+    
+    iteration.exceptions = llm_chat(
+        "Error Extraction",
+        [
+            get_sys_prompt("log_parser_tofu.md"),
+            LlmMessage.user_from_data("Logs", logs_data)
+        ],
+        model=LlmModel.OPENAI_GPT_5_MINI,
+        tag_entity=config.current_iteration
+    ).text
+    iteration.save()
     
     if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
         goal_achieved_critera = textwrap.dedent(f"""
@@ -2517,15 +2497,15 @@ def evaluate_iteration(
             - Base this determination only on the current logs—do not consider prior iterations.
         """)
     
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) and not stack_errors and stack_logs:
+    if (
+            TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) 
+            and iteration.log_content_deployment 
+            and not (runtime_errors or deploy_errors)
+    ): 
         raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
     
     allow_goal_achieved, goal_achieved_reason = compute_goal_achievement_gate(
-        config.task_type,
-        config.current_iteration.version_number,
-        bool(config.self_driving_task.test_file_path),
-        stack_logs,
-        stack_errors,
+        config
     )
     
     eval_data = llm_chat(
@@ -2553,9 +2533,8 @@ def evaluate_iteration(
             ),
             
             LlmMessage.user_from_data(
-                "OpenTofu Deployment Status",
+                "Allow returning `Goal Achieved`?",
                 {
-                    "stack_logs": stack_logs,
                     "allow_goal_achieved": allow_goal_achieved,
                     "allow_goal_achieved_justification": goal_achieved_reason
                 }
@@ -2570,9 +2549,9 @@ def evaluate_iteration(
                 f"""
                 **QUICK REFERENCE** Exceptions extracted from the logs.  If there are problems, most likely related to the following:
                 
-                {exceptions_str}
+                {iteration.exceptions}
                 """
-            )) if exceptions_str else None,
+            )) if iteration.exceptions else None,
             
             LlmMessage.user(
                 "Please summarize this iteration"
@@ -2684,7 +2663,7 @@ def get_logs_msg(config, iteration):
     return LlmMessage.user_from_data(
         "Execution Logs",
         {
-            "OpenTofu Logs": iteration.cloudformation_logs or "N/A",
+            "exceptions": iteration.exceptions or "No Exceptions Found",
             "sysout logs by Phase": {
                 "init": iteration.log_content_init or "N/A",
                 "coding": iteration.log_content_coding or "N/A",
@@ -4836,12 +4815,13 @@ def deploy_opentofu_stack(
         previous_stack_outputs=previous_stack_outputs
     )
     
-    stack.stack_vars = tfvars_payload
+    opentofu_stack_manager = config.stack_managers[stack_type]
+    
+    stack.stack_vars = {k:v for k,v in tfvars_payload.items() if "password" not in k.lower()}
+    stack.resources = opentofu_stack_manager.get_resources()
     stack.sandbox_root_dir = config.sandbox_root_dir
     stack.save()
-    
-    opentofu_stack_manager = OpenTofuStackManager(stack, config.sandbox_root_dir, container_env)
-    
+
     plan_summary: Mapping[str, Any] | None = None
     
     try:
@@ -4860,9 +4840,10 @@ def deploy_opentofu_stack(
             tfvars=tfvars_payload,
         )
         
-        config.log(json.dumps(log_payload, indent=2, default=str))
-        return outputs, log_payload
-    except opentofu_utils.OpenTofuCommandError as exc:
+        config.add_deployment_log(stack_type, log_payload)
+        
+        return outputs
+    except OpenTofuCommandError as exc:
         error_payload = {
             "message": str(exc),
             "stderr": exc.result.stderr,
@@ -4883,8 +4864,6 @@ def deploy_opentofu_stack(
             error=error_payload,
         )
         
-        config.log(json.dumps(log_payload, indent=2, default=str))
-        
         raise AgentBlocked(json.dumps({
             "description": f"OpenTofu command failed for {stack_type.value}",
             **error_payload,
@@ -4902,7 +4881,8 @@ def build_tfvars_payload(
         previous_stack_outputs: dict | None = None
 ) -> dict[str, Any]:
     stack_type = InfrastructureStackType(stack.stack_type)
-    stack_variables = OpenTofuStackManager.get_stack_variables(stack, config.sandbox_root_dir)
+    stack_variables = config.stack_managers[stack_type].get_stack_variables()
+    
     forbidden_variables = {"DBName", "DBPassword"}
     forbidden_in_module = forbidden_variables.intersection(stack_variables.keys())
     if forbidden_in_module:

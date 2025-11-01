@@ -21,7 +21,7 @@ import types
 import unicodedata
 import urllib.request
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from statistics import median
@@ -906,6 +906,9 @@ def move_with_overwrite(source_file, dest_file):
 def get_dict(obj):
     if obj is None:
         return None
+    
+    if isinstance(obj, defaultdict):
+        return {k: get_dict(v) for k, v in obj.items()}
     
     if is_list_like(obj):
         return [get_dict(obj2) for obj2 in obj]

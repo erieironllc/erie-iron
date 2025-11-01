@@ -7,15 +7,18 @@
                 <th scope="col" data-sort-key="stack_type" data-sort-type="string">Stack Type</th>
                 <th scope="col" data-sort-key="scope" data-sort-type="string" data-sort-default="asc">Scope</th>
                 <th scope="col" data-sort-key="environment" data-sort-type="string">Environment</th>
-                <th scope="col" data-sort-key="stack_name" data-sort-type="string">Stack Name</th>
                 <th scope="col" data-sort-key="logs" data-sort-type="number">Logs</th>
                 <th scope="col" class="text-end" data-sort-key="updated" data-sort-type="number">Updated</th>
             </tr>
         </thead>
         <tbody>
             {% for stack in stack_entries %}
-                <tr>
-                    <td data-sort-value="{{ stack.stack_namespace_token|default:'' }}"><code>{{ stack.stack_namespace_token }}</code></td>
+                <tr data-stack-detail-url="{% url 'view_stack' stack.id %}" style="cursor: pointer;">
+                    <td data-sort-value="{{ stack.stack_namespace_token|default:'' }}">
+                        <a href="{% url 'view_stack' stack.id %}">
+                            <code>{{ stack.stack_namespace_token }}</code>
+                        </a>
+                    </td>
                     <td data-sort-value="{{ stack.stack_type_label|default:'' }}">{{ stack.stack_type_label }}</td>
                     <td data-sort-value="{{ stack.scope_label|default:'' }}">
                         {% if stack.initiative_id %}
@@ -27,27 +30,6 @@
                         {% endif %}
                     </td>
                     <td data-sort-value="{{ stack.aws_env_label|default:'' }}">{{ stack.aws_env_label }}</td>
-                    <td data-sort-value="{{ stack.stack_name|default:'' }} {{ stack.iac_state_label|default:'' }}">
-                        <div>
-                            {% if stack.iac_console_url %}
-                                <a href="{{ stack.iac_console_url }}" target="_blank" rel="noopener">
-                                    {{ stack.stack_name|default:"(unnamed stack)" }}
-                                </a>
-                            {% else %}
-                                {{ stack.stack_name|default:"(unnamed stack)" }}
-                            {% endif %}
-                        </div>
-                        <div class="small text-muted">
-                            {% if stack.iac_provider %}
-                                <span class="badge bg-light text-dark border me-1">{{ stack.iac_provider|default:""|title }}</span>
-                            {% endif %}
-                            {% if stack.iac_state_label %}
-                                <code>{{ stack.iac_state_label }}</code>
-                            {% elif stack.iac_state_locator %}
-                                <code>{{ stack.iac_state_locator }}</code>
-                            {% endif %}
-                        </div>
-                    </td>
                     <td data-sort-value="{% if stack.cloudwatch_logs_url %}1{% else %}0{% endif %}">
                         {% if stack.cloudwatch_logs_url %}
                             <a href="{{ stack.cloudwatch_logs_url }}" target="_blank" rel="noopener">Logs</a>
@@ -156,18 +138,32 @@
 
     document.addEventListener('click', function(event) {
         var header = event.target.closest('th[data-sort-key]');
-        if (!header) {
+        if (header) {
+            var table = header.closest('table[data-table-sortable]');
+            if (!table) {
+                return;
+            }
+
+            var currentDir = header.getAttribute('data-sort-dir') || 'asc';
+            var nextDir = currentDir === 'asc' ? 'desc' : 'asc';
+            applySort(table, header, nextDir, false);
             return;
         }
 
-        var table = header.closest('table[data-table-sortable]');
-        if (!table) {
+        var interactiveElement = event.target.closest('a, button, input, textarea, select, label');
+        if (interactiveElement) {
             return;
         }
 
-        var currentDir = header.getAttribute('data-sort-dir') || 'asc';
-        var nextDir = currentDir === 'asc' ? 'desc' : 'asc';
-        applySort(table, header, nextDir, false);
+        var row = event.target.closest('tr[data-stack-detail-url]');
+        if (!row) {
+            return;
+        }
+
+        var destination = row.getAttribute('data-stack-detail-url');
+        if (destination) {
+            window.location.href = destination;
+        }
     });
 
     function initializeTables() {
@@ -183,6 +179,10 @@
                 var direction = defaultHeader.getAttribute('data-sort-default') || 'asc';
                 applySort(table, defaultHeader, direction, true);
             }
+
+            table.querySelectorAll('tr[data-stack-detail-url]').forEach(function(row) {
+                row.style.cursor = 'pointer';
+            });
         });
     }
 
