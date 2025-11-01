@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://erieiron.local/prompts/eng_lead--task_ingester.md.schema.json",
+  "title": "Eng Lead Task Ingester Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "description",
+    "task_id",
+    "completion_criteria",
+    "risk_notes",
+    "task_type"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$",
+      "description": "Lowercase snake_case identifier summarizing the task."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One or two sentences in active voice summarizing the requested task."
+    },
+    "completion_criteria": {
+      "type": "array",
+      "description": "Specific, testable statements that confirm the task is complete.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "risk_notes": {
+      "type": "string",
+      "description": "Risks, dependencies, or follow-up notes. Empty string if none."
+    },
+    "task_type": {
+      "type": "string",
+      "description": "TaskType enum value representing the primary nature of the work.",
+      "enum": [
+        "BOOTSRAP_CLONE_REPO",
+        "PRODUCTION_DEPLOYMENT",
+        "INITIATIVE_VERIFICATION",
+        "CODING_APPLICATION",
+        "CODING_ML",
+        "TASK_EXECUTION",
+        "DESIGN_WEB_APPLICATION",
+        "HUMAN_WORK"
+      ]
+    }
+  }
+}

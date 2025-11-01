@@ -1,0 +1,5 @@
+{% load erieiron_common_tags %}
+
+{% for message in pubsub_messages %}
+    {% include "pubsub/_message_card.html" with message=message redirect_target=redirect_target %}
+{% endfor %}

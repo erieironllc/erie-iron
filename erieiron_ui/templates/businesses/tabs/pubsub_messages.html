@@ -1,0 +1,48 @@
+{% load erieiron_common_tags %}
+
+{% if pubsub_messages %}
+    <div class="erie_infinite_scroll" 
+         data-fetch_url="{% url 'fetch_pubsub_messages' %}"
+         data-sort_by="created_at"
+         data-has_more="{% if pubsub_messages|length == 20 %}true{% else %}false{% endif %}"
+         data-page_number="0">
+        <table class="table table-borderless table-hover table-condensed table-striped">
+            <thead>
+            <tr>
+                <th>Message</th>
+                <th>Type</th>
+                <th>Environment</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Retry Count</th>
+                <th>Created</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for message in pubsub_messages %}
+                <tr class="pubsub-message-row" data-message-id="{{ message.id }}">
+                    <td>
+                        <a href="{% url 'view_pubsub_message_details' message.id %}">{{ message.id|short_id }}</a>
+                    </td>
+                    <td>{{ message.message_type|label }}</td>
+                    <td>{{ message.env }}</td>
+                    <td>
+                        <span class="badge {% if message.priority == 'HIGH' %}bg-danger{% elif message.priority == 'NORMAL' %}bg-secondary{% else %}bg-light text-dark{% endif %}">
+                            {{ message.priority }}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge {% if message.status == 'PROCESSED' %}bg-success{% elif message.status == 'PROCESSING' %}bg-warning{% elif message.status == 'FAILED' %}bg-danger{% else %}bg-secondary{% endif %}">
+                            {{ message.status }}
+                        </span>
+                    </td>
+                    <td>{{ message.retry_count }}</td>
+                    <td>{{ message.created_at|date:"m/d/Y h:i:s a" }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <p class="text-muted">No PubSub messages found.</p>
+{% endif %}

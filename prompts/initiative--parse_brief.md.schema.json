@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://erieiron.local/prompts/initiative--parse_brief.md.schema.json",
+  "title": "Initiative Brief Parser Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "initiative_id",
+    "title",
+    "description",
+    "kpis"
+  ],
+  "properties": {
+    "initiative_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$",
+      "description": "Lowercase snake_case identifier summarizing the initiative."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Action-oriented initiative title."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Narrative capturing value, users, and desired outcome."
+    },
+    "kpis": {
+      "type": "array",
+      "description": "Relevant KPI identifiers or names inferred from the brief.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
