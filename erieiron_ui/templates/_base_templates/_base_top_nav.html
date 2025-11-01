@@ -3,6 +3,7 @@
 
 {% top_nav_dropdowns as breadcrumb_dropdowns %}
 
+{% if request.simple_auth_authenticated %}
 <nav id="top_nav" class="navbar navbar-expand-sm d-flex justify-content-between"
      {% if breadcrumbs %}style="margin-top: -0.70rem"{% endif %}
 >
@@ -65,5 +66,10 @@
     <div id="top_nav_rightpart" class="d-flex align-items-center gap-3">
         <div id="top_nav--page_menus" class="d-flex align-items-center"></div>
         <div id="top_nav--buttons" class="d-flex align-items-center"></div>
+        <div class="d-flex align-items-center gap-2">
+            <span class="text-uppercase text-secondary small fw-semibold">{{ request.simple_auth_email }}</span>
+            <a class="btn btn-outline-light btn-sm" href="{% url 'action_logout' %}">Log out</a>
+        </div>
     </div>
 </nav>
+{% endif %}

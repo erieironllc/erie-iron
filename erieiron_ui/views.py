@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Callable, Iterable, Any
 from urllib.parse import quote
 
+import jwt
 from django.contrib import messages
-from django.http import HttpResponse, Http404, JsonResponse
-from django.shortcuts import get_object_or_404
+from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils import timezone, formats
 from django.utils.html import escape
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 
@@ -42,6 +44,82 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
+logger = logging.getLogger(__name__)
+
+
+def _build_simple_auth_token(email: str) -> str:
+    issued_at = datetime.utcnow()
+    expires_at = issued_at + timedelta(seconds=settings.SIMPLE_AUTH_TOKEN_TTL_SECONDS)
+    payload = {
+        "email": email,
+        "iat": issued_at,
+        "exp": expires_at,
+    }
+    return jwt.encode(payload, settings.SIMPLE_AUTH_JWT_SECRET, algorithm="HS256")
+
+
+def _resolve_post_login_redirect(request, candidate: str | None) -> str:
+    fallback = reverse("view_home")
+    if not candidate:
+        return fallback
+
+    if url_has_allowed_host_and_scheme(candidate, {request.get_host()}, ["http", "https"]):
+        return candidate
+
+    if candidate.startswith("/"):
+        return candidate
+
+    return fallback
+
+
+def _credentials_match(email: str, password: str) -> bool:
+    return (
+        email == settings.SIMPLE_AUTH_ALLOWED_EMAIL
+        and password == settings.SIMPLE_AUTH_ALLOWED_PASSWORD
+    )
+
+
+def view_login(request):
+    next_param = request.GET.get("next") or request.POST.get("next")
+
+    if getattr(request, "simple_auth_authenticated", False):
+        destination = _resolve_post_login_redirect(request, next_param)
+        return HttpResponseRedirect(destination)
+
+    context = {
+        "page_title": "Sign in • ErieIron",
+        "next": next_param or "",
+        "prefill_email": request.POST.get("email", "").strip(),
+    }
+
+    if request.method == "POST":
+        email = (request.POST.get("email") or "").strip()
+        password = request.POST.get("password") or ""
+
+        if _credentials_match(email, password):
+            token = _build_simple_auth_token(email)
+            destination = _resolve_post_login_redirect(request, next_param)
+            response = HttpResponseRedirect(destination)
+            response.set_cookie(
+                settings.SIMPLE_AUTH_COOKIE_NAME,
+                token,
+                max_age=settings.SIMPLE_AUTH_TOKEN_TTL_SECONDS,
+                httponly=True,
+                secure=not settings.DEBUG,
+                samesite="Lax",
+            )
+            return response
+
+        messages.error(request, "Invalid email or password.")
+
+    return render(request, "login.html", context)
+
+
+def action_logout(request):
+    response = HttpResponseRedirect(reverse("view_login"))
+    response.delete_cookie(settings.SIMPLE_AUTH_COOKIE_NAME)
+    return response
+
 LLM_SPEND_RANGE_DEFAULT = "15d"
 LLM_SPEND_RANGE_OPTIONS = [
     {"slug": "24h", "label": "Last 24 Hours"},
@@ -65,8 +143,12 @@ def _businesses_tab_available_portfolio(_: Business) -> bool:
 
 
 def _businesses_tab_context_portfolio(erieiron_business: Business) -> dict:
+    ei_business = Business.get_erie_iron_business()
     return {
-        "businesses": Business.objects.all().order_by("created_at"),
+        "businesses": [
+            ei_business,
+            *Business.objects.exclude(id=ei_business.id).order_by("created_at")
+        ]
     }
 
 

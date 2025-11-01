@@ -23,6 +23,14 @@ STRIPE_WEBHOOK_SECRET_ARN = "TODO"
 SELF_DRIVING_IAC_PROVIDER = os.getenv("SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
 TOFU_BIN = os.environ.get("OPENTOFU_BIN", "tofu")
 
+SIMPLE_AUTH_ALLOWED_EMAIL = os.getenv("SIMPLE_AUTH_ALLOWED_EMAIL", "jj@erieironllc.com")
+SIMPLE_AUTH_ALLOWED_PASSWORD = os.getenv("SIMPLE_AUTH_ALLOWED_PASSWORD", "change_th1s_p@ssword")
+SIMPLE_AUTH_COOKIE_NAME = "erieiron_ui_auth_token"
+SIMPLE_AUTH_JWT_SECRET = SECRET_KEY
+SIMPLE_AUTH_TOKEN_TTL_SECONDS = 12 * 60 * 60  # 12 hours
+SIMPLE_AUTH_LOGIN_URL = "/login/"
+SIMPLE_AUTH_LOGOUT_URL = "/logout/"
+
 DOMAIN_CONTACT_INFO = {
     "FirstName": "ErieIron",
     "LastName": "LLC",
@@ -79,6 +87,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "erieiron_ui.middleware.SimpleAuthMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
