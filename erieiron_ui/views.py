@@ -10,7 +10,7 @@ from typing import Callable, Iterable, Any
 from urllib.parse import quote
 
 from django.contrib import messages
-from django.http import HttpResponse, Http404
+from django.http import HttpResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone, formats
@@ -53,6 +53,11 @@ LLM_SPEND_RANGE_OPTIONS = [
 
 def hello(request):
     return HttpResponse("hello world")
+
+
+def healthcheck(request):
+    logging.debug("healthcheck requested", extra={"path": request.path})
+    return JsonResponse({"ok": True})
 
 
 def _businesses_tab_available_portfolio(_: Business) -> bool:

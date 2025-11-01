@@ -298,7 +298,7 @@ When you recieve a chat request:
 
 - Adding containers, Dockerfiles, docker-compose service definitions, Kubernetes manifests, Terraform/CloudFormation resources, CI/CD config, or OS packages
 - Creating new services, processes, environment variables, ports, or daemons
-- Touching files outside settings.py, core/... or files explicitly named in this plan
+- Touching files outside settings.py, core/... (or other source directories describe in the architecture) or files explicitly named in this plan
 
 ### Default behavior:
 

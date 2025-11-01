@@ -1,4 +1,0 @@
-# m h  dom mon dow   command
-* * * * * /usr/local/bin/upload-logs-to-cloudwatch.sh >> /var/log/cloudwatch-upload.log 2>&1
-*/1 * * * * /usr/bin/flock -n /tmp/baremetal-container-manager.lockfile /usr/local/bin/baremetal-container-manager.sh
-5 8 * * 0 /usr/local/bin/baremetal-weekly-maintenance.sh

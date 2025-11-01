@@ -4,6 +4,8 @@ from erieiron_ui import views
 
 urlpatterns = [
     path("", views.view_businesses, name="view_home"),
+    path("health/", views.healthcheck, name="health"),
+    
     path("businesses/", views.view_businesses, name="view_businesses"),
     path("businesses/<slug:tab>/", views.view_businesses, name="view_businesses_tab"),
     

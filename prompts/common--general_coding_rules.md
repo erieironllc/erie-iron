@@ -31,8 +31,8 @@ Follow these rules for such model edits:
 ---
 
 ## Django Specific Rules
-- All Django view logic must reside in `./core/views.py`.  
-  **Never** create a subdirectory such as `./core/views/` to split view implementations into multiple files.  
+- All Django view logic must reside in the application's `views.py`.  Do not create a new views.py if one already exists. 
+  **Never** create a subdirectory such as `./views/` to split view implementations into multiple files.  
   All view functions and classes belong in the single `views.py` module unless there is a specific architectural contract requiring otherwise.
 
 ## Database Connectivity Rules
@@ -53,7 +53,7 @@ Follow these rules for such model edits:
 ---
 
 ## File and Module Naming
-- All Python application modules must live under `./core/`. The build pipeline copies `./core` into the deployment `dist/` directory automatically—do **not** attempt to write artifacts directly into `dist/`.
+- All Python application modules must live under `./core/` (or an alternative source directory described in the architecture). The build pipeline copies `./core` into the deployment `dist/` directory automatically—do **not** attempt to write artifacts directly into `dist/`.
 - All python test files **must** live in the directory "./core/tests".  **Do not** put them anywhere else
 - All files and modules must be named in a professional manner that describes their purpose.
     - This is an example of bad name:  "your_lambda_function"
