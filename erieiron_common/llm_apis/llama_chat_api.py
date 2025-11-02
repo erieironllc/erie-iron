@@ -19,10 +19,4 @@ def chat(
         verbosity: LlmVerbosity = None,
         schema_file: Path = None
 ):
-    # fireworks.api_key = get_api_key()
-    # response = fireworks.chat.completions.create(
-    #     model=model.value,
-    #     messages=messages
-    # )
-    # return response.choices[0].message.content
-    raise Exception("not implemented")
+    raise NotImplementedError("LLaMA chat adapter is not implemented")

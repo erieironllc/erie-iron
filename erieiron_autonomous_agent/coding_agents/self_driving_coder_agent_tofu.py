@@ -1,4 +1,5 @@
 import copy
+import subprocess
 import json
 import logging
 import os
@@ -1810,15 +1811,13 @@ def run_container_command(
         config: SelfDriverConfig,
         command_args: list[str],
         container_env: dict,
-        container_image_tag: str,
-        stdout=None
+        container_image_tag: str
 ) -> None:
-    if stdout is None:
-        stdout = config.log_f
-    
     command_args = common.ensure_list(command_args)
     cmd = [
         "podman", "run", "--rm",
+        "--memory", "1g",
+        "--memory-swap", "5g",
         "--platform", ContainerPlatform.FARGATE,
         "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
@@ -1830,12 +1829,13 @@ def run_container_command(
     
     config.log("\n" + "=" * 50 + "\n")
     config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
+    print(f"DUDE {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
     
     # Capture podman run start time
     process = subprocess.Popen(
         common.strings(cmd),
-        stdout=stdout,
+        stdout=config.log_f,
         env=container_env,
         stderr=subprocess.STDOUT,
         text=True
@@ -1851,6 +1851,8 @@ def run_container_command(
     
     if return_code == 0:
         logging.info(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
+    elif return_code == 137:
+        raise ExecutionException(f"\n{command_args[-1]} execution was killed with SIGKILL (exit code 137). Possible Out-Of-Memory condition.\n")
     else:
         raise ExecutionException(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
 
@@ -2339,8 +2341,8 @@ def validate_web_container(
         process = subprocess.Popen(
             [
                 "podman", "run", "--rm",
-                "--memory", "512m",
-                "--memory-swap", "1g",
+                "--memory", "2g",
+                "--memory-swap", "5g",
                 "-e", f"HTTP_LISTENER_PORT={port}",
                 "--platform", ContainerPlatform.FARGATE,
                 "-p", f"{port}:{port}",
