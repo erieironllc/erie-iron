@@ -31,7 +31,6 @@ from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import (
     ERIEIRON_PUBLIC_COMMON_VERSION,
     USE_CODEX,
     SdaInitialAction,
-    sentence_transformer_model,
     SelfDriverConfig,
 )
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
@@ -54,7 +53,7 @@ from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda, get_full_image_uri
-from erieiron_common.cloudformation_utils import get_resource_configs, CloudformationResourceType
+from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -2232,7 +2231,7 @@ def build_iteration(config, container_env):
     tag_exists_in_ecr = False
     
     if (
-            tag_exists_in_ecr or 
+            tag_exists_in_ecr or
             (previous_container_tag and not required_build_steps.get(BuildStep.CONTAINERS.value))
     ):
         container_image_tag = previous_container_tag
@@ -3037,7 +3036,7 @@ def get_lessons(
     else:
         import numpy as np  # Ensure this is at the top of the file if not already imported
         # Load embedding model (should ideally be cached/shared elsewhere)
-        query_embedding = sentence_transformer_model.encode(task_desc, normalize_embeddings=True)
+        query_embedding = get_text_embedding(task_desc)
         query_embedding = np.array(query_embedding).flatten().tolist()
         
         # Define a custom Func for pgvector cosine distance
@@ -3074,7 +3073,7 @@ def get_lessons(
         # Generate text to embed
         lesson_texts = [f"{a.pattern}. {a.trigger}. {a.lesson}" for a in lessons]
         if lesson_texts:
-            lesson_embeddings = sentence_transformer_model.encode(lesson_texts, normalize_embeddings=True)
+            lesson_embeddings = get_text_embedding(lesson_texts)
         else:
             lesson_embeddings = []
         
