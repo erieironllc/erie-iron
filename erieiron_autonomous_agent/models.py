@@ -15,7 +15,6 @@ from django.db.models import Sum, Q
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from pgvector.django import VectorField
-from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus, BusinessOperationType
@@ -36,8 +35,6 @@ from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.models import BaseErieIronModel
-
-mini_lm_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 class Business(BaseErieIronModel):
@@ -1708,7 +1705,9 @@ class AgentLesson(BaseErieIronModel):
     def create_from_data(agent_step, data: dict, source_iteration=None) -> 'AgentLesson':
         tag_text = common.safe_join(data.get("context_tags", []), delim=",")
         text = f'Step: {agent_step}. {data.get("pattern_description")}. {data.get("trigger")}. {data.get("lesson")}. Tags: {tag_text}'
-        embedding = mini_lm_model.encode(text, normalize_embeddings=True)
+        
+        from erieiron_common.chat_engine import language_utils
+        embedding = language_utils.get_text_embedding(text)
         
         lesson = AgentLesson.objects.create(
             source_iteration=source_iteration,
@@ -1719,7 +1718,7 @@ class AgentLesson(BaseErieIronModel):
             context_tags=data.get("context_tags"),
             embedding=embedding
         )
-    
+   
     def get_llm_data(self):
         return {
             "agent_step": self.agent_step,

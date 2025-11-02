@@ -1426,8 +1426,8 @@ def build_container_image(
     ]
     
     # force a new container image tag to make sure OpenTofu updates
-    # if config.one_off_action:
-    #     container_image_tag_parts.append(str(time.time())[-5:])
+    if config.one_off_action:
+        container_image_tag_parts.append(str(time.time())[-5:])
     
     container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     

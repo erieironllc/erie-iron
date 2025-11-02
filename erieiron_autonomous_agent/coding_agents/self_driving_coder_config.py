@@ -12,7 +12,6 @@ import botocore.session
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
-from sentence_transformers import SentenceTransformer
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
@@ -29,8 +28,6 @@ LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 USE_CODEX = True
-
-sentence_transformer_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 

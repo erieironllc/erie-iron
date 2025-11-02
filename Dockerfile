@@ -50,8 +50,13 @@ RUN pip install --no-cache-dir gunicorn
 
 RUN echo "Using erieiron-public-common ref: $ERIEIRON_PUBLIC_COMMON_SHA"
 
+#
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download Hugging Face models to cache
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "from transformers import AutoModel, AutoTokenizer; [AutoModel.from_pretrained(m) and AutoTokenizer.from_pretrained(m) for m in ['bert-base-uncased', 'sentence-transformers/all-MiniLM-L6-v2']]" || true
 
 COPY . .
 
