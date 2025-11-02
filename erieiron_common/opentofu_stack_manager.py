@@ -27,11 +27,9 @@ class OpenTofuStackManager:
     def __init__(
             self,
             stack: InfrastructureStack,
-            sandbox_root_dir: Path,
             container_env: dict = None
     ):
         self.stack = stack
-        self.sandbox_root_dir = common.assert_exists(sandbox_root_dir)
         self.container_env = container_env or {}
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
         self.module_file = self.get_swizzled_module_file()
@@ -54,19 +52,12 @@ class OpenTofuStackManager:
         asdf = 1
     
     def get_swizzled_module_file(self):
-        tf_path = common.assert_exists(
-            self.sandbox_root_dir / InfrastructureStackType(self.stack.stack_type).get_opentofu_config()
-        )
-        
-        with tf_path.open("r", encoding="utf-8") as f:
-            contents = f.read()
+        contents = self.stack.stack_configuration
         
         prevent_destroy = EnvironmentType.PRODUCTION.eq(self.stack.env_type)
         new_contents = contents.replace("ERIE_IRON_RETAIN_RESOURCES", "true" if prevent_destroy else "false")
         
-        temp_dir = tempfile.mkdtemp(prefix="opentofu_swizzle_")
-        swizzled_path = Path(temp_dir) / tf_path.name
-        
+        swizzled_path = Path(tempfile.mkdtemp(prefix="opentofu_swizzle_")) / InfrastructureStackType(self.stack.stack_type).get_opentofu_config()
         with swizzled_path.open("w", encoding="utf-8") as f:
             f.write(new_contents)
         
@@ -401,7 +392,7 @@ class OpenTofuStackManager:
         return aws_utils.sanitize_aws_name(f"{base}-{suffix}", max_length=63)
     
     def get_workspace_dir(self) -> Path:
-        workspace_dir = self.sandbox_root_dir / "opentofu" / "workspaces" / self.get_workspace_name()
+        workspace_dir = Path(os.getcwd()) / "opentofu" / "workspaces" / self.get_workspace_name()
         workspace_dir.mkdir(parents=True, exist_ok=True)
         return workspace_dir
     

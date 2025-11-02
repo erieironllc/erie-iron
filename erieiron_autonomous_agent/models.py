@@ -553,7 +553,6 @@ class InfrastructureStack(BaseErieIronModel):
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     stack_vars = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
-    sandbox_root_dir = models.TextField(null=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
     
@@ -694,12 +693,12 @@ class InfrastructureStack(BaseErieIronModel):
         return stack
     
     @transaction.atomic
-    def tombstone(self, sandbox_root_dir: Path) -> 'InfrastructureStack':
+    def tombstone(self) -> 'InfrastructureStack':
         env_type = self.env_type
         initiative = self.initiative
         stack_type = self.stack_type
         
-        self.delete_resources(self.env_type)
+        self.delete_resources()
         
         InfrastructureStack.objects.filter(
             id=self.id
@@ -716,11 +715,8 @@ class InfrastructureStack(BaseErieIronModel):
         if EnvironmentType.PRODUCTION.eq(self.env_type):
             raise Exception(f"cannot tombstone a production stack")
         
-        if not self.resources or not self.sandbox_root_dir:
-            return 
-        
         from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
-        opentofu_stack_manager = OpenTofuStackManager(self, self.sandbox_root_dir)
+        opentofu_stack_manager = OpenTofuStackManager(self)
         try:
             opentofu_stack_manager.destroy_stack()
         except Exception as e:

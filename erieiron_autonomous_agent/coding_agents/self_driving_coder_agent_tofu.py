@@ -4837,6 +4837,7 @@ def deploy_opentofu_stack(
         previous_stack_outputs=previous_stack_outputs
     )
     
+    stack.stack_configuration = common.assert_exists(config.sandbox_root_dir / InfrastructureStackType(stack.stack_type).get_opentofu_config()).read_text()
     stack.stack_vars = {k: v for k, v in tfvars_payload.items() if "password" not in k.lower()}
     stack.sandbox_root_dir = config.sandbox_root_dir
     stack.updated_timestamp = common.get_now()

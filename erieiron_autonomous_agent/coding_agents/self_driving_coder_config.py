@@ -112,7 +112,7 @@ class SelfDriverConfig:
 
         self.runtime_env = self.get_runtime_env()
         self.stack_managers = {
-            stack_type: OpenTofuStackManager(stack, self.sandbox_root_dir, self.runtime_env)
+            stack_type: OpenTofuStackManager(stack, self.runtime_env)
             for stack_type, stack in self.stacks.items()
         }
         self.all_stack_managers: list[OpenTofuStackManager] = self.stack_managers.values()
