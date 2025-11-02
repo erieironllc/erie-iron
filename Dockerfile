@@ -54,28 +54,15 @@ RUN echo "Using erieiron-public-common ref: $ERIEIRON_PUBLIC_COMMON_SHA"
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set Hugging Face cache directories before model downloads
+# 1. Allow downloads at build time
 ENV HF_HOME=/usr/local/huggingface \
     TRANSFORMERS_CACHE=$HF_HOME \
     SENTENCE_TRANSFORMERS_HOME=$HF_HOME \
-    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
-    TRANSFORMERS_OFFLINE=1 \
-    HF_DATASETS_OFFLINE=1
-
-# Persist environment variables system-wide (optional hardening)
-RUN echo 'export HF_HOME=/usr/local/huggingface' >> /etc/profile.d/hf_cache.sh && \
-    echo 'export TRANSFORMERS_CACHE=/usr/local/huggingface' >> /etc/profile.d/hf_cache.sh && \
-    echo 'export SENTENCE_TRANSFORMERS_HOME=/usr/local/huggingface' >> /etc/profile.d/hf_cache.sh
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
 RUN mkdir -p $HF_HOME && chmod -R 755 $HF_HOME
 
-# Verify environment variables and ensure cache directory exists
-RUN echo "[build] HF_HOME=$HF_HOME" && \
-    echo "[build] TRANSFORMERS_CACHE=$TRANSFORMERS_CACHE" && \
-    echo "[build] SENTENCE_TRANSFORMERS_HOME=$SENTENCE_TRANSFORMERS_HOME" && \
-    mkdir -p "$HF_HOME" && ls -la "$HF_HOME"
-
-# Download and cache models at build time
+# 2. Download and cache models while online
 RUN python - <<'PYCODE'
 from transformers import AutoModel, AutoTokenizer
 from sentence_transformers import SentenceTransformer
@@ -84,10 +71,7 @@ import os
 cache_dir = os.environ.get("HF_HOME", "/usr/local/huggingface")
 os.makedirs(cache_dir, exist_ok=True)
 
-models = [
-    "bert-base-uncased",
-    "sentence-transformers/all-MiniLM-L6-v2",
-]
+models = ["bert-base-uncased", "sentence-transformers/all-MiniLM-L6-v2"]
 
 for m in models:
     print(f"[build] Downloading and caching {m}")
@@ -98,9 +82,13 @@ SentenceTransformer("all-MiniLM-L6-v2")
 print("[build] Cache preloaded successfully")
 PYCODE
 
-# Inspect cache for confirmation
+# 3. Verify cache
 RUN ls -Rlh /usr/local/huggingface
 
+# 4. Enable offline mode for runtime containers
+ENV TRANSFORMERS_OFFLINE=1 \
+    HF_DATASETS_OFFLINE=1
+    
 # Keep cache volume for reuse at runtime
 VOLUME /usr/local/huggingface
 
