@@ -3,13 +3,13 @@ from django.urls import path
 from erieiron_ui import views
 
 urlpatterns = [
-    path("", views.view_businesses, name="view_home"),
+    path("", views.view_portfolio, name="view_home"),
     path("login/", views.view_login, name="view_login"),
     path("logout/", views.action_logout, name="action_logout"),
     path("health/", views.healthcheck, name="health"),
     
-    path("businesses/", views.view_businesses, name="view_businesses"),
-    path("businesses/<slug:tab>/", views.view_businesses, name="view_businesses_tab"),
+    path("portfolio/", views.view_portfolio, name="view_portfolio"),
+    path("portfolio/<slug:tab>/", views.view_portfolio, name="view_portfolio_tab"),
     
     path("_business/add", views.action_add_business, name="action_add_business"),
     path("_business/find", views.action_find_business, name="action_find_business"),

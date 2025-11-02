@@ -1,0 +1,16 @@
+<div class="tab-pane-content">
+    {% if stack_count %}
+        <p class="text-muted small">
+            Tracking {{ stack_count }} infrastructure stack{{ stack_count|pluralize }} across
+            {{ business_count }} business{{ business_count|pluralize }}{% if initiative_count %}
+            and {{ initiative_count }} initiative{{ initiative_count|pluralize }}{% endif %}.
+            Use the links below to inspect IaC state details or filter CloudWatch log groups by namespace token.
+        </p>
+    {% else %}
+        <p class="text-muted small">
+            No infrastructure stacks are recorded yet. Once stacks are provisioned they will appear here with links to IaC metadata and CloudWatch.
+        </p>
+    {% endif %}
+
+    {% include "_base_templates/infrastructure_stacks_table.html" with stack_entries=stack_entries empty_message="No infrastructure stacks found across any business yet." %}
+</div>

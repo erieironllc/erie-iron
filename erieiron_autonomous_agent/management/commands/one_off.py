@@ -12,4 +12,5 @@ from erieiron_common.enums import EnvironmentType
 
 class Command(BaseCommand):
     def handle(self, env_type=None, *args, **options):
-        identify_required_credentials(Business.get_erie_iron_business())
+        Business.objects.filter(id="79dabfb0-35d8-4859-8ce2-695d2f94c443").delete()
+        Business.objects.filter(id="97c2b33a-4ff5-4bd7-a2f2-e829db0fe3cc").update(name="Erie Iron, LLC")

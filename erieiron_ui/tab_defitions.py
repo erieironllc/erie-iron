@@ -91,64 +91,71 @@ INITIATIVE_TAB_MAP = {
     if not definition.get("is_divider")
 }
 
-BUSINESSES_TAB_DEFINITIONS = [
+PORTFOLIO_TAB_DEFINITIONS = [
     {
         "slug": "portfolio",
         "label": "Portfolio",
-        "template": "businesses/tabs/portfolio.html",
-        "context_fn": views._businesses_tab_context_portfolio,
+        "template": "portfolio/tabs/portfolio.html",
+        "context_fn": views._portfolio_tab_context_portfolio,
     },
     TAB_DIVIDER,
     {
         "slug": "llm-spend",
         "label": "LLM Spend",
-        "template": "businesses/tabs/llm_spend.html",
-        "availability_fn": views._businesses_tab_available_llm_spend,
-        "context_fn": views._businesses_tab_context_llm_spend,
+        "template": "portfolio/tabs/llm_spend.html",
+        "availability_fn": views._portfolio_tab_available_llm_spend,
+        "context_fn": views._portfolio_tab_context_llm_spend,
     },
     {
         "slug": "capacity",
         "label": "Capacity",
-        "template": "businesses/tabs/capacity.html",
-        "availability_fn": views._businesses_tab_available_capacity,
-        "context_fn": views._businesses_tab_context_capacity,
+        "template": "portfolio/tabs/capacity.html",
+        "availability_fn": views._portfolio_tab_available_capacity,
+        "context_fn": views._portfolio_tab_context_capacity,
+    },
+    {
+        "slug": "infrastructure-stacks",
+        "label": "Infrastructure Stacks",
+        "template": "portfolio/tabs/infrastructure_stacks.html",
+        "availability_fn": views._portfolio_tab_available_infrastructure_stacks,
+        "context_fn": views._portfolio_tab_context_infrastructure_stacks,
     },
     {
         "slug": "lessons",
         "label": "Lessons",
-        "template": "businesses/tabs/lessons.html",
-        "availability_fn": views._businesses_tab_available_lessons,
-        "context_fn": views._businesses_tab_context_lessons,
+        "template": "portfolio/tabs/lessons.html",
+        "availability_fn": views._portfolio_tab_available_lessons,
+        "context_fn": views._portfolio_tab_context_lessons,
     },
 
     {
         "slug": "pubsub-messages",
         "label": "PubSub Messages",
-        "template": "businesses/tabs/pubsub_messages.html",
-        "availability_fn": views._businesses_tab_available_pubsub_messages,
-        "context_fn": views._businesses_tab_context_pubsub_messages,
+        "template": "portfolio/tabs/pubsub_messages.html",
+        "availability_fn": views._portfolio_tab_available_pubsub_messages,
+        "context_fn": views._portfolio_tab_context_pubsub_messages,
     },
     # {
     #     "slug": "tools",
     #     "label": "Tools",
-    #     "template": "businesses/tabs/tools.html",
-    #     "availability_fn": views._businesses_tab_available_tools,
-    #     "context_fn": views._businesses_tab_context_tools,
+    #     "template": "portfolio/tabs/tools.html",
+    #     "availability_fn": views._portfolio_tab_available_tools,
+    #     "context_fn": views._portfolio_tab_context_tools,
     # },
     TAB_DIVIDER,
     {
         "slug": "logout",
         "label": "Log Out",
-        "availability_fn": views._businesses_tab_available_logout,
-        "context_fn": views._businesses_tab_context_logout,
+        "availability_fn": views._portfolio_tab_available_logout,
+        "context_fn": views._portfolio_tab_context_logout,
         "is_action_tab": True,
         "url_name": "action_logout",
     },
 ]
 
-BUSINESSES_TAB_MAP = {
+PORTFOLIO_TAB_MAP = {
     definition["slug"]: definition
-    for definition in BUSINESSES_TAB_DEFINITIONS
+    for definition in PORTFOLIO_TAB_DEFINITIONS
     if not definition.get("is_divider") and not definition.get("is_action_tab")
 }
 

@@ -142,7 +142,7 @@ def healthcheck(request):
 
 
 
-def _businesses_tab_context_portfolio(erieiron_business: Business) -> dict:
+def _portfolio_tab_context_portfolio(erieiron_business: Business) -> dict:
     ei_business = Business.get_erie_iron_business()
     
     portfolio_businesses = defaultdict(list)
@@ -163,11 +163,11 @@ def _businesses_tab_context_portfolio(erieiron_business: Business) -> dict:
     }
 
 
-def _businesses_tab_available_capacity(erieiron_business: Business) -> bool:
+def _portfolio_tab_available_capacity(erieiron_business: Business) -> bool:
     return erieiron_business.businesscapacityanalysis_set.exists()
 
 
-def _businesses_tab_context_capacity(erieiron_business: Business) -> dict:
+def _portfolio_tab_context_capacity(erieiron_business: Business) -> dict:
     return {
         "business_capacity_analysis_list": erieiron_business.businesscapacityanalysis_set.all().order_by("-created_timestamp"),
     }
@@ -176,21 +176,21 @@ def _businesses_tab_context_capacity(erieiron_business: Business) -> dict:
 
 
 
-def _businesses_tab_available_lessons(_: Business) -> bool:
+def _portfolio_tab_available_lessons(_: Business) -> bool:
     return AgentLesson.objects.exists()
 
 
-def _businesses_tab_context_lessons(_: Business) -> dict:
+def _portfolio_tab_context_lessons(_: Business) -> dict:
     return {
         "agent_lessons": AgentLesson.objects.all().order_by("-timestamp"),
     }
 
 
-def _businesses_tab_available_tools(_: Business) -> bool:
+def _portfolio_tab_available_tools(_: Business) -> bool:
     return True
 
 
-def _businesses_tab_context_tools(_: Business) -> dict:
+def _portfolio_tab_context_tools(_: Business) -> dict:
     return {
         "all_running_processes": RunningProcess.objects.filter(is_running=True).order_by('-started_at'),
         "operation_type_choices": BusinessOperationType.choices(),
@@ -198,11 +198,53 @@ def _businesses_tab_context_tools(_: Business) -> dict:
     }
 
 
-def _businesses_tab_available_pubsub_messages(_: Business) -> bool:
+def _portfolio_tab_available_infrastructure_stacks(_: Business) -> bool:
+    return True
+
+
+def _portfolio_tab_context_infrastructure_stacks(_: Business) -> dict:
+    stacks_qs = (
+        InfrastructureStack.objects
+        .select_related("initiative", "business")
+        .all()
+        .order_by("env_type", "stack_type", "created_timestamp")
+    )
+
+    def business_label(stack: InfrastructureStack) -> str:
+        business = getattr(stack, "business", None)
+        if not business:
+            return "Business"
+        return getattr(business, "name", None) or getattr(business, "slug", None) or "Business"
+
+    stack_entries = _build_infrastructure_stack_entries(
+        stacks_qs,
+        scope_label_fn=business_label,
+    )
+
+    business_ids = {entry.get("business_id") for entry in stack_entries if entry.get("business_id")}
+    initiative_ids = {entry.get("initiative_id") for entry in stack_entries if entry.get("initiative_id")}
+
+    for entry in stack_entries:
+        business_name = entry.get("business_name") or "Business"
+        initiative_title = entry.get("initiative_title")
+        if initiative_title:
+            entry["initiative_title"] = f"{initiative_title} ({business_name})"
+        else:
+            entry["scope_label"] = f"{business_name} (Business)"
+
+    return {
+        "stack_entries": stack_entries,
+        "stack_count": len(stack_entries),
+        "business_count": len(business_ids),
+        "initiative_count": len(initiative_ids),
+    }
+
+
+def _portfolio_tab_available_pubsub_messages(_: Business) -> bool:
     return PubSubMessage.objects.exists()
 
 
-def _businesses_tab_context_pubsub_messages(_: Business, request: HttpRequest | None = None) -> dict:
+def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | None = None) -> dict:
     page_size = 20
 
     selected_message_types = []
@@ -250,7 +292,7 @@ def _businesses_tab_context_pubsub_messages(_: Business, request: HttpRequest | 
     return {
         "pubsub_messages": pubsub_messages,
         "total_count": total_count,
-        "pubsub_messages_redirect": reverse('view_businesses_tab', args=['pubsub-messages']),
+        "pubsub_messages_redirect": reverse('view_portfolio_tab', args=['pubsub-messages']),
         "message_type_options": message_type_options,
         "status_options": status_options,
         "selected_message_types": selected_message_types,
@@ -260,11 +302,11 @@ def _businesses_tab_context_pubsub_messages(_: Business, request: HttpRequest | 
     }
 
 
-def _businesses_tab_available_logout(_: Business) -> bool:
+def _portfolio_tab_available_logout(_: Business) -> bool:
     return True
 
 
-def _businesses_tab_context_logout(_: Business) -> dict:
+def _portfolio_tab_context_logout(_: Business) -> dict:
     return {}
 
 
@@ -333,7 +375,7 @@ def _start_of_week(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
 
-def _businesses_tab_available_llm_spend(_: Business) -> bool:
+def _portfolio_tab_available_llm_spend(_: Business) -> bool:
     return True
 
 
@@ -694,7 +736,7 @@ def _build_llm_spend_context(
     }
 
 
-def _businesses_tab_context_llm_spend(_: Business, request=None) -> dict:
+def _portfolio_tab_context_llm_spend(_: Business, request=None) -> dict:
     return _build_llm_spend_context(request=request)
 
 
@@ -706,11 +748,11 @@ def _tab_context_llm_spend(business: Business, request=None) -> dict:
     return _build_llm_spend_context(business=business, request=request)
 
 
-def _build_businesses_tabs(erieiron_business: Business) -> list[dict]:
+def _build_portfolio_tabs(erieiron_business: Business) -> list[dict]:
     from erieiron_ui import tab_defitions
     tabs: list[dict] = []
     
-    for definition in tab_defitions.BUSINESSES_TAB_DEFINITIONS:
+    for definition in tab_defitions.PORTFOLIO_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
@@ -726,9 +768,9 @@ def _build_businesses_tabs(erieiron_business: Business) -> list[dict]:
         elif definition.get("url"):
             url = definition["url"]
         elif slug == "portfolio":
-            url = reverse('view_businesses')
+            url = reverse('view_portfolio')
         else:
-            url = reverse('view_businesses_tab', args=[slug])
+            url = reverse('view_portfolio_tab', args=[slug])
         
         tab_entry = {
             **definition,
@@ -741,16 +783,16 @@ def _build_businesses_tabs(erieiron_business: Business) -> list[dict]:
     return tabs
 
 
-def view_businesses(request, tab: str = 'portfolio'):
+def view_portfolio(request, tab: str = 'portfolio'):
     from erieiron_ui import tab_defitions
     erieiron_business = Business.get_erie_iron_business()
     tab_slug = (tab or 'portfolio').lower()
     
-    if tab_slug not in tab_defitions.BUSINESSES_TAB_MAP:
+    if tab_slug not in tab_defitions.PORTFOLIO_TAB_MAP:
         raise Http404
     
-    tabs = _build_businesses_tabs(erieiron_business)
-    tab_definition = tab_defitions.BUSINESSES_TAB_MAP[tab_slug]
+    tabs = _build_portfolio_tabs(erieiron_business)
+    tab_definition = tab_defitions.PORTFOLIO_TAB_MAP[tab_slug]
     
     active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
     if not active_tab_entry or not active_tab_entry.get('available'):
@@ -764,7 +806,7 @@ def view_businesses(request, tab: str = 'portfolio'):
         "sidebar_title": "Erie Iron",
     }
     if tab_slug == 'llm-spend':
-        context.update(_businesses_tab_context_llm_spend(erieiron_business, request=request))
+        context.update(_portfolio_tab_context_llm_spend(erieiron_business, request=request))
     else:
         context_fn = tab_definition["context_fn"]
         fn_params = inspect.signature(context_fn).parameters
@@ -774,14 +816,14 @@ def view_businesses(request, tab: str = 'portfolio'):
             context.update(context_fn(erieiron_business))
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio")
+        (reverse(view_portfolio), "Portfolio")
     ]
     if tab_slug != 'portfolio':
-        breadcrumbs.append((reverse('view_businesses_tab', args=[tab_slug]), tab_definition["label"]))
+        breadcrumbs.append((reverse('view_portfolio_tab', args=[tab_slug]), tab_definition["label"]))
     
     return send_response(
         request,
-        "businesses/businesses_base.html",
+        "portfolio/portfolio_base.html",
         context,
         breadcrumbs=breadcrumbs
     )
@@ -1203,7 +1245,7 @@ def view_business(request, business_id, tab='overview'):
         context.update(tab_definition["context_fn"](business))
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio"),
+        (reverse(view_portfolio), "Portfolio"),
         (reverse('view_business', args=[business.id]), business.name)
     ]
     if tab != 'overview':
@@ -1311,6 +1353,7 @@ def _build_infrastructure_stack_entries(
     entries: list[dict] = []
     
     for stack in stacks:
+        business = getattr(stack, "business", None)
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         env_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
@@ -1356,6 +1399,7 @@ def _build_infrastructure_stack_entries(
             {
                 "id": str(stack.id),
                 "business_id": stack.business_id,
+                "business_name": getattr(business, "name", None) or getattr(business, "slug", None),
                 "initiative_id": stack.initiative_id,
                 "initiative_title": getattr(stack.initiative, "title", None) if stack.initiative_id else None,
                 "stack_name": stack.stack_name,
@@ -1522,7 +1566,7 @@ def view_initiative(request, initiative_id, tab='overview'):
         context.update(tab_definition["context_fn"](initiative))
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio"),
+        (reverse(view_portfolio), "Portfolio"),
         (reverse('view_business', args=[business.id]), business.name),
         (reverse('view_initiative', args=[initiative.id]), initiative.title)
     ]
@@ -2135,7 +2179,7 @@ def view_task(request, task_id, tab='overview'):
         context.update(tab_definition["context_fn"](task, business, self_driving_task))
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio"),
+        (reverse(view_portfolio), "Portfolio"),
         (reverse('view_business', args=[business.id]), business.name),
         (reverse(view_initiative, args=[initiative.id]), initiative.title),
         (reverse('view_task', args=[task.id]), task.get_name()),
@@ -2253,7 +2297,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
     context.update(tab_context)
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio"),
+        (reverse(view_portfolio), "Portfolio"),
         (reverse(view_business, args=[business.id]), business.name),
         (reverse(view_initiative, args=[initiative.id]), initiative.title),
         (reverse(view_task, args=[task.id]), task.get_name()),
@@ -2445,10 +2489,10 @@ def action_delete_task(request, task_id):
         return redirect(reverse('view_initiative', args=[initiative_id]))
     except Task.DoesNotExist:
         messages.error(request, 'Task not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         messages.error(request, f'Error deleting task: {str(e)}')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
 
 
 def action_add_business(request):
@@ -2462,15 +2506,15 @@ def action_add_business(request):
     
     if not business_name:
         messages.error(request, 'Business name is required.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     
     if not business_description:
         messages.error(request, 'Business description is required.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     
     if not BusinessOperationType.valid(operation_type):
         messages.error(request, 'Invalid operation type selected.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     
     business = Business.objects.create(
         name=business_name,
@@ -2546,7 +2590,7 @@ def action_delete_business(request, business_id):
     except Exception as e:
         messages.error(request, f'Error deleting business: {str(e)}')
     
-    return redirect(reverse('view_businesses'))
+    return redirect(reverse('view_portfolio'))
 
 
 def action_submit_bug_report(request, business_id):
@@ -2743,15 +2787,15 @@ def action_add_initiative(request):
     
     if not title:
         messages.error(request, 'Initiative title is required.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     
     if not initiative_type:
         messages.error(request, 'Initiative type is required.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     
     if not description:
         messages.error(request, 'Initiative description is required.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     
     erieiron_business = Business.get_erie_iron_business()
     
@@ -2986,7 +3030,7 @@ def action_update_initiative(request, initiative_id):
         return redirect(reverse('view_initiative_tab', args=['edit', initiative_id]))
     except Initiative.DoesNotExist:
         messages.error(request, 'Initiative not found.')
-        return redirect(reverse('view_businesses_tab', args=['initiatives']))
+        return redirect(reverse('view_portfolio_tab', args=['initiatives']))
     except Exception as e:
         logging.exception(e)
         messages.error(request, f'Error updating initiative: {str(e)}')
@@ -3026,7 +3070,7 @@ def action_find_business(request):
         }
     )
     
-    return redirect(reverse('view_businesses_tab', args=['portfolio']))
+    return redirect(reverse('view_portfolio_tab', args=['portfolio']))
 
 
 def action_update_task_guidance(request, task_id):
@@ -3043,7 +3087,7 @@ def action_update_task_guidance(request, task_id):
         return redirect(reverse('view_task_tab', args=['guidance', task_id]))
     except Task.DoesNotExist:
         messages.error(request, 'Task not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         messages.error(request, f'Error updating guidance: {str(e)}')
         return redirect(reverse('view_task', args=[task_id]))
@@ -3158,7 +3202,7 @@ def action_update_task(request, task_id):
     except Task.DoesNotExist as e:
         logging.exception(e)
         messages.error(request, 'Task not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         logging.exception(e)
         messages.error(request, f'Error updating task: {str(e)}')
@@ -3230,7 +3274,7 @@ def action_update_business(request, business_id):
         return redirect(reverse('view_business_tab', args=['edit', business_id]))
     except Business.DoesNotExist:
         messages.error(request, 'Business not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         logging.exception(e)
         messages.error(request, f'Error updating business: {str(e)}')
@@ -3267,7 +3311,7 @@ def action_bootstrap_business(request, business_id):
         return redirect(reverse('view_business_tab', args=['edit', business_id]))
     except Business.DoesNotExist:
         messages.error(request, 'Business not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         messages.error(request, f'Error bootstrapping business: {str(e)}')
         return redirect(reverse('view_business', args=[business_id]))
@@ -3288,7 +3332,7 @@ def action_kill_process(request, process_id):
             task_id = running_process.task_execution.task.id
             redirect_url = reverse('view_task_tab', args=['processes', task_id])
         else:
-            redirect_url = reverse('view_businesses_tab', args=['tools'])
+            redirect_url = reverse('view_portfolio_tab', args=['tools'])
         
         if running_process.kill_process():
             messages.success(request, f'Process {process_id} killed successfully!')
@@ -3298,10 +3342,10 @@ def action_kill_process(request, process_id):
         return redirect(redirect_url)
     except RunningProcess.DoesNotExist:
         messages.error(request, 'Process not found.')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
     except Exception as e:
         messages.error(request, f'Error killing process: {str(e)}')
-        return redirect(reverse('view_businesses_tab', args=['tools']))
+        return redirect(reverse('view_portfolio_tab', args=['tools']))
 
 
 def action_delete_iteration(request, iteration_id):
@@ -3319,10 +3363,10 @@ def action_delete_iteration(request, iteration_id):
         return redirect(reverse('view_task_tab', args=['iterations', task_id]))
     except SelfDrivingTaskIteration.DoesNotExist:
         messages.error(request, 'Iteration not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         messages.error(request, f'Error deleting iteration: {str(e)}')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
 
 
 def action_rollback_iteration(request, iteration_id):
@@ -3353,10 +3397,10 @@ def action_rollback_iteration(request, iteration_id):
         return redirect(reverse('view_self_driver_iteration', args=[iteration.id]))
     except SelfDrivingTaskIteration.DoesNotExist:
         messages.error(request, 'Iteration not found.')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
     except Exception as e:
         messages.error(request, f'Error rolling back iteration: {str(e)}')
-        return redirect(reverse('view_businesses'))
+        return redirect(reverse('view_portfolio'))
 
 
 def action_toggle_lesson_validity(request, lesson_id):
@@ -3372,13 +3416,13 @@ def action_toggle_lesson_validity(request, lesson_id):
         
         status = "invalid" if lesson.invalid_lesson else "valid"
         messages.success(request, f'Lesson marked as {status}!')
-        return redirect(reverse('view_businesses_tab', args=['lessons']))
+        return redirect(reverse('view_portfolio_tab', args=['lessons']))
     except AgentLesson.DoesNotExist:
         messages.error(request, 'Lesson not found.')
-        return redirect(reverse('view_businesses_tab', args=['lessons']))
+        return redirect(reverse('view_portfolio_tab', args=['lessons']))
     except Exception as e:
         messages.error(request, f'Error updating lesson: {str(e)}')
-        return redirect(reverse('view_businesses_tab', args=['lessons']))
+        return redirect(reverse('view_portfolio_tab', args=['lessons']))
 
 
 @require_POST
@@ -3569,7 +3613,7 @@ def view_stack(request, stack_id):
     }
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio"),
+        (reverse(view_portfolio), "Portfolio"),
         (business_url, business.name),
     ]
     
@@ -3625,7 +3669,7 @@ def view_codefile(request, codefile_id):
     
     # Build breadcrumbs 
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_portfolio), Business.get_erie_iron_business().name),
         (reverse('view_business', args=[business.id]), business.name),
         (reverse('view_codefile', args=[codefile_id]), code_file.file_path)
     ]
@@ -3880,7 +3924,7 @@ def view_llm_request(request, llm_request_id):
     llm_request = LlmRequest.objects.get(id=llm_request_id)
     
     breadcrumbs = [
-        (reverse(view_businesses), "Portfolio")
+        (reverse(view_portfolio), "Portfolio")
     ]
     iteration = llm_request.task_iteration
     task = iteration.self_driving_task.task if iteration else None
@@ -3945,18 +3989,18 @@ def view_pubsub_message_details(request, message_id):
     
     return send_response(
         request,
-        "businesses/businesses_base.html",
+        "portfolio/portfolio_base.html",
         {
             "business": Business.get_erie_iron_business(),
-            "tabs": _build_businesses_tabs(Business.get_erie_iron_business()),
+            "tabs": _build_portfolio_tabs(Business.get_erie_iron_business()),
             "message": message,
             "payload_json": json.dumps(message.payload, indent=2) if message.payload else None,
             "tab_template": "pubsub/message_details.html",
-            "redirect_target": reverse('view_businesses_tab', args=['pubsub-messages']),
+            "redirect_target": reverse('view_portfolio_tab', args=['pubsub-messages']),
         },
         breadcrumbs=[
-            (reverse('view_businesses'), Business.get_erie_iron_business().name),
-            (reverse('view_businesses_tab', args=['pubsub-messages']), 'PubSub Messages'),
+            (reverse('view_portfolio'), Business.get_erie_iron_business().name),
+            (reverse('view_portfolio_tab', args=['pubsub-messages']), 'PubSub Messages'),
             (None, f'Message {str(message_id)[:8]}'),
         ]
     )
@@ -3987,7 +4031,7 @@ def fetch_pubsub_messages(request):
 
     context = {
         "pubsub_messages": messages,
-        "redirect_target": reverse('view_businesses_tab', args=['pubsub-messages']),
+        "redirect_target": reverse('view_portfolio_tab', args=['pubsub-messages']),
     }
     
     return render(request, "pubsub/message_list_partial.html", context)
@@ -3999,7 +4043,7 @@ def action_delete_pubsub_message(request, message_id):
     message.delete()
     
     messages.success(request, f"PubSub message {str(message_id)[:8]} deleted successfully.")
-    return redirect(reverse('view_businesses_tab', args=['pubsub-messages']))
+    return redirect(reverse('view_portfolio_tab', args=['pubsub-messages']))
 
 
 @require_POST
