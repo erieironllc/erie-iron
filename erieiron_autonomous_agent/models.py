@@ -549,6 +549,7 @@ class InfrastructureStack(BaseErieIronModel):
     stack_name = models.TextField(unique=True)
     stack_arn = models.TextField(null=True)
     env_type = models.TextField(choices=EnvironmentType.choices())
+    stack_configuration = models.TextField(null=True)
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     stack_vars = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
