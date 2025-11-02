@@ -54,11 +54,13 @@ RUN echo "Using erieiron-public-common ref: $ERIEIRON_PUBLIC_COMMON_SHA"
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
- # Set Hugging Face cache directories before model downloads
+# Set Hugging Face cache directories before model downloads
 ENV HF_HOME=/usr/local/huggingface \
     TRANSFORMERS_CACHE=$HF_HOME \
     SENTENCE_TRANSFORMERS_HOME=$HF_HOME \
-    HF_HUB_DISABLE_SYMLINKS_WARNING=1
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_DATASETS_OFFLINE=1
 
 # Persist environment variables system-wide (optional hardening)
 RUN echo 'export HF_HOME=/usr/local/huggingface' >> /etc/profile.d/hf_cache.sh && \
@@ -73,19 +75,34 @@ RUN echo "[build] HF_HOME=$HF_HOME" && \
     echo "[build] SENTENCE_TRANSFORMERS_HOME=$SENTENCE_TRANSFORMERS_HOME" && \
     mkdir -p "$HF_HOME" && ls -la "$HF_HOME"
 
-# Optional optimization: persist Hugging Face cache between builds
-RUN --mount=type=cache,target=/usr/local/huggingface \
-    python -c "from transformers.utils import move_cache; move_cache()"
+# Download and cache models at build time
+RUN python - <<'PYCODE'
+from transformers import AutoModel, AutoTokenizer
+from sentence_transformers import SentenceTransformer
+import os
 
-# Pre-download Hugging Face models directly into the runtime cache
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-RUN python -c "from transformers import AutoModel, AutoTokenizer; [AutoModel.from_pretrained(m) and AutoTokenizer.from_pretrained(m) for m in ['bert-base-uncased', 'sentence-transformers/all-MiniLM-L6-v2']]" || true
+cache_dir = os.environ.get("HF_HOME", "/usr/local/huggingface")
+os.makedirs(cache_dir, exist_ok=True)
 
-# Perform the cache migration in-place
-RUN python -c "from transformers.utils import move_cache; move_cache()"
+models = [
+    "bert-base-uncased",
+    "sentence-transformers/all-MiniLM-L6-v2",
+]
 
-# Clean permissions
-RUN chmod -R 755 $HF_HOME
+for m in models:
+    print(f"[build] Downloading and caching {m}")
+    AutoModel.from_pretrained(m, cache_dir=cache_dir)
+    AutoTokenizer.from_pretrained(m, cache_dir=cache_dir)
+
+SentenceTransformer("all-MiniLM-L6-v2")
+print("[build] Cache preloaded successfully")
+PYCODE
+
+# Inspect cache for confirmation
+RUN ls -Rlh /usr/local/huggingface
+
+# Keep cache volume for reuse at runtime
+VOLUME /usr/local/huggingface
 
 COPY . .
 

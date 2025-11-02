@@ -35,11 +35,12 @@ python-decouple>=3.8
 python-hcl2>=4.3.0
 requests
 scikit-learn>=1.0.0
-sentence-transformers==2.2.2
+transformers==4.39.3
+tokenizers==0.15.2
+sentence-transformers==2.6.1
 sqlparse
 tiktoken
 tree_sitter_languages
 tree-sitter==0.25.2
 torch>=2.6
 torchvggish
-transformers
