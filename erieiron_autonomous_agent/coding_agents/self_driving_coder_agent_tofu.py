@@ -2106,7 +2106,7 @@ def deploy_iteration(
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
-   
+    
     foundation_outputs = deploy_opentofu_stack(
         config=config,
         stack_type=InfrastructureStackType.FOUNDATION,
@@ -2339,6 +2339,8 @@ def validate_web_container(
         process = subprocess.Popen(
             [
                 "podman", "run", "--rm",
+                "--memory", "512m",
+                "--memory-swap", "1g",
                 "-e", f"HTTP_LISTENER_PORT={port}",
                 "--platform", ContainerPlatform.FARGATE,
                 "-p", f"{port}:{port}",
