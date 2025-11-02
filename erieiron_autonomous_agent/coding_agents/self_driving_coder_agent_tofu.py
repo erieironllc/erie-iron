@@ -2221,7 +2221,7 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+    previous_container_tag = None #config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
@@ -2463,6 +2463,7 @@ def compute_goal_achievement_gate(config: SelfDriverConfig, ) -> tuple[bool, str
 def evaluate_iteration(
         config: SelfDriverConfig
 ):
+    return
     log_output = config.set_phase(SdaPhase.EVALUATE)
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
