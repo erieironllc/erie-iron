@@ -4,7 +4,6 @@ FROM 782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim
 ARG ERIEIRON_ENV=dev
 ARG HTTP_LISTENER_PORT=8006
 ARG CACHEBUST=1
-ARG ERIEIRON_PUBLIC_COMMON_SHA=manual
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -48,6 +47,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir gunicorn
 
+ARG ERIEIRON_PUBLIC_COMMON_SHA=manual
 RUN echo "Using erieiron-public-common ref: $ERIEIRON_PUBLIC_COMMON_SHA"
 
 #
