@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from erieiron_common import settings_utils
+from erieiron_public import agent_tools
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
@@ -37,7 +38,6 @@ FEEDBACK_EMAIL = config('FEEDBACK_EMAIL', default="erieironllc@gmail.com", cast=
 START_MESSAGE_QUEUE_PROCESSOR = config('START_MESSAGE_QUEUE_PROCESSOR', default=False, cast=bool)
 RUNTIME_CONFIG_OVERRIDES = config("RUNTIME_CONFIG_OVERRIDES", default=None)
 SHOW_TIMERS = config('SHOW_TIMERS', default=False, cast=bool)
-LOCAL_DB = config('LOCAL_DB', default=False, cast=bool)
 
 S3_CACHE_DIR = config('S3_CACHE_DIR', default=tempfile.mkdtemp(), cast=str)
 S3_CACHE_MAX_DISK_USAGE = config('S3_CACHE_MAX_DISK_USAGE', default=70, cast=int)
@@ -145,18 +145,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "erieiron_config.wsgi.application"
 
-if LOCAL_DB:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": "erieiron",
-            "HOST": "localhost",
-            "PORT": "5432",
-        }
-    }
-else:
-    from erieiron_public import agent_tools
-    DATABASES = agent_tools.get_django_settings_databases_conf()
+
+DATABASES = agent_tools.get_django_settings_databases_conf()
 
 AUTH_PASSWORD_VALIDATORS = [
     {
