@@ -178,7 +178,7 @@ for i in {1..30}; do
 done
 
 echo "Installing pgvector extension..."
-psql "host=${aws_db_instance.primary.address} user=$PGUSER dbname=${local.database_name}" \
+PGPASSWORD="$PGPASSWORD" psql "host=${aws_db_instance.primary.address} user=$PGUSER dbname=${local.database_name}" \
   -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 echo "pgvector installation complete."
