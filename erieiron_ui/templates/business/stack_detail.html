@@ -202,6 +202,23 @@
     </div>
 
     <div class="card mb-4">
+        <div class="card-header">Stack Configuration</div>
+        <div class="card-body">
+            {% if stack.stack_configuration %}
+                <div class="copy-container">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="small text-muted">IaC configuration captured for this stack.</span>
+                        {% include "_copy_clipboard_btn.html" with target_el="#stack-configuration-content" %}
+                    </div>
+                    <pre id="stack-configuration-content" class="mb-0 small">{{ stack.stack_configuration }}</pre>
+                </div>
+            {% else %}
+                <p class="text-muted mb-0">No stack configuration captured.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card mb-4">
         <div class="card-header">Stack Variables</div>
         <div class="card-body">
             {% if stack_vars_pretty %}

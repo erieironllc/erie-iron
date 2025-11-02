@@ -534,6 +534,14 @@ class Initiative(BaseErieIronModel):
                 "testable": req.testable
             } for req in self.requirements.order_by()]
         }
+    
+    def get_first_task_to_implement(self) -> 'Task':
+        return (
+            self
+            .tasks.exclude(status__in=[TaskStatus.BLOCKED, TaskStatus.COMPLETE])
+            .order_by("created_timestamp")
+            .first()
+        )
 
 
 class InfrastructureStack(BaseErieIronModel):
@@ -1425,6 +1433,13 @@ class CodeFile(BaseErieIronModel):
     
     def get_dir(self) -> Path:
         return self.get_path().parent
+    
+    def get_latest_code(self):
+        code_version = self.codeversion_set.order_by("-created_at").first()
+        if code_version:
+            return code_version.code
+        else:
+            return ""
     
     def get_latest_version(self, self_driving_task: SelfDrivingTask = None) -> 'CodeVersion':
         if self_driving_task:
