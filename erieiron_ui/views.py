@@ -3218,6 +3218,10 @@ def action_update_business(request, business_id):
         
         # Get form data
         name = rget(request, 'name', '').strip()
+        erie_iron_business = Business.get_erie_iron_business()
+        if business.id == erie_iron_business.id:
+            name = erie_iron_business.name
+            
         summary = rget(request, 'summary', '').strip()
         raw_idea = rget(request, 'raw_idea', '').strip()
         value_prop = rget(request, 'value_prop', '').strip()

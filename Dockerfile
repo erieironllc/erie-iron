@@ -57,6 +57,19 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download Hugging Face models to cache
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 RUN python -c "from transformers import AutoModel, AutoTokenizer; [AutoModel.from_pretrained(m) and AutoTokenizer.from_pretrained(m) for m in ['bert-base-uncased', 'sentence-transformers/all-MiniLM-L6-v2']]" || true
+# Migrate Hugging Face cache to the latest layout to avoid runtime migration overhead
+RUN python -c "from transformers.utils import move_cache; move_cache()"
+
+# Persist Hugging Face cache so models are available at runtime
+ENV HF_HOME=/usr/local/huggingface
+RUN mkdir -p $HF_HOME && \
+    cp -r /root/.cache/huggingface/* $HF_HOME/ && \
+    chmod -R 755 $HF_HOME
+
+# Ensure runtime uses the same cache directory
+ENV TRANSFORMERS_CACHE=$HF_HOME \
+    SENTENCE_TRANSFORMERS_HOME=$HF_HOME \
+    HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
 COPY . .
 
