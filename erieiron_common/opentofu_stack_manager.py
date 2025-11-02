@@ -34,6 +34,7 @@ class OpenTofuStackManager:
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
         self.module_file = self.get_swizzled_module_file()
         self.module_dir = self.module_file.parent
+        self.workspace_dir = self.module_dir.parent / "workspaces" / self.get_workspace_name()
         self.tf_env = self.build_opentofu_env()
         
         self.full_env: MutableMapping[str, str] = os.environ.copy()
@@ -46,10 +47,8 @@ class OpenTofuStackManager:
         self.tfvars_path = self.write_tfvars_file(
             self.stack.stack_vars
         )
-        self.plan_output_path = self.get_workspace_dir() / "current.plan"
+        self.plan_output_path = self.workspace_dir / "current.plan"
         self.init_workspace(upgrade=True)
-        
-        asdf = 1
     
     def get_swizzled_module_file(self):
         contents = self.stack.stack_configuration
@@ -58,6 +57,7 @@ class OpenTofuStackManager:
         new_contents = contents.replace("ERIE_IRON_RETAIN_RESOURCES", "true" if prevent_destroy else "false")
         
         swizzled_path = Path(tempfile.mkdtemp(prefix="opentofu_swizzle_")) / InfrastructureStackType(self.stack.stack_type).get_opentofu_config()
+        swizzled_path.parent.mkdir(parents=True, exist_ok=True)
         with swizzled_path.open("w", encoding="utf-8") as f:
             f.write(new_contents)
         
@@ -110,7 +110,7 @@ class OpenTofuStackManager:
             timeout: int | None = None,
     ) -> OpenTofuCommandResult:
         self.stage = stage
-        workdir = str(self.get_workspace_dir())
+        workdir = str(self.workspace_dir)
         command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *args]
         started_at = common.get_now()
         logging.debug("Running OpenTofu command", extra={"command": command, "cwd": str(workdir)})
@@ -293,7 +293,7 @@ class OpenTofuStackManager:
                     # Synthesize a successful OpenTofuCommandResult, mark the stage, and return
                     synthetic_result = OpenTofuCommandResult(
                         command=[settings.TOFU_BIN, *args],
-                        cwd=self.get_workspace_dir(),
+                        cwd=self.workspace_dir,
                         started_at=error.result.started_at,
                         completed_at=error.result.completed_at,
                         returncode=0,
@@ -329,7 +329,7 @@ class OpenTofuStackManager:
             "OpenTofu apply failed without raising an exception",
             OpenTofuCommandResult(
                 command=[settings.TOFU_BIN, *args],
-                cwd=self.get_workspace_dir(),
+                cwd=self.workspace_dir,
                 started_at=common.get_now(),
                 completed_at=common.get_now(),
                 returncode=-1,
@@ -391,13 +391,8 @@ class OpenTofuStackManager:
         suffix = aws_utils.sanitize_aws_name(self.stack.stack_type.lower(), max_length=20)
         return aws_utils.sanitize_aws_name(f"{base}-{suffix}", max_length=63)
     
-    def get_workspace_dir(self) -> Path:
-        workspace_dir = Path(os.getcwd()) / "opentofu" / "workspaces" / self.get_workspace_name()
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        return workspace_dir
-    
     def get_state_file(self):
-        return str(self.get_workspace_dir() / "terraform.tfstate"),
+        return str(self.workspace_dir / "terraform.tfstate"),
     
     def get_state_locator(self):
         return f"opentofu://workspace/{self.get_workspace_name()}"
@@ -441,7 +436,7 @@ class OpenTofuStackManager:
             filename: str | None = None,
     ) -> Path:
         suffix = filename or f"{self.stack.stack_type.lower()}.auto.tfvars.json"
-        tfvars_path = self.get_workspace_dir() / suffix
+        tfvars_path = self.workspace_dir / suffix
         tfvars_path.parent.mkdir(parents=True, exist_ok=True)
         common.write_json(tfvars_path, variables)
         return tfvars_path
@@ -456,9 +451,8 @@ class OpenTofuStackManager:
                 continue
             env[str(key)] = str(value)
         
-        workspace_dir = self.get_workspace_dir()
-        tf_data_dir = workspace_dir / ".terraform-data"
-        tf_plugin_cache = workspace_dir / "plugin-cache"
+        tf_data_dir = self.workspace_dir / ".terraform-data"
+        tf_plugin_cache = self.workspace_dir / "plugin-cache"
         tf_data_dir.mkdir(parents=True, exist_ok=True)
         tf_plugin_cache.mkdir(parents=True, exist_ok=True)
         

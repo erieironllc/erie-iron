@@ -108,7 +108,15 @@ class SelfDriverConfig:
             stack_type: InfrastructureStack.get(self.initiative, stack_type, self.env_type)
             for stack_type in [InfrastructureStackType.FOUNDATION, InfrastructureStackType.APPLICATION]
         }
+        self.all_stacks = list(self.stacks.values())
         self.all_stack_tokens: list[OpenTofuStackManager] = [s.stack_namespace_token for s in self.stacks.values()]
+
+        for stack in self.all_stacks:
+            if not stack.stack_configuration:
+                stack.stack_configuration = common.assert_exists(
+                    self.sandbox_root_dir / InfrastructureStackType(stack.stack_type).get_opentofu_config()
+                ).read_text()
+                stack.save()
 
         self.runtime_env = self.get_runtime_env()
         self.stack_managers = {
