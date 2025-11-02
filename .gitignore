@@ -187,3 +187,4 @@ __pycache__/
 /.codex/
 /production_deploy_thoughts.md
 /.claude/
+/opentofu/workspaces/
