@@ -26,7 +26,7 @@ from botocore.exceptions import ClientError
 
 import settings
 from erieiron_common import common
-from erieiron_common import settings_common
+import settings
 from erieiron_common.aws_s3_local_cache import S3LocalCache
 from erieiron_common.enums import ContainerPlatform
 
@@ -402,7 +402,7 @@ def get_secret(secret_name: str):
 @lru_cache
 def get_cloudfron_url_signing_private_key():
     response = client("secretsmanager").get_secret_value(
-        SecretId=settings_common.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
+        SecretId=settings.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
     )
     
     return rsa.PrivateKey.load_pkcs1(response["SecretString"].encode("utf-8"))
@@ -418,7 +418,7 @@ def generate_signed_cloudfront_url(cloudfront_domain, s3_key, expires_in_seconds
     signature = rsa.sign(policy.encode(), private_key, 'SHA-1')
     encoded_sig = quote_plus(base64.b64encode(signature).decode("utf-8"))
     
-    url = f"{url}?Expires={expires}&Signature={encoded_sig}&Key-Pair-Id={settings_common.CLOUDFRONT_KEY_PAIR_ID}"
+    url = f"{url}?Expires={expires}&Signature={encoded_sig}&Key-Pair-Id={settings.CLOUDFRONT_KEY_PAIR_ID}"
     
     return url
 
@@ -530,7 +530,7 @@ class AwsInterface:
         
         page_iterator = boto3.client(
             'logs',
-            region_name=settings_common.AWS_DEFAULT_REGION_NAME
+            region_name=settings.AWS_DEFAULT_REGION_NAME
         ).get_paginator(
             'filter_log_events'
         ).paginate(**kwargs)
@@ -554,8 +554,8 @@ class AwsInterface:
         from erieiron_common import common
         common.log_info(f"sending email: {subject} to {recipient}")
         
-        sender = common.default_str(sender, settings_common.FEEDBACK_EMAIL)
-        ses_client = boto3.client('ses', region_name=settings_common.AWS_DEFAULT_REGION_NAME)
+        sender = common.default_str(sender, settings.FEEDBACK_EMAIL)
+        ses_client = boto3.client('ses', region_name=settings.AWS_DEFAULT_REGION_NAME)
         
         # if recipient.lower() != "erieironllc@gmail.com":
         #     self.send_email(f"ccme: {subject} ({recipient})", "erieironllc@gmail.com", body)
@@ -573,7 +573,7 @@ class AwsInterface:
 </html>
 """
         
-        if settings_common.DISABLE_EMAIL_SEND:
+        if settings.DISABLE_EMAIL_SEND:
             logging.info(f"""
 NOT SENDING THIS EMAIL (settings.DISABLE_EMAIL_SEND=False)
 
@@ -670,15 +670,15 @@ BODY:
         
         apigateway_client = boto3.client(
             'apigatewaymanagementapi',
-            region_name=settings_common.AWS_DEFAULT_REGION_NAME,
-            endpoint_url=f"https://{settings_common.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}"
+            region_name=settings.AWS_DEFAULT_REGION_NAME,
+            endpoint_url=f"https://{settings.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}"
         )
         
         table = boto3.resource(
             'dynamodb',
-            region_name=settings_common.AWS_DEFAULT_REGION_NAME
+            region_name=settings.AWS_DEFAULT_REGION_NAME
         ).Table(
-            settings_common.CLIENT_MESSAGE_DYNAMO_TABLE
+            settings.CLIENT_MESSAGE_DYNAMO_TABLE
         )
         
         # query for all connections open for this person
@@ -1443,3 +1443,33 @@ def aws_console_url_from_arn(arn: str) -> str:
             return f"{console_base}/ecs/home{region_qs}#/clusters/{cluster}"
     
     return f"{console_base}/go/view?arn={arn}"
+
+
+def get_ecr_arn(ecr_repo_name, container_image_tag, region:str):
+    ecr_client = boto3.client("ecr", region_name=region)
+    repo_desc = ecr_client.describe_repositories(repositoryNames=[ecr_repo_name])
+    return repo_desc["repositories"][0]["repositoryArn"]
+
+
+def get_full_image_uri(ecr_repo_name: str, container_image_tag: str, region: str) -> str:
+    account_id = client("sts").get_caller_identity()["Account"]
+    
+    return f"{account_id}.dkr.ecr.{region}.amazonaws.com/{ecr_repo_name}:{container_image_tag}"
+
+
+def tag_exists_in_ecr(repo_name: str, container_image_tag:str, region: str) -> bool:
+    if not container_image_tag:
+        return False
+    
+    ecr_client = boto3.client("ecr", region_name=region)
+    
+    try:
+        response = ecr_client.describe_images(
+            repositoryName=repo_name,
+            imageIds=[{"imageTag": container_image_tag}]
+        )
+        return bool(response.get("imageDetails"))
+    except Exception as e:
+        logging.exception(e)
+    
+    return False

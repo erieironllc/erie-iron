@@ -1,31 +1,67 @@
 {% load erieiron_common_tags %}
-<div>{{ initiative.description|linebreaksbr }}</div>
 
-{% if initiative.linked_kpis.exists %}
-    <h5 class="mt-4">KPIs</h5>
-    <table class="table table-striped">
-        <thead>
-        <tr>
-            <th>Name</th>
-            <th>Description</th>
-            <th>Priority</th>
-        </tr>
-        </thead>
-        {% for kpi in initiative.linked_kpis.all|dictsort:"name" %}
-            <tr>
-                <td>{{ kpi.name }}</td>
-                <td>{{ kpi.description }}</td>
-                <td>{{ kpi.priority|label }}</td>
-            </tr>
-        {% endfor %}
-    </table>
-{% endif %}
+<div class="initiative-overview">
+    <header class="initiative-overview__header">
+        <div class="d-flex justify-content-between align-items-start flex-wrap w-100">
+            <div class="initiative-overview__intro">
+                <div class="d-flex justify-content-between">
+                    <h1 class="initiative-overview__title">{{ initiative.title }}</h1>
+                    {% if initiative.domain %}
+                        <div>
+                        <a href="https://{{ initiative.domain }}" target="_blank"
+                           class="bi bi-box-arrow-up-right initiative-overview__chip text-bg-light text-dark text-decoration-none">
+                            Open
+                        </a>
+                        </div>
+                    {% endif %}
+                </div>
 
-{% if initiative.expected_kpi_lift %}
-    <h5 class="mt-5">Expected KPI Lift</h5>
-    <ul>
-        {% for kpi_lift, v in initiative.expected_kpi_lift.items %}
-            <li>{{ kpi_lift|label }}: {{ v }}</li>
-        {% endfor %}
-    </ul>
-{% endif %}
+                <div class="initiative-overview__summary">{{ initiative.description|linebreaksbr }}</div>
+            </div>
+        </div>
+    </header>
+
+    {% if initiative.linked_kpis.exists %}
+        <section class="initiative-overview__section">
+            <div class="initiative-overview__section-header">
+                <h5 class="initiative-overview__section-title">KPIs</h5>
+            </div>
+            <div class="initiative-overview__section-body table-responsive">
+                <table class="table table-dark table-striped table-borderless align-middle mb-0">
+                    <thead>
+                    <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Description</th>
+                        <th scope="col">Priority</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for kpi in initiative.linked_kpis.all|dictsort:"name" %}
+                        <tr>
+                            <td>{{ kpi.name }}</td>
+                            <td>{{ kpi.description }}</td>
+                            <td>{{ kpi.priority|label }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endif %}
+
+    {% if initiative.expected_kpi_lift %}
+        <section class="initiative-overview__section">
+            <div class="initiative-overview__section-header">
+                <h5 class="initiative-overview__section-title">Expected KPI Lift</h5>
+                <span class="initiative-overview__section-subtitle">Projected impact by metric</span>
+            </div>
+            <div class="initiative-overview__section-body">
+                <ul class="mb-0">
+                    {% for kpi_lift, value in initiative.expected_kpi_lift.items %}
+                        <li><strong>{{ kpi_lift|label }}</strong>: {{ value }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </section>
+    {% endif %}
+</div>

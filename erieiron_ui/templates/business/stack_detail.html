@@ -23,6 +23,16 @@
                     View CloudWatch Logs
                 </a>
             {% endif %}
+            {% if stack.env_type != 'production' %}
+                <form method="post" action="{% url 'action_destroy_stack' stack.id %}" class="d-inline">
+                    {% csrf_token %}
+                    <button type="submit"
+                            class="btn btn-outline-danger btn-sm mb-2 ms-md-2 hide-on-click"
+                            onclick="return confirm('Destroying this stack will remove its resources. This action cannot be undone. Continue?');">
+                        Destroy Stack
+                    </button>
+                </form>
+            {% endif %}
         </div>
     </div>
 
@@ -130,15 +140,19 @@
                                                         {{ resource.mode|title }}
                                                     {% endif %}
                                                     {% if resource.provider %}
-                                                        {% if resource.mode %}&middot;{% endif %} {{ resource.provider }}
+                                                        {% if resource.mode %}&middot;{% endif %}
+                                                        {{ resource.provider }}
                                                     {% endif %}
                                                     {% if resource.module_address %}
-                                                        {% if resource.mode or resource.provider %}&middot;{% endif %} {{ resource.module_address }}
+                                                        {% if resource.mode or resource.provider %}&middot;{% endif %}
+                                                        {{ resource.module_address }}
                                                     {% endif %}
                                                 </div>
                                             </div>
                                             {% if resource.console_url %}
-                                                <a href="{{ resource.console_url }}" class="btn btn-outline-primary btn-sm mt-2 mt-md-0" target="_blank" rel="noopener">Open in AWS Console</a>
+                                                <a href="{{ resource.console_url }}"
+                                                   class="btn btn-outline-primary btn-sm mt-2 mt-md-0" target="_blank"
+                                                   rel="noopener">Open in AWS Console</a>
                                             {% endif %}
                                         </div>
 
@@ -165,9 +179,12 @@
                                         </dl>
 
                                         {% if resource.values_pretty %}
-                                            <details class="small">
-                                                <summary class="mb-2">Values</summary>
-                                                <pre class="mb-0 small">{{ resource.values_pretty }}</pre>
+                                            <details class="small copy-container">
+                                                <div class="d-flex justify-content-between">
+                                                    <summary class="mb-2">Values</summary>
+                                                    {% include "_copy_clipboard_btn.html" with target_el=".resource_values" %}
+                                                </div>
+                                                <pre class="resource_values mb-0 small">{{ resource.values_pretty }}</pre>
                                             </details>
                                         {% elif resource.resource_pretty %}
                                             <pre class="mb-0 small">{{ resource.resource_pretty }}</pre>
@@ -197,55 +214,55 @@
 </div>
 
 <script>
-(function () {
-    var container = document.querySelector('.col-main-content');
-    if (!container) {
-        return;
-    }
-
-    container.addEventListener('click', function (event) {
-        var trigger = event.target.closest('.js-resource-scroll');
-        if (!trigger) {
+    (function () {
+        var container = document.querySelector('.col-main-content');
+        if (!container) {
             return;
         }
 
-        var anchorId = trigger.getAttribute('data-scroll-anchor');
-        if (!anchorId) {
-            return;
-        }
-
-        var escapeId = function (value) {
-            if (window.CSS && typeof window.CSS.escape === 'function') {
-                return window.CSS.escape(value);
+        container.addEventListener('click', function (event) {
+            var trigger = event.target.closest('.js-resource-scroll');
+            if (!trigger) {
+                return;
             }
-            return value.replace(/[^a-zA-Z0-9_\-]/g, function (char) {
-                return '\\' + char;
-            });
-        }(anchorId);
 
-        var target = container.querySelector('#' + escapeId) || document.getElementById(anchorId);
-        if (!target) {
-            return;
-        }
+            var anchorId = trigger.getAttribute('data-scroll-anchor');
+            if (!anchorId) {
+                return;
+            }
 
-        event.preventDefault();
+            var escapeId = function (value) {
+                if (window.CSS && typeof window.CSS.escape === 'function') {
+                    return window.CSS.escape(value);
+                }
+                return value.replace(/[^a-zA-Z0-9_\-]/g, function (char) {
+                    return '\\' + char;
+                });
+            }(anchorId);
 
-        var containerRect = container.getBoundingClientRect();
-        var targetRect = target.getBoundingClientRect();
-        var offset = targetRect.top - containerRect.top + container.scrollTop;
-        if (offset < 0) {
-            offset = 0;
-        }
+            var target = container.querySelector('#' + escapeId) || document.getElementById(anchorId);
+            if (!target) {
+                return;
+            }
 
-        if (typeof container.scrollTo === 'function') {
-            container.scrollTo({ top: offset, behavior: 'smooth' });
-        } else {
-            container.scrollTop = offset;
-        }
+            event.preventDefault();
 
-        if (history && typeof history.replaceState === 'function') {
-            history.replaceState(null, '', '#' + anchorId);
-        }
-    });
-})();
+            var containerRect = container.getBoundingClientRect();
+            var targetRect = target.getBoundingClientRect();
+            var offset = targetRect.top - containerRect.top + container.scrollTop;
+            if (offset < 0) {
+                offset = 0;
+            }
+
+            if (typeof container.scrollTo === 'function') {
+                container.scrollTo({top: offset, behavior: 'smooth'});
+            } else {
+                container.scrollTop = offset;
+            }
+
+            if (history && typeof history.replaceState === 'function') {
+                history.replaceState(null, '', '#' + anchorId);
+            }
+        });
+    })();
 </script>

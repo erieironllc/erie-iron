@@ -774,7 +774,7 @@ def view_businesses(request, tab: str = 'portfolio'):
             context.update(context_fn(erieiron_business))
     
     breadcrumbs = [
-        (reverse(view_businesses), erieiron_business.name)
+        (reverse(view_businesses), "Portfolio")
     ]
     if tab_slug != 'portfolio':
         breadcrumbs.append((reverse('view_businesses_tab', args=[tab_slug]), tab_definition["label"]))
@@ -1203,7 +1203,7 @@ def view_business(request, business_id, tab='overview'):
         context.update(tab_definition["context_fn"](business))
     
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_businesses), "Portfolio"),
         (reverse('view_business', args=[business.id]), business.name)
     ]
     if tab != 'overview':
@@ -1522,7 +1522,7 @@ def view_initiative(request, initiative_id, tab='overview'):
         context.update(tab_definition["context_fn"](initiative))
     
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_businesses), "Portfolio"),
         (reverse('view_business', args=[business.id]), business.name),
         (reverse('view_initiative', args=[initiative.id]), initiative.title)
     ]
@@ -2135,7 +2135,7 @@ def view_task(request, task_id, tab='overview'):
         context.update(tab_definition["context_fn"](task, business, self_driving_task))
     
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_businesses), "Portfolio"),
         (reverse('view_business', args=[business.id]), business.name),
         (reverse(view_initiative, args=[initiative.id]), initiative.title),
         (reverse('view_task', args=[task.id]), task.get_name()),
@@ -2253,7 +2253,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
     context.update(tab_context)
     
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_businesses), "Portfolio"),
         (reverse(view_business, args=[business.id]), business.name),
         (reverse(view_initiative, args=[initiative.id]), initiative.title),
         (reverse(view_task, args=[task.id]), task.get_name()),
@@ -2409,9 +2409,6 @@ def action_restart_task(request, task_id):
     
     SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=task_id).delete()
     CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
-    
-    for stack in InfrastructureStack.objects.filter(initiative_id=task.initiative_id):
-        stack.tombstone()
     
     # Reset task status and clear any existing executions
     Task.objects.filter(id=task_id).update(
@@ -3384,6 +3381,38 @@ def action_toggle_lesson_validity(request, lesson_id):
         return redirect(reverse('view_businesses_tab', args=['lessons']))
 
 
+@require_POST
+def action_destroy_stack(request, stack_id):
+    stack = get_object_or_404(InfrastructureStack, pk=stack_id)
+    
+    if EnvironmentType.PRODUCTION.eq(stack.env_type):
+        messages.error(request, 'Production stacks cannot be destroyed from this interface.')
+        return redirect(reverse('view_stack', args=[stack_id]))
+
+    stack_display = stack.stack_name or stack.stack_namespace_token or str(stack.id)
+    business_id = stack.business_id
+
+    try:
+        stack.delete_resources()
+    except Exception as exc:
+        logger.exception(exc)
+        messages.error(
+            request,
+            f'Failed to destroy infrastructure resources for stack "{stack_display}": {exc}'
+        )
+        return redirect(reverse('view_stack', args=[stack_id]))
+
+    try:
+        stack.delete()
+    except Exception as exc:
+        logger.exception(exc)
+        messages.error(request, f'Failed to delete stack "{stack_display}": {exc}')
+        return redirect(reverse('view_stack', args=[stack_id]))
+
+    messages.success(request, f'Stack "{stack_display}" destroyed successfully.')
+    return redirect(reverse('view_business_tab', args=['infrastructure-stacks', business_id]))
+
+
 def view_stack(request, stack_id):
     stack = get_object_or_404(InfrastructureStack, pk=stack_id)
     business = stack.business
@@ -3540,7 +3569,7 @@ def view_stack(request, stack_id):
     }
     
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name),
+        (reverse(view_businesses), "Portfolio"),
         (business_url, business.name),
     ]
     
@@ -3851,7 +3880,7 @@ def view_llm_request(request, llm_request_id):
     llm_request = LlmRequest.objects.get(id=llm_request_id)
     
     breadcrumbs = [
-        (reverse(view_businesses), Business.get_erie_iron_business().name)
+        (reverse(view_businesses), "Portfolio")
     ]
     iteration = llm_request.task_iteration
     task = iteration.self_driving_task.task if iteration else None

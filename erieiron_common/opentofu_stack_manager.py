@@ -31,7 +31,7 @@ class OpenTofuStackManager:
             container_env: dict = None
     ):
         self.stack = stack
-        self.sandbox_root_dir = sandbox_root_dir
+        self.sandbox_root_dir = common.assert_exists(sandbox_root_dir)
         self.container_env = container_env or {}
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
         self.module_file = self.get_swizzled_module_file()
@@ -49,10 +49,9 @@ class OpenTofuStackManager:
             self.stack.stack_vars
         )
         self.plan_output_path = self.get_workspace_dir() / "current.plan"
-        try:
-            self.init_workspace()
-        except Exception as e:
-            logging.warning("Workspace init failed or already initialized: %s", e)
+        self.init_workspace(upgrade=True)
+        
+        asdf = 1
     
     def get_swizzled_module_file(self):
         tf_path = common.assert_exists(
@@ -187,7 +186,18 @@ class OpenTofuStackManager:
         args.append(f"-backend-config=key={key_value}")
         args.append(f"-backend-config=region={EnvironmentType(self.stack.env_type).get_aws_region()}")
         
-        return self.run_tofu_command("init", args)
+        last_exception = None
+        
+        for attempt in range(3):
+            try:
+                return self.run_tofu_command("init", args)
+            except OpenTofuCommandError as e:
+                if "state data in S3 does not have the expected content" in e.result.stderr:
+                    time.sleep(10 * (attempt + 1))
+                    continue
+                last_exception = e
+                
+        raise last_exception
     
     def plan(
             self,
@@ -521,31 +531,45 @@ class OpenTofuStackManager:
         except json.JSONDecodeError as exc:
             raise OpenTofuCommandError("Failed to decode OpenTofu state JSON", result) from exc
     
-    def get_resources(self) -> list[str]:
-        return [
-            resource
-            for resource in
-            common.get_list(self.get_state_data(), ["values", "root_module", "resources"])
-        ]
+    def get_resources(self, resource_type: str = None) -> list[str]:
+        resource_datas = common.get_list(self.get_state_data(), ["values", "root_module", "resources"])
+        
+        if resource_type:
+            resource_datas = [
+                resource_data
+                for resource_data in resource_datas
+                if resource_data.get("type") == resource_type
+            ]
+        
+        return resource_datas
     
     def get_arns(self, resource_type: str) -> list[str]:
-        state_data = self.get_state_data()
-        arns = []
-        for resource in state_data.get("values", {}).get("root_module", {}).get("resources", []):
-            if resource.get("type") != resource_type:
-                continue
-            
-            arn = common.get(resource, ["values", "arn"])
-            if arn:
-                arns.append(arn)
+        return common.filter_empty([
+            common.get(resource, ["values", "arn"])
+            for resource in self.get_resources(resource_type)
+        ])
+    
+    def get_resource_definitions(self, resource_type: str = None):
+        resource_defs = []
         
-        return list(set(arns))
+        with open(self.module_file, 'r') as f:
+            tf_data = hcl2.load(f)
+        
+        for resource_def_item in tf_data.get('resource', []):
+            for resource_key, resource_def in resource_def_item.items():
+                if resource_type:
+                    if resource_type == resource_key:
+                        resource_defs.append(resource_def)
+                else:
+                    resource_defs.append(resource_def)
+    
+        return resource_defs
     
     @staticmethod
-    def get_cross_stack_resources(stack_managers: list['OpenTofuStackManager']) -> list[str]:
+    def get_cross_stack_resources(stack_managers: list['OpenTofuStackManager'], resource_type: str = None) -> list[str]:
         resources = []
         for stack_manager in stack_managers:
-            resources += stack_manager.get_resources()
+            resources += stack_manager.get_resources(resource_type)
         return resources
     
     @staticmethod
@@ -554,3 +578,10 @@ class OpenTofuStackManager:
         for stack_manager in stack_managers:
             arns += stack_manager.get_arns(resource_type)
         return arns
+    
+    @staticmethod
+    def get_cross_stack_resource_definitions(stack_managers: list['OpenTofuStackManager'], resource_type: str = None):
+        resource_defs = []
+        for stack_manager in stack_managers:
+            resource_defs += stack_manager.get_resource_definitions(resource_type)
+        return resource_defs

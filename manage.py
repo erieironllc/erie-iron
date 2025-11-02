@@ -3,11 +3,17 @@
 import os
 import sys
 import warnings
+from pathlib import Path
 
-from erieiron_common import settings_common
+import settings
 
 os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
 warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
+
+tf_plugin_cache = Path(os.path.expanduser("~/.terraform.d/plugin-cache"))
+tf_plugin_cache.mkdir(parents=True, exist_ok=True)
+os.environ["TF_PLUGIN_CACHE_DIR"] = str(tf_plugin_cache)
+
 
 
 def main():
@@ -31,7 +37,7 @@ def main():
     argv = [a for a in argv if "erieiron-env" not in a]
     
     from erieiron_common.aws_utils import assert_account_name
-    assert_account_name(settings_common.REQUIRED_ACCOUNT_NAME)
+    assert_account_name(settings.REQUIRED_ACCOUNT_NAME)
     
     try:
         from django.core.management import execute_from_command_line

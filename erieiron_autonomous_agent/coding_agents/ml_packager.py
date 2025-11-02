@@ -9,7 +9,7 @@ from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu impor
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, CodeFile, CodeVersion
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat
-from erieiron_common import common, aws_utils, settings_common
+from erieiron_common import common, aws_utils
 from erieiron_common.enums import TaskType, S3Bucket
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
@@ -172,18 +172,18 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
     for file in checkpoint_files:
         aws_utils.get_aws_interface().upload_file(
             file,
-            settings_common.BUCKETS[S3Bucket.MODELS],
+            settings.BUCKETS[S3Bucket.MODELS],
             f"{s3_dir}/{file.name}"
         )
     
-    print(f"model checkpoints uploaded to s3://{settings_common.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")
+    print(f"model checkpoints uploaded to s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}")
     
     txt_output = f"""
 # Best iteration
 Iteration #{best_version_num} {planning_model}
 Code:  {main_file_name}
 ### Checkpoints:
-s3://{settings_common.BUCKETS[S3Bucket.MODELS]}/{s3_dir}
+s3://{settings.BUCKETS[S3Bucket.MODELS]}/{s3_dir}
 
 # Summary
 {common.get(eval_data, 'summary')}

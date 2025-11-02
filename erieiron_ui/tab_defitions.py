@@ -343,6 +343,7 @@ BUSINESS_TAB_DEFINITIONS = [
         "label": "Report a Bug",
         "template": "business/tabs/bug_report.html"
     },
+    TAB_DIVIDER,
     {
         "slug": "business-plan",
         "label": "Business Plan",
@@ -351,18 +352,17 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_business_plan,
     },
     {
-        "slug": "product-initiatives",
-        "label": "Product Initiatives",
-        "template": "business/tabs/product_initiatives.html",
-        "context_fn": views._tab_context_product_initiatives,
-    },
-    TAB_DIVIDER,
-    {
         "slug": "analysis",
         "label": "Analysis",
         "template": "business/tabs/analysis.html",
         "availability_fn": views._tab_available_analysis,
         "context_fn": views._tab_context_analysis,
+    },
+    {
+        "slug": "product-initiatives",
+        "label": "Initiatives",
+        "template": "business/tabs/product_initiatives.html",
+        "context_fn": views._tab_context_product_initiatives,
     },
     TAB_DIVIDER,
     {

@@ -52,8 +52,8 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, ErieIronJSONEncoder, aws_log_reader
-from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda
+from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader
+from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda, get_full_image_uri
 from erieiron_common.cloudformation_utils import get_resource_configs, CloudformationResourceType
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
@@ -1235,7 +1235,7 @@ def get_strategic_unblocking_data(config):
         "Get Stragic Unblocking Data",
         [
             get_sys_prompt([
-                "codeplanning--strategic_unblocker.md", 
+                "codeplanning--strategic_unblocker.md",
                 "common--forbidden_actions_tofu.md"
             ]),
             get_architecture_docs(
@@ -1342,7 +1342,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
                 include_erie_common=True
             )
         
-        if not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
+        elif not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
             config.business.snapshot_code(
                 config.current_iteration,
                 include_erie_common=False
@@ -1459,21 +1459,10 @@ def build_container_image(
     if build_process.returncode != 0:
         raise Exception(f"Podman build failed with return code: {build_process.returncode}")
     
-    env_flags = " ".join(build_env_flags(container_env))
-    config.log(f"""
-=========================================================
-if you want to debug the container, run this 
-
-podman run --rm -it \
-  --platform {ContainerPlatform.FARGATE} \
-  -v {config.sandbox_root_dir}:/app \
-  -w /app \
-  {env_flags} \
-  {container_image_tag} \
-  /bin/bash
-
-=========================================================
-        """)
+    push_image_to_ecr(
+        config,
+        container_image_tag
+    )
     
     return container_image_tag
 
@@ -1612,17 +1601,22 @@ def build_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
 
 def get_stack_lambdas(config) -> list[dict]:
     lambdas = []
-    for resource_name, resource_config in get_resource_configs(
-            config.cloudformation_configs,
-            CloudformationResourceType.LAMBDA_FUNCTION
-    ).items():
-        s3_key_ref = common.get(resource_config, ["Properties", "Code", "S3Key"])
-        source_file = common.get(resource_config, ["Metadata", "SourceFile"])
+    
+    for resource_definition in OpenTofuStackManager.get_cross_stack_resource_definitions([config.stack_managers[InfrastructureStackType.APPLICATION]], "aws_lambda_function"):
+        s3_key_ref = resource_definition['s3_key']
+        resource_name = "todo"
+        if s3_key_ref:
+            raise AgentBlocked('fix this')
+        
+        source_file = common.first(config.sandbox_root_dir.rglob(
+            resource_definition['handler'].split(".")[0] + ".py"
+        ))
+        
         if not (s3_key_ref and source_file):
             continue
         
         s3_key_param = get_lambda_s3_key_param(
-            resource_name,
+            resource_definition["arn"],
             s3_key_ref
         )
         
@@ -1681,9 +1675,8 @@ def get_lambda_dependencies(config, source_file: str) -> list:
 
 def get_stack_buckets(config) -> list[dict]:
     buckets = []
-    for resource_name, resource_config in get_resource_configs(config.cloudformation_configs, CloudformationResourceType.S3_BUCKET).items():
-        properties = resource_config.get("Properties", {}) or {}
-        bucket_name_expr = properties.get("BucketName")
+    for resource_def in OpenTofuStackManager.get_cross_stack_resource_definitions(config.all_stack_managers, "aws_s3_bucket"):
+        bucket_name_expr = resource_def.get("bucket")
         
         if isinstance(bucket_name_expr, str):
             bucket_physical_name = bucket_name_expr
@@ -1696,7 +1689,7 @@ def get_stack_buckets(config) -> list[dict]:
             bucket_name_param = None
         
         buckets.append({
-            "bucket_name": resource_name,
+            "bucket_name": bucket_name_expr,
             "bucket_physical_name": bucket_physical_name,
             "bucket_name_param": bucket_name_param,
             "properties": properties,
@@ -1763,44 +1756,55 @@ def push_image_to_ecr(
 ):
     region = config.env_type.get_aws_region()
     ecr_client = boto3.client("ecr", region_name=region)
-    account_id = aws_utils.client("sts").get_caller_identity()["Account"]
+    repo_name = config.ecr_repo_name
     
-    repo_name = sanitize_aws_name(config.business.service_token)
-    ecr_repo_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo_name}"
+    full_image_uri = get_full_image_uri(
+        repo_name,
+        container_image_tag,
+        region
+    )
     
-    full_image_uri = f"{ecr_repo_uri}:{container_image_tag}"
     config.log(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
     
-    try:
-        ecr_client.describe_repositories(repositoryNames=[repo_name])
-    except ecr_client.exceptions.RepositoryNotFoundException:
-        ecr_client.create_repository(repositoryName=repo_name)
+    for i in range(3):
+        try:
+            try:
+                ecr_client.describe_repositories(repositoryNames=[repo_name])
+            except ecr_client.exceptions.RepositoryNotFoundException:
+                ecr_client.create_repository(repositoryName=repo_name)
+            
+            subprocess.run(
+                ["podman", "tag", container_image_tag, full_image_uri],
+                check=True,
+                stdout=config.log_f,
+                stderr=subprocess.STDOUT
+            )
+            
+            env = os.environ.copy()
+            env.pop("HTTP_PROXY", None)
+            env.pop("http_proxy", None)
+            env.pop("HTTPS_PROXY", None)
+            env.pop("https_proxy", None)
+            
+            subprocess.run(
+                ["podman", "push", full_image_uri],
+                check=True,
+                stdout=config.log_f,
+                stderr=subprocess.STDOUT,
+                env=env
+            )
+            break
+        except Exception as e:
+            logging.exception(e)
+            if i < 2:
+                logging.info(f"failed to push to ECR on attempt {i + 1}")
+                time.sleep(5)
+            else:
+                raise AgentBlocked(f"task {config.task.id} is failing to push {container_image_tag} to ECR. {e}")
     
-    repo_desc = ecr_client.describe_repositories(repositoryNames=[repo_name])
-    ecr_arn = repo_desc["repositories"][0]["repositoryArn"]
-    
-    subprocess.run(
-        ["podman", "tag", container_image_tag, full_image_uri],
-        check=True,
-        stdout=config.log_f,
-        stderr=subprocess.STDOUT
-    )
-    
-    env = os.environ.copy()
-    env.pop("HTTP_PROXY", None)
-    env.pop("http_proxy", None)
-    env.pop("HTTPS_PROXY", None)
-    env.pop("https_proxy", None)
-    subprocess.run(
-        ["podman", "push", full_image_uri],
-        check=True,
-        stdout=config.log_f,
-        stderr=subprocess.STDOUT,
-        env=env
-    )
     config.log(f"======== COMPLETED ECR Push to {full_image_uri}\n\n\n\n")
     
-    return full_image_uri, ecr_arn
+    return full_image_uri
 
 
 def run_container_command(
@@ -1857,6 +1861,9 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
     try:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
+        
+        for stack_manager in config.all_stack_managers:
+            stack_manager.validate_stack()
         
         container_env = build_env(
             config
@@ -2092,34 +2099,19 @@ def deploy_iteration(
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
     
-    ecr_arn = full_image_uri = None
-    for i in range(3):
-        try:
-            full_image_uri, ecr_arn = push_image_to_ecr(
-                config,
-                container_image_tag
-            )
-            break
-        except Exception as e:
-            logging.exception(e)
-            if i < 2:
-                logging.info(f"failed to push to ECR on attempt {i + 1}")
-                time.sleep(5)
-            else:
-                raise AgentBlocked(f"task {task.id} is failing to push {container_image_tag} to ECR. {e}")
-        
-        try:
-            empty_stack_buckets(
-                config,
-                delete_bucket=False
-            )
-        except Exception as e:
-            config.log(e)
-            raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
+    try:
+        empty_stack_buckets(
+            config,
+            delete_bucket=False
+        )
+    except Exception as e:
+        config.log(e)
+        raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
     
     foundation_outputs = deploy_opentofu_stack(
         config=config,
         stack_type=InfrastructureStackType.FOUNDATION,
+        container_image_tag=container_image_tag,
         container_env=container_env,
     )
     
@@ -2145,8 +2137,7 @@ def deploy_iteration(
         config=config,
         stack_type=InfrastructureStackType.APPLICATION,
         container_env=container_env,
-        web_container_image=full_image_uri,
-        ecr_arn=ecr_arn,
+        container_image_tag=container_image_tag,
         lambda_datas=lambda_datas,
         previous_stack_outputs=foundation_outputs
     )
@@ -2198,29 +2189,54 @@ def get_iteration_files_msg(current_iteration):
 
 def build_iteration(config, container_env):
     config.set_phase(SdaPhase.BUILD)
-    
-    required_build_steps = llm_chat(
-        "Plan Build Steps",
-        [
-            get_sys_prompt("build_planner.md"),
-            get_iteration_files_msg(config.current_iteration),
-        ],
-        output_schema="build_planner.md.schema.json",
-        model=LlmModel.OPENAI_GPT_5_NANO,
-        tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.LOW
-    ).json()
-    
-    # TODO take this out
-    # required_build_steps = {
-    #     BuildStep.CONTAINERS.value: False,
-    #     BuildStep.LAMBDAS.value: False
-    # }
-    
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
     
-    if not config.iteration_to_modify.docker_tag or required_build_steps.get(BuildStep.CONTAINERS.value):
+    if config.current_iteration.version_number > 1:
+        required_build_steps = llm_chat(
+            "Plan Build Steps",
+            [
+                get_sys_prompt("build_planner.md"),
+                get_iteration_files_msg(config.current_iteration),
+            ],
+            output_schema="build_planner.md.schema.json",
+            model=LlmModel.OPENAI_GPT_5_NANO,
+            tag_entity=config.current_iteration,
+            reasoning_effort=LlmReasoningEffort.LOW
+        ).json()
+    else:
+        required_build_steps = {
+            BuildStep.CONTAINERS.value: True,
+            BuildStep.LAMBDAS.value: True
+        }
+    
+    required_build_steps = {
+        BuildStep.CONTAINERS.value: True,
+        BuildStep.LAMBDAS.value: True
+    }
+    
+    if required_build_steps.get(BuildStep.LAMBDAS.value):
+        lambda_datas = build_lambda_packages(
+            config
+        )
+    else:
+        lambda_datas = []
+    
+    previous_container_tag = config.iteration_to_modify.docker_tag
+    
+    tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
+        config.ecr_repo_name,
+        previous_container_tag,
+        config.env_type.get_aws_region()
+    )
+    tag_exists_in_ecr = False
+    
+    if (
+            tag_exists_in_ecr or 
+            (previous_container_tag and not required_build_steps.get(BuildStep.CONTAINERS.value))
+    ):
+        container_image_tag = previous_container_tag
+    else:
         docker_file = config.sandbox_root_dir / "Dockerfile"
         
         ecr_authenticate(
@@ -2233,15 +2249,6 @@ def build_iteration(config, container_env):
             container_env,
             docker_file
         )
-    else:
-        container_image_tag = config.iteration_to_modify.docker_tag
-    
-    if required_build_steps.get(BuildStep.LAMBDAS.value):
-        lambda_datas = build_lambda_packages(
-            config
-        )
-    else:
-        lambda_datas = []
     
     SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
         docker_tag=container_image_tag
@@ -2436,7 +2443,7 @@ def assert_tests_green(config: SelfDriverConfig):
         })
 
 
-def compute_goal_achievement_gate( config:SelfDriverConfig, ) -> tuple[bool, str]:
+def compute_goal_achievement_gate(config: SelfDriverConfig, ) -> tuple[bool, str]:
     iteration = config.current_iteration
     
     if not iteration.log_content_deployment:
@@ -2503,10 +2510,10 @@ def evaluate_iteration(
         """)
     
     if (
-            TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) 
-            and iteration.log_content_deployment 
+            TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type)
+            and iteration.log_content_deployment
             and not (runtime_errors or deploy_errors)
-    ): 
+    ):
         raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
     
     allow_goal_achieved, goal_achieved_reason = compute_goal_achievement_gate(
@@ -4799,13 +4806,24 @@ def deploy_opentofu_stack(
         *,
         stack_type: InfrastructureStackType,
         container_env: dict,
-        web_container_image: str | None = None,
-        ecr_arn: str | None = None,
+        container_image_tag: str,
         lambda_datas: list | None = None,
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stack = config.stacks[stack_type]
     opentofu_stack_manager = config.stack_managers[stack_type]
+    
+    web_container_image = aws_utils.get_full_image_uri(
+        config.ecr_repo_name,
+        container_image_tag,
+        config.env_type.get_aws_region()
+    )
+    
+    ecr_arn = aws_utils.get_ecr_arn(
+        config.ecr_repo_name,
+        container_image_tag,
+        config.env_type.get_aws_region()
+    )
     
     tfvars_payload = build_tfvars_payload(
         config,
@@ -4817,12 +4835,11 @@ def deploy_opentofu_stack(
         previous_stack_outputs=previous_stack_outputs
     )
     
-    stack.stack_vars = {k:v for k,v in tfvars_payload.items() if "password" not in k.lower()}
-    stack.resources = opentofu_stack_manager.get_resources()
+    stack.stack_vars = {k: v for k, v in tfvars_payload.items() if "password" not in k.lower()}
     stack.sandbox_root_dir = config.sandbox_root_dir
     stack.updated_timestamp = common.get_now()
     stack.save()
-
+    
     plan_summary: Mapping[str, Any] | None = None
     
     try:
@@ -4832,7 +4849,8 @@ def deploy_opentofu_stack(
         apply_result = opentofu_stack_manager.apply()
         outputs = apply_result.extra["outputs"]
         
-        manage_ses_domain_settings(config, tfvars_payload)
+        if opentofu_stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
+            manage_ses_domain_settings(config, tfvars_payload)
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
             stack_type=stack_type.value,
@@ -4842,6 +4860,9 @@ def deploy_opentofu_stack(
         )
         
         config.add_deployment_log(stack_type, log_payload)
+        
+        stack.resources = opentofu_stack_manager.get_resources()
+        stack.save()
         
         return outputs
     except OpenTofuCommandError as exc:

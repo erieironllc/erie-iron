@@ -14,6 +14,7 @@ from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 
+import settings
 from erieiron_autonomous_agent.models import (
     LlmRequest,
     Business,
@@ -22,7 +23,7 @@ from erieiron_autonomous_agent.models import (
     SelfDrivingTask,
     SelfDrivingTaskIteration,
 )
-from erieiron_common import common, date_utils, settings_common, ErieIronJSONEncoder
+from erieiron_common import common, date_utils, ErieIronJSONEncoder
 from erieiron_common.aws_utils import get_cloudwatch_url
 from erieiron_common.enums import LlmModel
 from erieiron_common.llm_apis.llm_constants import get_token_count
@@ -93,14 +94,14 @@ def top_nav_dropdowns(context):
         iteration_label = f"Iteration {iteration_obj.version_number}"
     
     entries = []
-    for crumb in breadcrumbs:
+    for idx, crumb in enumerate(breadcrumbs):
         label = common.default_str(common.get(crumb, "label"))
         url = common.default_str(common.get(crumb, "url"))
         
         tabs = []
         active = None
         
-        if erie_business and label == erie_business.name:
+        if erie_business and idx == 0:
             tabs = cached(("businesses", erie_business.id), lambda: ui_views._build_businesses_tabs(erie_business))
         elif business_obj and label == business_obj.name:
             tabs = cached(("business", business_obj.id), lambda: ui_views._build_business_tabs(business_obj))
@@ -137,13 +138,14 @@ def dynamic_format(content):
         ...
     
     if isinstance(content, dict):
-        return mark_safe(f"<div class='pre'>{ pprint_json(content)}</div>")
+        return mark_safe(f"<div class='pre'>{pprint_json(content)}</div>")
     else:
         return mark_safe(markdown.markdown(content))
 
+
 @register.filter(name='json_to_md')
 def json_to_md(json_content, filter_def=None, use_default_wrapper=True):
-    return json_to_div(json_content, filter_def, use_default_wrapper, apply_md=True )
+    return json_to_div(json_content, filter_def, use_default_wrapper, apply_md=True)
 
 
 @register.filter(name='json_to_pre')
@@ -155,7 +157,7 @@ def json_to_pre(json_content, filter_def=None, use_default_wrapper=True, make_pr
 def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pre=False, apply_md=False):
     if not json_content:
         return ""
-   
+    
     only_fields = []
     exclude_fields = []
     keys = []
@@ -174,7 +176,7 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pr
             except:
                 if apply_md:
                     json_content = markdown.markdown(json_content)
-                    
+                
                 if use_default_wrapper:
                     return mark_safe(f"""
                 <div class="json_to_div--container {'pre' if make_pre else ''}">{json_content}</div>
@@ -209,7 +211,7 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pr
                     
                     if apply_md:
                         v1 = markdown.markdown(v1)
-                        
+                    
                     pres.append(f"<div class=' {'pre' if make_pre else ''}'>{v1}</div>")
                 
                 pres = "<br>".join(pres)
@@ -337,7 +339,7 @@ def dictsort_case_insensitive(value, arg):
 
 @register.simple_tag
 def timestamp_static(orig_filename):
-    static_dir_root = Path.cwd() / settings_common.STATIC_COMPILED_DIR
+    static_dir_root = Path.cwd() / settings.STATIC_COMPILED_DIR
     filename, ext = common.get_filename_and_extension(f"{static_dir_root}/{orig_filename}")
     
     files_with_time = []
@@ -429,6 +431,7 @@ def short_id(s):
         return s.split("-")[0]
     else:
         return s.split("_")[0]
+
 
 @register.filter
 def id_safe_str(s):

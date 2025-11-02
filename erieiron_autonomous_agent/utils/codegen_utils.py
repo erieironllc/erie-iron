@@ -78,16 +78,17 @@ def extract_methods(ext, source_code):
 
     language_name = LANGUAGE_NAMES[ext]
     source_text = source_code.decode("utf-8") if isinstance(source_code, bytes) else source_code
-
-    try:
-        return _extract_methods_with_tree_sitter(language_name, source_text)
-    except (TypeError, ImportError, OSError, AttributeError) as exc:
-        logging.warning(
-            "Falling back to non-tree-sitter method extraction for %s: %s",
-            language_name,
-            exc,
-        )
-        return _extract_methods_without_tree_sitter(language_name, source_text)
+    
+    return _extract_methods_without_tree_sitter(language_name, source_text)
+    # try:
+    #     return _extract_methods_with_tree_sitter(language_name, source_text)
+    # except (TypeError, ImportError, OSError, AttributeError) as exc:
+    #     logging.warning(
+    #         "Falling back to non-tree-sitter method extraction for %s: %s",
+    #         language_name,
+    #         exc,
+    #     )
+    #     return _extract_methods_without_tree_sitter(language_name, source_text)
 
 
 def _extract_methods_with_tree_sitter(language_name, source_text):

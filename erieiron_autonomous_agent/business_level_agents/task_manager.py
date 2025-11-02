@@ -2,12 +2,13 @@ import logging
 from typing import Optional
 
 from django.db import transaction
-from django.db.models import F, Value, Q
+from django.db.models import F, Value
 from django.db.models.functions import Coalesce
 
+import settings
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Task
-from erieiron_common import aws_utils, settings_common
+from erieiron_common import aws_utils
 from erieiron_common.enums import PubSubMessageType, TaskType
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
@@ -45,7 +46,7 @@ def _get_task_type(task: Task) -> Optional[TaskType]:
 def _find_next_ready_serial_task(task: Task) -> Optional[Task]:
     if not task.initiative_id:
         return None
-
+    
     candidates = (
         Task.objects
         .filter(
@@ -55,18 +56,18 @@ def _find_next_ready_serial_task(task: Task) -> Optional[Task]:
         )
         .order_by("created_timestamp", "id")
     )
-
+    
     for candidate in candidates:
         if candidate.are_dependencies_complete():
             return candidate
-
+    
     return None
 
 
 def _has_serial_task_in_progress(task: Task) -> bool:
     if not task.initiative_id:
         return False
-
+    
     return Task.objects.filter(
         initiative=task.initiative,
         task_type__in=SERIALIZED_TASK_TYPE_VALUES,
@@ -78,14 +79,14 @@ def _should_execute_task(task: Task) -> bool:
     task_type = _get_task_type(task)
     if task_type not in SERIALIZED_TASK_TYPES:
         return True
-
+    
     if _has_serial_task_in_progress(task):
         return False
-
+    
     next_ready = _find_next_ready_serial_task(task)
     if next_ready is None:
         return True
-
+    
     return next_ready.id == task.id
 
 
@@ -93,10 +94,10 @@ def _maybe_publish_next_serial_task(task: Task) -> None:
     task_type = _get_task_type(task)
     if task_type not in SERIALIZED_TASK_TYPES:
         return
-
+    
     if _has_serial_task_in_progress(task):
         return
-
+    
     next_ready = _find_next_ready_serial_task(task)
     if next_ready and next_ready.id != task.id:
         PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, next_ready.id)
@@ -106,10 +107,10 @@ def _trigger_next_serial_task(task: Task) -> None:
     task_type = _get_task_type(task)
     if task_type not in SERIALIZED_TASK_TYPES:
         return
-
+    
     if _has_serial_task_in_progress(task):
         return
-
+    
     next_ready = _find_next_ready_serial_task(task)
     if next_ready:
         PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, next_ready.id)
@@ -117,7 +118,7 @@ def _trigger_next_serial_task(task: Task) -> None:
 
 def on_task_updated(task_id):
     task = Task.objects.get(id=task_id)
-
+    
     status = TaskStatus(task.status)
     if status in [TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]:
         if not task.are_dependencies_complete():
@@ -130,11 +131,11 @@ def on_task_updated(task_id):
             Task.objects.filter(id=task_id).update(
                 status=TaskStatus.IN_PROGRESS
             )
-
+            
             msg_type = TASKTYPE_TO_MSGTYPE.get(
                 TaskType(task.task_type)
             )
-
+            
             PubSubManager.publish_id(msg_type, task.id)
         else:
             _maybe_publish_next_serial_task(task)
@@ -146,18 +147,18 @@ def on_task_updated(task_id):
 
 def on_task_complete(task_id):
     task = Task.objects.get(id=task_id)
-
+    
     Task.objects.filter(id=task_id).update(
         status=TaskStatus.COMPLETE
     )
     task.update_dependent_tasks()
-
+    
     _trigger_next_serial_task(task)
     
     initiative = task.initiative
     if initiative and initiative.all_tasks_complete():
         PubSubManager.publish_id(
-            PubSubMessageType.INITIATIVE_DEPLOY_REQUESTED, 
+            PubSubMessageType.INITIATIVE_DEPLOY_REQUESTED,
             initiative.id
         )
 
@@ -165,7 +166,7 @@ def on_task_complete(task_id):
 def on_task_spend(payload):
     task_id = payload['task_id']
     usd_spent = float(payload['usd_spent'])
-
+    
     with transaction.atomic():
         Task.objects.filter(id=task_id).update(
             current_spend=Coalesce(F('current_spend'), Value(0)) + usd_spent
@@ -178,36 +179,36 @@ def on_task_failed(payload):
             "task_id": payload,
             "error": "unknown"
         }
-
+    
     task = Task.objects.get(id=payload.get("task_id"))
-
+    
     cc_parts = "<br>".join([cc for cc in task.completion_criteria])
-
+    
     err = payload.get('error', '').replace("\n", "<br>").replace("\t", "&nbsp;&nbsp;")
     logging.error(f"""
 Task {task.id}: {task.description} FAILED
 {err} """)
-
+    
     aws_utils.get_aws_interface().send_email(
         subject=f"Task failed: {task.id} - {task.description}",
         recipient="erieironllc@gmail.com",
         body=f"""
 <h3>TaskID</h3>{task.id}<hr>
 
-{settings_common.BASE_URL}/task/task_build_dev_runtime_container
+{settings.BASE_URL}/task/task_build_dev_runtime_container
 
 <h3>Error</h3><pre>{err}</pre><hr>
 
 <h3>Completion Criteria</h3>{cc_parts}
 """
     )
-
+    
     Task.objects.filter(id=task.id).update(
         status=TaskStatus.FAILED
     )
-
+    
     task.update_dependent_tasks()
-
+    
     return task.id
 
 
@@ -226,9 +227,9 @@ def on_initiative_green_lit(initiative_id):
         # Trigger task updates for all tasks in the initiative
         for task in tasks:
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, task.id)
-            
-        logging.info(f"Initiative {initiative_id} green lit - triggered {tasks.count()} tasks for execution")
         
+        logging.info(f"Initiative {initiative_id} green lit - triggered {tasks.count()} tasks for execution")
+    
     except Initiative.DoesNotExist:
         logging.error(f"Initiative {initiative_id} not found when handling INITIATIVE_GREEN_LIT")
     except Exception as e:

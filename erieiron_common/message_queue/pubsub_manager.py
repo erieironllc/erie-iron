@@ -21,7 +21,8 @@ from django.db import transaction
 from django.db.models import QuerySet
 from django.utils import timezone
 
-from erieiron_common import common, settings_common
+from erieiron_common import common
+import settings
 from erieiron_common.common import get_now, get_methods_with_decorator
 from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, PubSubHandlerInstanceStatus, PubSubMessagePriority, ComputeDevice
 from erieiron_common.enums import SystemCapacity
@@ -226,7 +227,7 @@ class PubSubManager:
     ):
         exclusive = []
         exclude = []
-        for mt in common.safe_split(settings_common.MESSAGE_TYPES):
+        for mt in common.safe_split(settings.MESSAGE_TYPES):
             if mt.startswith("-"):
                 exclude.append(mt[1:])
             else:
@@ -246,7 +247,7 @@ class PubSubManager:
             max_percent_capacity_consumed = 70
 
         if handler and process:
-            if not (force or settings_common.START_MESSAGE_QUEUE_PROCESSOR):
+            if not (force or settings.START_MESSAGE_QUEUE_PROCESSOR):
                 raise Exception("attempting to initialize pubsub manager, but pubsub not supported per settings")
 
             self.handler_instance_id = handler.id
@@ -278,7 +279,7 @@ class PubSubManager:
 
     @staticmethod
     def get_env(run_isolated=False) -> PubSubEnvironment:
-        settings_env = settings_common.MESSAGE_QUEUE_ENV or common.get_machine_name()
+        settings_env = settings.MESSAGE_QUEUE_ENV or common.get_machine_name()
 
         if run_isolated:
             cache = common.get_local_server_cache()
@@ -293,7 +294,7 @@ class PubSubManager:
         return PubSubEnvironment.objects.get_or_create(id=env)[0]
 
     def supports_cuda_msgs(self) -> bool:
-        return settings_common.DEBUG or ComputeDevice.CUDA.eq(self.compute_device)
+        return settings.DEBUG or ComputeDevice.CUDA.eq(self.compute_device)
 
     @cached_property
     def compute_device(self) -> ComputeDevice | None:

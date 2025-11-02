@@ -7,15 +7,16 @@ from typing import Dict, Any
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from erieiron_common import common, settings_common
+from erieiron_common import common
+import settings
 
 
 class S3LocalCache:
     def __init__(self, s3_client):
         self.s3_client = s3_client
-        self.max_disk_usage_percent = settings_common.S3_CACHE_MAX_DISK_USAGE
+        self.max_disk_usage_percent = settings.S3_CACHE_MAX_DISK_USAGE
 
-        self.cache_dir = Path(settings_common.S3_CACHE_DIR).resolve()
+        self.cache_dir = Path(settings.S3_CACHE_DIR).resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_cache_path(self, bucket_name: str, s3_key: str) -> Path:

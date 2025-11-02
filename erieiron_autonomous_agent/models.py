@@ -303,6 +303,9 @@ class Business(BaseErieIronModel):
             self_driving_task_iteration: 'SelfDrivingTaskIteration',
             include_erie_common=True
     ):
+        if True:
+            return
+        
         instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
         sandbox_path = Path(self_driving_task_iteration.self_driving_task.sandbox_path)
         
@@ -677,8 +680,16 @@ class InfrastructureStack(BaseErieIronModel):
             )
             initiative.refresh_from_db(fields=["domain"])
             
+            zone_id = initiative.business.route53_hosted_zone_id
+            if not zone_id:
+                from erieiron_common import aws_utils 
+                zone_id = domain_manager.find_hosted_zone_id(
+                    aws_utils.client("route53"), 
+                    initiative.business.domain
+                )
+            
             domain_manager.add_dns_records(
-                initiative.business.route53_hosted_zone_id,
+                zone_id,
                 new_domain
             )
         
@@ -690,15 +701,7 @@ class InfrastructureStack(BaseErieIronModel):
         initiative = self.initiative
         stack_type = self.stack_type
         
-        if EnvironmentType.PRODUCTION.eq(env_type):
-            raise Exception(f"cannot tombstone a production stack")
-        
-        from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
-        opentofu_stack_manager = OpenTofuStackManager(self, self.sandbox_root_dir)
-        try:
-            opentofu_stack_manager.destroy_stack()
-        except Exception as e:
-            logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
+        self.delete_resources(self.env_type)
         
         InfrastructureStack.objects.filter(
             id=self.id
@@ -710,6 +713,20 @@ class InfrastructureStack(BaseErieIronModel):
             env_type=env_type,
             assert_create=True
         )
+    
+    def delete_resources(self):
+        if EnvironmentType.PRODUCTION.eq(self.env_type):
+            raise Exception(f"cannot tombstone a production stack")
+        
+        if not self.resources or not self.sandbox_root_dir:
+            return 
+        
+        from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
+        opentofu_stack_manager = OpenTofuStackManager(self, self.sandbox_root_dir)
+        try:
+            opentofu_stack_manager.destroy_stack()
+        except Exception as e:
+            logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
     
     def get_template_name(self) -> str:
         return InfrastructureStackType(self.stack_type).get_template_name()
@@ -1094,7 +1111,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     log_content_deployment = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     log_content_cloudwatch = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     exceptions = models.TextField(null=True)
-
+    
     planning_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     evaluation_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     slowest_cloudformation_resources = models.JSONField(null=True, encoder=ErieIronJSONEncoder)

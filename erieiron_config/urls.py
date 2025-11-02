@@ -70,6 +70,7 @@ urlpatterns = [
     path("_pubsub/retry/<uuid:message_id>", views.action_retry_pubsub_message, name="action_retry_pubsub_message"),
     
     path("codefile/<uuid:codefile_id>", views.view_codefile, name="view_codefile"),
+    path("stack/<uuid:stack_id>/destroy", views.action_destroy_stack, name="action_destroy_stack"),
     path("stack/<uuid:stack_id>", views.view_stack, name="view_stack"),
     path("api/codefile/<uuid:codefile_id>/content", views.api_codefile_content, name="api_codefile_content"),
 ]

@@ -7,7 +7,7 @@ import numpy as np
 import psutil
 import torch
 
-from erieiron_common import settings_common
+import settings
 from erieiron_common.enums import ComputeDevice
 
 
@@ -75,7 +75,7 @@ def get_free_gpu_memory():
 
 @lru_cache
 def supported_device() -> ComputeDevice:
-    if torch.backends.mps.is_available() and settings_common.ALLOW_MPS_DEVICE:
+    if torch.backends.mps.is_available() and settings.ALLOW_MPS_DEVICE:
         return ComputeDevice.MPS
     elif torch.cuda.is_available():
         return ComputeDevice.CUDA

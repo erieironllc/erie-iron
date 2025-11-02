@@ -18,6 +18,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_common import common, ErieIronJSONEncoder
+from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, CredentialService, SdaPhase
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
@@ -118,7 +119,8 @@ class SelfDriverConfig:
             for stack_type, stack in self.stacks.items()
         }
         self.all_stack_managers: list[OpenTofuStackManager] = self.stack_managers.values()
-
+        self.ecr_repo_name = sanitize_aws_name(self.business.service_token)
+        
         self.model_code_planning = LlmModel.OPENAI_GPT_5
     
     def get_runtime_env(self) -> dict:

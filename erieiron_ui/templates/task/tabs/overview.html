@@ -1,41 +1,110 @@
 {% load erieiron_common_tags %}
 
-<div class="tab-pane-content">
-    <p>
-        <div class="d-flex justify-content-between align-content-center">
-            <h5 >{{ task.get_name }}</h5>
-            <div style="height: 20px"  class=" me-2 badge d-flex align-content-center
-                    {% if task.status == "COMPLETE" %}
-                        bg-success
-                    {% elif task.status == "BLOCKED" %}
-                        bg-danger
-                    {% elif task.status == "IN_PROGRESS" %}
-                        bg-primary
-                    {% else %}
-                        bg-secondary
-                    {% endif %}
-                    
-                pt-1 p-2"
-            >{{ task.status }}</div>
+<div class="task-overview">
+    <header class="task-overview__header">
+        <div class="d-flex justify-content-between align-items-start flex-wrap w-100">
+            <div class="task-overview__intro">
+                <div class="d-flex justify-content-between align-content-start">
+                    <h1 class="task-overview__title">{{ task.get_name }}</h1>
+                    <div class="task-overview__meta ">
+                        <div class="d-flex justify-content-between align-items-start gap-3 w-100">
+                            <div class="task-overview__chips w-100">
+                                <div style="white-space: nowrap" class="d-flex justify-content-center  task-overview__chip w-100
+                                    {% if task.status == "COMPLETE" %}text-bg-success
+                                    {% elif task.status == "BLOCKED" %}text-bg-danger
+                                    {% elif task.status == "IN_PROGRESS" %}text-bg-primary
+                                    {% else %}text-bg-secondary
+                                    {% endif %}">
+                                    {{ task.status|label }}
+                                </div>
+                            </div>
+                        </div>
+                        {% if task.role_assignee %}
+                            <div class="task-overview__meta-item">
+                                <span class="task-overview__meta-label">Owner</span>
+                                <span class="task-overview__meta-value">{{ task.role_assignee|label }}</span>
+                            </div>
+                        {% endif %}
+                        <div class="task-overview__meta-item">
+                            <span class="task-overview__meta-label">Created</span>
+                            <span class="task-overview__meta-value">{{ task.created_timestamp|date:"M j, Y" }}</span>
+                        </div>
+                        {% if task.max_budget_usd %}
+                            <div class="task-overview__meta-item">
+                                <span class="task-overview__meta-label">Budget</span>
+                                <span class="task-overview__meta-value">${{ task.max_budget_usd|floatformat:0 }}</span>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="task-overview__summary markdown-container">
+                    {{ task.description|markdown }}
+                </div>
+            </div>
+
         </div>
-
-        {% if task.role_assignee %}
-            &nbsp;Owner: {{ task.role_assignee|label }}
-        {% endif %}
-    </p>
-
-    <div class="markdown-container">
-        {{ task.description|markdown }}
-    </div>
+    </header>
 
     {% if task.completion_criteria %}
-        <div class="markdown-container">
-            <h5 class="mt-4">Completion Criteria</h5>
-            <ol>
-                {{ task.completion_criteria|json_to_pre }}
-            </ol>
-        </div>
+        <section class="task-overview__section">
+            <div class="task-overview__section-header">
+                <h5 class="task-overview__section-title">Completion Criteria</h5>
+            </div>
+            <div class="task-overview__section-body">
+                <ol class="mb-0">
+                    {{ task.completion_criteria|json_to_pre }}
+                </ol>
+            </div>
+        </section>
     {% endif %}
 
+    {% if task.guidance %}
+        <section class="task-overview__section">
+            <div class="task-overview__section-header">
+                <h5 class="task-overview__section-title">Guidance</h5>
+            </div>
+            <div class="task-overview__section-body markdown-container">
+                {{ task.guidance|markdown }}
+            </div>
+        </section>
+    {% endif %}
 
+    {% if task.risk_notes %}
+        <section class="task-overview__section">
+            <div class="task-overview__section-header">
+                <h5 class="task-overview__section-title">Risk Notes</h5>
+            </div>
+            <div class="task-overview__section-body markdown-container">
+                {{ task.risk_notes|markdown }}
+            </div>
+        </section>
+    {% endif %}
+
+    {% if task.depends_on.exists %}
+        <section class="task-overview__section">
+            <div class="task-overview__section-header">
+                <h5 class="task-overview__section-title">Dependencies</h5>
+            </div>
+            <div class="task-overview__section-body">
+                <ul class="mb-0">
+                    {% for dependency in task.depends_on.all %}
+                        <li>
+                            <a href="{% url 'view_task' dependency.id %}" class="link-light text-decoration-none">
+                                {{ dependency.get_name|default:dependency.id }}
+                            </a>
+                            <span class="badge ms-2
+                                {% if dependency.status == "COMPLETE" %}bg-success
+                                {% elif dependency.status == "BLOCKED" %}bg-danger
+                                {% elif dependency.status == "IN_PROGRESS" %}bg-primary
+                                {% else %}bg-secondary
+                                {% endif %}">
+                                {{ dependency.status|label }}
+                            </span>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </section>
+    {% endif %}
 </div>

@@ -5,6 +5,7 @@ BaseContainerView = ErieView.extend({
         'mousedown .resizer_bar-horiz': 'horiz_resizer_mousedown',
         'mousedown .resizer_bar-vert': 'vert_resizer_mousedown',
 
+        'click .hide-on-click': 'hide_on_click_click',
         'change #txt_llm_search': 'txt_llm_search_change',
         'change #statusFilter': 'statusFilter_change',
         'click .modal .btn-cancel': 'modal_cancel_click',
@@ -402,6 +403,10 @@ BaseContainerView = ErieView.extend({
                 el.show(el.data("status") === selected_status);
             });
         }
+    },
+
+    hide_on_click_click: function (ev) {
+        $(ev.target).closest(".hide-on-click").css("visibility", "hidden");
     },
 
     modal_cancel_click: function (ev) {

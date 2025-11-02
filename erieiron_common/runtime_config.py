@@ -1,6 +1,7 @@
 import json
 
-from erieiron_common import common, settings_common
+from erieiron_common import common
+import settings
 
 
 class RuntimeConfig:
@@ -17,9 +18,9 @@ class RuntimeConfig:
         if cls.internal_instance:
             return cls.internal_instance
         else:
-            if settings_common.RUNTIME_CONFIG_OVERRIDES:
+            if settings.RUNTIME_CONFIG_OVERRIDES:
                 return cls.set_instance(RuntimeConfigOverrideInstance(
-                    config_override=json.loads(settings_common.RUNTIME_CONFIG_OVERRIDES)
+                    config_override=json.loads(settings.RUNTIME_CONFIG_OVERRIDES)
                 ))
             else:
                 return cls.set_instance(RuntimeConfig())

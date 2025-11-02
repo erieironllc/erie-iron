@@ -39,7 +39,7 @@ from django.utils import timezone as tz
 from numpy import ndarray
 from sklearn.metrics.pairwise import cosine_similarity
 
-from erieiron_common import settings_common
+import settings
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 
 UUID_NULL_OBJECT = uuid.UUID('11111111-1111-1111-1111-111111111111')
@@ -1459,7 +1459,7 @@ def id_or(m: Model, default_val=None) -> Optional[uuid.UUID]:
 
 
 def simulate_crash(wait_secs=0):
-    if not settings_common.DEBUG:
+    if not settings.DEBUG:
         logging.error("attempting to simulate a crash in non DEBUG mode.  skipping it")
         return
     
@@ -1727,7 +1727,7 @@ def safe_filename(s, replacement="_", max_length=255):
 
 
 def build_absolute_uri(page=""):
-    return f"{settings_common.BASE_URL}/{page}"
+    return f"{settings.BASE_URL}/{page}"
 
 
 def copy_missing_files(src_dir, destination_dir):
