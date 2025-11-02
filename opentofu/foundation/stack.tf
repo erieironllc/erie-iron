@@ -155,6 +155,41 @@ resource "aws_db_instance" "primary" {
   }
 }
 
+resource "null_resource" "enable_pgvector" {
+  depends_on = [aws_db_instance.primary]
+
+  provisioner "local-exec" {
+    command = <<EOT
+set -e
+echo "Fetching DB credentials from Secrets Manager..."
+
+SECRET_JSON=$(aws secretsmanager get-secret-value \
+  --secret-id ${aws_db_instance.primary.master_user_secret[0].secret_arn} \
+  --query SecretString --output text)
+
+PGPASSWORD=$(echo "$SECRET_JSON" | jq -r '.password')
+PGUSER=$(echo "$SECRET_JSON" | jq -r '.username')
+
+echo "Waiting for DB to accept connections..."
+for i in {1..30}; do
+  pg_isready -h ${aws_db_instance.primary.address} -U "$PGUSER" -d ${local.database_name} && break
+  echo "Still waiting..."
+  sleep 10
+done
+
+echo "Installing pgvector extension..."
+psql "host=${aws_db_instance.primary.address} user=$PGUSER dbname=${local.database_name}" \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+echo "pgvector installation complete."
+EOT
+  }
+
+  triggers = {
+    db_instance_id = aws_db_instance.primary.id
+  }
+}
+
 resource "aws_security_group_rule" "rds_ingress_vpc" {
   security_group_id = var.SecurityGroupId
   type              = "ingress"

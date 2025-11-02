@@ -1425,8 +1425,8 @@ def build_container_image(
     ]
     
     # force a new container image tag to make sure OpenTofu updates
-    if config.one_off_action:
-        container_image_tag_parts.append(str(time.time())[-5:])
+    # if config.one_off_action:
+    #     container_image_tag_parts.append(str(time.time())[-5:])
     
     container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     
@@ -2004,6 +2004,15 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
     
     test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
     
+    # try:
+    #     empty_stack_buckets(
+    #         config,
+    #         delete_bucket=False
+    #     )
+    # except Exception as e:
+    #     config.log(e)
+    #     raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
+    
     if test_errors_blob:
         first_tests = llm_chat(
             "parse test failures",
@@ -2097,16 +2106,7 @@ def deploy_iteration(
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
-    
-    try:
-        empty_stack_buckets(
-            config,
-            delete_bucket=False
-        )
-    except Exception as e:
-        config.log(e)
-        raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
-    
+   
     foundation_outputs = deploy_opentofu_stack(
         config=config,
         stack_type=InfrastructureStackType.FOUNDATION,
@@ -2221,14 +2221,12 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = config.iteration_to_modify.docker_tag
-    
+    previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
         config.env_type.get_aws_region()
     )
-    tag_exists_in_ecr = False
     
     if (
             tag_exists_in_ecr or
