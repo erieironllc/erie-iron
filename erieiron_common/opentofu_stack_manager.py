@@ -40,7 +40,7 @@ class OpenTofuStackManager:
         self.module_dir = common.mkdirs(self.sandbox_root / "opentofu" / "swizzled_modules" / self.stack_type.value.lower())
         
         self.swizzled_module_file = self.get_swizzled_module_file()
-
+        
         self.tf_env = self.build_opentofu_env()
         
         self.full_env: MutableMapping[str, str] = os.environ.copy()
@@ -50,9 +50,6 @@ class OpenTofuStackManager:
         self.stage = "init"
         self.run_results: list[OpenTofuRunResult] = []
         
-        self.tfvars_path = self.write_tfvars_file(
-            self.stack.stack_vars
-        )
         self.plan_output_path = self.workspace_dir / "current.plan"
         self.init_workspace()
     
@@ -123,12 +120,12 @@ class OpenTofuStackManager:
     ) -> OpenTofuCommandResult:
         self.stage = stage
         workdir = str(self.workspace_dir)
-        command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *args]
+        command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *common.strings(args)]
         started_at = common.get_now()
         logging.debug("Running OpenTofu command", extra={"command": command, "cwd": str(workdir)})
         try:
             completed_process = subprocess.run(
-                command,
+                common.strings(command),
                 cwd=workdir,
                 input=input_data,
                 text=True,
@@ -178,7 +175,7 @@ class OpenTofuStackManager:
     def init_workspace(self) -> OpenTofuCommandResult:
         un_swizzled_module_file = self.sandbox_root / self.stack_type.get_opentofu_config()
         lock_file = self.swizzled_module_file.parent / ".terraform.lock.hcl"
-
+        
         if not lock_file.exists():
             use_upgrade = True
             reason = ".terraform.lock.hcl does not exist"
@@ -212,7 +209,7 @@ class OpenTofuStackManager:
                 last_exception = e
         
         raise last_exception
-   
+    
     def plan(
             self,
             *,
@@ -230,8 +227,8 @@ class OpenTofuStackManager:
                 args.append("-destroy")
             if not refresh:
                 args.append("-refresh=false")
-            for vf in common.ensure_list(self.tfvars_path):
-                args.extend(["-var-file", str(vf)])
+            
+            args.extend(["-var-file", self.get_tfvars_file()])
             
             result = self.run_tofu_command(
                 "plan",
@@ -367,8 +364,7 @@ class OpenTofuStackManager:
             timeout: int | None = None,
     ) -> dict[str, Any]:
         refresh_args = ["refresh", "-no-color", "-input=false"]
-        for vf in common.ensure_list(self.tfvars_path):
-            refresh_args.extend(["-var-file", str(vf)])
+        refresh_args.extend(["-var-file", self.get_tfvars_file()])
         
         self.run_tofu_command("refresh", refresh_args)
         
@@ -452,16 +448,10 @@ class OpenTofuStackManager:
         
         return variables
     
-    def write_tfvars_file(
-            self,
-            variables: Mapping[str, Any],
-            *,
-            filename: str | None = None,
-    ) -> Path:
-        suffix = filename or f"{self.stack.stack_type.lower()}.auto.tfvars.json"
-        tfvars_path = self.workspace_dir / suffix
+    def get_tfvars_file(self) -> Path:
+        tfvars_path = self.workspace_dir / f"{self.stack.stack_type.lower()}.auto.tfvars.json"
         tfvars_path.parent.mkdir(parents=True, exist_ok=True)
-        common.write_json(tfvars_path, variables)
+        common.write_json(tfvars_path, self.stack.stack_vars or {})
         return tfvars_path
     
     def build_opentofu_env(self) -> dict[str, str]:
@@ -521,8 +511,9 @@ class OpenTofuStackManager:
         args = ["destroy", "-input=false", "-no-color"]
         if auto_approve:
             args.append("-auto-approve")
-        for vf in self.tfvars_path:
-            args.extend(["-var-file", str(vf)])
+        
+        args.extend(["-var-file", self.get_tfvars_file()])
+        
         try:
             result = self.run_tofu_command("destroy", args, timeout=timeout)
             self.record("destroy", result)

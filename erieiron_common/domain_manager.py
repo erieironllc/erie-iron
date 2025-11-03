@@ -178,7 +178,7 @@ def create_hosted_zone(chosen_domain):
     
     # Reuse an existing hosted zone if one already exists; repeated stack rotations or
     # fallback domain handling should not create duplicate hosted zones in Route53.
-    existing_hosted_zone_id = find_hosted_zone_id(route53, normalized_domain)
+    existing_hosted_zone_id = find_hosted_zone_id(normalized_domain, route53)
     if existing_hosted_zone_id:
         return existing_hosted_zone_id
     
@@ -206,7 +206,7 @@ def add_dns_records(hosted_zone_id, chosen_domain):
         raise Exception(f"chosen_domain is required")
     
     if not hosted_zone_id:
-        hosted_zone_id = find_hosted_zone_id(route53, chosen_domain)
+        hosted_zone_id = find_hosted_zone_id(chosen_domain, route53)
         if not hosted_zone_id:
             raise Exception(f"hosted_zone_id is required")
     
@@ -581,11 +581,12 @@ def _match_hosted_zone_id(
     return fallback_id
 
 
-def find_hosted_zone_id(route53_client, domain: str) -> Optional[str]:
+def find_hosted_zone_id(domain: str, route53_client=None) -> Optional[str]:
     normalized_domain = _normalize_domain_name(domain)
     if not normalized_domain:
         return None
     
+    route53_client = route53_client or aws_utils.client("route53")
     caller_ref = _deterministic_caller_reference(normalized_domain)
     
     try:
@@ -650,7 +651,7 @@ def _resolve_existing_hosted_zone(
     last_error: Exception | None = None
     for attempt in range(max_attempts):
         try:
-            hosted_zone_id = find_hosted_zone_id(route53_client, domain)
+            hosted_zone_id = find_hosted_zone_id(domain, route53_client)
             if hosted_zone_id:
                 return hosted_zone_id
         except Exception as exc:  # pragma: no cover - defensive
@@ -821,7 +822,7 @@ def delete_subdomain(domain_name):
         return
     
     route53_client = aws_utils.client("route53")
-    hosted_zone_id = find_hosted_zone_id(route53_client, normalized_domain)
+    hosted_zone_id = find_hosted_zone_id(normalized_domain, route53_client)
     if not hosted_zone_id:
         logging.warning("Unable to locate hosted zone for %s; skipping subdomain deletion", normalized_domain)
         return

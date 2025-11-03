@@ -719,16 +719,9 @@ def get_guidance_msg(config: SelfDriverConfig):
     return config.guidance
 
 
-def validate_infrastructure(config, normalized_changed):
-    impacted_modules: list[tuple[InfrastructureStackType, InfrastructureStack]] = []
-    sandbox_root = config.sandbox_root_dir
-    
-    container_env = build_env(config)
-    
+def validate_infrastructure(config):
     for stack_manager in config.all_stack_managers:
         stack_manager.validate_stack()
-    
-    return None
 
 
 def validate_all_changed_files(config, normalized_changed, planning_data):
@@ -736,7 +729,7 @@ def validate_all_changed_files(config, normalized_changed, planning_data):
     validation_errors = []
     
     try:
-        validate_infrastructure(config, normalized_changed)
+        validate_infrastructure(config)
     except Exception as e:
         logging.exception(e)
         validation_errors.append(e)
@@ -1360,7 +1353,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     else:
         domain_name = config.initiative.domain
     
-    hosted_zone_id = config.business.route53_hosted_zone_id
+    hosted_zone_id = domain_manager.find_hosted_zone_id(config.business.domain)
     
     if not domain_name or not hosted_zone_id:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
@@ -2223,6 +2216,8 @@ def deploy_iteration(
     config.set_phase(SdaPhase.DEPLOY)
     task = config.task
     
+    validate_infrastructure(config)
+    
     foundation_outputs = deploy_opentofu_stack(
         config=config,
         stack_type=InfrastructureStackType.FOUNDATION,
@@ -2327,7 +2322,7 @@ def build_iteration(config, container_env):
     
     required_build_steps = {
         BuildStep.CONTAINERS.value: True,
-        BuildStep.LAMBDAS.value: True
+        BuildStep.LAMBDAS.value: False
     }
     
     if required_build_steps.get(BuildStep.LAMBDAS.value):
@@ -2337,7 +2332,7 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = None #config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+    previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
@@ -5088,7 +5083,10 @@ def build_tfvars_payload(
     
     payload["DomainName"] = domain_name
     payload["DomainHostedZoneId"] = config.business.route53_hosted_zone_id
-    payload["AlbCertificateArn"] = config.business.domain_certificate_arn
+    payload["AlbCertificateArn"] = domain_manager.find_certificate_arn(
+        business.domain,
+        config.env_type.get_aws_region()
+    )
     
     payload["VpcId"] = shared_vpc.vpc_id
     if shared_vpc.cidr_block:

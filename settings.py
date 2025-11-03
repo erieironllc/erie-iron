@@ -98,7 +98,9 @@ READONLY_FILES = [
 
 BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "erieironllc.com"
+]
 
 INSTALLED_APPS = [
     'erieiron_common.apps.ErieironCommonConfig',
