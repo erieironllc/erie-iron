@@ -19,7 +19,7 @@ class HealthCheckBypassMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        if request.path == '/health' and request.method == 'GET':
+        if str(request.path).startswith('/health') and request.method == 'GET':
             from erieiron_ui import views
             return views.healthcheck(request)
 

@@ -7,8 +7,8 @@ env
 PORT="${HTTP_LISTENER_PORT:-8006}"
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
-echo "[webcontainer startup] INFO Starting gunicorn core.wsgi on port ${PORT}"
-gunicorn core.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 60 &
+echo "[webcontainer startup] INFO Starting gunicorn erieiron_config.wsgi on port ${PORT}"
+gunicorn erieiron_config.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 60 &
 GUNICORN_PID=$!
 
 echo "[webcontainer startup] INFO gunicorn started with PID ${GUNICORN_PID}"
@@ -33,7 +33,7 @@ trap cleanup EXIT
 echo "[webcontainer startup] Waiting for health endpoint..."
 for attempt in {1..12}; do
     sleep 5
-    if curl -fsSL "http://127.0.0.1:${PORT}/health/" >/dev/null 2>&1; then
+    if curl -v "http://127.0.0.1:${PORT}/health/"; then
         echo "[webcontainer startup] INFO internal docker healthcheck succeeded"
         wait "${GUNICORN_PID}"
         exit 0
@@ -41,6 +41,7 @@ for attempt in {1..12}; do
 done
 
 echo "[webcontainer startup]  ERROR internal docker healthcheck failed.  Killing gunicorn (PID ${GUNICORN_PID})"
+
 kill "${GUNICORN_PID}" || true
 wait "${GUNICORN_PID}" || true
 exit 1

@@ -1423,8 +1423,8 @@ def build_container_image(
     ]
     
     # force a new container image tag to make sure OpenTofu updates
-    # if config.one_off_action:
-    #     container_image_tag_parts.append(str(time.time())[-5:])
+    if config.one_off_action:
+        container_image_tag_parts.append(str(time.time())[-5:])
     
     container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     
@@ -2332,7 +2332,7 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+    previous_container_tag = None # config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
