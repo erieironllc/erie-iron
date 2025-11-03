@@ -7,15 +7,6 @@ env
 PORT="${HTTP_LISTENER_PORT:-8006}"
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
-HF_CACHE_DIR="${HF_HOME:-/usr/local/huggingface}"
-if [[ -n "${HF_MODEL_CACHE_S3_URI:-}" ]]; then
-  echo "[webcontainer startup] INFO syncing HuggingFace cache from ${HF_MODEL_CACHE_S3_URI}"
-  mkdir -p "${HF_CACHE_DIR}"
-  aws s3 sync "${HF_MODEL_CACHE_S3_URI}" "${HF_CACHE_DIR}" --only-show-errors
-  echo "[webcontainer startup] INFO HuggingFace cache sync complete"
-else
-  echo "[webcontainer startup] INFO HF_MODEL_CACHE_S3_URI not set; skipping HuggingFace cache sync"
-fi
 
 # Memory and OOM logging
 echo "[webcontainer startup] INFO Monitoring dmesg for OOM kills..."

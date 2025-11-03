@@ -2,6 +2,8 @@ import ast
 import logging
 import os
 import warnings
+from threading import Lock
+from typing import Optional
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 from pathlib import Path
@@ -11,8 +13,11 @@ import torch
 from numpy import ndarray
 from transformers import AutoTokenizer, AutoModel
 
-tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-model = AutoModel.from_pretrained("microsoft/codebert-base")
+
+_CODEBERT_MODEL_NAME = "microsoft/codebert-base"
+_codebert_model: Optional[AutoModel] = None
+_codebert_tokenizer: Optional[AutoTokenizer] = None
+_codebert_lock = Lock()
 
 LANGUAGE_NAMES = {
     '.py': 'python',
@@ -38,10 +43,39 @@ def lint_and_format(code_str: str) -> str:
 
 
 def get_codebert_embedding(code_snippet: str) -> ndarray:
+    model, tokenizer = _get_codebert_resources()
     tokens = tokenizer(code_snippet, return_tensors='pt', truncation=True, max_length=512)
     with torch.no_grad():
         output = model(**tokens)
         return (output.last_hidden_state[:, 0, :]).squeeze().numpy()
+
+
+def _get_codebert_resources() -> tuple[AutoModel, AutoTokenizer]:
+    global _codebert_model, _codebert_tokenizer
+    if _codebert_model is not None and _codebert_tokenizer is not None:
+        return _codebert_model, _codebert_tokenizer
+
+    with _codebert_lock:
+        if _codebert_model is not None and _codebert_tokenizer is not None:
+            return _codebert_model, _codebert_tokenizer
+
+        local_files_only = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+        logging.info(
+            "Loading CodeBERT resources (%s); local_files_only=%s",
+            _CODEBERT_MODEL_NAME,
+            local_files_only,
+        )
+
+        _codebert_tokenizer = AutoTokenizer.from_pretrained(
+            _CODEBERT_MODEL_NAME,
+            local_files_only=local_files_only,
+        )
+        _codebert_model = AutoModel.from_pretrained(
+            _CODEBERT_MODEL_NAME,
+            local_files_only=local_files_only,
+        ).eval()
+
+        return _codebert_model, _codebert_tokenizer
 
 
 def get_node_text(source_code, node):
