@@ -7,8 +7,8 @@ env
 PORT="${HTTP_LISTENER_PORT:-8006}"
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
-echo "[webcontainer startup] INFO Starting gunicorn core.wsgi on port ${PORT}"
-gunicorn core.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 60 &
+echo "[webcontainer startup] INFO Starting gunicorn erieiron_config.wsgi on port ${PORT}"
+gunicorn erieiron_config.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 60 &
 GUNICORN_PID=$!
 
 echo "[webcontainer startup] INFO gunicorn started with PID ${GUNICORN_PID}"
