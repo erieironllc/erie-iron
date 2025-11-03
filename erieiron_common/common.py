@@ -1870,3 +1870,13 @@ def gen_random_token(len) -> str:
         new_token = f"a{random_string(len - 1).lower()}"
     
     return new_token
+
+
+def mkdirs(path):
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def is_file1_newer(un_swizzled_module_file: Path, lock_file: Path) -> bool:
+    return un_swizzled_module_file.stat().st_mtime > lock_file.stat().st_mtime

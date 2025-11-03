@@ -4,10 +4,10 @@ import json
 import logging
 import os
 import re
-import subprocess
 import textwrap
 import time
 import traceback
+import shutil
 from collections import defaultdict
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
@@ -61,6 +61,9 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError
 from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
+
+
+MIN_PODMAN_STORAGE_FREE_GB = 4.0
 
 
 def execute(
@@ -1415,6 +1418,7 @@ def build_container_image(
         container_file: Path
 ) -> str:
     exec_container_prune()
+    ensure_container_storage_capacity(config)
     
     current_iteration = config.current_iteration
     self_driving_task = current_iteration.self_driving_task
@@ -1432,11 +1436,13 @@ def build_container_image(
     container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     
     config.log(f"\n\n\n\n======== Begining PODMAN Build for tag {container_image_tag} ")
-    
+
     config.log(f"Building container image for platform: {ContainerPlatform.FARGATE}")
     container_build_cmd = common.strings([
         "podman",
         "build",
+        "--memory", "4g",
+        "--memory-swap", "10g",
         "--platform", ContainerPlatform.FARGATE,
         "--build-arg", f"ERIEIRON_PUBLIC_COMMON_SHA={ERIEIRON_PUBLIC_COMMON_VERSION}",
         "-t", container_image_tag,
@@ -1457,7 +1463,7 @@ def build_container_image(
         time.sleep(1)
     
     if build_process.returncode != 0:
-        raise Exception(f"Podman build failed with return code: {build_process.returncode}")
+        handle_podman_build_failure(config, build_process.returncode)
     
     push_image_to_ecr(
         config,
@@ -1467,9 +1473,112 @@ def build_container_image(
     return container_image_tag
 
 
-def exec_container_prune():
+def ensure_container_storage_capacity(
+        config: SelfDriverConfig,
+        min_free_gb: float = MIN_PODMAN_STORAGE_FREE_GB
+) -> None:
+    storage_path = get_podman_storage_path()
+    if not storage_path:
+        config.log("Unable to determine podman storage path; continuing without disk space guard.")
+        return
+
+    free_gb = _get_free_space_gb(storage_path)
+    if free_gb >= min_free_gb:
+        return
+
+    config.log(
+        f"Detected low disk space for podman storage at {storage_path} ({free_gb:.2f} GiB free). Running aggressive prune."
+    )
+
+    exec_container_prune(aggressive=True)
+
+    free_gb_after_prune = _get_free_space_gb(storage_path)
+    if free_gb_after_prune >= min_free_gb:
+        config.log(
+            f"Podman storage now has {free_gb_after_prune:.2f} GiB free after prune."
+        )
+        return
+
+    message = (
+        f"Podman storage path {storage_path} still has only {free_gb_after_prune:.2f} GiB free after prune. "
+        "Free disk space and rerun."
+    )
+    config.log(message)
+    raise AgentBlocked(message)
+
+
+def handle_podman_build_failure(config: SelfDriverConfig, return_code: int) -> None:
+    storage_path = get_podman_storage_path()
+
+    if storage_path:
+        free_gb = _get_free_space_gb(storage_path)
+        if free_gb < MIN_PODMAN_STORAGE_FREE_GB:
+            message = (
+                f"Podman build failed (return code {return_code}) because {storage_path} has only {free_gb:.2f} GiB free. "
+                "Clear disk space for Podman and retry the iteration."
+            )
+            config.log(message)
+            raise AgentBlocked(message)
+
+    raise Exception(f"Podman build failed with return code: {return_code}")
+
+
+def get_podman_storage_path() -> Optional[Path]:
     try:
-        subprocess.run(["podman", "system", "prune", "-f"], check=True)
+        podman_info = subprocess.run(
+            ["podman", "info", "--format", "json"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        store_info = common.get_dict(json.loads(podman_info.stdout).get("store") or {})
+        graph_root = store_info.get("graphRoot") or store_info.get("GraphRoot")
+        if graph_root:
+            candidate = Path(graph_root)
+            if candidate.exists():
+                return candidate
+    except Exception as e:
+        logging.exception(e)
+
+    candidates: list[Path] = []
+    storage_env = os.environ.get("CONTAINERS_STORAGE")
+    if storage_env:
+        candidates.append(Path(storage_env))
+
+    candidates.extend([
+        Path.home() / ".local" / "share" / "containers" / "storage",
+        Path("/var/lib/containers/storage"),
+    ])
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _get_free_space_gb(path: Path) -> float:
+    try:
+        usage = shutil.disk_usage(path)
+    except FileNotFoundError as exc:
+        logging.exception(exc)
+        raise AgentBlocked(f"Podman storage path {path} is not accessible.")
+
+    return usage.free / (1024 ** 3)
+
+
+def exec_container_prune(aggressive: bool = False):
+    try:
+        prune_cmd = ["podman", "system", "prune", "-f"]
+        if aggressive:
+            prune_cmd.append("-a")
+            prune_cmd.append("--volumes")
+
+        subprocess.run(prune_cmd, check=True)
+
+        if aggressive:
+            subprocess.run(["podman", "image", "prune", "-a", "-f"], check=True)
+            subprocess.run(["podman", "builder", "prune", "-a", "-f"], check=True)
     except Exception as e:
         logging.exception(e)
         raise AgentBlocked("unable to run podman prune - is podman running?")
@@ -1518,6 +1627,10 @@ def build_env(config: SelfDriverConfig) -> dict:
         "BUILDAH_FORMAT": "docker",
         "PATH": os.getenv("PATH")
     }
+
+    hf_model_cache_s3_uri = getattr(settings, "HF_MODEL_CACHE_S3_URI", None)
+    if hf_model_cache_s3_uri:
+        env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
     
     for credential_service_name, cred_def in config.business.required_credentials.items():
         if credential_service_name == CredentialService.RDS.value:
@@ -1814,10 +1927,11 @@ def run_container_command(
         container_image_tag: str
 ) -> None:
     command_args = common.ensure_list(command_args)
+
     cmd = [
         "podman", "run", "--rm",
-        "--memory", "1g",
-        "--memory-swap", "5g",
+        "--memory", "4g",
+        "--memory-swap", "10g",
         "--platform", ContainerPlatform.FARGATE,
         "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
@@ -2341,8 +2455,8 @@ def validate_web_container(
         process = subprocess.Popen(
             [
                 "podman", "run", "--rm",
-                "--memory", "2g",
-                "--memory-swap", "5g",
+                "--memory", "4g",
+                "--memory-swap", "10g",
                 "-e", f"HTTP_LISTENER_PORT={port}",
                 "--platform", ContainerPlatform.FARGATE,
                 "-p", f"{port}:{port}",
