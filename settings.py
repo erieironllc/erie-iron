@@ -99,6 +99,8 @@ READONLY_FILES = [
 BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
 
 ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
     "erieironllc.com"
 ]
 
