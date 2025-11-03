@@ -48,8 +48,14 @@ INITIATIVE_TAB_DEFINITIONS = [
         "context_fn": views._initiative_tab_context_architecture,
     },
     {
+        "slug": "infra-diagram",
+        "label": "Infra Diagram",
+        "template": "initiative/tabs/infra_diagram.html",
+        "context_fn": views._initiative_tab_context_infra_diagram,
+    },
+    {
         "slug": "infrastructure-stacks",
-        "label": "Infrastructure Stacks",
+        "label": "Infrastructure",
         "template": "initiative/tabs/infrastructure_stacks.html",
         "availability_fn": views._initiative_tab_available_infrastructure_stacks,
         "context_fn": views._initiative_tab_context_infrastructure_stacks,
@@ -115,7 +121,7 @@ PORTFOLIO_TAB_DEFINITIONS = [
     },
     {
         "slug": "infrastructure-stacks",
-        "label": "Infrastructure Stacks",
+        "label": "Infrastructure",
         "template": "portfolio/tabs/infrastructure_stacks.html",
         "availability_fn": views._portfolio_tab_available_infrastructure_stacks,
         "context_fn": views._portfolio_tab_context_infrastructure_stacks,
@@ -378,9 +384,15 @@ BUSINESS_TAB_DEFINITIONS = [
         "availability_fn": views._tab_available_architecture,
         "context_fn": views._tab_context_architecture,
     },
+    # {
+    #     "slug": "infra-diagram",
+    #     "label": "Infra Diagram",
+    #     "template": "business/tabs/infra_diagram.html",
+    #     "context_fn": views._tab_context_infra_diagram,
+    # },
     {
         "slug": "infrastructure-stacks",
-        "label": "Infrastructure Stacks",
+        "label": "Infrastructure",
         "template": "business/tabs/infrastructure_stacks.html",
         "availability_fn": views._tab_available_infrastructure_stacks,
         "context_fn": views._tab_context_infrastructure_stacks,

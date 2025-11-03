@@ -3,6 +3,7 @@ import inspect
 import json
 import logging
 import pprint
+import re
 import uuid
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, date
@@ -209,6 +210,7 @@ def _portfolio_tab_context_infrastructure_stacks(_: Business) -> dict:
         .all()
         .order_by("env_type", "stack_type", "created_timestamp")
     )
+    stacks = list(stacks_qs)
 
     def business_label(stack: InfrastructureStack) -> str:
         business = getattr(stack, "business", None)
@@ -217,7 +219,7 @@ def _portfolio_tab_context_infrastructure_stacks(_: Business) -> dict:
         return getattr(business, "name", None) or getattr(business, "slug", None) or "Business"
 
     stack_entries = _build_infrastructure_stack_entries(
-        stacks_qs,
+        stacks,
         scope_label_fn=business_label,
     )
 
@@ -232,11 +234,19 @@ def _portfolio_tab_context_infrastructure_stacks(_: Business) -> dict:
         else:
             entry["scope_label"] = f"{business_name} (Business)"
 
+    architecture_diagram = _build_infra_diagram_payload(
+        stacks,
+        stack_entries=stack_entries,
+        diagram_namespace="portfolio-infrastructure-stacks",
+        scope_label_fn=business_label,
+    )
+
     return {
         "stack_entries": stack_entries,
         "stack_count": len(stack_entries),
         "business_count": len(business_ids),
         "initiative_count": len(initiative_ids),
+        "architecture_diagram": architecture_diagram,
     }
 
 
@@ -885,6 +895,35 @@ def _tab_context_architecture(business: Business) -> dict:
     return {}
 
 
+def _tab_available_architecture_diagram(_: Business) -> bool:
+    return True
+
+
+def _tab_context_infra_diagram(business: Business) -> dict:
+    stacks = list(
+        business.infrastructurestack_set
+        .filter(initiative__isnull=True)
+        .select_related("initiative")
+        .order_by("env_type", "stack_type", "created_timestamp")
+    )
+
+    stack_entries = _build_infrastructure_stack_entries(
+        stacks,
+        scope_label_fn=lambda _stack: "Business",
+    )
+
+    architecture_diagram = _build_infra_diagram_payload(
+        stacks,
+        stack_entries=stack_entries,
+        diagram_namespace=f"business-architecture-{business.id}",
+        scope_label_fn=lambda _stack: "Business",
+    )
+
+    return {
+        "architecture_diagram": architecture_diagram,
+    }
+
+
 def _tab_available_infrastructure_stacks(_: Business) -> bool:
     return True
 
@@ -896,24 +935,36 @@ def _tab_context_infrastructure_stacks(business: Business) -> dict:
         .all()
         .order_by("env_type", "stack_type", "created_timestamp")
     )
+    stacks = list(stacks_qs)
+
+    def scope_label_fn(stack: InfrastructureStack) -> str:
+        if stack.initiative_id:
+            title = getattr(stack.initiative, "title", None)
+            return title if title else "Initiative"
+        return "Business"
+
     stack_entries = _build_infrastructure_stack_entries(
-        stacks_qs,
-        scope_label_fn=lambda stack: (
-            stack.initiative.title
-            if getattr(stack.initiative, "title", None)
-            else "Initiative"
-        ) if stack.initiative_id else "Business",
+        stacks,
+        scope_label_fn=scope_label_fn,
     )
-    
+
     stack_count = len(stack_entries)
     initiative_stack_count = len({entry["initiative_id"] for entry in stack_entries if entry["initiative_id"]})
     business_scoped_stack_count = stack_count - initiative_stack_count
-    
+
+    architecture_diagram = _build_infra_diagram_payload(
+        stacks,
+        stack_entries=stack_entries,
+        diagram_namespace=f"business-infrastructure-stacks-{business.id}",
+        scope_label_fn=scope_label_fn,
+    )
+
     return {
         "stack_entries": stack_entries,
         "stack_count": stack_count,
         "initiative_stack_count": initiative_stack_count,
         "business_scoped_stack_count": business_scoped_stack_count,
+        "architecture_diagram": architecture_diagram,
     }
 
 
@@ -1285,6 +1336,550 @@ def _initiative_tab_context_architecture(initiative: Initiative) -> dict:
     return {}
 
 
+def _build_infra_diagram_payload(
+        stacks: Iterable[InfrastructureStack],
+        *,
+        stack_entries: list[dict[str, Any]],
+        diagram_namespace: str,
+        scope_label_fn: Callable[[InfrastructureStack], str],
+) -> dict[str, Any]:
+    stack_list = list(stacks)
+    dom_id = slugify(diagram_namespace) or "architecture-diagram"
+    if not stack_list:
+        return {
+            "stacks": [],
+            "nodes": [],
+            "levels": [],
+            "edges": [],
+            "resource_count": 0,
+            "stack_count": 0,
+            "dom_id": dom_id,
+        }
+
+    address_lookup_by_stack: dict[int, dict[str, str]] = defaultdict(dict)
+    global_address_lookup: dict[str, list[str]] = defaultdict(list)
+    stack_resource_counts: dict[int, int] = defaultdict(int)
+    nodes: list[dict[str, Any]] = []
+
+    def _parse_resource(raw_resource: Any) -> dict[str, Any]:
+        if isinstance(raw_resource, dict):
+            return raw_resource
+
+        if isinstance(raw_resource, str):
+            trimmed = raw_resource.strip()
+            if trimmed.startswith("{") or trimmed.startswith("["):
+                try:
+                    parsed = json.loads(trimmed)
+                except json.JSONDecodeError as exc:
+                    logging.exception(exc)
+                    return {"raw": raw_resource}
+                if isinstance(parsed, dict):
+                    return parsed
+                return {"raw": parsed}
+            return {"raw": raw_resource}
+
+        return {"raw": raw_resource}
+
+    def _resolve_values(resource_payload: dict[str, Any]) -> dict[str, Any]:
+        values = resource_payload.get("values")
+        if isinstance(values, dict):
+            return values
+        return {}
+
+    def _safe_string(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        if isinstance(value, (int, float)):
+            return str(value)
+        return None
+
+    def _stack_vars_dict(stack_obj: InfrastructureStack) -> dict[str, Any]:
+        raw_stack_vars = getattr(stack_obj, "stack_vars", None)
+        if isinstance(raw_stack_vars, dict):
+            return raw_stack_vars
+        if isinstance(raw_stack_vars, str):
+            stripped = raw_stack_vars.strip()
+            if stripped:
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return {}
+                if isinstance(parsed, dict):
+                    return parsed
+        return {}
+
+    def _extract_region(stack_obj: InfrastructureStack, values: dict[str, Any]) -> tuple[str, str]:
+        candidates: list[str] = []
+
+        for key in ("region", "aws_region", "provider_region"):
+            candidate = _safe_string(values.get(key))
+            if candidate:
+                candidates.append(candidate)
+
+        availability_zone = _safe_string(values.get("availability_zone"))
+        if not availability_zone:
+            availability_zones = values.get("availability_zones")
+            if isinstance(availability_zones, (list, tuple)):
+                availability_zone = _safe_string(common.first([az for az in availability_zones if _safe_string(az)]))
+        if availability_zone:
+            region_candidate = re.sub(r"[a-z]$", "", availability_zone)
+            if region_candidate:
+                candidates.append(region_candidate)
+
+        stack_vars = _stack_vars_dict(stack_obj)
+        for key in ("region", "aws_region", "AWS_REGION", "provider_region"):
+            candidate = _safe_string(stack_vars.get(key))
+            if candidate:
+                candidates.append(candidate)
+
+        metadata = {}
+        try:
+            metadata = stack_obj.get_iac_state_metadata()
+        except Exception as metadata_exc:  # pragma: no cover - defensive logging
+            logging.exception(metadata_exc)
+        if isinstance(metadata, dict):
+            candidate = _safe_string(metadata.get("region"))
+            if candidate:
+                candidates.append(candidate)
+
+        region_value = None
+        for candidate in candidates:
+            if candidate:
+                region_value = candidate
+                break
+
+        if not region_value:
+            return "unknown-region", "Unknown Region"
+
+        region_key = slugify(region_value) or region_value.lower()
+        return region_key, region_value
+
+    def _extract_subnet(values: dict[str, Any]) -> tuple[str, str]:
+        subnet_value: str | None = None
+
+        direct_keys = ["subnet_id", "subnet", "network_interface_subnet_id"]
+        list_keys = ["subnet_ids", "subnets", "availability_zone_ids"]
+
+        for key in direct_keys:
+            candidate = _safe_string(values.get(key))
+            if candidate:
+                subnet_value = candidate
+                break
+
+        if not subnet_value:
+            for key in list_keys:
+                raw_candidate = values.get(key)
+                if raw_candidate is None:
+                    continue
+                items = [
+                    _safe_string(item)
+                    for item in common.ensure_list(raw_candidate)
+                ]
+                item_values = [item for item in items if item]
+                if item_values:
+                    subnet_value = ", ".join(sorted(set(item_values)))
+                    break
+
+        if not subnet_value:
+            return "no-subnet", "No Subnet"
+
+        subnet_key = slugify(subnet_value) or re.sub(r"[^a-z0-9]+", "-", subnet_value.lower())
+        if not subnet_key:
+            subnet_key = "no-subnet"
+        return subnet_key, subnet_value
+
+    def _resource_type_label(resource_type: str | None) -> str:
+        if not resource_type:
+            return "Resource"
+        cleaned = resource_type.replace(".", " ")
+        if cleaned.startswith("aws_"):
+            cleaned = "AWS " + cleaned[4:]
+        cleaned = cleaned.replace("_", " ")
+        return cleaned.title()
+
+    def _resource_display_name(
+        resource_payload: dict[str, Any],
+        values: dict[str, Any],
+        fallback: str,
+        *,
+        tag_name: str | None = None,
+    ) -> str:
+        candidates = [
+            tag_name,
+            values.get("name"),
+            values.get("identifier"),
+            values.get("id"),
+            resource_payload.get("name"),
+            fallback,
+        ]
+        for candidate in candidates:
+            if candidate:
+                return str(candidate)
+        return "Resource"
+
+    nodes_by_uid: dict[str, dict[str, Any]] = {}
+
+    for stack in stack_list:
+        raw_resources = stack.resources
+        if raw_resources in (None, {}, []):
+            continue
+
+        normalized_resources = common.ensure_list(raw_resources)
+        stack_env_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
+        stack_env_label = stack_env_enum.label() if stack_env_enum else (stack.env_type or "Unknown")
+        stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
+        stack_type_label = stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown")
+
+        for index, raw_resource in enumerate(normalized_resources):
+            resource_payload = _parse_resource(raw_resource)
+            values = _resolve_values(resource_payload)
+
+            resource_type_value = resource_payload.get("type") or resource_payload.get("resource_type")
+            resource_type_normalized = _safe_string(resource_type_value)
+            if resource_type_normalized and resource_type_normalized.lower() in {"null", "null_resource"}:
+                continue
+
+            resource_type_base = (
+                resource_type_normalized.split(".", 1)[0].lower()
+                if resource_type_normalized
+                else ""
+            )
+            if resource_type_base == "aws_region":
+                continue
+
+            resource_address = resource_payload.get("address") or resource_payload.get("name")
+            identity_basis = resource_address or f"{stack.stack_name}:{resource_payload.get('type') or 'resource'}:{index}"
+            uid = uuid.uuid5(uuid.NAMESPACE_URL, f"{diagram_namespace}:{stack.id}:{identity_basis}").hex
+
+            if resource_address:
+                address_lookup_by_stack[stack.id][resource_address] = uid
+                global_address_lookup[resource_address].append(uid)
+
+            depends_on_candidates = resource_payload.get("depends_on") or resource_payload.get("dependencies") or []
+            depends_on_raw: list[str] = [
+                str(dep)
+                for dep in common.ensure_list(depends_on_candidates)
+                if isinstance(dep, str)
+            ]
+
+            tags = values.get("tags") if isinstance(values.get("tags"), dict) else None
+            tag_name = None
+            if isinstance(tags, dict):
+                raw_tag_name = tags.get("Name") or tags.get("name")
+                if raw_tag_name:
+                    tag_name = str(raw_tag_name)
+
+            resource_name_value = values.get("name")
+            identifier_value = values.get("identifier") or values.get("id")
+
+            arn_value = values.get("arn")
+            arn = str(arn_value) if isinstance(arn_value, str) else None
+            console_url = None
+            if arn:
+                try:
+                    console_url = aws_console_url_from_arn(arn)
+                except Exception as exc:
+                    logging.exception(exc)
+
+            display_name = _resource_display_name(resource_payload, values, identity_basis, tag_name=tag_name)
+            if display_name.strip().lower() == "null":
+                continue
+
+            resource_type_label = _resource_type_label(
+                resource_payload.get("type") or resource_payload.get("resource_type")
+            )
+            if resource_type_label.strip().lower() == "aws region":
+                continue
+
+            region_key, region_label = _extract_region(stack, values)
+            subnet_key, subnet_label = _extract_subnet(values)
+
+            node = {
+                "uid": uid,
+                "address": resource_address,
+                "type": resource_payload.get("type") or resource_payload.get("resource_type") or "unknown",
+                "type_label": resource_type_label,
+                "display_name": display_name,
+                "resource_name": str(resource_name_value) if resource_name_value else "",
+                "identifier": str(identifier_value) if identifier_value else "",
+                "tag_name": tag_name or "",
+                "provider": resource_payload.get("provider_name") or resource_payload.get("provider") or "",
+                "module_address": resource_payload.get("module_address"),
+                "mode": resource_payload.get("mode"),
+                "arn": arn,
+                "console_url": console_url,
+                "depends_on_raw": depends_on_raw,
+                "region_key": region_key,
+                "region_label": region_label,
+                "subnet_key": subnet_key,
+                "subnet_label": subnet_label,
+                "stack": {
+                    "id": stack.id,
+                    "name": stack.stack_name,
+                    "namespace": stack.stack_namespace_token,
+                    "type": stack.stack_type,
+                    "type_label": stack_type_label,
+                    "env": stack.env_type,
+                    "env_label": stack_env_label,
+                },
+            }
+
+            nodes.append(node)
+            nodes_by_uid[uid] = node
+            stack_resource_counts[stack.id] += 1
+
+    for node in nodes:
+        resolved_dependencies: list[str] = []
+        unresolved_dependencies: list[str] = []
+        stack_id = node["stack"]["id"]
+
+        for dependency_key in node.get("depends_on_raw", []):
+            resolved_uid = address_lookup_by_stack.get(stack_id, {}).get(dependency_key)
+            if not resolved_uid:
+                candidates = global_address_lookup.get(dependency_key, [])
+                if len(candidates) == 1:
+                    resolved_uid = candidates[0]
+            if resolved_uid and resolved_uid in nodes_by_uid:
+                resolved_dependencies.append(resolved_uid)
+            else:
+                unresolved_dependencies.append(dependency_key)
+
+        node["dependencies"] = resolved_dependencies
+        node["external_dependencies"] = unresolved_dependencies
+
+    dependency_sources: set[str] = set()
+    for node in nodes:
+        dependency_sources.update(node.get("dependencies", []))
+
+    filtered_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        if not node.get("arn"):
+            continue
+        if node["uid"] in dependency_sources:
+            continue
+        filtered_nodes.append(node)
+
+    nodes = filtered_nodes
+    nodes_by_uid = {node["uid"]: node for node in nodes}
+
+    stack_resource_counts = defaultdict(int)
+    for node in nodes:
+        stack_resource_counts[node["stack"]["id"]] += 1
+
+    level_cache: dict[str, int] = {}
+
+    def _resolve_level(node_uid: str, ancestry: set[str] | None = None) -> int:
+        if node_uid in level_cache:
+            return level_cache[node_uid]
+
+        node_payload = nodes_by_uid.get(node_uid)
+        if not node_payload:
+            level_cache[node_uid] = 0
+            return 0
+
+        dependencies = node_payload.get("dependencies") or []
+        if not dependencies:
+            level_cache[node_uid] = 0
+            return 0
+
+        if ancestry is None:
+            ancestry = set()
+
+        if node_uid in ancestry:
+            logger.warning(
+                "Detected dependency cycle while computing architecture diagram levels",
+                extra={"node": node_uid},
+            )
+            level_cache[node_uid] = 0
+            return 0
+
+        ancestry.add(node_uid)
+        dependency_levels = [
+            _resolve_level(dep_uid, ancestry)
+            for dep_uid in dependencies
+            if dep_uid in nodes_by_uid
+        ]
+        ancestry.remove(node_uid)
+
+        level_value = (max(dependency_levels) + 1) if dependency_levels else 0
+        level_cache[node_uid] = level_value
+        return level_value
+
+    levels: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for node in nodes:
+        node_level = _resolve_level(node["uid"])
+        node["level"] = node_level
+        levels[node_level].append(node)
+
+    level_entries: list[dict[str, Any]] = []
+    for level_number in sorted(levels.keys()):
+        resources_in_level = levels[level_number]
+        resources_in_level.sort(
+            key=lambda item: (
+                item["stack"].get("env_label") or "",
+                item["stack"].get("type_label") or "",
+                item.get("type_label") or "",
+                item.get("display_name") or "",
+            )
+        )
+        for order_index, resource in enumerate(resources_in_level):
+            resource["order_index"] = order_index
+            resource["dom_id"] = f"architecture-node-{resource['uid']}"
+
+        region_group_map: dict[str, dict[str, Any]] = OrderedDict()
+        for resource in resources_in_level:
+            region_key = resource.get("region_key") or "unknown-region"
+            region_label = resource.get("region_label") or "Unknown Region"
+            region_entry = region_group_map.setdefault(
+                region_key,
+                {
+                    "key": region_key,
+                    "label": region_label,
+                    "subnet_map": OrderedDict(),
+                },
+            )
+
+            subnet_key = resource.get("subnet_key") or "no-subnet"
+            subnet_label = resource.get("subnet_label") or "No Subnet"
+            subnet_entry = region_entry["subnet_map"].setdefault(
+                subnet_key,
+                {
+                    "key": subnet_key,
+                    "label": subnet_label,
+                    "nodes": [],
+                },
+            )
+            subnet_entry["nodes"].append(resource)
+
+        region_groups: list[dict[str, Any]] = []
+        ungrouped_nodes: list[dict[str, Any]] = []
+
+        for region_entry in region_group_map.values():
+            subnet_groups = list(region_entry["subnet_map"].values())
+            subnet_groups.sort(key=lambda item: item["label"] or "")
+
+            region_label_value = _safe_string(region_entry.get("label")) or ""
+            region_key_value = region_entry.get("key") or ""
+            is_placeholder_region = (
+                not region_label_value
+                or region_label_value.lower() == "unknown region"
+                or region_key_value == "unknown-region"
+            )
+
+            all_region_nodes: list[dict[str, Any]] = []
+            for subnet_entry in subnet_groups:
+                all_region_nodes.extend(subnet_entry.get("nodes", []))
+
+            if is_placeholder_region:
+                ungrouped_nodes.extend(all_region_nodes)
+                continue
+
+            meaningful_subnet_groups: list[dict[str, Any]] = []
+            subnet_free_nodes: list[dict[str, Any]] = []
+
+            for subnet_entry in subnet_groups:
+                subnet_label_value = _safe_string(subnet_entry.get("label")) or ""
+                subnet_key_value = subnet_entry.get("key") or ""
+                is_placeholder_subnet = (
+                    not subnet_label_value
+                    or subnet_label_value.lower() == "no subnet"
+                    or subnet_key_value == "no-subnet"
+                )
+
+                if is_placeholder_subnet:
+                    subnet_free_nodes.extend(subnet_entry.get("nodes", []))
+                else:
+                    meaningful_subnet_groups.append(subnet_entry)
+
+            region_groups.append(
+                {
+                    "key": region_entry["key"],
+                    "label": region_entry["label"],
+                    "subnet_groups": meaningful_subnet_groups,
+                    "nodes": subnet_free_nodes,
+                }
+            )
+
+        region_groups.sort(key=lambda item: item["label"] or "")
+
+        level_entries.append(
+            {
+                "level": level_number,
+                "resources": resources_in_level,
+                "region_groups": region_groups,
+                "ungrouped_nodes": ungrouped_nodes,
+            }
+        )
+
+    edges: list[dict[str, str]] = []
+    for node in nodes:
+        for dependency_uid in node.get("dependencies", []):
+            if dependency_uid in nodes_by_uid:
+                edges.append({"from": dependency_uid, "to": node["uid"]})
+
+    total_resources = len(nodes)
+
+    stack_meta_lookup = {str(entry.get("id")): entry for entry in stack_entries}
+    stack_summaries: list[dict[str, Any]] = []
+    for stack in stack_list:
+        entry = stack_meta_lookup.get(str(stack.id), {})
+        stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
+        env_type_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
+        stack_summaries.append(
+            {
+                "id": stack.id,
+                "name": stack.stack_name,
+                "namespace": stack.stack_namespace_token,
+                "type_label": entry.get("stack_type_label") or (stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown")),
+                "env_label": entry.get("aws_env_label") or (env_type_enum.label() if env_type_enum else (stack.env_type or "Unknown")),
+                "scope_label": entry.get("scope_label") or scope_label_fn(stack),
+                "resource_count": stack_resource_counts.get(stack.id, 0),
+            }
+        )
+
+    return {
+        "stacks": stack_summaries,
+        "nodes": nodes,
+        "levels": level_entries,
+        "edges": edges,
+        "resource_count": total_resources,
+        "stack_count": len(stack_list),
+        "dom_id": dom_id,
+    }
+
+
+def _initiative_tab_available_architecture_diagram(_: Initiative) -> bool:
+    return True
+
+
+def _initiative_tab_context_infra_diagram(initiative: Initiative) -> dict:
+    stacks = list(
+        initiative.cloudformation_stacks
+        .select_related("business", "initiative")
+        .all()
+        .order_by("env_type", "stack_type", "created_timestamp")
+    )
+
+    stack_entries = _build_infrastructure_stack_entries(
+        stacks,
+        scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
+    )
+
+    architecture_diagram = _build_infra_diagram_payload(
+        stacks,
+        stack_entries=stack_entries,
+        diagram_namespace=f"initiative-architecture-{initiative.id}",
+        scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
+    )
+
+    return {
+        "architecture_diagram": architecture_diagram,
+    }
+
+
 def _initiative_tab_available_user_documentation(initiative: Initiative) -> bool:
     return True
 
@@ -1442,14 +2037,27 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
         .all()
         .order_by("env_type", "stack_type", "created_timestamp")
     )
+    stacks = list(stacks_qs)
+
+    def scope_label_fn(stack: InfrastructureStack) -> str:
+        return "Initiative" if stack.initiative_id == initiative.id else "Business"
+
     stack_entries = _build_infrastructure_stack_entries(
-        stacks_qs,
-        scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
+        stacks,
+        scope_label_fn=scope_label_fn,
     )
-    
+
+    architecture_diagram = _build_infra_diagram_payload(
+        stacks,
+        stack_entries=stack_entries,
+        diagram_namespace=f"initiative-infrastructure-stacks-{initiative.id}",
+        scope_label_fn=scope_label_fn,
+    )
+
     return {
         "stack_entries": stack_entries,
         "child_task_count": initiative.tasks.count(),
+        "architecture_diagram": architecture_diagram,
     }
 
 
@@ -3241,11 +3849,13 @@ def action_update_business(request, business_id):
         allow_autonomous_shutdown = request.POST.get('allow_autonomous_shutdown') == 'on'
         needs_domain = request.POST.get('needs_domain') == 'on'
         domain = rget(request, 'domain', '').strip()
+        domain_certificate_arn = rget(request, 'domain_certificate_arn', '').strip()
 
         # Prepare update data
         update_data = {
             'name': name,
             'domain': domain or None,
+            'domain_certificate_arn': domain_certificate_arn or None,
             'summary': summary or None,
             'raw_idea': raw_idea or None,
             'value_prop': value_prop or None,
@@ -3478,34 +4088,10 @@ def view_stack(request, stack_id):
         if stack.initiative_id
         else "Business"
     )
-    
-    def _format_pretty(value):
-        if value is None or value == "":
-            return ""
-        
-        if isinstance(value, str):
-            stripped = value.strip()
-            if not stripped:
-                return ""
-            if stripped[:1] in {"[", "{"}:
-                try:
-                    parsed = json.loads(stripped)
-                except json.JSONDecodeError as exc:
-                    logging.exception(exc)
-                    return stripped
-                value = parsed
-            else:
-                return stripped
-        
-        try:
-            return json.dumps(value, indent=2, sort_keys=True, cls=ErieIronJSONEncoder)
-        except (TypeError, ValueError) as exc:
-            logging.exception(exc)
-            return str(value)
-    
-    stack_vars_pretty = _format_pretty(stack.stack_vars)
+   
+    stack_vars_pretty = common.json_format_pretty(stack.stack_vars)
     iac_state_metadata = stack_entry.get("iac_state_metadata")
-    iac_state_metadata_pretty = _format_pretty(iac_state_metadata)
+    iac_state_metadata_pretty = common.json_format_pretty(iac_state_metadata)
     
     raw_resources = stack.resources
     if raw_resources in (None, {}, []):
@@ -3539,8 +4125,8 @@ def view_stack(request, stack_id):
                     "module_address": None,
                     "arn": None,
                     "console_url": None,
-                    "values_pretty": _format_pretty(parsed_resource),
-                    "resource_pretty": _format_pretty(parsed_resource),
+                    "values_pretty": common.json_format_pretty(parsed_resource),
+                    "resource_pretty": common.json_format_pretty(parsed_resource),
                 }
             )
             continue
@@ -3567,8 +4153,8 @@ def view_stack(request, stack_id):
                 "module_address": parsed_resource.get("module_address"),
                 "arn": arn,
                 "console_url": console_url,
-                "values_pretty": _format_pretty(values),
-                "resource_pretty": _format_pretty(parsed_resource),
+                "values_pretty": common.json_format_pretty(values),
+                "resource_pretty": common.json_format_pretty(parsed_resource),
             }
         )
     

@@ -39,9 +39,7 @@
 }
 
 .pubsub-details-page__title {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 600;
+  @extend .erie-title--large;
 }
 
 .pubsub-details-page__chips {
@@ -77,14 +75,12 @@
 }
 
 .pubsub-details-page__timestamp-label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  @extend .erie-label--meta;
   color: rgba(255, 255, 255, 0.45);
 }
 
 .pubsub-details-page__timestamp-value {
-  font-size: 0.9rem;
+  @extend .erie-meta-value;
   color: rgba(255, 255, 255, 0.85);
 }
 
@@ -128,16 +124,14 @@
 }
 
 .pubsub-details-card__label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  @extend .erie-label--meta;
   color: rgba(148, 163, 184, 0.65);
 }
 
 .pubsub-details-card__value {
+  @extend .erie-meta-value;
   font-size: 0.95rem;
   color: rgba(226, 232, 240, 0.9);
-  word-break: break-word;
 }
 
 .pubsub-details-card__value code {

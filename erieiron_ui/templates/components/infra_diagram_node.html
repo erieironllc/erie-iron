@@ -1,0 +1,69 @@
+{% with resource=resource %}
+<div id="{{ resource.dom_id }}"
+     class="architecture-diagram__node card shadow-sm"
+     data-node-uid="{{ resource.uid }}"
+     data-dependencies="{{ resource.dependencies|join:',' }}"
+     data-external="{{ resource.external_dependencies|join:',' }}">
+    <div class="card-body p-3">
+        <div class="architecture-diagram__node-type text-uppercase small fw-semibold mb-1">
+            {{ resource.type_label }}
+        </div>
+        <div class="architecture-diagram__node-name fw-semibold mb-1">
+            {{ resource.display_name }}
+        </div>
+        {% if resource.region_label %}
+            <div class="architecture-diagram__node-meta small mb-1">
+                Region: {{ resource.region_label }}
+            </div>
+        {% endif %}
+        {% if resource.subnet_label and resource.subnet_label != 'No Subnet' %}
+            <div class="architecture-diagram__node-meta small mb-1">
+                Subnet: {{ resource.subnet_label }}
+            </div>
+        {% endif %}
+        {% if resource.tag_name and resource.tag_name != resource.display_name %}
+            <div class="architecture-diagram__node-meta small mb-1">
+                Tag: {{ resource.tag_name }}
+            </div>
+        {% endif %}
+        {% if resource.resource_name and resource.resource_name != resource.display_name %}
+            <div class="architecture-diagram__node-meta small mb-1">
+                Name: {{ resource.resource_name }}
+            </div>
+        {% endif %}
+        {% if resource.identifier %}
+            <div class="architecture-diagram__node-meta small mb-1">
+                ID: {{ resource.identifier }}
+            </div>
+        {% endif %}
+        {% if resource.arn %}
+            <div class="architecture-diagram__node-meta architecture-diagram__node-meta--arn small mb-1" title="{{ resource.arn }}">
+                ARN: {{ resource.arn }}
+            </div>
+        {% endif %}
+        <div class="architecture-diagram__node-badges d-flex flex-wrap gap-1 mt-2">
+            {% if resource.stack.env_label %}
+                <span class="badge bg-light text-dark border">{{ resource.stack.env_label }}</span>
+            {% endif %}
+            {% if resource.stack.type_label %}
+                <span class="badge bg-light text-dark border">{{ resource.stack.type_label }}</span>
+            {% endif %}
+            {% if resource.provider %}
+                <span class="badge bg-light text-dark border">{{ resource.provider }}</span>
+            {% endif %}
+        </div>
+        {% if resource.console_url %}
+            <div class="architecture-diagram__node-links small mt-3">
+                <a class="text-decoration-none" href="{{ resource.console_url }}" target="_blank" rel="noopener">
+                    View in console
+                </a>
+            </div>
+        {% endif %}
+        {% if resource.external_dependencies %}
+            <div class="architecture-diagram__node-external small text-warning-emphasis mt-3">
+                External dependencies: {{ resource.external_dependencies|join:', ' }}
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endwith %}

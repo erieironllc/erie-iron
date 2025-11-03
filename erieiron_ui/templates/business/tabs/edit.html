@@ -127,6 +127,13 @@
                                value="{{ business.domain|default:"" }}" />
                     </div>
 
+                    <div class="mb-3">
+                        <label for="domain_certificate_arn" class="form-label">Domain Certificate ARN</label>
+                        <input type="text" name="domain_certificate_arn" id="domain_certificate_arn" class="form-control"
+                               value="{{ business.domain_certificate_arn|default:"" }}"
+                               placeholder="arn:aws:acm:region:account:certificate/certificate-id">
+                    </div>
+
                     <div class="mb-3 form-check">
                         <input type="checkbox" name="needs_domain" id="needs_domain"
                                class="form-check-input"

@@ -1870,3 +1870,27 @@ def gen_random_token(len) -> str:
         new_token = f"a{random_string(len - 1).lower()}"
     
     return new_token
+    
+def json_format_pretty(value):
+    if value is None or value == "":
+        return ""
+    
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        if stripped[:1] in {"[", "{"}:
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                logging.exception(exc)
+                return stripped
+            value = parsed
+        else:
+            return stripped
+    
+    try:
+        return json.dumps(value, indent=2, sort_keys=True, cls=ErieIronJSONEncoder)
+    except (TypeError, ValueError) as exc:
+        logging.exception(exc)
+        return str(value)

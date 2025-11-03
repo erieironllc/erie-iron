@@ -1,0 +1,203 @@
+{% with diagram=architecture_diagram title=diagram_title|default:"Infrastructure Diagram" %}
+{% with dom_id=diagram.dom_id|default:"architecture-diagram" data_element_id=dom_id|add:"-data" %}
+<div class="architecture-diagram" id="{{ dom_id }}">
+    <div class="architecture-diagram__header d-flex align-items-center justify-content-between mb-3">
+        <div>
+            <h2 class="h5 mb-1 architecture-diagram__title">{{ title }}</h2>
+            <p class="architecture-diagram__subtitle small mb-0">
+                {{ diagram.resource_count|default:0 }} resource{{ diagram.resource_count|default:0|pluralize }} across {{ diagram.stack_count|default:0 }} stack{{ diagram.stack_count|default:0|pluralize }}
+            </p>
+        </div>
+    </div>
+
+    {% if not diagram.resource_count %}
+        <div class="architecture-diagram__empty text-center text-muted py-5">
+            No infrastructure resources have been captured for this scope yet.
+        </div>
+    {% else %}
+        <div class="architecture-diagram__canvas">
+            <div class="architecture-diagram__canvas-inner">
+                <svg class="architecture-diagram__connections" preserveAspectRatio="none"></svg>
+                <div class="architecture-diagram__columns">
+                    {% for level in diagram.levels %}
+                        <div class="architecture-diagram__column" data-level="{{ level.level }}">
+                            <div class="architecture-diagram__column-header text-uppercase small mb-3">
+                                Layer {{ forloop.counter }}
+                            </div>
+                            {% if level.region_groups or level.ungrouped_nodes %}
+                                {% for region_group in level.region_groups %}
+                                    <div class="architecture-diagram__group architecture-diagram__group--region">
+                                        <div class="architecture-diagram__group-header">
+                                            Region: {{ region_group.label|default:"Unknown Region" }}
+                                        </div>
+                                        <div class="architecture-diagram__group-body">
+                                            {% if region_group.subnet_groups %}
+                                                {% for subnet_group in region_group.subnet_groups %}
+                                                    <div class="architecture-diagram__group architecture-diagram__group--subnet">
+                                                        <div class="architecture-diagram__group-header">
+                                                            Subnet: {{ subnet_group.label|default:"Unknown Subnet" }}
+                                                        </div>
+                                                        <div class="architecture-diagram__group-body">
+                                                            {% for resource in subnet_group.nodes %}
+                                                                {% include "components/infra_diagram_node.html" with resource=resource %}
+                                                            {% empty %}
+                                                                <div class="text-muted small fst-italic">No resources in this subnet.</div>
+                                                            {% endfor %}
+                                                        </div>
+                                                    </div>
+                                                {% endfor %}
+                                            {% endif %}
+
+                                            {% if region_group.nodes %}
+                                                {% for resource in region_group.nodes %}
+                                                    {% include "components/infra_diagram_node.html" with resource=resource %}
+                                                {% endfor %}
+                                            {% elif not region_group.subnet_groups %}
+                                                <div class="text-muted small fst-italic">No resources in this region.</div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                {% endfor %}
+
+                                {% for resource in level.ungrouped_nodes %}
+                                    {% include "components/infra_diagram_node.html" with resource=resource %}
+                                {% empty %}
+                                    {% if not level.region_groups %}
+                                        <div class="text-muted small fst-italic">No resources in this layer.</div>
+                                    {% endif %}
+                                {% endfor %}
+                            {% else %}
+                                {% for resource in level.resources %}
+                                    {% include "components/infra_diagram_node.html" with resource=resource %}
+                                {% empty %}
+                                    <div class="text-muted small fst-italic">No resources in this layer.</div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        {{ diagram|json_script:data_element_id }}
+        <script>
+            (function () {
+                const rootId = '{{ dom_id|escapejs }}';
+                const dataScriptId = '{{ data_element_id|escapejs }}';
+                const root = document.getElementById(rootId);
+                if (!root) {
+                    return;
+                }
+
+                const canvas = root.querySelector('.architecture-diagram__canvas');
+                if (!canvas) {
+                    return;
+                }
+
+                const container = canvas.querySelector('.architecture-diagram__canvas-inner');
+                if (!container) {
+                    return;
+                }
+
+                const svg = container.querySelector('.architecture-diagram__connections');
+                if (!svg) {
+                    return;
+                }
+
+                const dataScript = document.getElementById(dataScriptId);
+                if (!dataScript) {
+                    return;
+                }
+
+                let diagramData;
+                try {
+                    diagramData = JSON.parse(dataScript.textContent);
+                } catch (error) {
+                    console.error('Failed to parse architecture diagram data', error);
+                    return;
+                }
+
+                const svgNS = 'http://www.w3.org/2000/svg';
+                const defs = document.createElementNS(svgNS, 'defs');
+                const marker = document.createElementNS(svgNS, 'marker');
+                marker.setAttribute('id', `${rootId}-arrow`);
+                marker.setAttribute('markerWidth', '10');
+                marker.setAttribute('markerHeight', '10');
+                marker.setAttribute('refX', '9');
+                marker.setAttribute('refY', '3');
+                marker.setAttribute('orient', 'auto');
+                marker.setAttribute('markerUnits', 'strokeWidth');
+                const markerPath = document.createElementNS(svgNS, 'path');
+                markerPath.setAttribute('d', 'M0,0 L0,6 L9,3 z');
+                markerPath.setAttribute('class', 'architecture-diagram__connection-arrow');
+                marker.appendChild(markerPath);
+                defs.appendChild(marker);
+                svg.appendChild(defs);
+
+                const getNodeCenter = (element) => {
+                    const canvasRect = canvas.getBoundingClientRect();
+                    const rect = element.getBoundingClientRect();
+                    return {
+                        left: rect.left - canvasRect.left + canvas.scrollLeft,
+                        right: rect.right - canvasRect.left + canvas.scrollLeft,
+                        top: rect.top - canvasRect.top + canvas.scrollTop,
+                        middleY: rect.top - canvasRect.top + rect.height / 2 + canvas.scrollTop
+                    };
+                };
+
+                const ensureSvgDimensions = () => {
+                    const width = container.scrollWidth;
+                    const height = container.scrollHeight;
+                    svg.setAttribute('width', width);
+                    svg.setAttribute('height', height);
+                    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+                };
+
+                const drawConnections = () => {
+                    ensureSvgDimensions();
+                    svg.querySelectorAll('.architecture-diagram__connection').forEach((path) => path.remove());
+
+                    const nodeElements = new Map();
+                    container.querySelectorAll('.architecture-diagram__node').forEach((nodeEl) => {
+                        nodeElements.set(nodeEl.dataset.nodeUid, nodeEl);
+                    });
+
+                    const edges = diagramData.edges || [];
+                    edges.forEach((edge) => {
+                        const source = nodeElements.get(edge.from);
+                        const target = nodeElements.get(edge.to);
+                        if (!source || !target) {
+                            return;
+                        }
+
+                        const sourcePos = getNodeCenter(source);
+                        const targetPos = getNodeCenter(target);
+                        const startX = sourcePos.right;
+                        const startY = sourcePos.middleY;
+                        const endX = targetPos.left;
+                        const endY = targetPos.middleY;
+                        const controlOffset = Math.max((endX - startX) / 2, 40);
+
+                        const path = document.createElementNS(svgNS, 'path');
+                        path.setAttribute('d', `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`);
+                        path.setAttribute('class', 'architecture-diagram__connection');
+                        path.setAttribute('marker-end', `url(#${rootId}-arrow)`);
+                        svg.appendChild(path);
+                    });
+                };
+
+                const scheduleRedraw = () => window.requestAnimationFrame(drawConnections);
+
+                scheduleRedraw();
+                window.addEventListener('resize', scheduleRedraw);
+
+                if (window.ResizeObserver) {
+                    const observer = new ResizeObserver(scheduleRedraw);
+                    observer.observe(container);
+                }
+            })();
+        </script>
+    {% endif %}
+</div>
+{% endwith %}
+{% endwith %}

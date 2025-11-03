@@ -1,23 +1,15 @@
+<style>
+    .infrastructure-stacks-tabs{
+        margin-top: -2rem;
+    }
+</style>
 <div class="tab-pane-content">
-    <div class="d-flex justify-content-end mb-3">
+    <div class="d-flex justify-content-end mb-3 gap-3">
         <form method="post" action="{% url 'action_business_production_push' business.id %}">
             {% csrf_token %}
             <button type="submit" class="btn btn-warning">Production Push</button>
         </form>
     </div>
-
-    {% if stack_count %}
-        <p class="text-muted small">
-            Tracking {{ stack_count }} stack{{ stack_count|pluralize }} across
-            {{ initiative_stack_count }} initiative{{ initiative_stack_count|pluralize }}
-            and {{ business_scoped_stack_count }} business-level stack{{ business_scoped_stack_count|pluralize }}.
-            Use the links below to inspect IaC state details or filter CloudWatch log groups by namespace token.
-        </p>
-    {% else %}
-        <p class="text-muted small">
-            This business has no recorded infrastructure stacks yet. Once stacks are provisioned they will appear here with links to IaC metadata and CloudWatch.
-        </p>
-    {% endif %}
 
     {% include "_base_templates/infrastructure_stacks_table.html" with stack_entries=stack_entries empty_message="No infrastructure stacks found for this business yet." %}
 </div>

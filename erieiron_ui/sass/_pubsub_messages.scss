@@ -11,9 +11,9 @@
   gap: 1rem;
   padding: 1.5rem;
   border-radius: 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: radial-gradient(circle at top left, rgba(63, 94, 251, 0.18), rgba(10, 16, 32, 0.85));
-  box-shadow: 0 20px 35px rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba($white, 0.05);
+  background: radial-gradient(circle at top left, rgba($primary, 0.18), rgba($dark, 0.85));
+  box-shadow: 0 20px 35px rgba($dark, 0.4);
 }
 
 .pubsub-messages-page__titles {
@@ -23,15 +23,11 @@
 }
 
 .pubsub-messages-page__title {
-  margin: 0;
-  font-size: 1.125rem;
-  font-weight: 600;
+  @extend .erie-title;
 }
 
 .pubsub-messages-page__subtitle {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.65);
-  font-size: 0.9rem;
+  @extend .erie-subtitle;
 }
 
 .pubsub-messages-page__counter {
@@ -43,10 +39,8 @@
 }
 
 .pubsub-messages-page__counter-label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.55);
+  @extend .erie-label;
+  color: rgba($white, 0.55);
 }
 
 .pubsub-messages-page__counter-value {
@@ -63,8 +57,8 @@
 .pubsub-messages-page__empty {
   padding: 2rem;
   border-radius: 0.75rem;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  background: rgba(15, 23, 42, 0.35);
+  border: 1px dashed rgba($white, 0.1);
+  background: rgba($dark, 0.35);
 }
 
 .pubsub-message-card {
@@ -73,16 +67,16 @@
   gap: 0.75rem;
   padding: 1.25rem;
   border-radius: 0.875rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(165deg, rgba(17, 25, 40, 0.9) 0%, rgba(17, 25, 40, 0.65) 100%);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba($white, 0.08);
+  background: linear-gradient(165deg, rgba($dark, 0.9) 0%, rgba($dark, 0.65) 100%);
+  box-shadow: 0 12px 24px rgba($dark, 0.45);
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .pubsub-message-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.55);
-  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 18px 36px rgba($dark, 0.55);
+  border-color: rgba($primary, 0.45);
 }
 
 .pubsub-message-card__top {
@@ -99,23 +93,20 @@
 }
 
 .pubsub-message-card__label {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.45);
+  @extend .erie-label;
 }
 
 .pubsub-message-card__id {
   font-family: "Menlo", "SFMono-Regular", "Roboto Mono", monospace;
   font-size: 1rem;
   font-weight: 600;
-  color: #a5b4fc;
+  color: rgba($primary, 0.7);
   text-decoration: none;
   transition: color 0.2s ease;
 }
 
 .pubsub-message-card__id:hover {
-  color: #c7d2fe;
+  color: rgba($primary, 0.85);
 }
 
 .pubsub-message-card__status {
@@ -137,16 +128,11 @@
 }
 
 .pubsub-message-card__meta-label {
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.4);
+  @extend .erie-label--meta;
 }
 
 .pubsub-message-card__meta-value {
-  font-size: 0.9rem;
-  color: rgba(255, 255, 255, 0.85);
-  word-break: break-word;
+  @extend .erie-meta-value;
 }
 
 .pubsub-message-card__footer {

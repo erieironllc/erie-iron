@@ -93,15 +93,12 @@ $overview-roots: (
     }
 
     &__meta-label {
-      font-size: 0.75rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      @extend .erie-label;
       color: rgba($light, 0.7);
     }
 
     &__meta-value {
-      font-size: 1rem;
-      font-weight: 600;
+      @extend .erie-meta-value--large;
     }
 
     &__section {
@@ -132,9 +129,7 @@ $overview-roots: (
     }
 
     &__section-subtitle {
-      font-size: 0.85rem;
-      color: rgba($light, 0.55);
-      letter-spacing: 0.05em;
+      @extend .erie-subtitle--section;
     }
 
     &__section-body {

@@ -1,8 +1,5 @@
 {% load humanize %}
 
 <div class="tab-pane-content">
-    <p class="text-muted small">
-        {{ child_task_count|default:0 }} child task{{ child_task_count|pluralize }} share these stack namespaces. Use the links below to inspect IaC state details or filter CloudWatch log groups by the namespace token.
-    </p>
     {% include "_base_templates/infrastructure_stacks_table.html" with stack_entries=stack_entries empty_message="No infrastructure stacks found for this initiative yet." %}
 </div>

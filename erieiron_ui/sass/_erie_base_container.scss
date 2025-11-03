@@ -396,3 +396,52 @@ body {
     font-size: 1rem;
   }
 }
+
+// Common UI component classes - consolidated from multiple SCSS files
+.erie-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: inherit;
+}
+
+.erie-title--large {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.erie-subtitle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba($white, 0.65);
+}
+
+.erie-subtitle--section {
+  font-size: 0.85rem;
+  color: rgba($light, 0.55);
+  letter-spacing: 0.05em;
+}
+
+.erie-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba($white, 0.45);
+}
+
+.erie-label--meta {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: rgba($white, 0.4);
+}
+
+.erie-meta-value {
+  font-size: 0.9rem;
+  color: rgba($white, 0.85);
+  word-break: break-word;
+}
+
+.erie-meta-value--large {
+  font-size: 1rem;
+  font-weight: 600;
+}

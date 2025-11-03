@@ -1,195 +1,95 @@
 {% load humanize %}
-<div class="table-responsive">
-    <table class="table table-striped align-middle" data-table-sortable="true">
-        <thead>
-            <tr>
-                <th scope="col" data-sort-key="token" data-sort-type="string">Token</th>
-                <th scope="col" data-sort-key="stack_type" data-sort-type="string">Stack Type</th>
-                <th scope="col" data-sort-key="scope" data-sort-type="string" data-sort-default="asc">Scope</th>
-                <th scope="col" data-sort-key="environment" data-sort-type="string">Environment</th>
-                <th scope="col" data-sort-key="logs" data-sort-type="number">Logs</th>
-                <th scope="col" class="text-end" data-sort-key="updated" data-sort-type="number">Updated</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for stack in stack_entries %}
-                <tr data-stack-detail-url="{% url 'view_stack' stack.id %}" style="cursor: pointer;">
-                    <td data-sort-value="{{ stack.stack_namespace_token|default:'' }}">
-                        <a href="{% url 'view_stack' stack.id %}">
-                            <code>{{ stack.stack_namespace_token }}</code>
-                        </a>
-                    </td>
-                    <td data-sort-value="{{ stack.stack_type_label|default:'' }}">{{ stack.stack_type_label }}</td>
-                    <td data-sort-value="{{ stack.scope_label|default:'' }}">
-                        {% if stack.initiative_id %}
-                            <a href="{% url 'view_initiative_tab' 'infrastructure-stacks' stack.initiative_id %}">
-                                {{ stack.initiative_title|default:stack.scope_label }}
-                            </a>
-                        {% else %}
-                            {{ stack.scope_label }}
-                        {% endif %}
-                    </td>
-                    <td data-sort-value="{{ stack.aws_env_label|default:'' }}">{{ stack.aws_env_label }}</td>
-                    <td data-sort-value="{% if stack.cloudwatch_logs_url %}1{% else %}0{% endif %}">
-                        {% if stack.cloudwatch_logs_url %}
-                            <a href="{{ stack.cloudwatch_logs_url }}" target="_blank" rel="noopener">Logs</a>
-                        {% endif %}
-                    </td>
-                    <td class="text-end" nowrap data-sort-value="{{ stack.updated_timestamp|date:'U'|default:'' }}">
-                        {% if stack.updated_timestamp %}
-                            {{ stack.updated_timestamp|naturaltime }}
-                        {% else %}
-                            <span class="text-muted">Unknown</span>
-                        {% endif %}
-                    </td>
-                </tr>
-            {% empty %}
-                <tr data-empty-row="true">
-                    <td colspan="7" class="text-center text-muted">
-                        {{ empty_message|default:"No infrastructure stacks found yet." }}
-                    </td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+{% with raw_dom_id=architecture_diagram.dom_id %}
+{% with base_dom_id=raw_dom_id|default:"infrastructure-diagram" %}
+<div class="infrastructure-stacks-tabs" id="{{ base_dom_id }}-container" data-base-dom-id="{{ base_dom_id }}">
+    <ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="{{ base_dom_id }}-table-tab" data-bs-toggle="tab" data-bs-target="#{{ base_dom_id }}-table" type="button" role="tab" aria-controls="{{ base_dom_id }}-table" aria-selected="true">
+                Stacks
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="{{ base_dom_id }}-diagram-tab" data-bs-toggle="tab" data-bs-target="#{{ base_dom_id }}-diagram-pane" type="button" role="tab" aria-controls="{{ base_dom_id }}-diagram-pane" aria-selected="false" data-tab-hash="#{{ base_dom_id }}-diagram">
+                Diagram
+            </button>
+        </li>
+    </ul>
+    <div class="tab-content pt-3">
+        <div class="tab-pane fade show active" id="{{ base_dom_id }}-table" role="tabpanel" aria-labelledby="{{ base_dom_id }}-table-tab">
+            <div class="table-responsive">
+                <h5>Stacks</h5>
+                <table class="table table-striped align-middle" data-table-sortable="true">
+                    <thead>
+                        <tr>
+                            <th scope="col" data-sort-key="token" data-sort-type="string">Token</th>
+                            <th scope="col" data-sort-key="stack_type" data-sort-type="string">Stack Type</th>
+                            <th scope="col" data-sort-key="scope" data-sort-type="string" data-sort-default="asc">Scope</th>
+                            <th scope="col" data-sort-key="environment" data-sort-type="string">Environment</th>
+                            <th scope="col" data-sort-key="logs" data-sort-type="number">Logs</th>
+                            <th scope="col" class="text-end" data-sort-key="updated" data-sort-type="number">Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for stack in stack_entries %}
+                            <tr data-stack-detail-url="{% url 'view_stack' stack.id %}" style="cursor: pointer;">
+                                <td data-sort-value="{{ stack.stack_namespace_token|default:'' }}">
+                                    <a href="{% url 'view_stack' stack.id %}">
+                                        <code>{{ stack.stack_namespace_token }}</code>
+                                    </a>
+                                </td>
+                                <td data-sort-value="{{ stack.stack_type_label|default:'' }}">{{ stack.stack_type_label }}</td>
+                                <td data-sort-value="{{ stack.scope_label|default:'' }}">
+                                    {% if stack.initiative_id %}
+                                        <a href="{% url 'view_initiative_tab' 'infrastructure-stacks' stack.initiative_id %}">
+                                            {{ stack.initiative_title|default:stack.scope_label }}
+                                        </a>
+                                    {% else %}
+                                        {{ stack.scope_label }}
+                                    {% endif %}
+                                </td>
+                                <td data-sort-value="{{ stack.aws_env_label|default:'' }}">{{ stack.aws_env_label }}</td>
+                                <td data-sort-value="{% if stack.cloudwatch_logs_url %}1{% else %}0{% endif %}">
+                                    {% if stack.cloudwatch_logs_url %}
+                                        <a href="{{ stack.cloudwatch_logs_url }}" target="_blank" rel="noopener">Logs</a>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end" nowrap data-sort-value="{{ stack.updated_timestamp|date:'U'|default:'' }}">
+                                    {% if stack.updated_timestamp %}
+                                        {{ stack.updated_timestamp|naturaltime }}
+                                    {% else %}
+                                        <span class="text-muted">Unknown</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr data-empty-row="true">
+                                <td colspan="7" class="text-center text-muted">
+                                    {{ empty_message|default:"No infrastructure stacks found yet." }}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="tab-pane fade" id="{{ base_dom_id }}-diagram-pane" role="tabpanel" aria-labelledby="{{ base_dom_id }}-diagram-tab">
+            {% include "components/infra_diagram.html" with architecture_diagram=architecture_diagram diagram_title=diagram_title|default:"Infrastructure Diagram" %}
+        </div>
+    </div>
 </div>
+
 <script>
-(function() {
-    if (window.__infrastructureStacksTableSortInit) {
+(function () {
+    if (typeof InfrastructureStacksView === 'undefined') {
         return;
     }
-    window.__infrastructureStacksTableSortInit = true;
-
-    function parseSortValue(rawValue, type) {
-        if (type === 'number') {
-            var number = parseFloat(rawValue);
-            return isNaN(number) ? 0 : number;
-        }
-        if (type === 'date') {
-            var timestamp = Date.parse(rawValue);
-            return isNaN(timestamp) ? 0 : timestamp;
-        }
-        return String(rawValue || '').toLowerCase();
-    }
-
-    function applySort(table, header, direction, isInitial) {
-        if (!table || !header) {
-            return;
-        }
-
-        var tbody = table.tBodies[0];
-        if (!tbody) {
-            return;
-        }
-
-        var rows = Array.prototype.filter.call(tbody.rows, function(row) {
-            return row.getAttribute('data-empty-row') !== 'true';
-        });
-
-        if (rows.length === 0) {
-            return;
-        }
-
-        var columnIndex = Array.prototype.indexOf.call(header.parentNode.children, header);
-        var sortType = header.getAttribute('data-sort-type') || 'string';
-
-        rows.sort(function(rowA, rowB) {
-            var cellA = rowA.cells[columnIndex];
-            var cellB = rowB.cells[columnIndex];
-            var valueA = cellA ? cellA.getAttribute('data-sort-value') : '';
-            var valueB = cellB ? cellB.getAttribute('data-sort-value') : '';
-            var parsedA = parseSortValue(valueA, sortType);
-            var parsedB = parseSortValue(valueB, sortType);
-
-            if (parsedA < parsedB) {
-                return -1;
-            }
-            if (parsedA > parsedB) {
-                return 1;
-            }
-            return 0;
-        });
-
-        if (direction === 'desc') {
-            rows.reverse();
-        }
-
-        rows.forEach(function(row) {
-            tbody.appendChild(row);
-        });
-
-        Array.prototype.forEach.call(table.querySelectorAll('th[data-sort-key]'), function(th) {
-            if (th === header) {
-                th.setAttribute('aria-sort', direction);
-                th.setAttribute('data-sort-dir', direction);
-            } else {
-                th.setAttribute('aria-sort', 'none');
-                th.removeAttribute('data-sort-dir');
-            }
-        });
-
-        if (!isInitial) {
-            var scopeAttr = header.getAttribute('data-sort-key');
-            if (scopeAttr) {
-                table.setAttribute('data-active-sort', scopeAttr + ':' + direction);
-            }
-        }
-    }
-
-    document.addEventListener('click', function(event) {
-        var header = event.target.closest('th[data-sort-key]');
-        if (header) {
-            var table = header.closest('table[data-table-sortable]');
-            if (!table) {
-                return;
-            }
-
-            var currentDir = header.getAttribute('data-sort-dir') || 'asc';
-            var nextDir = currentDir === 'asc' ? 'desc' : 'asc';
-            applySort(table, header, nextDir, false);
-            return;
-        }
-
-        var interactiveElement = event.target.closest('a, button, input, textarea, select, label');
-        if (interactiveElement) {
-            return;
-        }
-
-        var row = event.target.closest('tr[data-stack-detail-url]');
-        if (!row) {
-            return;
-        }
-
-        var destination = row.getAttribute('data-stack-detail-url');
-        if (destination) {
-            window.location.href = destination;
-        }
-    });
-
-    function initializeTables() {
-        var tables = document.querySelectorAll('table[data-table-sortable]');
-        tables.forEach(function(table) {
-            if (table.getAttribute('data-sort-initialized') === 'true') {
-                return;
-            }
-            table.setAttribute('data-sort-initialized', 'true');
-
-            var defaultHeader = table.querySelector('th[data-sort-default]');
-            if (defaultHeader) {
-                var direction = defaultHeader.getAttribute('data-sort-default') || 'asc';
-                applySort(table, defaultHeader, direction, true);
-            }
-
-            table.querySelectorAll('tr[data-stack-detail-url]').forEach(function(row) {
-                row.style.cursor = 'pointer';
-            });
-        });
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeTables, { once: true });
-    } else {
-        initializeTables();
+    if (!window.infrastructureStacksView) {
+        window.infrastructureStacksView = new InfrastructureStacksView();
+    } else if (typeof window.infrastructureStacksView.initializeContainers === 'function') {
+        window.infrastructureStacksView.initializeContainers();
+        window.infrastructureStacksView.maybeActivateFromHash(window.location.hash);
     }
 })();
 </script>
+{% endwith %}
+{% endwith %}
