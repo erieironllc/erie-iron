@@ -188,3 +188,4 @@ __pycache__/
 /production_deploy_thoughts.md
 /.claude/
 /opentofu/workspaces/
+/opentofu/swizzled_modules/

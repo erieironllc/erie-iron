@@ -116,6 +116,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "erieiron_ui.middleware.HealthCheckBypassMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
