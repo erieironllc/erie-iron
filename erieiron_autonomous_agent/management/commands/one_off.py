@@ -19,13 +19,4 @@ asdf = {
 
 class Command(BaseCommand):
     def handle(self, env_type=None, *args, **options):
-        for stack in InfrastructureStack.objects.filter(stack_configuration__isnull=True).order_by("business__name", "stack_type"):
-            task = stack.initiative.get_first_task_to_implement()
-            
-            contents = common.assert_exists(Path.cwd() / ".codex" / asdf[str(stack.id)]).read_text()
-            
-            stack.stack_configuration = contents
-            stack.save()
-
-
-            print(stack.id, stack.business.name, stack.stack_type)
+        print("ASDF")

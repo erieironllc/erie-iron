@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git
 Django==5.1.6
 Jinja2
@@ -42,5 +44,5 @@ sqlparse
 tiktoken
 tree_sitter_languages
 tree-sitter==0.25.2
-torch>=2.6
+torch==2.6.0+cpu
 torchvggish

@@ -41,6 +41,7 @@ SHOW_TIMERS = config('SHOW_TIMERS', default=False, cast=bool)
 
 S3_CACHE_DIR = config('S3_CACHE_DIR', default=tempfile.mkdtemp(), cast=str)
 S3_CACHE_MAX_DISK_USAGE = config('S3_CACHE_MAX_DISK_USAGE', default=70, cast=int)
+HF_MODEL_CACHE_S3_URI = config('HF_MODEL_CACHE_S3_URI', default=None)
 
 COGNITO_USER_POOL_ID = config("COGNITO_USER_POOL_ID")
 COGNITO_CLIENT_ID = config("COGNITO_CLIENT_ID")
@@ -97,7 +98,9 @@ READONLY_FILES = [
 
 BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "erieironllc.com"
+]
 
 INSTALLED_APPS = [
     'erieiron_common.apps.ErieironCommonConfig',
@@ -113,6 +116,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "erieiron_ui.middleware.HealthCheckBypassMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",

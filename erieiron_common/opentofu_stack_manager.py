@@ -27,14 +27,20 @@ class OpenTofuStackManager:
     def __init__(
             self,
             stack: InfrastructureStack,
-            container_env: dict = None
+            container_env: dict = None,
+            sandbox_root: Path = None
     ):
+        
         self.stack = stack
         self.container_env = container_env or {}
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
-        self.module_file = self.get_swizzled_module_file()
-        self.module_dir = self.module_file.parent
-        self.workspace_dir = self.module_dir.parent / "workspaces" / self.get_workspace_name()
+        self.sandbox_root = sandbox_root or Path(tempfile.mkdtemp(prefix=f"opentofu_temp_root_{self.stack_type}".lower()))
+        
+        self.workspace_dir = common.mkdirs(self.sandbox_root / "opentofu" / "workspaces" / self.get_workspace_name())
+        self.module_dir = common.mkdirs(self.sandbox_root / "opentofu" / "swizzled_modules" / self.stack_type.value.lower())
+        
+        self.swizzled_module_file = self.get_swizzled_module_file()
+        
         self.tf_env = self.build_opentofu_env()
         
         self.full_env: MutableMapping[str, str] = os.environ.copy()
@@ -44,22 +50,25 @@ class OpenTofuStackManager:
         self.stage = "init"
         self.run_results: list[OpenTofuRunResult] = []
         
-        self.tfvars_path = self.write_tfvars_file(
-            self.stack.stack_vars
-        )
         self.plan_output_path = self.workspace_dir / "current.plan"
-        self.init_workspace(upgrade=True)
+        self.init_workspace()
     
     def get_swizzled_module_file(self):
-        contents = self.stack.stack_configuration
+        stack_config_source_file = self.sandbox_root / self.stack_type.get_opentofu_config()
         
-        prevent_destroy = EnvironmentType.PRODUCTION.eq(self.stack.env_type)
-        new_contents = contents.replace("ERIE_IRON_RETAIN_RESOURCES", "true" if prevent_destroy else "false")
+        if stack_config_source_file.exists():
+            self.stack.stack_configuration = stack_config_source_file.read_text()
+            self.stack.save()
         
-        swizzled_path = Path(tempfile.mkdtemp(prefix="opentofu_swizzle_")) / InfrastructureStackType(self.stack.stack_type).get_opentofu_config()
-        swizzled_path.parent.mkdir(parents=True, exist_ok=True)
+        swizzled_contents = self.stack.stack_configuration.replace(
+            "ERIE_IRON_RETAIN_RESOURCES",
+            "true" if EnvironmentType.PRODUCTION.eq(self.stack.env_type) else "false"
+        )
+        
+        swizzled_path = self.module_dir / "stack.tf"
+        
         with swizzled_path.open("w", encoding="utf-8") as f:
-            f.write(new_contents)
+            f.write(swizzled_contents)
         
         return swizzled_path
     
@@ -111,12 +120,12 @@ class OpenTofuStackManager:
     ) -> OpenTofuCommandResult:
         self.stage = stage
         workdir = str(self.workspace_dir)
-        command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *args]
+        command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *common.strings(args)]
         started_at = common.get_now()
         logging.debug("Running OpenTofu command", extra={"command": command, "cwd": str(workdir)})
         try:
             completed_process = subprocess.run(
-                command,
+                common.strings(command),
                 cwd=workdir,
                 input=input_data,
                 text=True,
@@ -163,14 +172,25 @@ class OpenTofuStackManager:
         self.record(stage, result)
         return result
     
-    def init_workspace(
-            self,
-            *,
-            upgrade: bool = False,
-    ) -> OpenTofuCommandResult:
-        args = ["init", "-input=false", "-no-color"]
+    def init_workspace(self) -> OpenTofuCommandResult:
+        un_swizzled_module_file = self.sandbox_root / self.stack_type.get_opentofu_config()
+        lock_file = self.swizzled_module_file.parent / ".terraform.lock.hcl"
         
-        if upgrade:
+        if not lock_file.exists():
+            use_upgrade = True
+            reason = ".terraform.lock.hcl does not exist"
+        elif common.is_file1_newer(un_swizzled_module_file, lock_file):
+            use_upgrade = True
+            reason = "The module configuration file is newer than the lock file"
+        else:
+            use_upgrade = False
+            reason = None
+        
+        if use_upgrade:
+            logging.info("OpenTofu init: using -upgrade (%s)", reason)
+        
+        args = ["init", "-input=false", "-no-color"]
+        if use_upgrade:
             args.append("-upgrade")
         
         key_value = f"{self.stack.stack_namespace_token}/stack.tfstate"
@@ -187,7 +207,7 @@ class OpenTofuStackManager:
                     time.sleep(10 * (attempt + 1))
                     continue
                 last_exception = e
-                
+        
         raise last_exception
     
     def plan(
@@ -207,8 +227,8 @@ class OpenTofuStackManager:
                 args.append("-destroy")
             if not refresh:
                 args.append("-refresh=false")
-            for vf in common.ensure_list(self.tfvars_path):
-                args.extend(["-var-file", str(vf)])
+            
+            args.extend(["-var-file", self.get_tfvars_file()])
             
             result = self.run_tofu_command(
                 "plan",
@@ -344,8 +364,7 @@ class OpenTofuStackManager:
             timeout: int | None = None,
     ) -> dict[str, Any]:
         refresh_args = ["refresh", "-no-color", "-input=false"]
-        for vf in common.ensure_list(self.tfvars_path):
-            refresh_args.extend(["-var-file", str(vf)])
+        refresh_args.extend(["-var-file", self.get_tfvars_file()])
         
         self.run_tofu_command("refresh", refresh_args)
         
@@ -398,7 +417,7 @@ class OpenTofuStackManager:
         return f"opentofu://workspace/{self.get_workspace_name()}"
     
     def get_stack_variables(self) -> dict[str, OpenTofuVariable]:
-        tf_path = self.module_file
+        tf_path = self.swizzled_module_file
         
         try:
             with tf_path.open("r", encoding="utf-8") as tf_file:
@@ -429,16 +448,10 @@ class OpenTofuStackManager:
         
         return variables
     
-    def write_tfvars_file(
-            self,
-            variables: Mapping[str, Any],
-            *,
-            filename: str | None = None,
-    ) -> Path:
-        suffix = filename or f"{self.stack.stack_type.lower()}.auto.tfvars.json"
-        tfvars_path = self.workspace_dir / suffix
+    def get_tfvars_file(self) -> Path:
+        tfvars_path = self.workspace_dir / f"{self.stack.stack_type.lower()}.auto.tfvars.json"
         tfvars_path.parent.mkdir(parents=True, exist_ok=True)
-        common.write_json(tfvars_path, variables)
+        common.write_json(tfvars_path, self.stack.stack_vars or {})
         return tfvars_path
     
     def build_opentofu_env(self) -> dict[str, str]:
@@ -498,8 +511,9 @@ class OpenTofuStackManager:
         args = ["destroy", "-input=false", "-no-color"]
         if auto_approve:
             args.append("-auto-approve")
-        for vf in self.tfvars_path:
-            args.extend(["-var-file", str(vf)])
+        
+        args.extend(["-var-file", self.get_tfvars_file()])
+        
         try:
             result = self.run_tofu_command("destroy", args, timeout=timeout)
             self.record("destroy", result)
@@ -537,7 +551,7 @@ class OpenTofuStackManager:
     def get_resource_definitions(self, resource_type: str = None):
         resource_defs = []
         
-        with open(self.module_file, 'r') as f:
+        with open(self.swizzled_module_file, 'r') as f:
             tf_data = hcl2.load(f)
         
         for resource_def_item in tf_data.get('resource', []):
@@ -547,7 +561,7 @@ class OpenTofuStackManager:
                         resource_defs.append(resource_def)
                 else:
                     resource_defs.append(resource_def)
-    
+        
         return resource_defs
     
     @staticmethod

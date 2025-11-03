@@ -688,10 +688,7 @@ class InfrastructureStack(BaseErieIronModel):
             zone_id = initiative.business.route53_hosted_zone_id
             if not zone_id:
                 from erieiron_common import aws_utils 
-                zone_id = domain_manager.find_hosted_zone_id(
-                    aws_utils.client("route53"), 
-                    initiative.business.domain
-                )
+                zone_id = domain_manager.find_hosted_zone_id(initiative.business.domain, aws_utils.client("route53"))
             
             domain_manager.add_dns_records(
                 zone_id,

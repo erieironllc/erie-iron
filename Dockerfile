@@ -25,19 +25,15 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     curl \
     gettext-base \
-    && curl -fsSL https://astral.sh/uv/install.sh | bash - \
     && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/root/.local/bin:$PATH"
 
-# Install AWS CLI and upgrade pip
-RUN pip install awscli && pip install --upgrade pip
-# Install AWS SAM CLI for SAM-based local invocations during tests
-RUN pip install --no-cache-dir aws-sam-cli
-# Verify SAM CLI is available on PATH (fail fast if missing)
-RUN sam --version || (echo "SAM CLI not found on PATH after install" && exit 1)
+ # Install AWS CLI and AWS SAM CLI using pip
+ENV PIP_ROOT_USER_ACTION=ignore
+RUN pip install awscli aws-sam-cli
 
 # Create app directory and set working directory
 WORKDIR /app
@@ -45,50 +41,25 @@ WORKDIR /app
 # Copy requirements and constraints files
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir gunicorn
+RUN pip install gunicorn
 
 ARG ERIEIRON_PUBLIC_COMMON_SHA=manual
 RUN echo "Using erieiron-public-common ref: $ERIEIRON_PUBLIC_COMMON_SHA"
 
 #
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# 1. Allow downloads at build time
-ENV HF_HOME=/usr/local/huggingface \
-    TRANSFORMERS_CACHE=$HF_HOME \
-    SENTENCE_TRANSFORMERS_HOME=$HF_HOME \
-    HF_HUB_DISABLE_SYMLINKS_WARNING=1
+# Configure HuggingFace cache location; runtime will populate via S3 sync.
+ENV HF_HOME=/usr/local/huggingface
+ENV TRANSFORMERS_CACHE=${HF_HOME}
+ENV SENTENCE_TRANSFORMERS_HOME=${HF_HOME}
+ENV HF_HUB_DISABLE_SYMLINKS_WARNING=1 \
+    TRANSFORMERS_OFFLINE=0 \
+    HF_DATASETS_OFFLINE=0
 
-RUN mkdir -p $HF_HOME && chmod -R 755 $HF_HOME
+RUN mkdir -p "$HF_HOME" && chmod -R 755 "$HF_HOME"
 
-# 2. Download and cache models while online
-RUN python - <<'PYCODE'
-from transformers import AutoModel, AutoTokenizer
-from sentence_transformers import SentenceTransformer
-import os
-
-cache_dir = os.environ.get("HF_HOME", "/usr/local/huggingface")
-os.makedirs(cache_dir, exist_ok=True)
-
-models = ["bert-base-uncased", "sentence-transformers/all-MiniLM-L6-v2"]
-
-for m in models:
-    print(f"[build] Downloading and caching {m}")
-    AutoModel.from_pretrained(m, cache_dir=cache_dir)
-    AutoTokenizer.from_pretrained(m, cache_dir=cache_dir)
-
-SentenceTransformer("all-MiniLM-L6-v2")
-print("[build] Cache preloaded successfully")
-PYCODE
-
-# 3. Verify cache
-RUN ls -Rlh /usr/local/huggingface
-
-# 4. Enable offline mode for runtime containers
-ENV TRANSFORMERS_OFFLINE=1 \
-    HF_DATASETS_OFFLINE=1
-    
 # Keep cache volume for reuse at runtime
 VOLUME /usr/local/huggingface
 

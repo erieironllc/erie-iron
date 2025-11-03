@@ -9,6 +9,23 @@ from django.http import HttpResponseRedirect
 _LOG = logging.getLogger(__name__)
 
 
+class HealthCheckBypassMiddleware:
+    """
+    Bypass Django's ALLOWED_HOSTS check for GET /health_check.
+    Must be first in MIDDLEWARE so that no host validation or URL routing runs.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path == '/health' and request.method == 'GET':
+            from erieiron_ui import views
+            return views.healthcheck(request)
+
+        return self.get_response(request)
+
+
 class SimpleAuthMiddleware:
     """Temporary JWT cookie auth until Cognito integration lands."""
 
