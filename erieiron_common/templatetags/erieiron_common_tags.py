@@ -102,7 +102,7 @@ def top_nav_dropdowns(context):
         active = None
         
         if erie_business and idx == 0:
-            tabs = cached(("businesses", erie_business.id), lambda: ui_views._build_businesses_tabs(erie_business))
+            tabs = cached(("portfolio", erie_business.id), lambda: ui_views._build_portfolio_tabs(erie_business))
         elif business_obj and label == business_obj.name:
             tabs = cached(("business", business_obj.id), lambda: ui_views._build_business_tabs(business_obj))
         elif initiative_obj and label == getattr(initiative_obj, "title", ""):
