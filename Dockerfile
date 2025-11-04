@@ -67,6 +67,8 @@ COPY . .
 
 RUN chmod +x /app/docker-internal-startup-cmd.sh
 
+RUN npm run compile-ui
+
 # Expose listener port.
 EXPOSE ${HTTP_LISTENER_PORT}
 

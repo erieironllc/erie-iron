@@ -2077,6 +2077,7 @@ def execute_iteration(
         config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
     elif task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
         logging.info("Skipping automated test run for production deployment task")
+        # TODO - is it possible to block until the new ECS task is running?
     elif TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
         task_io_dir = Path(config.sandbox_root_dir) / "task_io"
         task_io_dir.mkdir(parents=True, exist_ok=True)

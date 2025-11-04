@@ -16,7 +16,6 @@ DEBUG = config.get("DEBUG", True)
 
 VALIDATION_PORT = 8006
 TIME_ZONE = 'America/Los_Angeles'
-STATIC_ROOT = os.path.join(Path(__file__).resolve().parent, "erieiron_ui", "static")
 SECRET_KEY = "django-insecure-4yp%)5s=rx5ph(+zs7mhk&zj9&sko+15(bi=nx-94^m-hrd&2v"
 LLM_API_KEYS_SECRET_ARN = "arn:aws:secretsmanager:us-west-2:782005355493:secret:LLM_API_KEYS-B1Bn3t"
 STRIPE_WEBHOOK_SECRET_ARN = "TODO"
@@ -120,6 +119,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "erieiron_ui.middleware.HealthCheckBypassMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -181,7 +181,18 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+_static_compiled_path = Path(STATIC_COMPILED_DIR)
+if not _static_compiled_path.is_absolute():
+    _static_compiled_path = (BASE_DIR / _static_compiled_path).resolve()
+
+STATICFILES_DIRS = []
+if _static_compiled_path.resolve() != Path(STATIC_ROOT).resolve():
+    _static_compiled_path.mkdir(parents=True, exist_ok=True)
+    STATICFILES_DIRS.append(_static_compiled_path)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

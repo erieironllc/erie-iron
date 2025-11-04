@@ -13,6 +13,7 @@ botocore
 cfn-lint
 cryptography>=3.4
 django-stubs
+whitenoise>=6.8.2
 dnspython>=2.6.1
 google-analytics-data
 google-api-core==2.11.1
@@ -44,5 +45,6 @@ sqlparse
 tiktoken
 tree_sitter_languages
 tree-sitter==0.25.2
-torch==2.6.0+cpu
+torch==2.6.0+cpu; platform_system == "Linux"
+torch==2.6.0; platform_system == "Darwin"
 torchvggish
