@@ -713,7 +713,7 @@ class PubSubHanderInstance(BaseErieIronModel):
         return self
     
     def ping(self, system_capacity: SystemCapacity, system_capacity_explanation: str):
-        from message_queue.resource_manager import get_db_connections_info
+        from erieiron_common.message_queue.resource_manager import get_db_connections_info
         max_connections, used_connections = get_db_connections_info()
         
         with transaction.atomic():
