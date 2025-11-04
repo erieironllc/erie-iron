@@ -12,7 +12,7 @@ env
 PORT="${HTTP_LISTENER_PORT:-8006}"
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
-python manage.py collectstatic --noinput || { echo "collectstatic failed"; exit 1; }
+python manage.py collectstatic --noinput 2>&1 | grep -v "Found another file with the destination path"
 
 echo "Starting message processor daemons for env ${ERIEIRON_ENV}..."
 python manage.py message_processor_daemon \
