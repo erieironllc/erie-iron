@@ -46,7 +46,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[webcontainer startup] Waiting for health endpoint..."
-for attempt in {1..12}; do
+for attempt in {1..20}; do
     sleep 5
     if curl -fsSL "http://127.0.0.1:${PORT}/health/" >/dev/null 2>&1; then
         echo "[webcontainer startup] INFO internal docker healthcheck succeeded"
