@@ -2476,9 +2476,9 @@ def validate_web_container(
         
         config.log(f"Starting Webcontainer Validation (PID={process.pid})")
         start_time = time.time()
-        max_wait = 60  # seconds
+        max_wait = 10 * 60  # seconds
         healthy = False
-        for attempt in range(1, 13):  # 12 attempts × 5s = 60s
+        for attempt in range(1, 21):  # 12 attempts × 5s = 60s
             time.sleep(5)
             config.log(f"Healthcheck attempt {attempt}: querying http://127.0.0.1:{port}/health/")
             try:

@@ -38,6 +38,10 @@ RUN pip install awscli aws-sam-cli
 # Create app directory and set working directory
 WORKDIR /app
 
+# Copy only package manifests and install Node.js dependencies early to leverage caching
+COPY package*.json ./
+RUN npm install
+
 # Copy requirements and constraints files
 COPY requirements.txt .
 
@@ -67,7 +71,6 @@ COPY . .
 
 RUN chmod +x /app/docker-internal-startup-cmd.sh
 
-RUN npm install
 RUN npm run compile-ui
 
 # Expose listener port.
