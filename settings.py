@@ -4,6 +4,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from decouple import Csv
+
 from erieiron_common import settings_utils
 from erieiron_public import agent_tools
 
@@ -102,6 +104,12 @@ ALLOWED_HOSTS = [
     "localhost",
     "erieironllc.com"
 ]
+
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default="https://erieironllc.com,https://*.erieironllc.com",
+    cast=Csv()
+)
 
 INSTALLED_APPS = [
     'erieiron_common.apps.ErieironCommonConfig',
