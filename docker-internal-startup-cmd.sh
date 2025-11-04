@@ -12,14 +12,12 @@ env
 PORT="${HTTP_LISTENER_PORT:-8006}"
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
-python manage.py collectstatic --noinput 2>&1 | grep -v "Found another file with the destination path"
-
-echo "Starting message processor daemons for env ${ERIEIRON_ENV}..."
-python manage.py message_processor_daemon \
-  --retry_failed=True \
-  --max_threads=8 \
-  --env="${ERIEIRON_ENV}" \
-  --suppress_timing_messages=False &
+#echo "Starting message processor daemons for env ${ERIEIRON_ENV}..."
+#python manage.py message_processor_daemon \
+#  --retry_failed=True \
+#  --max_threads=8 \
+#  --env="${ERIEIRON_ENV}" \
+#  --suppress_timing_messages=False &
 
 echo "Starting Gunicorn..."
 echo "[webcontainer startup] INFO Starting gunicorn erieiron_config.wsgi on port ${PORT}"
@@ -35,6 +33,8 @@ gunicorn \
 GUNICORN_PID=$!
 
 echo "[webcontainer startup] INFO gunicorn started with PID ${GUNICORN_PID}"
+
+python manage.py collectstatic --noinput 2>&1 | grep -v "Found another file with the destination path" &
 
 forward_signal() {
     if kill -0 "${GUNICORN_PID}" >/dev/null 2>&1; then

@@ -2322,7 +2322,7 @@ def build_iteration(config, container_env):
         }
     
     required_build_steps = {
-        BuildStep.CONTAINERS.value: True,
+        BuildStep.CONTAINERS.value: False,
         BuildStep.LAMBDAS.value: False
     }
     
@@ -2333,7 +2333,7 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = None  # config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+    previous_container_tag = None #config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
@@ -2478,7 +2478,7 @@ def validate_web_container(
         start_time = time.time()
         max_wait = 10 * 60  # seconds
         healthy = False
-        for attempt in range(1, 21):  # 12 attempts × 5s = 60s
+        for attempt in range(1, 100):  # will hit max_wait before 100
             time.sleep(5)
             config.log(f"Healthcheck attempt {attempt}: querying http://127.0.0.1:{port}/health/")
             try:

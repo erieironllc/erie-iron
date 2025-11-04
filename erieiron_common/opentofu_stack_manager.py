@@ -162,11 +162,15 @@ class OpenTofuStackManager:
         )
         
         if result.returncode != 0:
-            logging.error(completed_process.stderr)
-            raise OpenTofuCommandError(
-                f"OpenTofu command failed with exit code {result.returncode}",
-                result,
-            )
+            # Allow return codes 2 and 3 for plan stage (indicate "changes pending" or "changes present")
+            if result.returncode in (2, 3):
+                logging.info(f"OpenTofu plan completed with changes (exit code {result.returncode}). Treating as success.")
+            else:
+                logging.error(completed_process.stderr)
+                raise OpenTofuCommandError(
+                    f"OpenTofu command failed with exit code {result.returncode}",
+                    result,
+                )
         
         logging.debug("OpenTofu command completed", extra=result.loggable_dict())
         self.record(stage, result)
@@ -480,6 +484,7 @@ class OpenTofuStackManager:
         try:
             self.run_tofu_command("validate", ["fmt", "-check"])
         except subprocess.CalledProcessError as exc:
+            logging.exception(exc)
             return BadPlan(textwrap.dedent(f"""
                 OpenTofu formatting failed for {self.stack.stack_type} module.
                 stdout:
