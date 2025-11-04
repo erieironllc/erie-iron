@@ -57,7 +57,7 @@ MESSAGE_TYPES = config('MESSAGE_TYPES', default=None, cast=str)
 BUCKETS = settings_utils.get_buckets(config)
 
 
-SIMPLE_AUTH_ALLOWED_EMAIL = os.getenv("SIMPLE_AUTH_ALLOWED_EMAIL", "jj@erieironllc.com")
+SIMPLE_AUTH_ALLOWED_EMAIL = os.getenv("SIMPLE_AUTH_ALLOWED_EMAIL", "jj@erieironllc.com,sach.nanda@gmail.com")
 SIMPLE_AUTH_ALLOWED_PASSWORD = os.getenv("SIMPLE_AUTH_ALLOWED_PASSWORD", "change_th1s_p@ssword")
 SIMPLE_AUTH_COOKIE_NAME = "erieiron_ui_auth_token"
 SIMPLE_AUTH_JWT_SECRET = SECRET_KEY

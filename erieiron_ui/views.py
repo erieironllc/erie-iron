@@ -76,7 +76,7 @@ def _resolve_post_login_redirect(request, candidate: str | None) -> str:
 
 def _credentials_match(email: str, password: str) -> bool:
     return (
-            email == settings.SIMPLE_AUTH_ALLOWED_EMAIL
+            email.lower() in settings.SIMPLE_AUTH_ALLOWED_EMAIL
             and password == settings.SIMPLE_AUTH_ALLOWED_PASSWORD
     )
 
