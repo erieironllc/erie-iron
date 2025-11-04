@@ -72,7 +72,7 @@ variable "WebDesiredCount" {
 variable "StaticCompiledDir" {
   description = "Directory containing compiled static assets within the container."
   type        = string
-  default     = "/app/static_compiled"
+  default     = "erieiron_ui/static/compiled"
 }
 
 variable "DatabaseName" {
