@@ -379,10 +379,6 @@ resource "aws_ecs_task_definition" "web" {
   tags = merge(local.base_tags, {
     Name = "${var.StackIdentifier}-task"
   })
-
-  lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
-  }
 }
 
 resource "aws_ecs_service" "web" {
