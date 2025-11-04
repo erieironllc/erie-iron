@@ -329,6 +329,30 @@ resource "aws_iam_role_policy" "web_secrets" {
   })
 }
 
+resource "aws_iam_role_policy" "web_llm_api_keys" {
+  name = "${var.StackIdentifier}-web-llm-api-keys"
+  role = aws_iam_role.web_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "AllowReadLlmApiKeys"
+        Effect   = "Allow"
+        Action   = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:LLM_API_KEYS*"
+      }
+    ]
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
 resource "aws_ecs_task_definition" "web" {
   family                   = substr("${var.StackIdentifier}-web", 0, 255)
   cpu                      = tostring(var.WebContainerCpu)
@@ -427,7 +451,14 @@ resource "aws_ecs_service" "web" {
   }
 }
 
+variable "CreateIngressRule" {
+  description = "Whether to create the ECS ingress rule (useful when security group is shared)."
+  type        = bool
+  default     = true
+}
+
 resource "aws_security_group_rule" "ecs_ingress" {
+  count             = var.CreateIngressRule ? 1 : 0
   security_group_id = var.SecurityGroupId
   type              = "ingress"
   from_port         = 8006

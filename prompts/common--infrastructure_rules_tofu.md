@@ -79,7 +79,36 @@
     - **OpenTofu stacks must be able to delete cleanly in all environments, with no manual resource cleanup or intervention ever required.**
 - Erie Iron deploys every stack inside the shared VPC `erie-iron-shared-vpc`. Plans and templates must rely on `VpcId`, `PublicSubnet{1,2}Id`, `PrivateSubnet{1,2}Id`, and `VpcCidr` parameters and must not create or modify VPCs, subnets, route tables, internet gateways, NAT gateways, or VPC endpoints.
 
-### S3 Event Notification Standard
+-### S3 Event Notification Standard
+-### Duplicate Security Group Rule Guidance
+- When defining `aws_security_group_rule` resources, ensure each rule is unique per `(protocol, from_port, to_port, source)` tuple.
+- If a shared Security Group already includes the rule, **do not re-create it** in downstream stacks.
+- To prevent duplicate rule errors, always:
+  - Prefer **conditional creation** using a `count` guard variable (e.g., `count = var.CreateIngressRule ? 1 : 0`) when multiple stacks might target the same Security Group.
+  - Avoid defining identical ingress or egress rules in multiple modules pointing to the same Security Group ID.
+  - For shared security groups, manage rules in the **foundation stack** only, and reference them from application stacks.
+- When a duplicate rule error occurs (e.g., `InvalidPermission.Duplicate`), do **not** modify the Security Group manually. Instead:
+  - Identify the conflicting rule via `aws ec2 describe-security-group-rules --filters Name=group-id,Values=<sg-id>`.
+  - Remove or conditionally disable the redundant rule in the relevant stack template.
+- Example conditional block:
+  ```hcl
+  variable "CreateIngressRule" {
+    description = "Whether to create this ingress rule (useful when SG is shared)."
+    type        = bool
+    default     = true
+  }
+
+  resource "aws_security_group_rule" "example_ingress" {
+    count             = var.CreateIngressRule ? 1 : 0
+    security_group_id = var.SecurityGroupId
+    type              = "ingress"
+    from_port         = 8006
+    to_port           = 8006
+    protocol          = "tcp"
+    cidr_blocks       = [var.VpcCidr]
+  }
+  ```
+- Always prefer **shared guardrails** and **consistent naming conventions** to avoid state drift or overlapping rules.
 - Always configure S3 -> Lambda/SNS/SQS notifications using the inline `NotificationConfiguration` property on the `AWS::S3::Bucket` resource.
   - There is no `AWS::S3::BucketNotification` resource type in OpenTofu.
   - Configure notifications directly within the bucket definition using the `NotificationConfiguration` property.
