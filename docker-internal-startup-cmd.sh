@@ -14,11 +14,11 @@ export PYTHONPATH="/app:${PYTHONPATH:-}"
 
 python manage.py collectstatic --noinput || { echo "collectstatic failed"; exit 1; }
 
-echo "Starting message processor daemons for env ${ERIE_IRON_ENV}..."
+echo "Starting message processor daemons for env ${ERIEIRON_ENV}..."
 python manage.py message_processor_daemon \
   --retry_failed=True \
   --max_threads=8 \
-  --env="${ERIE_IRON_ENV}" \
+  --env="${ERIEIRON_ENV}" \
   --suppress_timing_messages=False &
 
 echo "Starting Gunicorn..."

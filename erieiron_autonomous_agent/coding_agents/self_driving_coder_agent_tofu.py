@@ -1,13 +1,13 @@
 import copy
-import subprocess
 import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import textwrap
 import time
 import traceback
-import shutil
 from collections import defaultdict
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
@@ -61,7 +61,6 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError
 from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
-
 
 MIN_PODMAN_STORAGE_FREE_GB = 4.0
 
@@ -1429,7 +1428,7 @@ def build_container_image(
     container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     
     config.log(f"\n\n\n\n======== Begining PODMAN Build for tag {container_image_tag} ")
-
+    
     config.log(f"Building container image for platform: {ContainerPlatform.FARGATE}")
     container_build_cmd = common.strings([
         "podman",
@@ -1474,24 +1473,24 @@ def ensure_container_storage_capacity(
     if not storage_path:
         config.log("Unable to determine podman storage path; continuing without disk space guard.")
         return
-
+    
     free_gb = _get_free_space_gb(storage_path)
     if free_gb >= min_free_gb:
         return
-
+    
     config.log(
         f"Detected low disk space for podman storage at {storage_path} ({free_gb:.2f} GiB free). Running aggressive prune."
     )
-
+    
     exec_container_prune(aggressive=True)
-
+    
     free_gb_after_prune = _get_free_space_gb(storage_path)
     if free_gb_after_prune >= min_free_gb:
         config.log(
             f"Podman storage now has {free_gb_after_prune:.2f} GiB free after prune."
         )
         return
-
+    
     message = (
         f"Podman storage path {storage_path} still has only {free_gb_after_prune:.2f} GiB free after prune. "
         "Free disk space and rerun."
@@ -1502,7 +1501,7 @@ def ensure_container_storage_capacity(
 
 def handle_podman_build_failure(config: SelfDriverConfig, return_code: int) -> None:
     storage_path = get_podman_storage_path()
-
+    
     if storage_path:
         free_gb = _get_free_space_gb(storage_path)
         if free_gb < MIN_PODMAN_STORAGE_FREE_GB:
@@ -1512,7 +1511,7 @@ def handle_podman_build_failure(config: SelfDriverConfig, return_code: int) -> N
             )
             config.log(message)
             raise AgentBlocked(message)
-
+    
     raise Exception(f"Podman build failed with return code: {return_code}")
 
 
@@ -1532,21 +1531,21 @@ def get_podman_storage_path() -> Optional[Path]:
                 return candidate
     except Exception as e:
         logging.exception(e)
-
+    
     candidates: list[Path] = []
     storage_env = os.environ.get("CONTAINERS_STORAGE")
     if storage_env:
         candidates.append(Path(storage_env))
-
+    
     candidates.extend([
         Path.home() / ".local" / "share" / "containers" / "storage",
         Path("/var/lib/containers/storage"),
     ])
-
+    
     for candidate in candidates:
         if candidate.exists():
             return candidate
-
+    
     return None
 
 
@@ -1556,7 +1555,7 @@ def _get_free_space_gb(path: Path) -> float:
     except FileNotFoundError as exc:
         logging.exception(exc)
         raise AgentBlocked(f"Podman storage path {path} is not accessible.")
-
+    
     return usage.free / (1024 ** 3)
 
 
@@ -1566,9 +1565,9 @@ def exec_container_prune(aggressive: bool = False):
         if aggressive:
             prune_cmd.append("-a")
             prune_cmd.append("--volumes")
-
+        
         subprocess.run(prune_cmd, check=True)
-
+        
         if aggressive:
             subprocess.run(["podman", "image", "prune", "-a", "-f"], check=True)
             subprocess.run(["podman", "builder", "prune", "-a", "-f"], check=True)
@@ -1621,7 +1620,7 @@ def build_env(config: SelfDriverConfig) -> dict:
         "BUILDAH_FORMAT": "docker",
         "PATH": os.getenv("PATH")
     }
-
+    
     hf_model_cache_s3_uri = getattr(settings, "HF_MODEL_CACHE_S3_URI", None)
     if hf_model_cache_s3_uri:
         env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
@@ -1921,7 +1920,7 @@ def run_container_command(
         container_image_tag: str
 ) -> None:
     command_args = common.ensure_list(command_args)
-
+    
     cmd = [
         "podman", "run", "--rm",
         "--memory", "4g",
@@ -2334,7 +2333,7 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = None # config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+    previous_container_tag = None  # config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
@@ -2409,6 +2408,13 @@ def manage_db(
         container_env: dict,
         container_image_tag: str
 ):
+    if (
+            config.current_iteration.version_number > 1
+            and not config.current_iteration.codeversion_set.filter(code_file__file_path__contains="models").exists()
+    ):
+        logging.info("models not changed in current iteration")
+        return
+    
     try:
         run_container_command(
             config=config,
