@@ -392,6 +392,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_infrastructure_stacks,
     },
     {
+        "slug": "cloud-accounts",
+        "label": "Cloud Accounts",
+        "template": "business/tabs/cloud_accounts.html",
+        "availability_fn": views._tab_available_cloud_accounts,
+        "context_fn": views._tab_context_cloud_accounts,
+    },
+    {
         "slug": "codefiles",
         "label": "Code Files",
         "template": "business/tabs/codefiles.html",

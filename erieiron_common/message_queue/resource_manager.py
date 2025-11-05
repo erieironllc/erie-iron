@@ -7,17 +7,17 @@ from erieiron_common.enums import SystemCapacity
 
 
 def get_system_capacity(max_percent_capacity_consumed=90) -> Tuple[SystemCapacity, str]:
-    mem_used = common.get_memory_used_percent()
-    if mem_used > max_percent_capacity_consumed:
-        return SystemCapacity.OVERLOAD, f"memory: {mem_used}% is greater than {max_percent_capacity_consumed}%"
-    elif mem_used > (max_percent_capacity_consumed * .9):
-        return SystemCapacity.CAPPED, f"memory: {mem_used}% is greater than {max_percent_capacity_consumed * .9}%"
+    # mem_used = common.get_memory_used_percent()
+    # if mem_used > max_percent_capacity_consumed:
+    #     return SystemCapacity.OVERLOAD, f"memory: {mem_used}% is greater than {max_percent_capacity_consumed}%"
+    # elif mem_used > (max_percent_capacity_consumed * .9):
+    #     return SystemCapacity.CAPPED, f"memory: {mem_used}% is greater than {max_percent_capacity_consumed * .9}%"
 
-    cpu_used = common.get_cpu_used_percent()
-    if cpu_used > max_percent_capacity_consumed:
-        return SystemCapacity.OVERLOAD, f"cpu: {cpu_used}% is greater than {max_percent_capacity_consumed}%"
-    elif cpu_used > max_percent_capacity_consumed * .9:
-        return SystemCapacity.CAPPED, f"cpu avail {cpu_used}% is greater than {max_percent_capacity_consumed * .9}%"
+    # cpu_used = common.get_cpu_used_percent()
+    # if cpu_used > max_percent_capacity_consumed:
+    #     return SystemCapacity.OVERLOAD, f"cpu: {cpu_used}% is greater than {max_percent_capacity_consumed}%"
+    # elif cpu_used > max_percent_capacity_consumed * .9:
+    #     return SystemCapacity.CAPPED, f"cpu avail {cpu_used}% is greater than {max_percent_capacity_consumed * .9}%"
 
     if connection.vendor == 'postgresql':
         db_capacity, explanation = get_db_capacity()

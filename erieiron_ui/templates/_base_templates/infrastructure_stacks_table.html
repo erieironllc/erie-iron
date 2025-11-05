@@ -25,6 +25,7 @@
                             <th scope="col" data-sort-key="stack_type" data-sort-type="string">Stack Type</th>
                             <th scope="col" data-sort-key="scope" data-sort-type="string" data-sort-default="asc">Scope</th>
                             <th scope="col" data-sort-key="environment" data-sort-type="string">Environment</th>
+                            <th scope="col" data-sort-key="cloud-account" data-sort-type="string">Cloud Account</th>
                             <th scope="col" data-sort-key="logs" data-sort-type="number">Logs</th>
                             <th scope="col" class="text-end" data-sort-key="updated" data-sort-type="number">Updated</th>
                         </tr>
@@ -48,6 +49,16 @@
                                     {% endif %}
                                 </td>
                                 <td data-sort-value="{{ stack.aws_env_label|default:'' }}">{{ stack.aws_env_label }}</td>
+                                <td data-sort-value="{{ stack.cloud_account_name|default:'' }}">
+                                    {% if stack.cloud_account_id %}
+                                        <div>{{ stack.cloud_account_name }}</div>
+                                        <div class="text-muted small">
+                                            {{ stack.cloud_account_provider_label|default:stack.cloud_account_provider|default:"" }}
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">Not assigned</span>
+                                    {% endif %}
+                                </td>
                                 <td data-sort-value="{% if stack.cloudwatch_logs_url %}1{% else %}0{% endif %}">
                                     {% if stack.cloudwatch_logs_url %}
                                         <a href="{{ stack.cloudwatch_logs_url }}" target="_blank" rel="noopener">Logs</a>

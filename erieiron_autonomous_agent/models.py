@@ -30,7 +30,11 @@ from erieiron_common.enums import (
     BusinessIdeaSource,
     TaskType,
     EnvironmentType,
-    InfrastructureStackType, DEV_STACK_TOKEN_LENGTH, LlmVerbosity, )
+    InfrastructureStackType,
+    DEV_STACK_TOKEN_LENGTH,
+    LlmVerbosity,
+    CloudProvider,
+)
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -343,6 +347,66 @@ class Business(BaseErieIronModel):
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
         return f"z/{project_name}/{env_type.value}"
 
+    def get_default_cloud_account(self, env_type: EnvironmentType | None) -> 'CloudAccount | None':
+        if not env_type:
+            return None
+
+        qs = self.cloud_accounts.all()
+        if EnvironmentType.PRODUCTION.eq(env_type):
+            return qs.filter(is_default_production=True).first()
+        if EnvironmentType.DEV.eq(env_type):
+            return qs.filter(is_default_dev=True).first()
+        return None
+
+    def iter_cloud_accounts(self) -> models.QuerySet:
+        return self.cloud_accounts.order_by("name")
+
+
+class CloudAccount(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="cloud_accounts")
+    name = models.TextField()
+    provider = models.TextField(choices=CloudProvider.choices(), default=CloudProvider.AWS)
+    account_identifier = models.TextField(null=True, blank=True)
+    credentials_secret_arn = models.TextField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
+    is_default_dev = models.BooleanField(default=False)
+    is_default_production = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["business", "provider"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["business", "name"], name="cloudaccount_unique_business_name"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.provider})"
+
+    def build_secret_name(self) -> str:
+        if not self.id:
+            raise ValueError("CloudAccount must be saved before building secret name")
+        base = self.business.get_secrets_root_key(EnvironmentType.PRODUCTION)
+        return f"{base}/cloud-accounts/{self.id}"
+
+    def set_default_flags(self, *, dev: bool | None = None, production: bool | None = None) -> None:
+        updates: dict[str, bool] = {}
+        if dev is not None:
+            updates["is_default_dev"] = dev
+        if production is not None:
+            updates["is_default_production"] = production
+        if not updates:
+            return
+        for field, value in updates.items():
+            setattr(self, field, value)
+        self.save(update_fields=list(updates.keys()))
+        if updates.get("is_default_dev"):
+            CloudAccount.objects.filter(business=self.business, is_default_dev=True).exclude(id=self.id).update(is_default_dev=False)
+        if updates.get("is_default_production"):
+            CloudAccount.objects.filter(business=self.business, is_default_production=True).exclude(id=self.id).update(is_default_production=False)
+
 
 class BusinessAnalysis(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
@@ -553,6 +617,13 @@ class InfrastructureStack(BaseErieIronModel):
         blank=True,
         related_name="cloudformation_stacks",
     )
+    cloud_account = models.ForeignKey(
+        'CloudAccount',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stacks",
+    )
     stack_namespace_token = models.TextField(unique=True)
     stack_name = models.TextField(unique=True)
     stack_arn = models.TextField(null=True)
@@ -667,6 +738,7 @@ class InfrastructureStack(BaseErieIronModel):
         stack = InfrastructureStack.objects.create(
             business=initiative.business,
             initiative=initiative if not EnvironmentType.PRODUCTION.eq(env_type) else None,
+            cloud_account=initiative.business.get_default_cloud_account(env_type),
             stack_type=stack_type,
             stack_name=stack_name,
             stack_namespace_token=stack_namespace_token,
@@ -724,8 +796,14 @@ class InfrastructureStack(BaseErieIronModel):
             return
         
         from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
+        from erieiron_autonomous_agent.utils import cloud_accounts
         try:
-            OpenTofuStackManager(self).destroy_stack()
+            env_type = EnvironmentType.valid_or(self.env_type, None)
+            container_env = cloud_accounts.build_aws_env(
+                self.cloud_account or self.business.get_default_cloud_account(env_type),
+                env_type,
+            )
+            OpenTofuStackManager(self, container_env=container_env).destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
     
@@ -736,6 +814,7 @@ class InfrastructureStack(BaseErieIronModel):
         indexes = [
             models.Index(fields=["business", "stack_type"]),
             models.Index(fields=["initiative", "stack_type"]),
+            models.Index(fields=["cloud_account", "stack_type"]),
         ]
     
     def __str__(self):

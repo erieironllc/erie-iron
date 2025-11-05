@@ -8,7 +8,6 @@ from collections import defaultdict
 from enum import auto
 from pathlib import Path
 
-import botocore.session
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -16,6 +15,7 @@ from django.utils import timezone
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
+from erieiron_autonomous_agent.utils import cloud_accounts
 from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, CredentialService, SdaPhase
@@ -125,12 +125,14 @@ class SelfDriverConfig:
         env_type = self.env_type
         aws_region = env_type.get_aws_region()
         
-        aws_credentials = botocore.session.Session(
-            profile=os.environ.get("AWS_PROFILE")
-        ).get_credentials().get_frozen_credentials()
-        
         stack_foundation = self.stacks[InfrastructureStackType.FOUNDATION]
         stack_application = self.stacks[InfrastructureStackType.APPLICATION]
+        cloud_account = (
+            stack_application.cloud_account
+            or stack_foundation.cloud_account
+            or self.business.get_default_cloud_account(self.env_type)
+        )
+        aws_env = cloud_accounts.build_aws_env(cloud_account, self.env_type)
         
         if EnvironmentType.PRODUCTION.eq(self.env_type):
             domain_name = self.business.domain
@@ -139,11 +141,15 @@ class SelfDriverConfig:
         
         env = {
             "DOMAIN_NAME": domain_name,
-            "AWS_DEFAULT_REGION": settings.AWS_DEFAULT_REGION_NAME,
-            "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
-            "AWS_ACCESS_KEY_ID": aws_credentials.access_key,
-            "AWS_SECRET_ACCESS_KEY": aws_credentials.secret_key,
-            "AWS_SESSION_TOKEN": aws_credentials.token,
+            "AWS_DEFAULT_REGION": aws_env.get("AWS_DEFAULT_REGION"),
+            "AWS_REGION": aws_env.get("AWS_REGION"),
+            "AWS_ACCOUNT_ID": (
+                getattr(cloud_account, "account_identifier", None)
+                or settings.AWS_ACCOUNT_ID
+            ),
+            "AWS_ACCESS_KEY_ID": aws_env.get("AWS_ACCESS_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": aws_env.get("AWS_SECRET_ACCESS_KEY"),
+            "AWS_SESSION_TOKEN": aws_env.get("AWS_SESSION_TOKEN"),
             "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
             
             "STACK_NAME": stack_application.stack_name,
@@ -174,6 +180,11 @@ class SelfDriverConfig:
         for k in list(env.keys()):
             if k.startswith("__") or env.get(k) is None:
                 env.pop(k, None)
+        env.update({
+            key: value
+            for key, value in aws_env.items()
+            if value and key not in env
+        })
         
         return env
     

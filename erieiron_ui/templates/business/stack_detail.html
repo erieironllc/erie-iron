@@ -82,6 +82,15 @@
                 </dd>
                 <dt class="col-sm-4">Environment</dt>
                 <dd class="col-sm-8">{{ environment_label }}</dd>
+                <dt class="col-sm-4">Cloud Account</dt>
+                <dd class="col-sm-8">
+                    {% if stack_entry.cloud_account_name %}
+                        <a href="{% url 'view_business_tab' 'cloud-accounts' business.id %}">{{ stack_entry.cloud_account_name }}</a>
+                        <span class="text-muted">({{ stack_entry.cloud_account_provider_label|default:stack_entry.cloud_account_provider }})</span>
+                    {% else %}
+                        <span class="text-muted">Not assigned</span>
+                    {% endif %}
+                </dd>
                 <dt class="col-sm-4">IaC Provider</dt>
                 <dd class="col-sm-8">{{ stack_entry.iac_provider|default:"Unknown"|title }}</dd>
                 <dt class="col-sm-4">Created</dt>

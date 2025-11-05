@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import jwt
 from django.contrib import messages
+from django.db import IntegrityError, transaction
 from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect, HttpRequest
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -35,16 +36,18 @@ from erieiron_autonomous_agent.models import (
     CodeFile,
     CodeVersion,
     InfrastructureStack,
+    CloudAccount,
 )
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, domain_manager, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
+from erieiron_autonomous_agent.utils import cloud_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,40 @@ DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES = {
     PubSubMessageType.EVERY_HOUR.value,
     PubSubMessageType.EVERY_DAY.value,
 }
+
+
+def _parse_json_body(request: HttpRequest) -> dict:
+    if not getattr(request, "body", b""):
+        return {}
+    try:
+        if isinstance(request.body, bytes):
+            raw = request.body.decode("utf-8")
+        else:
+            raw = request.body
+        raw = raw.strip()
+        return json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON payload") from exc
+
+
+def _serialize_cloud_account(account: CloudAccount) -> dict:
+    provider_value = account.provider
+    provider_enum = CloudProvider.valid_or(provider_value, None)
+    metadata = account.metadata if isinstance(account.metadata, dict) else {}
+    return {
+        "id": str(account.id),
+        "business_id": str(account.business_id),
+        "name": account.name,
+        "provider": provider_value,
+        "provider_label": provider_enum.label() if provider_enum else provider_value,
+        "account_identifier": account.account_identifier,
+        "metadata": metadata,
+        "is_default_dev": account.is_default_dev,
+        "is_default_production": account.is_default_production,
+        "credentials_secret_arn": account.credentials_secret_arn,
+        "created_at": account.created_at,
+        "updated_at": account.updated_at,
+    }
 
 
 def _build_simple_auth_token(email: str) -> str:
@@ -936,7 +973,7 @@ def _tab_context_infra_diagram(business: Business) -> dict:
     stacks = list(
         business.infrastructurestack_set
         .filter(initiative__isnull=True)
-        .select_related("initiative")
+        .select_related("initiative", "cloud_account")
         .order_by("env_type", "stack_type", "created_timestamp")
     )
 
@@ -964,7 +1001,7 @@ def _tab_available_infrastructure_stacks(_: Business) -> bool:
 def _tab_context_infrastructure_stacks(business: Business) -> dict:
     stacks_qs = (
         business.infrastructurestack_set
-        .select_related("initiative")
+        .select_related("initiative", "cloud_account")
         .all()
         .order_by("env_type", "stack_type", "created_timestamp")
     )
@@ -998,6 +1035,29 @@ def _tab_context_infrastructure_stacks(business: Business) -> dict:
         "initiative_stack_count": initiative_stack_count,
         "business_scoped_stack_count": business_scoped_stack_count,
         "architecture_diagram": architecture_diagram,
+    }
+
+
+def _tab_available_cloud_accounts(_: Business) -> bool:
+    return True
+
+
+def _tab_context_cloud_accounts(business: Business) -> dict:
+    account_payloads = [
+        _serialize_cloud_account(account)
+        for account in business.iter_cloud_accounts()
+    ]
+    provider_choices = [
+        {
+            "value": provider.value,
+            "label": provider.label(),
+        }
+        for provider in CloudProvider
+    ]
+    return {
+        "cloud_accounts": account_payloads,
+        "cloud_accounts_json": json.dumps(account_payloads, cls=ErieIronJSONEncoder),
+        "cloud_provider_choices_json": json.dumps(provider_choices, cls=ErieIronJSONEncoder),
     }
 
 
@@ -1985,11 +2045,20 @@ def _build_infrastructure_stack_entries(
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         env_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
-        
+
         metadata = stack.get_iac_state_metadata() if hasattr(stack, "get_iac_state_metadata") else {}
         provider = stack.iac_provider if hasattr(stack, "iac_provider") else getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
         provider = (provider or "unknown").lower()
-        
+
+        cloud_account = getattr(stack, "cloud_account", None)
+        cloud_account_name = getattr(cloud_account, "name", None)
+        cloud_account_provider = getattr(cloud_account, "provider", None)
+        cloud_account_provider_label = None
+        if cloud_account_provider:
+            provider_enum = CloudProvider.valid_or(cloud_account_provider, None)
+            if provider_enum:
+                cloud_account_provider_label = provider_enum.label()
+
         console_url = metadata.get("console_url")
         if provider == "cloudformation" and not console_url:
             if stack.stack_arn:
@@ -2035,6 +2104,10 @@ def _build_infrastructure_stack_entries(
                 "stack_type_value": stack.stack_type,
                 "aws_env_label": env_enum.label() if env_enum else (stack.env_type or "Unknown"),
                 "aws_env_value": stack.env_type,
+                "cloud_account_id": stack.cloud_account_id,
+                "cloud_account_name": cloud_account_name,
+                "cloud_account_provider": cloud_account_provider,
+                "cloud_account_provider_label": cloud_account_provider_label,
                 "iac_console_url": console_url,
                 "cloudwatch_logs_url": logs_url,
                 "stack_namespace_token": stack.stack_namespace_token,
@@ -2066,7 +2139,7 @@ def _initiative_tab_available_infrastructure_stacks(_: Initiative) -> bool:
 def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dict:
     stacks_qs = (
         initiative.cloudformation_stacks
-        .select_related("initiative")
+        .select_related("initiative", "cloud_account")
         .all()
         .order_by("env_type", "stack_type", "created_timestamp")
     )
@@ -4132,7 +4205,10 @@ def action_destroy_stack(request, stack_id):
 
 
 def view_stack(request, stack_id):
-    stack = get_object_or_404(InfrastructureStack, pk=stack_id)
+    stack = get_object_or_404(
+        InfrastructureStack.objects.select_related("business", "initiative", "cloud_account"),
+        pk=stack_id,
+    )
     business = stack.business
     
     tabs = _build_business_tabs(business)
@@ -4434,6 +4510,194 @@ def api_codefile_content(request, codefile_id):
             }
         else:
             return {"error": "Not enough versions found for comparison"}
+
+
+@json_endpoint
+def api_business_cloud_accounts(request, business_id):
+    if request.method not in ("GET",):
+        raise ValueError("Unsupported method")
+
+    business = get_object_or_404(Business, pk=business_id)
+    accounts = [
+        _serialize_cloud_account(account)
+        for account in business.iter_cloud_accounts()
+    ]
+    provider_choices = [
+        {
+            "value": provider.value,
+            "label": provider.label(),
+        }
+        for provider in CloudProvider
+    ]
+    return {
+        "accounts": accounts,
+        "provider_choices": provider_choices,
+    }
+
+
+@require_POST
+@json_endpoint
+def api_business_cloud_account_create(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
+    try:
+        payload = _parse_json_body(request)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return {"error": "Name is required."}
+
+    provider = CloudProvider.valid_or(payload.get("provider"), CloudProvider.AWS)
+    account_identifier = (payload.get("account_identifier") or "").strip() or None
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+
+    if provider.eq(CloudProvider.AWS):
+        region = (payload.get("region") or metadata.get("region") or "").strip()
+        if region:
+            metadata["region"] = region
+    elif provider is not None and CloudProvider.AWS.neq(provider):
+        return {"error": f"Provider {provider.value} is not supported yet."}
+
+    raw_credentials = payload.get("credentials")
+    credentials_payload = raw_credentials if isinstance(raw_credentials, dict) else {}
+
+    if provider.eq(CloudProvider.AWS):
+        if not credentials_payload.get("role_arn"):
+            return {"error": "AWS role_arn is required."}
+        if "session_duration" in credentials_payload:
+            try:
+                duration = int(credentials_payload.get("session_duration"))
+                if duration < 900 or duration > 43200:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return {"error": "session_duration must be between 900 and 43200 seconds."}
+
+    is_default_dev = common.parse_bool(payload.get("is_default_dev"))
+    is_default_production = common.parse_bool(payload.get("is_default_production"))
+
+    try:
+        with transaction.atomic():
+            cloud_account = CloudAccount.objects.create(
+                business=business,
+                name=name,
+                provider=provider.value,
+                account_identifier=account_identifier,
+                metadata=metadata,
+                is_default_dev=is_default_dev,
+                is_default_production=is_default_production,
+            )
+            secret_identifier = cloud_accounts.store_credentials_secret(cloud_account, credentials_payload)
+            if secret_identifier:
+                CloudAccount.objects.filter(id=cloud_account.id).update(
+                    credentials_secret_arn=secret_identifier
+                )
+            if is_default_dev or is_default_production:
+                cloud_account.set_default_flags(
+                    dev=is_default_dev if is_default_dev else None,
+                    production=is_default_production if is_default_production else None,
+                )
+            cloud_accounts.clear_cached_credentials(cloud_account.id)
+            cloud_account.refresh_from_db()
+    except IntegrityError as exc:
+        logger.exception(exc)
+        return {"error": "A cloud account with this name already exists."}
+
+    return {
+        "account": _serialize_cloud_account(cloud_account),
+    }
+
+
+@json_endpoint
+def api_business_cloud_account_update(request, business_id, account_id):
+    if request.method not in ("POST", "PUT", "PATCH"):
+        raise ValueError("Unsupported method")
+
+    business = get_object_or_404(Business, pk=business_id)
+    cloud_account = get_object_or_404(CloudAccount, pk=account_id, business=business)
+
+    try:
+        payload = _parse_json_body(request)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    updates: list[str] = []
+    default_updates: dict[str, bool] = {}
+
+    if "name" in payload:
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return {"error": "Name cannot be blank."}
+        cloud_account.name = name
+        updates.append("name")
+
+    if "account_identifier" in payload:
+        identifier = (payload.get("account_identifier") or "").strip() or None
+        cloud_account.account_identifier = identifier
+        updates.append("account_identifier")
+
+    if "metadata" in payload:
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        if cloud_account.provider == CloudProvider.AWS.value:
+            region = (payload.get("region") or metadata.get("region") or "").strip()
+            if region:
+                metadata["region"] = region
+        cloud_account.metadata = metadata
+        updates.append("metadata")
+    elif "region" in payload and cloud_account.provider == CloudProvider.AWS.value:
+        metadata = cloud_account.metadata if isinstance(cloud_account.metadata, dict) else {}
+        metadata["region"] = (payload.get("region") or "").strip()
+        cloud_account.metadata = metadata
+        updates.append("metadata")
+
+    if "is_default_dev" in payload:
+        new_val = common.parse_bool(payload.get("is_default_dev"))
+        cloud_account.is_default_dev = new_val
+        updates.append("is_default_dev")
+        default_updates["dev"] = new_val
+
+    if "is_default_production" in payload:
+        new_val = common.parse_bool(payload.get("is_default_production"))
+        cloud_account.is_default_production = new_val
+        updates.append("is_default_production")
+        default_updates["production"] = new_val
+
+    raw_credentials = payload.get("credentials")
+    credentials_payload = raw_credentials if isinstance(raw_credentials, dict) and raw_credentials else None
+
+    try:
+        with transaction.atomic():
+            if updates:
+                cloud_account.save(update_fields=updates)
+            if credentials_payload:
+                if cloud_account.provider == CloudProvider.AWS.value and not credentials_payload.get("role_arn"):
+                    return {"error": "AWS role_arn is required when updating credentials."}
+                secret_identifier = cloud_accounts.store_credentials_secret(cloud_account, credentials_payload)
+                CloudAccount.objects.filter(id=cloud_account.id).update(
+                    credentials_secret_arn=secret_identifier
+                )
+                cloud_accounts.clear_cached_credentials(cloud_account.id)
+            if default_updates:
+                cloud_account.set_default_flags(**default_updates)
+            cloud_account.refresh_from_db()
+    except IntegrityError as exc:
+        logger.exception(exc)
+        return {"error": "A cloud account with this name already exists."}
+
+    return {
+        "account": _serialize_cloud_account(cloud_account),
+    }
+
+
+@require_POST
+@json_endpoint
+def api_business_cloud_account_delete(request, business_id, account_id):
+    business = get_object_or_404(Business, pk=business_id)
+    cloud_account = get_object_or_404(CloudAccount, pk=account_id, business=business)
+
+    cloud_accounts.clear_cached_credentials(cloud_account.id)
+    cloud_account.delete()
+    return {"success": True}
 
 
 def _generate_diff_html(old_version, new_version):

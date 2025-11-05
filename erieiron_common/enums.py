@@ -484,6 +484,12 @@ class EnvironmentType(ErieEnum):
         return "us-west-2"
 
 
+class CloudProvider(ErieEnum):
+    AWS = "aws"
+    GCP = "gcp"
+    AZURE = "azure"
+
+
 class FailureClassification(ErieEnum):
     SYNTAX_ERROR = auto()
     IMPORT_ERROR = auto()

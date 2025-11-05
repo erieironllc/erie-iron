@@ -74,4 +74,24 @@ urlpatterns = [
     path("stack/<uuid:stack_id>/destroy", views.action_destroy_stack, name="action_destroy_stack"),
     path("stack/<uuid:stack_id>", views.view_stack, name="view_stack"),
     path("api/codefile/<uuid:codefile_id>/content", views.api_codefile_content, name="api_codefile_content"),
+    path(
+        "api/business/<uuid:business_id>/cloud-accounts",
+        views.api_business_cloud_accounts,
+        name="api_business_cloud_accounts",
+    ),
+    path(
+        "api/business/<uuid:business_id>/cloud-accounts/create",
+        views.api_business_cloud_account_create,
+        name="api_business_cloud_account_create",
+    ),
+    path(
+        "api/business/<uuid:business_id>/cloud-accounts/<uuid:account_id>",
+        views.api_business_cloud_account_update,
+        name="api_business_cloud_account_update",
+    ),
+    path(
+        "api/business/<uuid:business_id>/cloud-accounts/<uuid:account_id>/delete",
+        views.api_business_cloud_account_delete,
+        name="api_business_cloud_account_delete",
+    ),
 ]
