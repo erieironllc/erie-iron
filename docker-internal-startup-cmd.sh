@@ -16,7 +16,6 @@ python manage.py collectstatic --noinput 2>&1 | grep -v "Found another file with
 
 echo "Starting message processor daemons for env ${ERIEIRON_ENV}..."
 python manage.py message_processor_daemon \
-  --retry_failed=True \
   --max_threads=8 \
   --env="${ERIEIRON_ENV}" \
   --suppress_timing_messages=False &

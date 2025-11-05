@@ -92,7 +92,8 @@ def _should_start_worker(tm, max_percent_capacity_consumed=70) -> bool:
     """Pure helper: decide if we may spawn a new worker."""
     from erieiron_common.message_queue.resource_manager import get_system_capacity
 
-    system_capacity, _ = get_system_capacity(max_percent_capacity_consumed)
+    system_capacity, reason = get_system_capacity(max_percent_capacity_consumed)
+    logging.info(f"_should_start_worker {system_capacity}: {reason}")
 
     needs_threads = tm.func_needs_threads()
     has_capacity = SystemCapacity.AVAILABLE.eq(system_capacity)
