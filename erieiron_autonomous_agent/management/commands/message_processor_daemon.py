@@ -1,4 +1,5 @@
 import faulthandler
+import logging
 import os
 import pprint
 import time
@@ -167,7 +168,7 @@ class Command(BaseCommand):
         try:
             idx = 0
             while True:
-                print(process_id)
+                logging.debug(f"message processor ping {process_id}")
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
                 
                 if not common.parse_bool(options.get("suppress_timing_messages")):
