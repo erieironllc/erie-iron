@@ -1,5 +1,6 @@
 import faulthandler
 import os
+import pprint
 import time
 import warnings
 from datetime import timedelta
@@ -10,12 +11,14 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 
+import settings
 from erieiron_autonomous_agent.models import RunningProcess
 from erieiron_common import common
 from erieiron_common.common import parse_bool
 from erieiron_common.enums import PubSubHandlerInstanceStatus, PubSubMessagePriority, PubSubMessageStatus, PubSubMessageType
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
 from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage
+
 
 os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
 warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
@@ -110,6 +113,7 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
+        pprint.pprint(settings.DATABASES)
         from erieiron_common.llm_apis import openai_chat_api
         openai.api_key = openai_chat_api.get_api_key()
         

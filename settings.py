@@ -53,7 +53,7 @@ CLIENT_MESSAGE_WEBSOCKET_ENDPOINT = "rkbq6d3yd4.execute-api.us-west-2.amazonaws.
 CLIENT_MESSAGE_DYNAMO_TABLE = "client-websocket_connections-db"
 GOOGLE_ANALYTICS_PROPERTY_ID = "TODO"
 MESSAGE_QUEUE_ENV = config('MESSAGE_QUEUE_ENV', default=None, cast=str)
-MESSAGE_TYPES = config('MESSAGE_TYPES', default=None, cast=str)
+MESSAGE_TYPES = os.getenv("MESSAGE_TYPES", config('MESSAGE_TYPES', default=None, cast=str))
 BUCKETS = settings_utils.get_buckets(config)
 
 

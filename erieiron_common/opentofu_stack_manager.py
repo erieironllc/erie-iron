@@ -30,6 +30,7 @@ class OpenTofuStackManager:
             container_env: dict = None,
             sandbox_root: Path = None
     ):
+        logging.info(f"Initiatize Stack Mangage for {stack.stack_namespace_token} ({stack.stack_type})")
         
         self.stack = stack
         self.container_env = container_env or {}
@@ -209,7 +210,12 @@ class OpenTofuStackManager:
             except OpenTofuCommandError as e:
                 if "state data in S3 does not have the expected content" in e.result.stderr:
                     time.sleep(10 * (attempt + 1))
-                    continue
+                    try:
+                        self.run_tofu_command("init", ["init", "-reconfigure", "-input=false", "-no-color"])
+                    except OpenTofuCommandError as e2:
+                        logging.exception(e2)
+                        raise e2
+                    
                 last_exception = e
         
         raise last_exception

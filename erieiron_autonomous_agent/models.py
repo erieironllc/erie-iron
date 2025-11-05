@@ -720,10 +720,12 @@ class InfrastructureStack(BaseErieIronModel):
         if EnvironmentType.PRODUCTION.eq(self.env_type):
             raise Exception(f"cannot tombstone a production stack")
         
+        if not self.resources:
+            return
+        
         from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
-        opentofu_stack_manager = OpenTofuStackManager(self)
         try:
-            opentofu_stack_manager.destroy_stack()
+            OpenTofuStackManager(self).destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
     

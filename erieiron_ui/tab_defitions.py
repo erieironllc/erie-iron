@@ -48,12 +48,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "context_fn": views._initiative_tab_context_architecture,
     },
     {
-        "slug": "infra-diagram",
-        "label": "Infra Diagram",
-        "template": "initiative/tabs/infra_diagram.html",
-        "context_fn": views._initiative_tab_context_infra_diagram,
-    },
-    {
         "slug": "infrastructure-stacks",
         "label": "Infrastructure",
         "template": "initiative/tabs/infrastructure_stacks.html",

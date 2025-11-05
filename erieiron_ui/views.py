@@ -844,7 +844,9 @@ def _tab_available_overview(business: Business) -> bool:
 
 
 def _tab_context_overview(business: Business) -> dict:
-    return {}
+    return {
+        "show_green_light_button": BusinessStatus.IDEA.eq(business.status),
+    }
 
 
 def _tab_available_business_plan(business: Business) -> bool:
@@ -3815,6 +3817,33 @@ def action_update_task(request, task_id):
         logging.exception(e)
         messages.error(request, f'Error updating task: {str(e)}')
         return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_business_green_light(request, business_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    try:
+        business = get_object_or_404(Business, pk=business_id)
+
+        Business.objects.filter(id=business_id).update(
+            status=BusinessStatus.ACTIVE.value
+        )
+
+        PubSubManager.publish_id(
+            PubSubMessageType.BOARD_GUIDANCE_UPDATED,
+            business_id,
+        )
+
+        messages.success(request, f'"{business.name}" is now green lit and active!')
+        return redirect(reverse('view_business', args=[business_id]))
+    except Business.DoesNotExist:
+        messages.error(request, 'Business not found.')
+        return redirect(reverse('view_portfolio'))
+    except Exception as e:
+        logging.exception(e)
+        messages.error(request, f'Error green lighting business: {str(e)}')
+        return redirect(reverse('view_business', args=[business_id]))
 
 
 def action_update_business(request, business_id):

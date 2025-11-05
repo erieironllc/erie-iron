@@ -26,6 +26,12 @@ variable "DeletePolicy" {
   default     = "Delete"
 }
 
+variable "ErieIronEnv" {
+  description = "The env."
+  type        = string
+  default     = "dev"
+}
+
 variable "DomainName" {
   description = "Domain serving the public application endpoint."
   type        = string
@@ -382,6 +388,7 @@ resource "aws_ecs_task_definition" "web" {
       environment = [
         { name = "ALLOWED_HOSTS", value = "*" },
         { name = "RDS_SECRET_ARN", value = var.RdsSecretArn },
+        { name = "ERIEIRON_ENV", value = var.ErieIronEnv },
         { name = "ERIEIRON_DB_NAME", value = var.DatabaseName },
         { name = "ERIEIRON_DB_HOST", value = var.RdsEndpointAddress },
         { name = "ERIEIRON_DB_PORT", value = var.RdsEndpointPort },

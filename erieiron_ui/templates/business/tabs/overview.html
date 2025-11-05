@@ -2,12 +2,18 @@
     <header class="business-overview__header ">
         <div class="d-flex justify-content-between align-items-start flex-wrap w-100">
             <div class="business-overview__intro">
-                <div class="d-flex justify-content-between">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <div class="business-overview__chips">
                         <span class="business-overview__chip text-bg-primary">{{ business.get_status_display }}</span>
                         <span class="business-overview__chip text-bg-info">{{ business.get_operation_type_display }}</span>
                     </div>
-                    <div class="d-flex justify-content-end gap-3">
+                    <div class="d-flex align-items-center gap-3">
+                        {% if show_green_light_button %}
+                            <form method="post" action="{% url 'action_business_green_light' business.id %}" class="m-0">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-success">Green Light</button>
+                            </form>
+                        {% endif %}
                         {% if business.github_repo_url %}
                             <div class="business-overview__domain ">
                                 <a href="{{ business.github_repo_url }}" target=_blank

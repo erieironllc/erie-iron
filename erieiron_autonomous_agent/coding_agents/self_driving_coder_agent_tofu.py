@@ -1603,6 +1603,7 @@ def build_env(config: SelfDriverConfig) -> dict:
     env = {
         "DOMAIN_NAME": domain_name,
         "ERIE_IRON_ENV": config.env_type.value,
+        "ERIEIRON_ENV": config.env_type.value,
         "AWS_DEFAULT_REGION": settings.AWS_DEFAULT_REGION_NAME,
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         "AWS_ACCESS_KEY_ID": aws_credentials.access_key,
@@ -5049,6 +5050,7 @@ def build_tfvars_payload(
         "StackIdentifier": stack_application.stack_namespace_token,
         "FoundationStackIdentifier": stack_foundation.stack_namespace_token,
         "ClientIpForRemoteAccess": developer_cidr,
+        "ErieIronEnv": config.env_type.value,
         "DeletePolicy": "Retain" if EnvironmentType.PRODUCTION.eq(env_type) else "Delete",
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         **get_admin_credentials(

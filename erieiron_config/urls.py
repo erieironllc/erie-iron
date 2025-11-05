@@ -13,6 +13,7 @@ urlpatterns = [
     
     path("_business/add", views.action_add_business, name="action_add_business"),
     path("_business/find", views.action_find_business, name="action_find_business"),
+    path("_business/green_light/<uuid:business_id>", views.action_business_green_light, name="action_business_green_light"),
     path("_business/update/<uuid:business_id>", views.action_update_business, name="action_update_business"),
     path("_business/bootstrap/<uuid:business_id>", views.action_bootstrap_business, name="action_bootstrap_business"),
     path("_business/newdomain/<uuid:business_id>", views.action_business_new_domain, name="action_business_new_domain"),
