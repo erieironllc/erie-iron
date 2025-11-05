@@ -114,7 +114,7 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
-        pprint.pprint(settings.DATABASES)
+        # pprint.pprint(settings.DATABASES)
         from erieiron_common.llm_apis import openai_chat_api
         openai.api_key = openai_chat_api.get_api_key()
         
@@ -168,7 +168,7 @@ class Command(BaseCommand):
         try:
             idx = 0
             while True:
-                logging.info(f"message processor ping env={env}; Instance={handler}; process={process}; max={handler.threads_per_process}")
+                # logging.info(f"message processor ping env={env}; Instance={handler}; process={process}; max={handler.threads_per_process}")
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
                 
                 if not common.parse_bool(options.get("suppress_timing_messages")):
