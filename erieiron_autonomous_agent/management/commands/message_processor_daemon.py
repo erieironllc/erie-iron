@@ -165,11 +165,6 @@ class Command(BaseCommand):
         """)
         
         try:
-            os.setsid()
-        except:
-            pass
-        
-        try:
             idx = 0
             while True:
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()

@@ -4,7 +4,7 @@ source ./env/bin/activate
 
 export DJANGO_SETTINGS_MODULE=settings
 export LOCAL_DB_NAME=""
-export ERIEIRON_ENV=dev
+export ERIEIRON_ENV=production
 export ERIEIRON_DB_HOST="kfqxw-db.cfmokeqce4va.us-west-2.rds.amazonaws.com"
 export ERIEIRON_DB_NAME="appdb"
 export AWS_PROFILE=erie-iron
@@ -16,5 +16,5 @@ python manage.py message_processor_daemon \
   --retry_failed=True \
   --debug_output=True \
   --max_threads=8 \
-  --env=dev \
+  --env=${ERIEIRON_ENV} \
   --suppress_timing_messages=True
