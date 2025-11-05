@@ -167,6 +167,7 @@ class Command(BaseCommand):
         try:
             idx = 0
             while True:
+                print(process_id)
                 process = PubSubHanderInstanceProcess.objects.filter(id=process_id).first()
                 
                 if not common.parse_bool(options.get("suppress_timing_messages")):
