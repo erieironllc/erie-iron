@@ -36,6 +36,12 @@
     </div>
 {% endif %}
 
+{% if default_message_type_filter_applied %}
+    <div class="text-muted small mb-3">
+        Hidden by default: {{ default_hidden_message_type_labels|join:', '|default:'Scheduled messages' }}. Use the filter to include these scheduled messages.
+    </div>
+{% endif %}
+
 {% if pubsub_messages %}
     <div>
         <table class="table table-borderless table-hover table-condensed table-striped">
@@ -91,10 +97,13 @@
                                         size="8"
                                         multiple>
                                     {% for option in message_type_options %}
-                                        <option value="{{ option.value }}" {% if option.value in selected_message_types %}selected{% endif %}>{{ option.label }}</option>
+                                        <option value="{{ option.value }}" {% if option.value in selected_message_types %}selected{% endif %}>{{ option.label }}{% if option.value in default_hidden_message_type_values %} (hidden by default){% endif %}</option>
                                     {% endfor %}
                                 </select>
                                 <div class="form-text">Hold Ctrl (Windows) or ⌘ (Mac) to select multiple types.</div>
+                                {% if default_hidden_message_type_values %}
+                                    <div class="form-text text-muted">Hidden by default: {{ default_hidden_message_type_labels|join:', '|default:'Scheduled messages' }}.</div>
+                                {% endif %}
                             {% else %}
                                 <p class="text-muted small mb-0">No message types available.</p>
                             {% endif %}

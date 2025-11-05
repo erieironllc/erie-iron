@@ -48,6 +48,12 @@ from erieiron_common.view_utils import send_response, redirect, rget, rget_bool,
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES = {
+    PubSubMessageType.EVERY_MINUTE.value,
+    PubSubMessageType.EVERY_HOUR.value,
+    PubSubMessageType.EVERY_DAY.value,
+}
+
 
 def _build_simple_auth_token(email: str) -> str:
     issued_at = datetime.utcnow()
@@ -257,15 +263,31 @@ def _portfolio_tab_available_pubsub_messages(_: Business) -> bool:
 def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | None = None) -> dict:
     page_size = 20
 
-    selected_message_types = []
-    selected_statuses = []
+    selected_message_types: list[str] = []
+    selected_statuses: list[str] = []
     if request:
         selected_message_types = [value for value in request.GET.getlist("message_types") if value]
         selected_statuses = [value for value in request.GET.getlist("statuses") if value]
 
+    has_user_defined_filters = bool(selected_message_types or selected_statuses)
+
+    raw_message_types_qs = (
+        PubSubMessage.objects.order_by("message_type").values_list("message_type", flat=True).distinct()
+    )
+    raw_message_types = [message_type for message_type in raw_message_types_qs if message_type]
+    hidden_types_in_data = [
+        message_type for message_type in raw_message_types if message_type in DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES
+    ]
+
+    default_message_type_filter_applied = False
+
     qs = PubSubMessage.objects.all()
     if selected_message_types:
         qs = qs.filter(message_type__in=selected_message_types)
+    elif hidden_types_in_data:
+        qs = qs.exclude(message_type__in=hidden_types_in_data)
+        default_message_type_filter_applied = True
+
     if selected_statuses:
         qs = qs.filter(status__in=selected_statuses)
 
@@ -276,28 +298,34 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
 
     total_count = qs.count()
 
-    raw_message_types = PubSubMessage.objects.order_by("message_type").values_list("message_type", flat=True).distinct()
     message_type_options = []
     for message_type in raw_message_types:
-        if not message_type:
-            continue
         if PubSubMessageType.valid(message_type):
             label = PubSubMessageType(message_type).label()
         else:
             label = message_type.replace("_", " ").title()
         message_type_options.append({
             "value": message_type,
-            "label": label
+            "label": label,
         })
 
     message_type_options.sort(key=lambda option: option["label"].lower())
 
-    status_options = [{
-        "value": status.value,
-        "label": status.label()
-    } for status in PubSubMessageStatus]
+    default_hidden_message_type_labels = [
+        option["label"]
+        for option in message_type_options
+        if option["value"] in hidden_types_in_data
+    ]
 
-    filters_applied = bool(selected_message_types or selected_statuses)
+    status_options = [
+        {
+            "value": status.value,
+            "label": status.label(),
+        }
+        for status in PubSubMessageStatus
+    ]
+
+    filters_applied = has_user_defined_filters
 
     return {
         "pubsub_messages": pubsub_messages,
@@ -309,6 +337,9 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
         "selected_statuses": selected_statuses,
         "filters_applied": filters_applied,
         "has_more": has_more,
+        "default_message_type_filter_applied": default_message_type_filter_applied,
+        "default_hidden_message_type_labels": default_hidden_message_type_labels,
+        "default_hidden_message_type_values": hidden_types_in_data,
     }
 
 
@@ -4643,6 +4674,9 @@ def fetch_pubsub_messages(request):
     messages_qs = PubSubMessage.objects.all()
     if message_types:
         messages_qs = messages_qs.filter(message_type__in=message_types)
+    else:
+        messages_qs = messages_qs.exclude(message_type__in=DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES)
+
     if statuses:
         messages_qs = messages_qs.filter(status__in=statuses)
 
