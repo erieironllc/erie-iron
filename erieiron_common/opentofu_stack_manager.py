@@ -33,7 +33,9 @@ class OpenTofuStackManager:
         logging.info(f"Initiatize Stack Mangage for {stack.stack_namespace_token} ({stack.stack_type})")
         
         self.stack = stack
+        
         self.container_env = container_env or {}
+        
         self.stack_type = InfrastructureStackType(self.stack.stack_type)
         self.sandbox_root = sandbox_root or Path(tempfile.mkdtemp(prefix=f"opentofu_temp_root_{self.stack_type}".lower()))
         

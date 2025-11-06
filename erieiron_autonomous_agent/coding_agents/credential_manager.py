@@ -47,7 +47,8 @@ def get_existing_service_schema_desc() -> str:
 
 
 def manage_credentials(
-        config: SelfDriverConfig,
+        business:Business,
+        task:Task,
         env_type: EnvironmentType,
         credential_service_name: str,
         cred_def: dict
@@ -58,9 +59,6 @@ def manage_credentials(
     
     if secret_arn_env_var == "STRIPE_WEBHOOK_SECRET_ARN":
         return settings.STRIPE_WEBHOOK_SECRET_ARN
-    
-    business = config.business
-    task = config.task
     
     credential_service = CredentialService.valid_or(common.default_str(credential_service_name).upper())
     if not credential_service:

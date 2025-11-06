@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import boto3
-import botocore.session
 import yaml
 from django.db import transaction
 from django.db.models import Func
@@ -50,7 +49,7 @@ from erieiron_autonomous_agent.models import (
     InfrastructureStack, Initiative,
 )
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-from erieiron_autonomous_agent.utils import codegen_utils
+from erieiron_autonomous_agent.utils import cloud_accounts, codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda, get_full_image_uri
@@ -1106,10 +1105,7 @@ def _estimate_codex_cost(metrics: dict, config: SelfDriverConfig) -> float | Non
         return None
     
     # Default to the planner's configured model; fall back to the primary system planning model.
-    planning_model = getattr(config, "model_code_planning", None) or LlmModel.OPENAI_GPT_5
-    planning_model = LlmModel(planning_model)
-    
-    pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(planning_model)
+    pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.OPENAI_GPT_5)
     if not pricing:
         return None
     
@@ -1581,70 +1577,9 @@ def get_aws_region():
 
 
 def get_env_var_names(config: SelfDriverConfig) -> str:
-    env = build_env(config)
+    env = config.get_runtime_env()
     return ", ".join(env.keys())
 
-
-def build_env(config: SelfDriverConfig) -> dict:
-    env_type = config.env_type
-    aws_region = env_type.get_aws_region()
-    
-    aws_credentials = botocore.session.Session(
-        profile=os.environ.get("AWS_PROFILE")
-    ).get_credentials().get_frozen_credentials()
-    
-    stack_foundation, stack_application = get_stacks(config)
-    
-    if EnvironmentType.PRODUCTION.eq(config.env_type):
-        domain_name = config.business.domain
-    else:
-        domain_name = config.initiative.domain
-    
-    env = {
-        "DOMAIN_NAME": domain_name,
-        "ERIE_IRON_ENV": config.env_type.value,
-        "ERIEIRON_ENV": config.env_type.value,
-        "AWS_DEFAULT_REGION": settings.AWS_DEFAULT_REGION_NAME,
-        "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
-        "AWS_ACCESS_KEY_ID": aws_credentials.access_key,
-        "AWS_SECRET_ACCESS_KEY": aws_credentials.secret_key,
-        "AWS_SESSION_TOKEN": aws_credentials.token,
-        "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
-        
-        "STACK_NAME": stack_application.stack_name,
-        "FOUNDATION_STACK_NAME": stack_foundation.stack_name,
-        
-        "TASK_NAMESPACE": stack_application.stack_namespace_token,
-        "STACK_IDENTIFIER": stack_application.stack_namespace_token,
-        "FOUNDATION_STACK_IDENTIFIER": stack_foundation.stack_namespace_token,
-        
-        "BUILDAH_FORMAT": "docker",
-        "PATH": os.getenv("PATH")
-    }
-    
-    hf_model_cache_s3_uri = getattr(settings, "HF_MODEL_CACHE_S3_URI", None)
-    if hf_model_cache_s3_uri:
-        env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
-    
-    for credential_service_name, cred_def in config.business.required_credentials.items():
-        if credential_service_name == CredentialService.RDS.value:
-            # OpenTofu and RDS handle the RDS secret - we update this as a special case later
-            continue
-        
-        secret_arn_env_var = cred_def.get("secret_arn_env_var")
-        secrent_arn = credential_manager.manage_credentials(
-            config,
-            env_type,
-            credential_service_name,
-            cred_def
-        )
-        env[secret_arn_env_var] = secrent_arn
-    
-    for k in list(env.keys()):
-        if k.startswith("__") or env.get(k) is None:
-            env.pop(k, None)
-    
-    return env
 
 
 def build_env_flags(env):
@@ -1974,9 +1909,7 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
         for stack_manager in config.all_stack_managers:
             stack_manager.validate_stack()
         
-        container_env = build_env(
-            config
-        )
+        container_env = config.get_runtime_env()
         
         container_image_tag, lambda_datas = build_iteration(
             config,
@@ -2322,11 +2255,6 @@ def build_iteration(config, container_env):
             BuildStep.LAMBDAS.value: True
         }
     
-    required_build_steps = {
-        BuildStep.CONTAINERS.value: False,
-        BuildStep.LAMBDAS.value: False
-    }
-    
     if required_build_steps.get(BuildStep.LAMBDAS.value):
         lambda_datas = build_lambda_packages(
             config
@@ -2334,7 +2262,7 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = None #config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+    previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
     tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
         config.ecr_repo_name,
         previous_container_tag,
@@ -2409,12 +2337,12 @@ def manage_db(
         container_env: dict,
         container_image_tag: str
 ):
-    if (
-            config.current_iteration.version_number > 1
-            and not config.current_iteration.codeversion_set.filter(code_file__file_path__contains="models").exists()
-    ):
-        logging.info("models not changed in current iteration")
-        return
+    # if (
+    #         config.current_iteration.version_number > 1
+    #         and not config.current_iteration.codeversion_set.filter(code_file__file_path__contains="models").exists()
+    # ):
+    #     logging.info("models not changed in current iteration")
+    #     return
     
     try:
         run_container_command(

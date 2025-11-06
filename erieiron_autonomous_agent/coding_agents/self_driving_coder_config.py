@@ -122,46 +122,26 @@ class SelfDriverConfig:
         self.model_code_planning = LlmModel.OPENAI_GPT_5
     
     def get_runtime_env(self) -> dict:
-        env_type = self.env_type
-        aws_region = env_type.get_aws_region()
-        
         stack_foundation = self.stacks[InfrastructureStackType.FOUNDATION]
         stack_application = self.stacks[InfrastructureStackType.APPLICATION]
-        cloud_account = (
-            stack_application.cloud_account
-            or stack_foundation.cloud_account
-            or self.business.get_default_cloud_account(self.env_type)
-        )
-        aws_env = cloud_accounts.build_aws_env(cloud_account, self.env_type)
-        
-        if EnvironmentType.PRODUCTION.eq(self.env_type):
-            domain_name = self.business.domain
-        else:
-            domain_name = self.initiative.domain
+        cloud_credentials = cloud_accounts.build_cloud_credentials([stack_foundation, stack_application])
         
         env = {
-            "DOMAIN_NAME": domain_name,
-            "AWS_DEFAULT_REGION": aws_env.get("AWS_DEFAULT_REGION"),
-            "AWS_REGION": aws_env.get("AWS_REGION"),
-            "AWS_ACCOUNT_ID": (
-                getattr(cloud_account, "account_identifier", None)
-                or settings.AWS_ACCOUNT_ID
-            ),
-            "AWS_ACCESS_KEY_ID": aws_env.get("AWS_ACCESS_KEY_ID"),
-            "AWS_SECRET_ACCESS_KEY": aws_env.get("AWS_SECRET_ACCESS_KEY"),
-            "AWS_SESSION_TOKEN": aws_env.get("AWS_SESSION_TOKEN"),
-            "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
-            
+            **cloud_credentials,
+            "DOMAIN_NAME": self.business.domain if EnvironmentType.PRODUCTION.eq(self.env_type) else self.initiative.domain,
             "STACK_NAME": stack_application.stack_name,
-            "FOUNDATION_STACK_NAME": stack_foundation.stack_name,
-            
-            "TASK_NAMESPACE": stack_application.stack_namespace_token,
             "STACK_IDENTIFIER": stack_application.stack_namespace_token,
             "FOUNDATION_STACK_IDENTIFIER": stack_foundation.stack_namespace_token,
-            
+            "FOUNDATION_STACK_NAME": stack_foundation.stack_name,
+            "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
+            "TASK_NAMESPACE": stack_application.stack_namespace_token,
             "BUILDAH_FORMAT": "docker",
             "PATH": os.getenv("PATH")
         }
+        
+        hf_model_cache_s3_uri = settings.HF_MODEL_CACHE_S3_URI
+        if hf_model_cache_s3_uri:
+            env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
         
         for credential_service_name, cred_def in self.business.required_credentials.items():
             if credential_service_name == CredentialService.RDS.value:
@@ -170,8 +150,9 @@ class SelfDriverConfig:
             
             secret_arn_env_var = cred_def.get("secret_arn_env_var")
             secrent_arn = credential_manager.manage_credentials(
-                self,
-                env_type,
+                self.business,
+                self.task,
+                self.env_type,
                 credential_service_name,
                 cred_def
             )
@@ -180,11 +161,6 @@ class SelfDriverConfig:
         for k in list(env.keys()):
             if k.startswith("__") or env.get(k) is None:
                 env.pop(k, None)
-        env.update({
-            key: value
-            for key, value in aws_env.items()
-            if value and key not in env
-        })
         
         return env
     

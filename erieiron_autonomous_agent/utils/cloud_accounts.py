@@ -7,9 +7,9 @@ import boto3
 from botocore.exceptions import ClientError
 from django.utils import timezone
 
-from erieiron_autonomous_agent.models import CloudAccount
+from erieiron_autonomous_agent.models import CloudAccount, InfrastructureStack, Business
 from erieiron_common import aws_utils, common
-from erieiron_common.enums import CloudProvider, EnvironmentType
+from erieiron_common.enums import CloudProvider, EnvironmentType, InfrastructureStackType
 
 logger = logging.getLogger(__name__)
 
@@ -86,24 +86,24 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
     """Return AWS credentials for the provided cloud account, refreshing when necessary."""
     if cloud_account is None:
         return _base_session_credentials()
-
+    
     if CloudProvider.AWS.neq(cloud_account.provider):
         raise NotImplementedError(f"Provider {cloud_account.provider} is not supported yet")
-
+    
     cache_key = str(cloud_account.id)
     cached = _CREDENTIAL_CACHE.get(cache_key)
     if not force_refresh and cached and cached.expiration - _now() > _CACHE_SAFETY_WINDOW:
         return cached
-
+    
     secret_payload = load_credentials_secret(cloud_account)
     role_arn = common.get(secret_payload, "role_arn")
     if not role_arn:
         raise RuntimeError("CloudAccount AWS credential payload missing role_arn")
-
+    
     session_name = common.get(secret_payload, "session_name") or f"erieiron-{cloud_account.id}"
     external_id = common.get(secret_payload, "external_id")
     duration_seconds = int(common.get(secret_payload, "session_duration") or 3600)
-
+    
     sts_client = boto3.client("sts")
     assume_kwargs = {
         "RoleArn": role_arn,
@@ -112,7 +112,7 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
     }
     if external_id:
         assume_kwargs["ExternalId"] = external_id
-
+    
     logger.info(
         "Assuming role for cloud account",
         extra={
@@ -129,7 +129,7 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
         expiration = _now() + timedelta(hours=1)
     elif not timezone.is_aware(expiration):
         expiration = timezone.make_aware(expiration)
-
+    
     cached = CachedAwsCredentials(
         access_key_id=credentials.get("AccessKeyId"),
         secret_access_key=credentials.get("SecretAccessKey"),
@@ -144,28 +144,32 @@ def clear_cached_credentials(cloud_account_id: str) -> None:
     _CREDENTIAL_CACHE.pop(str(cloud_account_id), None)
 
 
-def build_aws_env(cloud_account: Optional[CloudAccount], env_type: Optional[EnvironmentType]) -> Dict[str, str]:
-    credentials = get_aws_credentials(cloud_account)
-    region_candidates = []
-    if env_type:
-        try:
-            region_candidates.append(env_type.get_aws_region())
-        except Exception:  # Defensive: custom env types might not expose region
-            pass
-    if cloud_account and isinstance(cloud_account.metadata, dict):
-        metadata_region = cloud_account.metadata.get("region") or cloud_account.metadata.get("default_region")
-        if metadata_region:
-            region_candidates.insert(0, metadata_region)
-    region = common.first([candidate for candidate in region_candidates if candidate]) or "us-west-2"
-
+def build_cloud_credentials(stacks: list[InfrastructureStack]) -> Dict[str, str]:
+    stacks = common.ensure_list(stacks)
+    business = stacks[0].business
+    env_type = EnvironmentType(stacks[0].env_type)
+    
+    stack_map = {InfrastructureStackType(s.stack_type): s for s in stacks}
+    
+    cloud_account = (
+            common.get(stack_map, [InfrastructureStackType.APPLICATION, "cloud_account"])
+            or common.get(stack_map, [InfrastructureStackType.FOUNDATION, "cloud_account"])
+            or business.get_default_cloud_account(env_type)
+            or Business.get_erie_iron_business().get_default_cloud_account(env_type)
+    )
+    
+    cloud_account_credentials = get_aws_credentials(cloud_account)
+    
+    aws_region = env_type.get_aws_region()
     env = {
-        "AWS_ACCESS_KEY_ID": credentials.access_key_id,
-        "AWS_SECRET_ACCESS_KEY": credentials.secret_access_key,
-        "AWS_DEFAULT_REGION": region,
-        "AWS_REGION": region,
+        "BUSINESS_CLOUD_ACCOUNT_ID": cloud_account.account_identifier,
+        "AWS_ACCESS_KEY_ID": cloud_account_credentials.access_key_id,
+        "AWS_SECRET_ACCESS_KEY": cloud_account_credentials.secret_access_key,
+        "AWS_DEFAULT_REGION": aws_region,
+        "AWS_REGION": aws_region
     }
-    if credentials.session_token:
-        env["AWS_SESSION_TOKEN"] = credentials.session_token
-    if cloud_account:
-        env["ERIEIRON_CLOUD_ACCOUNT_ID"] = str(cloud_account.id)
+    
+    if cloud_account_credentials.session_token:
+        env["AWS_SESSION_TOKEN"] = cloud_account_credentials.session_token
+    
     return env

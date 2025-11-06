@@ -1,4 +1,6 @@
 CloudAccountsView = ErieView.extend({
+    el: '#cloud-accounts-root',
+    
     events: {
         'click [data-action="add-account"]': 'openCreateModal',
         'click [data-action="edit-account"]': 'handleEditClick',
@@ -9,8 +11,6 @@ CloudAccountsView = ErieView.extend({
     },
 
     init_view: function () {
-        this.$status = this.$('[data-role="status"]');
-        this.$tableBody = this.$('[data-role="accounts-body"]');
         this.$form = this.$('#cloud-account-form');
         this.$providerSelect = this.$('#cloud-account-provider');
         this.$credentialFields = this.$('[data-role="credential-fields"] input');
@@ -29,8 +29,6 @@ CloudAccountsView = ErieView.extend({
         this.currentAccountId = null;
         this.deleteAccountId = null;
 
-        this._sortAccounts();
-        this.renderTable();
     },
 
     refresh: function () {
@@ -49,67 +47,9 @@ CloudAccountsView = ErieView.extend({
         }
     },
 
-    renderTable: function () {
-        if (!this.accounts || this.accounts.length === 0) {
-            this.$tableBody.html('<tr data-empty-row="true"><td colspan="7" class="text-center text-muted">No cloud accounts yet. Add one to define deployment credentials.</td></tr>');
-            return;
-        }
-
-        const rows = this.accounts.map((account) => {
-            const defaults = [];
-            if (account.is_default_dev) {
-                defaults.push('<span class="badge bg-success me-1">Dev</span>');
-            }
-            if (account.is_default_production) {
-                defaults.push('<span class="badge bg-success">Prod</span>');
-            }
-            const defaultsHtml = defaults.length > 0 ? defaults.join(' ') : '<span class="text-muted">None</span>';
-            const providerLabel = account.provider_label || account.provider;
-            const accountId = account.account_identifier ? `<code>${_.escape(account.account_identifier)}</code>` : '<span class="text-muted">Not set</span>';
-            const region = account.metadata && account.metadata.region ? `<code>${_.escape(account.metadata.region)}</code>` : '<span class="text-muted">Inherited</span>';
-            const updatedDisplay = this._formatTimestamp(account.updated_at);
-            const updatedTitle = account.updated_at ? _.escape(account.updated_at) : '';
-
-            return `
-                <tr data-account-id="${_.escape(account.id)}">
-                    <td><strong>${_.escape(account.name)}</strong></td>
-                    <td>${_.escape(providerLabel)}</td>
-                    <td>${accountId}</td>
-                    <td>${region}</td>
-                    <td>${defaultsHtml}</td>
-                    <td class="text-end"><span title="${updatedTitle}">${updatedDisplay}</span></td>
-                    <td class="text-end">
-                        <div class="btn-group btn-group-sm" role="group">
-                            <button type="button" class="btn btn-outline-primary" data-action="edit-account" data-account-id="${_.escape(account.id)}">Edit</button>
-                            <button type="button" class="btn btn-outline-danger" data-action="delete-account" data-account-id="${_.escape(account.id)}">Delete</button>
-                        </div>
-                    </td>
-                </tr>
-            `;
-        }).join('');
-
-        this.$tableBody.html(rows);
-    },
-
-    _formatTimestamp: function (value) {
-        if (!value) {
-            return '—';
-        }
-        try {
-            const date = new Date(value);
-            if (Number.isNaN(date.getTime())) {
-                return _.escape(value);
-            }
-            return _.escape(date.toLocaleString());
-        } catch (err) {
-            return _.escape(String(value));
-        }
-    },
-
     openCreateModal: function () {
         this.currentAccountId = null;
         this.isEdit = false;
-        this._clearStatus();
         this.$form[0].reset();
         this._populateProviderChoices();
         this.$providerSelect.prop('disabled', this.providerChoices.length <= 1);
@@ -133,13 +73,12 @@ CloudAccountsView = ErieView.extend({
     openEditModal: function (accountId) {
         const account = this._findAccount(accountId);
         if (!account) {
-            this.showStatus('Unable to locate the selected cloud account.', 'danger');
+            console.error('Unable to locate the selected cloud account.');
             return;
         }
 
         this.currentAccountId = accountId;
         this.isEdit = true;
-        this._clearStatus();
         this.$form[0].reset();
         this._populateProviderChoices();
         this.$providerSelect.val(account.provider);
@@ -163,7 +102,6 @@ CloudAccountsView = ErieView.extend({
     handleDeleteClick: function (event) {
         event.preventDefault();
         this.deleteAccountId = String($(event.currentTarget).data('accountId'));
-        this._clearStatus();
         if (this.deleteModal) {
             this.deleteModal.show();
         }
@@ -239,26 +177,15 @@ CloudAccountsView = ErieView.extend({
             headers: {
                 'X-CSRFToken': getCSRFToken()
             }
-        }).done((data) => {
-            if (this.formModal) {
-                this.formModal.hide();
-            }
-            const message = isEdit ? 'Cloud account updated.' : 'Cloud account created.';
-            this.reloadFromServer().always(() => {
-                this.showStatus(message, 'success');
-            });
-        }).fail((xhr) => {
-            const error = this._extractError(xhr) || 'Unable to save the cloud account.';
-            this.showStatus(error, 'danger');
         }).always(() => {
-            this._setFormLoading(false);
+            window.location.reload();
         });
     },
 
     _buildPayload: function () {
         const name = this.$('#cloud-account-name').val().trim();
         if (!name) {
-            this.showStatus('Name is required.', 'danger');
+            console.error('Name is required.');
             return null;
         }
         const provider = this.$providerSelect.val() || 'aws';
@@ -275,7 +202,7 @@ CloudAccountsView = ErieView.extend({
         if (shouldIncludeCredentials) {
             const roleArn = this.$('#cloud-account-role-arn').val().trim();
             if (!roleArn) {
-                this.showStatus('Role ARN is required.', 'danger');
+                console.error('Role ARN is required.');
                 return null;
             }
             const sessionDurationRaw = this.$('#cloud-account-session-duration').val();
@@ -284,7 +211,7 @@ CloudAccountsView = ErieView.extend({
                 sessionDuration = 3600;
             }
             if (sessionDuration < 900 || sessionDuration > 43200) {
-                this.showStatus('Session duration must be between 900 and 43,200 seconds.', 'danger');
+                console.error('Session duration must be between 900 and 43,200 seconds.');
                 return null;
             }
             payload.credentials = {
@@ -311,58 +238,13 @@ CloudAccountsView = ErieView.extend({
             if (this.deleteModal) {
                 this.deleteModal.hide();
             }
-            this.reloadFromServer().always(() => {
-                this.showStatus('Cloud account deleted.', 'success');
-            });
+            window.location.reload();
         }).fail((xhr) => {
             const error = this._extractError(xhr) || 'Unable to delete the cloud account.';
-            this.showStatus(error, 'danger');
+            console.error(error);
         }).always(() => {
             this.deleteAccountId = null;
         });
-    },
-
-    reloadFromServer: function () {
-        return $.getJSON(this.apiRoot)
-            .done((data) => {
-                this.accounts = data.accounts || [];
-                if (data.provider_choices) {
-                    this.providerChoices = data.provider_choices;
-                }
-                this._sortAccounts();
-                this.renderTable();
-            })
-            .fail((xhr) => {
-                const error = this._extractError(xhr) || 'Unable to refresh cloud accounts.';
-                this.showStatus(error, 'danger');
-            });
-    },
-
-    showStatus: function (message, variant) {
-        const status = this.$status;
-        if (!status.length) {
-            return;
-        }
-        if (this._statusTimeout) {
-            clearTimeout(this._statusTimeout);
-            this._statusTimeout = null;
-        }
-        status.removeClass('d-none alert-info alert-success alert-danger');
-        const className = variant === 'danger' ? 'alert-danger' : (variant === 'success' ? 'alert-success' : 'alert-info');
-        status.addClass(className).text(message);
-        this._statusTimeout = setTimeout(() => {
-            this._clearStatus();
-        }, 6000);
-    },
-
-    _clearStatus: function () {
-        if (this._statusTimeout) {
-            clearTimeout(this._statusTimeout);
-            this._statusTimeout = null;
-        }
-        if (this.$status.length) {
-            this.$status.addClass('d-none').removeClass('alert-info alert-success alert-danger').text('');
-        }
     },
 
     _setFormLoading: function (isLoading) {
@@ -408,15 +290,5 @@ CloudAccountsView = ErieView.extend({
             }
         }
         return null;
-    },
-
-    _sortAccounts: function () {
-        if (!Array.isArray(this.accounts)) {
-            this.accounts = [];
-            return;
-        }
-        this.accounts = _.sortBy(this.accounts, function (item) {
-            return (item.name || '').toLowerCase();
-        });
     }
 });

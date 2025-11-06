@@ -346,18 +346,15 @@ class Business(BaseErieIronModel):
         from erieiron_common import aws_utils
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
         return f"z/{project_name}/{env_type.value}"
-
-    def get_default_cloud_account(self, env_type: EnvironmentType | None) -> 'CloudAccount | None':
-        if not env_type:
-            return None
-
+    
+    def get_default_cloud_account(self, env_type: EnvironmentType) -> 'CloudAccount | None':
         qs = self.cloud_accounts.all()
         if EnvironmentType.PRODUCTION.eq(env_type):
             return qs.filter(is_default_production=True).first()
         if EnvironmentType.DEV.eq(env_type):
             return qs.filter(is_default_dev=True).first()
         return None
-
+    
     def iter_cloud_accounts(self) -> models.QuerySet:
         return self.cloud_accounts.order_by("name")
 
@@ -373,7 +370,7 @@ class CloudAccount(BaseErieIronModel):
     is_default_production = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
+    
     class Meta:
         indexes = [
             models.Index(fields=["business", "provider"]),
@@ -381,16 +378,16 @@ class CloudAccount(BaseErieIronModel):
         constraints = [
             models.UniqueConstraint(fields=["business", "name"], name="cloudaccount_unique_business_name"),
         ]
-
+    
     def __str__(self):
         return f"{self.name} ({self.provider})"
-
+    
     def build_secret_name(self) -> str:
         if not self.id:
             raise ValueError("CloudAccount must be saved before building secret name")
         base = self.business.get_secrets_root_key(EnvironmentType.PRODUCTION)
         return f"{base}/cloud-accounts/{self.id}"
-
+    
     def set_default_flags(self, *, dev: bool | None = None, production: bool | None = None) -> None:
         updates: dict[str, bool] = {}
         if dev is not None:
@@ -759,7 +756,7 @@ class InfrastructureStack(BaseErieIronModel):
             
             zone_id = initiative.business.route53_hosted_zone_id
             if not zone_id:
-                from erieiron_common import aws_utils 
+                from erieiron_common import aws_utils
                 zone_id = domain_manager.find_hosted_zone_id(initiative.business.domain, aws_utils.client("route53"))
             
             domain_manager.add_dns_records(
@@ -798,11 +795,7 @@ class InfrastructureStack(BaseErieIronModel):
         from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
         from erieiron_autonomous_agent.utils import cloud_accounts
         try:
-            env_type = EnvironmentType.valid_or(self.env_type, None)
-            container_env = cloud_accounts.build_aws_env(
-                self.cloud_account or self.business.get_default_cloud_account(env_type),
-                env_type,
-            )
+            container_env = cloud_accounts.build_cloud_credentials(self)
             OpenTofuStackManager(self, container_env=container_env).destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
@@ -1808,7 +1801,7 @@ class AgentLesson(BaseErieIronModel):
             context_tags=data.get("context_tags"),
             embedding=embedding
         )
-   
+    
     def get_llm_data(self):
         return {
             "agent_step": self.agent_step,
