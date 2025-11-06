@@ -3008,9 +3008,6 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
     )
     
     tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
-    if not tab_entry or not tab_entry.get('available'):
-        raise Http404
-    
     tab_definition = tab_defitions.ITERATION_TAB_MAP[tab_slug]
     tab_context = tab_definition["context_fn"](
         iteration,
@@ -3712,16 +3709,18 @@ def action_business_production_push(request, business_id):
     )
     
     latest_git_commit_id, latest_git_commit_msg = GitWrapper.get_latest_commit(business.github_repo_url)
+    commit_url = f"{business.github_repo_url}/commit/{latest_git_commit_id}"
     
     task = Task.objects.create(
-        id=f"task_production_push_{business.service_token}_{common.gen_random_token(8)}",
+        id=f"task_production_push_{business.service_token}_{latest_git_commit_id[0:7]}",
         initiative=initiative,
         task_type=TaskType.PRODUCTION_DEPLOYMENT,
         status=TaskStatus.NOT_STARTED,
         description=textwrap.dedent(f"""
-            Production push requested on {formats.date_format(timezone.now(), 'DATETIME_FORMAT')}
+            Production push for {latest_git_commit_id[0:7]} requested on {formats.date_format(timezone.now(), 'DATETIME_FORMAT')}
             
-            Latest commit: {latest_git_commit_id}
+            Latest commit: [{latest_git_commit_id[0:7]}]({commit_url})
+            
             {latest_git_commit_msg}
         """),
         risk_notes="",
