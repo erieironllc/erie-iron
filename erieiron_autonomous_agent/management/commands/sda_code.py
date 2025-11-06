@@ -1,3 +1,4 @@
+import os
 import textwrap
 
 from django.core.management.base import BaseCommand
@@ -30,9 +31,10 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
-        if options.get("initiative_id"):
+        initiative_id = os.getenv("LOCAL_DEV_INITIATIVE", options.get("initiative_id"))
+        if initiative_id:
             task: Task = (
-                Initiative.objects.get(id=options.get("initiative_id"))
+                Initiative.objects.get(id=initiative_id)
                 .tasks.exclude(status__in=[TaskStatus.BLOCKED, TaskStatus.COMPLETE])
                 .order_by("created_timestamp")
                 .first()

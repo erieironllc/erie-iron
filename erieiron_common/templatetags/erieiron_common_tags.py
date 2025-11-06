@@ -311,6 +311,11 @@ def markdown_format(text):
     if not text:
         return text
     
+    if isinstance(text, list):
+        text = "\n".join(text)
+    elif isinstance(text, list):
+        text = json.dumps(text, indent=4)
+    
     return mark_safe(markdown.markdown(text))
 
 

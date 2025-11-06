@@ -1,3 +1,4 @@
+{% load erieiron_common_tags %}
 <div class="business-overview ">
     <header class="business-overview__header ">
         <div class="d-flex justify-content-between align-items-start flex-wrap w-100">
@@ -47,7 +48,7 @@
                 <h5 class="business-overview__section-title">The Pitch</h5>
             </div>
             <div class="business-overview__section-body">
-                <div class="business-overview__pitch">{{ business.raw_idea|linebreaksbr }}</div>
+                <div class="business-overview__pitch">{{ business.raw_idea|markdown }}</div>
             </div>
         </section>
     {% endif %}

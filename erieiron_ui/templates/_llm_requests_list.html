@@ -2,68 +2,14 @@
 {% load erieiron_common_tags %}
 
 <div class="d-flex justify-content-between align-items-end mb-3">
-    <label >Total Bill (so far): ${{ llm_requests|llm_cost|floatformat:2 }}</label>
-    <input id="txt_llm_search" type="text" placeholder="search llm requests" class="form-control w-25" /> 
+    <label>Total Bill (so far): ${{ llm_requests_total_cost|default_if_none:0|floatformat:2 }}</label>
+    <input id="txt_llm_search" type="text" placeholder="search llm requests" class="form-control w-25" />
 </div>
-{% for llm_request in llm_requests %}
-    <div class="card mb-4 iteration_card llm_request_card">
-        <div class="card-header d-flex justify-content-between"
-             role="button"
-             aria-expanded="false"
-             style="cursor: pointer;">
-        
-            <div class="d-flex align-items-center justify-content-between llm_request_card_toggle">
-                <i class="bi bi-chevron-right me-2 collapse-icon"
-                   data-bs-toggle="collapse"
-                   data-bs-target="#llmrequest-{{ forloop.counter }}"
-                ></i>
-                
-                <small class="text-muted">
-                    <a href="{% url 'view_llm_request' llm_request.id %}">{{ llm_request.title }}
-                        ({{ llm_request.timestamp }})</a>
-                </small>
-            </div>
-            <div class="d-flex justify-content-end align-items-center">
-                <small class="text-muted ms-3">
-                    {{ llm_request.llm_model }}
-                </small>
-                {% if llm_request.response %}
-                    <small class="text-muted ms-3">
-                        {{ llm_request.token_count|intcomma }} tokens
-                    </small>
-                    <small class="text-muted ms-3">
-                        {{ llm_request.chat_millis|intcomma }}ms
-                    </small>
-                    <small class="text-muted ms-3">
-                        ${{ llm_request.price|floatformat:3 }}
-                    </small>
-                {% else %}
-                    <small class="text-muted ms-3">
-                        In Progress
-                    </small>
-                {% endif %}
-                {% include "_copy_clipboard_btn.html" with target_el="#llmrequest-content-{{ forloop.counter }}" %}
-            </div>
-        </div>
-        <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
-            <dl class="row">
-                <pre id="llmrequest-content-{{ forloop.counter }}">
-                    {% for inp_msg in llm_request.input_messages %}
-==== Message Role: {{ inp_msg.role }} =========================================
 
-                        
-{{ inp_msg.content }}
-
-                    {% endfor %}
-==== Response from {{ llm_request.llm_model }} ================================
-                    {% if llm_request.response %}
-{{ llm_request.response }}
-                    {% else %}
-(¯`·._.·  w a i t i n g  ·._.·´¯)
-                    {% endif %}
-
-                </pre>
-            </dl>
-        </div>
-    </div>
-{% endfor %}
+<div class="erie_infinite_scroll"
+     data-fetch_url="{{ llm_requests_fetch_url }}"
+     data-sort_by="{{ llm_requests_sort_field|default:'timestamp' }}"
+     data-has_more="{% if llm_requests_has_more %}true{% else %}false{% endif %}"
+     data-page_number="0">
+    {% include 'llm_requests/request_cards_partial.html' with llm_requests=llm_requests %}
+</div>

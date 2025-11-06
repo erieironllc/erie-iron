@@ -1,19 +1,25 @@
-<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
-    {% if tasks|length > 0 %}
-        <div class="d-flex justify-content-end flex-grow-1" style="min-width: 200px;">
-            <select id="statusFilter" class="form-select" style="width: auto;">
-                <option value="">All Statuses</option>
-                <option value="NOT_STARTED">Not Started</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="COMPLETE">Complete</option>
-                <option value="BLOCKED">Blocked</option>
-                <option value="FAILED">Failed</option>
-            </select>
-        </div>
-    {% endif %}
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTaskModal">
-        Add Task
-    </button>
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+        <select id="statusFilter" class="form-select" style="width: auto;">
+            <option value="">All Statuses</option>
+            <option value="NOT_STARTED">Not Started</option>
+            <option value="IN_PROGRESS">In Progress</option>
+            <option value="COMPLETE">Complete</option>
+            <option value="BLOCKED">Blocked</option>
+            <option value="FAILED">Failed</option>
+        </select>
+    
+    <div class="d-flex justify-content-end gap-3">
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTaskModal">
+            Add Task
+        </button>
+        <form class="d-inline" method="post" action="{% url 'action_initiative_regenerate_tasks' initiative.id %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-danger"
+                    onclick="return confirm('Are you sure you want to delete and regenerate all the tasks for this initiative?')">
+                Reset and Regenerate Tasks
+            </button>
+        </form>
+    </div>
 </div>
 
 {% if tasks|length > 0 %}
@@ -35,16 +41,19 @@
                 <div class="modal-body">
                     {% csrf_token %}
                     <div class="mb-3">
-                        <label for="task_request" class="form-label">Task Details <span class="text-danger">*</span></label>
+                        <label for="task_request" class="form-label">Task Details <span
+                                class="text-danger">*</span></label>
                         <textarea
-                            name="task_request"
-                            id="task_request"
-                            class="form-control"
-                            rows="8"
-                            placeholder="Describe the task you want Erie Iron to execute. Include the goal, relevant context, and any acceptance criteria or risks we should consider."
-                            required
+                                name="task_request"
+                                id="task_request"
+                                class="form-control"
+                                rows="8"
+                                placeholder="Describe the task you want Erie Iron to execute. Include the goal, relevant context, and any acceptance criteria or risks we should consider."
+                                required
                         ></textarea>
-                        <div class="form-text">Share details that help us break the request into a clear task with measurable outcomes.</div>
+                        <div class="form-text">Share details that help us break the request into a clear task with
+                            measurable outcomes.
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">

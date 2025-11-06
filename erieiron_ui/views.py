@@ -14,6 +14,7 @@ from urllib.parse import quote
 import jwt
 from django.contrib import messages
 from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect, HttpRequest
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -56,6 +57,31 @@ DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES = {
     PubSubMessageType.EVERY_HOUR.value,
     PubSubMessageType.EVERY_DAY.value,
 }
+
+
+LLM_REQUESTS_PAGE_SIZE = 20
+
+
+def _paginate_llm_requests(queryset, page_number: int = 0, page_size: int = LLM_REQUESTS_PAGE_SIZE):
+    page_number = max(page_number, 0)
+    start_idx = page_number * page_size
+    end_idx = start_idx + page_size + 1
+    page_rows = list(queryset[start_idx:end_idx])
+    has_more = len(page_rows) > page_size
+    return page_rows[:page_size], has_more
+
+
+def _build_llm_request_listing_context(queryset, fetch_url: str):
+    ordered_qs = queryset.order_by("-timestamp")
+    page_rows, has_more = _paginate_llm_requests(ordered_qs)
+    total_cost = ordered_qs.aggregate(total=Sum("price"))
+    return {
+        "llm_requests": page_rows,
+        "llm_requests_total_cost": (total_cost.get("total") or 0),
+        "llm_requests_has_more": has_more,
+        "llm_requests_fetch_url": fetch_url,
+        "llm_requests_sort_field": "timestamp",
+    }
 
 
 def _parse_json_body(request: HttpRequest) -> dict:
@@ -1191,9 +1217,10 @@ def _tab_available_llmrequests(business: Business) -> bool:
 
 
 def _tab_context_llmrequests(business: Business) -> dict:
-    return {
-        "llm_requests": business.llmrequest_set.order_by("-timestamp")
-    }
+    return _build_llm_request_listing_context(
+        business.llmrequest_set.all(),
+        fetch_url=reverse('fetch_llm_requests', args=['business', business.id])
+    )
 
 
 def _tab_available_tasks(business: Business) -> bool:
@@ -2187,9 +2214,10 @@ def _initiative_tab_available_llmrequests(initiative: Initiative) -> bool:
 
 
 def _initiative_tab_context_llmrequests(initiative: Initiative) -> dict:
-    return {
-        "llm_requests": initiative.llmrequest_set.order_by("-timestamp")
-    }
+    return _build_llm_request_listing_context(
+        initiative.llmrequest_set.all(),
+        fetch_url=reverse('fetch_llm_requests', args=['initiative', initiative.id])
+    )
 
 
 def _initiative_tab_available_llm_spend(initiative: Initiative) -> bool:
@@ -2498,8 +2526,13 @@ def _task_tab_available_llmrequests(task, business, self_driving_task) -> bool:
 
 
 def _task_tab_context_llmrequests(task, business, self_driving_task) -> dict:
-    llm_requests = list(LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).order_by("-timestamp"))
-    return {"llm_requests": llm_requests}
+    task_llm_requests = LlmRequest.objects.filter(
+        task_iteration__self_driving_task__task=task
+    )
+    return _build_llm_request_listing_context(
+        task_llm_requests,
+        fetch_url=reverse('fetch_llm_requests', args=['task', task.id])
+    )
 
 
 def _task_tab_available_guidance(task, business, self_driving_task) -> bool:
@@ -2956,7 +2989,12 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
     except Exception:
         last_iteration = None
     
-    llm_requests = list(iteration.llmrequest_set.order_by("-timestamp"))
+    llm_requests_queryset = iteration.llmrequest_set.all()
+    llm_requests_context = _build_llm_request_listing_context(
+        llm_requests_queryset,
+        fetch_url=reverse('fetch_llm_requests', args=['iteration', iteration.id])
+    )
+    llm_requests_page = llm_requests_context["llm_requests"]
     
     tab_slug = (tab or 'routing').lower()
     if tab_slug not in tab_defitions.ITERATION_TAB_MAP:
@@ -2969,7 +3007,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         next_iteration=next_iteration,
         running_processes=running_processes,
         running_processes_count=running_processes_count,
-        llm_requests=llm_requests,
+        llm_requests=llm_requests_page,
         active_tab_slug=tab_slug,
     )
     
@@ -2985,9 +3023,9 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         next_iteration=next_iteration,
         running_processes=running_processes,
         running_processes_count=running_processes_count,
-        llm_requests=llm_requests,
+        llm_requests=llm_requests_page,
     )
-    
+
     context = {
         "iteration": iteration,
         "previous_iteration": previous_iteration,
@@ -3000,7 +3038,6 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         "self_driving_task": self_driving_task,
         "initiative": initiative,
         "business": business,
-        "llm_requests": llm_requests,
         "total_price": total_price,
         "total_tokens": total_tokens,
         "running_processes": running_processes,
@@ -3008,6 +3045,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         "active_tab": tab_slug,
         "tab_template": tab_definition["template"],
     }
+    context.update(llm_requests_context)
     context.update(tab_context)
     
     breadcrumbs = [
@@ -3248,6 +3286,24 @@ def action_add_business(request):
     
     messages.success(request, 'Business idea submitted successfully! It will be reviewed and processed.')
     return redirect(reverse('view_business', args=[business.id]))
+
+
+@require_POST
+def action_business_define_architecture(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
+    
+    business.architecture = "Architecture generation in progress"
+    business.save()
+
+    PubSubManager.publish(
+        PubSubMessageType.BUSINESS_ARCHITECTURE_GENERATION_REQUESTED,
+        payload={
+            "business_id": business_id,
+            "user_input": rget(request, "architecture_definition")
+        }
+    )
+    
+    return redirect(reverse('view_business_tab', args=['architecture', business.id]))
 
 
 def action_business_regenerate_architecture(request, business_id):
@@ -4920,6 +4976,50 @@ def view_pubsub_message_details(request, message_id):
     )
     
     return send_response(request, "pubsub/message_details.html", context, breadcrumbs=breadcrumbs)
+
+
+@require_POST
+def fetch_llm_requests(request, scope: str, entity_id: str):
+    try:
+        page_size = int(request.POST.get('page_size', LLM_REQUESTS_PAGE_SIZE))
+    except (TypeError, ValueError):
+        page_size = LLM_REQUESTS_PAGE_SIZE
+    page_size = max(page_size, 1)
+
+    try:
+        page_number = int(request.POST.get('page_number', 0))
+    except (TypeError, ValueError):
+        page_number = 0
+    page_number = max(page_number, 0)
+
+    sort_by = request.POST.get('sort_by', 'timestamp') or 'timestamp'
+    if sort_by not in {'timestamp'}:
+        sort_by = 'timestamp'
+
+    scope = (scope or '').lower()
+    if scope == 'business':
+        owner = get_object_or_404(Business, pk=entity_id)
+        queryset = owner.llmrequest_set.all()
+    elif scope == 'initiative':
+        owner = get_object_or_404(Initiative, pk=entity_id)
+        queryset = owner.llmrequest_set.all()
+    elif scope == 'task':
+        owner = get_object_or_404(Task, pk=entity_id)
+        queryset = LlmRequest.objects.filter(task_iteration__self_driving_task__task=owner)
+    elif scope == 'iteration':
+        owner = get_object_or_404(SelfDrivingTaskIteration, pk=entity_id)
+        queryset = owner.llmrequest_set.all()
+    else:
+        raise Http404
+
+    ordered_qs = queryset.order_by(f"-{sort_by}")
+    page_rows, _ = _paginate_llm_requests(ordered_qs, page_number=page_number, page_size=page_size)
+
+    context = {
+        "llm_requests": page_rows,
+    }
+
+    return render(request, "llm_requests/request_cards_partial.html", context)
 
 
 @require_POST

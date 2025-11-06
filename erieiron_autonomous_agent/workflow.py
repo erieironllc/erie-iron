@@ -90,6 +90,9 @@ def business_workflow(pubsub_manager: PubSubManager):
         T.BUSINESS_BOOTSTRAP_REQUESTED,
         eng_lead.bootstrap_buiness
     ).on(
+        T.BUSINESS_ARCHITECTURE_GENERATION_REQUESTED,
+        eng_lead.on_business_architecture_generation_requested
+    ).on(
         T.TASK_BLOCKED,
         eng_lead.on_task_blocked,
         T.TASK_UPDATED

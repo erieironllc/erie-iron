@@ -5,11 +5,6 @@
                 <button type="submit" class="btn btn-primary" form="business_edit_form">Save Changes</button>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <form method="post" action="{% url 'action_delete_business' business.id %}" class="d-inline"
-                      id="delete-business-form">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-outline-danger">Delete Business</button>
-                </form>
                 <form method="post" action="{% url 'action_business_new_domain' business.id %}" class="d-inline">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-warning"
@@ -23,6 +18,11 @@
                             onclick="return confirm('Are you sure you want to bootstrap this business? This action may create initial project structure.')">
                         Bootstrap
                     </button>
+                </form>
+                <form method="post" action="{% url 'action_delete_business' business.id %}" class="d-inline"
+                      id="delete-business-form">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline-danger">Delete Business</button>
                 </form>
             </div>
         </div>

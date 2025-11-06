@@ -44,7 +44,6 @@ INITIATIVE_TAB_DEFINITIONS = [
         "slug": "architecture",
         "label": "Architecture",
         "template": "initiative/tabs/architecture.html",
-        "availability_fn": views._initiative_tab_available_architecture,
         "context_fn": views._initiative_tab_context_architecture,
     },
     {
@@ -375,7 +374,6 @@ BUSINESS_TAB_DEFINITIONS = [
         "slug": "architecture",
         "label": "Architecture",
         "template": "business/tabs/architecture.html",
-        "availability_fn": views._tab_available_architecture,
         "context_fn": views._tab_context_architecture,
     },
     # {

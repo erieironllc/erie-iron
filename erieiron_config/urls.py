@@ -17,6 +17,7 @@ urlpatterns = [
     path("_business/update/<uuid:business_id>", views.action_update_business, name="action_update_business"),
     path("_business/bootstrap/<uuid:business_id>", views.action_bootstrap_business, name="action_bootstrap_business"),
     path("_business/newdomain/<uuid:business_id>", views.action_business_new_domain, name="action_business_new_domain"),
+    path("_business/define_architecture/<uuid:business_id>", views.action_business_define_architecture, name="action_business_define_architecture"),
     path("_business/regenerate_architecture/<uuid:business_id>", views.action_business_regenerate_architecture, name="action_business_regenerate_architecture"),
     path("_business/product-initiatives/add/<uuid:business_id>", views.action_add_initiative_from_brief, name="action_add_initiative_from_brief"),
     path("_business/production_push/<uuid:business_id>", views.action_business_production_push, name="action_business_production_push"),
@@ -67,6 +68,7 @@ urlpatterns = [
     path("pubsub/message/<uuid:message_id>", views.view_pubsub_message_details, name="view_pubsub_message_details"),
     
     path("_pubsub/fetch_messages", views.fetch_pubsub_messages, name="fetch_pubsub_messages"),
+    path("_llmrequests/fetch/<str:scope>/<str:entity_id>", views.fetch_llm_requests, name="fetch_llm_requests"),
     path("_pubsub/delete/<uuid:message_id>", views.action_delete_pubsub_message, name="action_delete_pubsub_message"),
     path("_pubsub/retry/<uuid:message_id>", views.action_retry_pubsub_message, name="action_retry_pubsub_message"),
     

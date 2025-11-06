@@ -1,5 +1,6 @@
 import logging
 import os
+import textwrap
 import traceback
 import uuid
 
@@ -93,6 +94,15 @@ def on_task_blocked(payload, msg):
         task.depends_on.set(Task.objects.filter(id__in=combined_dep_ids))
     
     return new_task_ids
+
+
+def on_business_architecture_generation_requested(payload):
+    business = Business.objects.get(id=payload["business_id"])
+    write_business_architecture(
+        business,
+        payload.get("user_input")
+    )
+    identify_required_credentials(business)
 
 
 def on_product_initiatives_defined(business_id):
@@ -420,7 +430,7 @@ def get_source_repo_url(business: Business) -> str:
     return "https://github.com/erieironllc/erieiron_bootstrap"
 
 
-def write_business_architecture(business):
+def write_business_architecture(business, user_input:str=None):
     business_architecture = llm_chat(
         "Write business architecture",
         [
@@ -441,12 +451,18 @@ def write_business_architecture(business):
                     ("<env_vars>", ", ".join(DEFAULT_ENV_VARS))
                 ]
             ),
-            *LlmMessage.user_from_data("Business Description", {
+            LlmMessage.user_from_data("Business Description", {
                 "business_description": business.llm_data()
             }),
-            *LlmMessage.user_from_data(
+            LlmMessage.user_from_data(
                 "Business Initiatives", [i.llm_data() for i in business.initiative_set.all()], "planned_initiatives"
             ),
+            textwrap.dedent(f"""
+            ## The CTO's guidance for the architecture:
+            {user_input}
+            
+            **You must** respect any guidance give here as closely as possible
+            """) if user_input else None,
             "Please write a markdown-formatted high-level design document for Business's architecture"
         ],
         model=LlmModel.OPENAI_GPT_5,
