@@ -378,19 +378,86 @@ BaseContainerView = ErieView.extend({
     },
 
     txt_llm_search_change: function (ev) {
-        const search_val = $("#txt_llm_search").val().toLowerCase();
-        if (!search_val) {
-            $(".llm_request_card").show();
-        } else {
-            $(".llm_request_card").each((idx, el) => {
-                const card_text = $("pre", el)[0].innerText.toLowerCase();
-                if (card_text.indexOf(search_val) >= 0) {
-                    $(el).show();
-                } else {
-                    $(el).hide();
-                }
-            })
+        const search_input = $(ev.target);
+        const container = search_input.closest(".llm-requests-section").find(".erie_infinite_scroll").first();
+        if (!container.length) {
+            return;
         }
+
+        const fetch_url = default_string(container.data("fetch_url"));
+        if (is_empty(fetch_url)) {
+            return;
+        }
+
+        const sort_by = container.data("sort_by");
+        const pageSize = parseInt(container.data("page_size"), 10) || 20;
+        const search_val = default_string(search_input.val()).trim();
+        const message_types = default_string(container.data("message_types"));
+        const statuses = default_string(container.data("statuses"));
+
+        const previousPageNumber = parseInt(container.data("page_number"), 10) || 0;
+        const previousHasMore = parse_bool(container.data("has_more"));
+
+        container.data("search_value", search_val);
+        container.data("page_number", 0);
+        container.data("loading", true);
+
+        const observer = container.data("scroll_observer");
+        if (observer) {
+            observer.disconnect();
+        }
+
+        const resetObserver = () => {
+            const scrollObserver = container.data("scroll_observer");
+            if (!scrollObserver) {
+                return;
+            }
+            scrollObserver.disconnect();
+            if (parse_bool(container.data("has_more")) && container.children().length) {
+                scrollObserver.observe(container.children().last()[0]);
+            }
+        };
+
+        const payload = {
+            "page_size": pageSize,
+            "page_number": 0,
+            "sort_by": sort_by
+        };
+
+        if (is_not_empty(message_types)) {
+            payload["message_types"] = message_types;
+        }
+
+        if (is_not_empty(statuses)) {
+            payload["statuses"] = statuses;
+        }
+
+        if (is_not_empty(search_val)) {
+            payload["search"] = search_val;
+        }
+
+        erie_server().exec_server_post(
+            fetch_url,
+            payload,
+            (resp) => {
+                const pageContent = $(resp).filter((idx, el) => el.innerHTML);
+                container.empty();
+                container.append(pageContent);
+
+                container.data("page_number", 0);
+                const hasMore = pageContent.length >= pageSize;
+                container.data("has_more", hasMore);
+                container.data("loading", false);
+
+                resetObserver();
+            },
+            () => {
+                container.data("page_number", previousPageNumber);
+                container.data("has_more", previousHasMore);
+                container.data("loading", false);
+                resetObserver();
+            }
+        );
     },
 
     statusFilter_change: function (ev) {
@@ -775,7 +842,7 @@ BaseContainerView = ErieView.extend({
     },
 
     init_infinite_scroll: function (el) {
-        const PAGE_SIZE = 20
+        const DEFAULT_PAGE_SIZE = 20;
         if (!el.length) {
             console.error(el);
             throw "el doesn't exist"
@@ -786,12 +853,18 @@ BaseContainerView = ErieView.extend({
         el.addClass("initialized");
 
         const sort_by = el.data("sort_by");
-        const fetch_url = el.data("fetch_url");
+        const fetch_url = default_string(el.data("fetch_url"));
+        if (is_empty(fetch_url)) {
+            return;
+        }
+
+        const pageSize = parseInt(el.data("page_size"), 10) || DEFAULT_PAGE_SIZE;
 
         const get_filter_params = () => {
             const params = {};
             const message_types = default_string(el.data("message_types"));
             const statuses = default_string(el.data("statuses"));
+            const search_value = default_string(el.data("search_value")).trim();
 
             if (is_not_empty(message_types)) {
                 params["message_types"] = message_types;
@@ -801,20 +874,42 @@ BaseContainerView = ErieView.extend({
                 params["statuses"] = statuses;
             }
 
+            if (is_not_empty(search_value)) {
+                params["search"] = search_value;
+            }
+
             return params;
         };
 
-        let loading = false;
-        let has_next = parse_bool(el.data("has_more"));
+        const normalizePageNumber = () => parseInt(el.data("page_number"), 10) || 0;
+        const updateObserver = () => {
+            const observer = el.data("scroll_observer");
+            if (!observer) {
+                return;
+            }
+
+            observer.disconnect();
+            if (parse_bool(el.data("has_more")) && el.children().length) {
+                observer.observe(el.children().last()[0]);
+            }
+        };
+
+        el.data("page_size", pageSize);
+        el.data("page_number", normalizePageNumber());
+        el.data("has_more", parse_bool(el.data("has_more")));
+        el.data("loading", false);
 
         const f_load_more = () => {
-            if (!has_next || loading) return;
-            loading = true;
+            if (!parse_bool(el.data("has_more")) || el.data("loading")) {
+                return;
+            }
 
-            const next_page = el.data("page_number") + 1;
+            el.data("loading", true);
+
+            const next_page = normalizePageNumber() + 1;
 
             const payload = Object.assign({
-                "page_size": PAGE_SIZE,
+                "page_size": pageSize,
                 "page_number": next_page,
                 "sort_by": sort_by
             }, get_filter_params());
@@ -828,26 +923,27 @@ BaseContainerView = ErieView.extend({
 
                     el.data("page_number", next_page);
                     el.append(page_content);
-                    has_next = count_returned >= PAGE_SIZE;
-                    loading = false;
+                    el.data("has_more", count_returned >= pageSize);
+                    el.data("loading", false);
 
-                    el.data("scroll_observer").disconnect();
-                    if (has_next && el.children().length) {
-                        el.data("scroll_observer").observe(el.children().last()[0]);
-                    }
-                });
-        }
+                    updateObserver();
+                },
+                () => {
+                    el.data("loading", false);
+                    updateObserver();
+                }
+            );
+        };
 
-        el.data("scroll_observer", new IntersectionObserver(entries => {
+        const scrollObserver = new IntersectionObserver(entries => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
-                    f_load_more()
+                    f_load_more();
                 }
             });
-        }));
+        });
 
-        if (el.children().length) {
-            el.data("scroll_observer").observe(el.children().last()[0]);
-        }
+        el.data("scroll_observer", scrollObserver);
+        updateObserver();
     }
 });

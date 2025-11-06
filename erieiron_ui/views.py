@@ -14,7 +14,8 @@ from urllib.parse import quote
 import jwt
 from django.contrib import messages
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
+from django.db.models import Sum, Q, TextField
+from django.db.models.functions import Cast
 from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect, HttpRequest
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -5011,6 +5012,19 @@ def fetch_llm_requests(request, scope: str, entity_id: str):
         queryset = owner.llmrequest_set.all()
     else:
         raise Http404
+
+    search_term = (request.POST.get('search') or '').strip()
+    if search_term:
+        queryset = queryset.annotate(
+            input_messages_text=Cast('input_messages', TextField()),
+            resp_json_text=Cast('resp_json', TextField()),
+        ).filter(
+            Q(title__icontains=search_term)
+            | Q(llm_model__icontains=search_term)
+            | Q(response__icontains=search_term)
+            | Q(input_messages_text__icontains=search_term)
+            | Q(resp_json_text__icontains=search_term)
+        )
 
     ordered_qs = queryset.order_by(f"-{sort_by}")
     page_rows, _ = _paginate_llm_requests(ordered_qs, page_number=page_number, page_size=page_size)
