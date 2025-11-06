@@ -3717,7 +3717,7 @@ def action_business_production_push(request, business_id):
         task_type=TaskType.PRODUCTION_DEPLOYMENT,
         status=TaskStatus.NOT_STARTED,
         description=textwrap.dedent(f"""
-            Production push for {latest_git_commit_id[0:7]} requested on {formats.date_format(timezone.now(), 'DATETIME_FORMAT')}
+            Production push for {latest_git_commit_id[0:7]} requested on {formats.date_format(common.get_now(), 'DATETIME_FORMAT')}
             
             Latest commit: [{latest_git_commit_id[0:7]}]({commit_url})
             
