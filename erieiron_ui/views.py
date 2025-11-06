@@ -4,6 +4,7 @@ import json
 import logging
 import pprint
 import re
+import textwrap
 import uuid
 from collections import defaultdict, OrderedDict
 from datetime import datetime, timedelta, date
@@ -42,14 +43,15 @@ from erieiron_autonomous_agent.models import (
 )
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
+from erieiron_autonomous_agent.utils import cloud_accounts
 from erieiron_common import common, domain_manager, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
 from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider
+from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
-from erieiron_autonomous_agent.utils import cloud_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,6 @@ DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES = {
     PubSubMessageType.EVERY_HOUR.value,
     PubSubMessageType.EVERY_DAY.value,
 }
-
 
 LLM_REQUESTS_PAGE_SIZE = 20
 
@@ -211,15 +212,12 @@ def healthcheck(request):
     return JsonResponse({"ok": True})
 
 
-
-
 def _portfolio_tab_context_portfolio(erieiron_business: Business) -> dict:
     ei_business = Business.get_erie_iron_business()
     
     portfolio_businesses = defaultdict(list)
     for b in Business.objects.exclude(id=ei_business.id).order_by("name"):
         portfolio_businesses[BusinessStatus(b.status)].append(b)
-        
     
     return {
         "operation_type_choices": BusinessOperationType.choices(),
@@ -242,9 +240,6 @@ def _portfolio_tab_context_capacity(erieiron_business: Business) -> dict:
     return {
         "business_capacity_analysis_list": erieiron_business.businesscapacityanalysis_set.all().order_by("-created_timestamp"),
     }
-
-
-
 
 
 def _portfolio_tab_available_lessons(_: Business) -> bool:
@@ -281,21 +276,21 @@ def _portfolio_tab_context_infrastructure_stacks(_: Business) -> dict:
         .order_by("env_type", "stack_type", "created_timestamp")
     )
     stacks = list(stacks_qs)
-
+    
     def business_label(stack: InfrastructureStack) -> str:
         business = getattr(stack, "business", None)
         if not business:
             return "Business"
         return getattr(business, "name", None) or getattr(business, "slug", None) or "Business"
-
+    
     stack_entries = _build_infrastructure_stack_entries(
         stacks,
         scope_label_fn=business_label,
     )
-
+    
     business_ids = {entry.get("business_id") for entry in stack_entries if entry.get("business_id")}
     initiative_ids = {entry.get("initiative_id") for entry in stack_entries if entry.get("initiative_id")}
-
+    
     for entry in stack_entries:
         business_name = entry.get("business_name") or "Business"
         initiative_title = entry.get("initiative_title")
@@ -303,14 +298,14 @@ def _portfolio_tab_context_infrastructure_stacks(_: Business) -> dict:
             entry["initiative_title"] = f"{initiative_title} ({business_name})"
         else:
             entry["scope_label"] = f"{business_name} (Business)"
-
+    
     architecture_diagram = _build_infra_diagram_payload(
         stacks,
         stack_entries=stack_entries,
         diagram_namespace="portfolio-infrastructure-stacks",
         scope_label_fn=business_label,
     )
-
+    
     return {
         "stack_entries": stack_entries,
         "stack_count": len(stack_entries),
@@ -326,15 +321,15 @@ def _portfolio_tab_available_pubsub_messages(_: Business) -> bool:
 
 def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | None = None) -> dict:
     page_size = 20
-
+    
     selected_message_types: list[str] = []
     selected_statuses: list[str] = []
     if request:
         selected_message_types = [value for value in request.GET.getlist("message_types") if value]
         selected_statuses = [value for value in request.GET.getlist("statuses") if value]
-
+    
     has_user_defined_filters = bool(selected_message_types or selected_statuses)
-
+    
     raw_message_types_qs = (
         PubSubMessage.objects.order_by("message_type").values_list("message_type", flat=True).distinct()
     )
@@ -342,26 +337,26 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
     hidden_types_in_data = [
         message_type for message_type in raw_message_types if message_type in DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES
     ]
-
+    
     default_message_type_filter_applied = False
-
+    
     qs = PubSubMessage.objects.all()
     if selected_message_types:
         qs = qs.filter(message_type__in=selected_message_types)
     elif hidden_types_in_data:
         qs = qs.exclude(message_type__in=hidden_types_in_data)
         default_message_type_filter_applied = True
-
+    
     if selected_statuses:
         qs = qs.filter(status__in=selected_statuses)
-
+    
     qs = qs.order_by("-created_at")
     page_candidates = list(qs[:page_size + 1])
     has_more = len(page_candidates) > page_size
     pubsub_messages = page_candidates[:page_size]
-
+    
     total_count = qs.count()
-
+    
     message_type_options = []
     for message_type in raw_message_types:
         if PubSubMessageType.valid(message_type):
@@ -372,15 +367,15 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
             "value": message_type,
             "label": label,
         })
-
+    
     message_type_options.sort(key=lambda option: option["label"].lower())
-
+    
     default_hidden_message_type_labels = [
         option["label"]
         for option in message_type_options
         if option["value"] in hidden_types_in_data
     ]
-
+    
     status_options = [
         {
             "value": status.value,
@@ -388,9 +383,9 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
         }
         for status in PubSubMessageStatus
     ]
-
+    
     filters_applied = has_user_defined_filters
-
+    
     return {
         "pubsub_messages": pubsub_messages,
         "total_count": total_count,
@@ -867,7 +862,7 @@ def _build_portfolio_tabs(erieiron_business: Business) -> list[dict]:
             available = definition["availability_fn"](erieiron_business)
         else:
             available = True
-            
+        
         if definition.get("url_name"):
             url = reverse(definition["url_name"])
         elif definition.get("url"):
@@ -1003,19 +998,19 @@ def _tab_context_infra_diagram(business: Business) -> dict:
         .select_related("initiative", "cloud_account")
         .order_by("env_type", "stack_type", "created_timestamp")
     )
-
+    
     stack_entries = _build_infrastructure_stack_entries(
         stacks,
         scope_label_fn=lambda _stack: "Business",
     )
-
+    
     architecture_diagram = _build_infra_diagram_payload(
         stacks,
         stack_entries=stack_entries,
         diagram_namespace=f"business-architecture-{business.id}",
         scope_label_fn=lambda _stack: "Business",
     )
-
+    
     return {
         "architecture_diagram": architecture_diagram,
     }
@@ -1033,29 +1028,29 @@ def _tab_context_infrastructure_stacks(business: Business) -> dict:
         .order_by("env_type", "stack_type", "created_timestamp")
     )
     stacks = list(stacks_qs)
-
+    
     def scope_label_fn(stack: InfrastructureStack) -> str:
         if stack.initiative_id:
             title = getattr(stack.initiative, "title", None)
             return title if title else "Initiative"
         return "Business"
-
+    
     stack_entries = _build_infrastructure_stack_entries(
         stacks,
         scope_label_fn=scope_label_fn,
     )
-
+    
     stack_count = len(stack_entries)
     initiative_stack_count = len({entry["initiative_id"] for entry in stack_entries if entry["initiative_id"]})
     business_scoped_stack_count = stack_count - initiative_stack_count
-
+    
     architecture_diagram = _build_infra_diagram_payload(
         stacks,
         stack_entries=stack_entries,
         diagram_namespace=f"business-infrastructure-stacks-{business.id}",
         scope_label_fn=scope_label_fn,
     )
-
+    
     return {
         "stack_entries": stack_entries,
         "stack_count": stack_count,
@@ -1127,10 +1122,10 @@ def _tab_context_ceo_guidance(business: Business) -> dict:
 
 
 def _tab_available_analysis(business: Business) -> bool:
-    return (business.businessanalysis_set.exists() or 
-            business.businesslegalanalysis_set.exists() or 
-            business.businesscapacityanalysis_set.exists() or 
-            business.businessguidance_set.exists() or 
+    return (business.businessanalysis_set.exists() or
+            business.businesslegalanalysis_set.exists() or
+            business.businesscapacityanalysis_set.exists() or
+            business.businessguidance_set.exists() or
             business.businessceodirective_set.exists())
 
 
@@ -1150,9 +1145,9 @@ def _tab_context_analysis(business: Business) -> dict:
     business_ceo_directives = list(
         business.businessceodirective_set.all().order_by("-created_timestamp")
     )
-
+    
     analysis_entries = []
-
+    
     for business_analysis in business_analysis_list:
         analysis_entries.append(
             {
@@ -1161,7 +1156,7 @@ def _tab_context_analysis(business: Business) -> dict:
                 "created_timestamp": business_analysis.created_timestamp,
             }
         )
-
+    
     for business_legal_analysis in business_legal_analysis_list:
         analysis_entries.append(
             {
@@ -1170,7 +1165,7 @@ def _tab_context_analysis(business: Business) -> dict:
                 "created_timestamp": business_legal_analysis.created_timestamp,
             }
         )
-
+    
     for business_capacity_analysis in business_capacity_analysis_list:
         analysis_entries.append(
             {
@@ -1179,7 +1174,7 @@ def _tab_context_analysis(business: Business) -> dict:
                 "created_timestamp": business_capacity_analysis.created_timestamp,
             }
         )
-
+    
     for business_guidance in business_guidance_list:
         analysis_entries.append(
             {
@@ -1188,7 +1183,7 @@ def _tab_context_analysis(business: Business) -> dict:
                 "created_timestamp": business_guidance.created_timestamp,
             }
         )
-
+    
     for ceo_directive in business_ceo_directives:
         analysis_entries.append(
             {
@@ -1197,12 +1192,12 @@ def _tab_context_analysis(business: Business) -> dict:
                 "created_timestamp": ceo_directive.created_timestamp,
             }
         )
-
+    
     analysis_entries.sort(
         key=lambda entry: entry["created_timestamp"],
         reverse=True,
     )
-
+    
     return {
         "business_analysis_list": business_analysis_list,
         "business_legal_analysis_list": business_legal_analysis_list,
@@ -1476,16 +1471,16 @@ def _build_infra_diagram_payload(
             "stack_count": 0,
             "dom_id": dom_id,
         }
-
+    
     address_lookup_by_stack: dict[int, dict[str, str]] = defaultdict(dict)
     global_address_lookup: dict[str, list[str]] = defaultdict(list)
     stack_resource_counts: dict[int, int] = defaultdict(int)
     nodes: list[dict[str, Any]] = []
-
+    
     def _parse_resource(raw_resource: Any) -> dict[str, Any]:
         if isinstance(raw_resource, dict):
             return raw_resource
-
+        
         if isinstance(raw_resource, str):
             trimmed = raw_resource.strip()
             if trimmed.startswith("{") or trimmed.startswith("["):
@@ -1498,15 +1493,15 @@ def _build_infra_diagram_payload(
                     return parsed
                 return {"raw": parsed}
             return {"raw": raw_resource}
-
+        
         return {"raw": raw_resource}
-
+    
     def _resolve_values(resource_payload: dict[str, Any]) -> dict[str, Any]:
         values = resource_payload.get("values")
         if isinstance(values, dict):
             return values
         return {}
-
+    
     def _safe_string(value: Any) -> str | None:
         if value is None:
             return None
@@ -1516,7 +1511,7 @@ def _build_infra_diagram_payload(
         if isinstance(value, (int, float)):
             return str(value)
         return None
-
+    
     def _stack_vars_dict(stack_obj: InfrastructureStack) -> dict[str, Any]:
         raw_stack_vars = getattr(stack_obj, "stack_vars", None)
         if isinstance(raw_stack_vars, dict):
@@ -1531,15 +1526,15 @@ def _build_infra_diagram_payload(
                 if isinstance(parsed, dict):
                     return parsed
         return {}
-
+    
     def _extract_region(stack_obj: InfrastructureStack, values: dict[str, Any]) -> tuple[str, str]:
         candidates: list[str] = []
-
+        
         for key in ("region", "aws_region", "provider_region"):
             candidate = _safe_string(values.get(key))
             if candidate:
                 candidates.append(candidate)
-
+        
         availability_zone = _safe_string(values.get("availability_zone"))
         if not availability_zone:
             availability_zones = values.get("availability_zones")
@@ -1549,13 +1544,13 @@ def _build_infra_diagram_payload(
             region_candidate = re.sub(r"[a-z]$", "", availability_zone)
             if region_candidate:
                 candidates.append(region_candidate)
-
+        
         stack_vars = _stack_vars_dict(stack_obj)
         for key in ("region", "aws_region", "AWS_REGION", "provider_region"):
             candidate = _safe_string(stack_vars.get(key))
             if candidate:
                 candidates.append(candidate)
-
+        
         metadata = {}
         try:
             metadata = stack_obj.get_iac_state_metadata()
@@ -1565,31 +1560,31 @@ def _build_infra_diagram_payload(
             candidate = _safe_string(metadata.get("region"))
             if candidate:
                 candidates.append(candidate)
-
+        
         region_value = None
         for candidate in candidates:
             if candidate:
                 region_value = candidate
                 break
-
+        
         if not region_value:
             return "unknown-region", "Unknown Region"
-
+        
         region_key = slugify(region_value) or region_value.lower()
         return region_key, region_value
-
+    
     def _extract_subnet(values: dict[str, Any]) -> tuple[str, str]:
         subnet_value: str | None = None
-
+        
         direct_keys = ["subnet_id", "subnet", "network_interface_subnet_id"]
         list_keys = ["subnet_ids", "subnets", "availability_zone_ids"]
-
+        
         for key in direct_keys:
             candidate = _safe_string(values.get(key))
             if candidate:
                 subnet_value = candidate
                 break
-
+        
         if not subnet_value:
             for key in list_keys:
                 raw_candidate = values.get(key)
@@ -1603,15 +1598,15 @@ def _build_infra_diagram_payload(
                 if item_values:
                     subnet_value = ", ".join(sorted(set(item_values)))
                     break
-
+        
         if not subnet_value:
             return "no-subnet", "No Subnet"
-
+        
         subnet_key = slugify(subnet_value) or re.sub(r"[^a-z0-9]+", "-", subnet_value.lower())
         if not subnet_key:
             subnet_key = "no-subnet"
         return subnet_key, subnet_value
-
+    
     def _resource_type_label(resource_type: str | None) -> str:
         if not resource_type:
             return "Resource"
@@ -1620,13 +1615,13 @@ def _build_infra_diagram_payload(
             cleaned = "AWS " + cleaned[4:]
         cleaned = cleaned.replace("_", " ")
         return cleaned.title()
-
+    
     def _resource_display_name(
-        resource_payload: dict[str, Any],
-        values: dict[str, Any],
-        fallback: str,
-        *,
-        tag_name: str | None = None,
+            resource_payload: dict[str, Any],
+            values: dict[str, Any],
+            fallback: str,
+            *,
+            tag_name: str | None = None,
     ) -> str:
         candidates = [
             tag_name,
@@ -1640,29 +1635,29 @@ def _build_infra_diagram_payload(
             if candidate:
                 return str(candidate)
         return "Resource"
-
+    
     nodes_by_uid: dict[str, dict[str, Any]] = {}
-
+    
     for stack in stack_list:
         raw_resources = stack.resources
         if raw_resources in (None, {}, []):
             continue
-
+        
         normalized_resources = common.ensure_list(raw_resources)
         stack_env_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
         stack_env_label = stack_env_enum.label() if stack_env_enum else (stack.env_type or "Unknown")
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         stack_type_label = stack_type_enum.label() if stack_type_enum else (stack.stack_type or "Unknown")
-
+        
         for index, raw_resource in enumerate(normalized_resources):
             resource_payload = _parse_resource(raw_resource)
             values = _resolve_values(resource_payload)
-
+            
             resource_type_value = resource_payload.get("type") or resource_payload.get("resource_type")
             resource_type_normalized = _safe_string(resource_type_value)
             if resource_type_normalized and resource_type_normalized.lower() in {"null", "null_resource"}:
                 continue
-
+            
             resource_type_base = (
                 resource_type_normalized.split(".", 1)[0].lower()
                 if resource_type_normalized
@@ -1670,32 +1665,32 @@ def _build_infra_diagram_payload(
             )
             if resource_type_base == "aws_region":
                 continue
-
+            
             resource_address = resource_payload.get("address") or resource_payload.get("name")
             identity_basis = resource_address or f"{stack.stack_name}:{resource_payload.get('type') or 'resource'}:{index}"
             uid = uuid.uuid5(uuid.NAMESPACE_URL, f"{diagram_namespace}:{stack.id}:{identity_basis}").hex
-
+            
             if resource_address:
                 address_lookup_by_stack[stack.id][resource_address] = uid
                 global_address_lookup[resource_address].append(uid)
-
+            
             depends_on_candidates = resource_payload.get("depends_on") or resource_payload.get("dependencies") or []
             depends_on_raw: list[str] = [
                 str(dep)
                 for dep in common.ensure_list(depends_on_candidates)
                 if isinstance(dep, str)
             ]
-
+            
             tags = values.get("tags") if isinstance(values.get("tags"), dict) else None
             tag_name = None
             if isinstance(tags, dict):
                 raw_tag_name = tags.get("Name") or tags.get("name")
                 if raw_tag_name:
                     tag_name = str(raw_tag_name)
-
+            
             resource_name_value = values.get("name")
             identifier_value = values.get("identifier") or values.get("id")
-
+            
             arn_value = values.get("arn")
             arn = str(arn_value) if isinstance(arn_value, str) else None
             console_url = None
@@ -1704,20 +1699,20 @@ def _build_infra_diagram_payload(
                     console_url = aws_console_url_from_arn(arn)
                 except Exception as exc:
                     logging.exception(exc)
-
+            
             display_name = _resource_display_name(resource_payload, values, identity_basis, tag_name=tag_name)
             if display_name.strip().lower() == "null":
                 continue
-
+            
             resource_type_label = _resource_type_label(
                 resource_payload.get("type") or resource_payload.get("resource_type")
             )
             if resource_type_label.strip().lower() == "aws region":
                 continue
-
+            
             region_key, region_label = _extract_region(stack, values)
             subnet_key, subnet_label = _extract_subnet(values)
-
+            
             node = {
                 "uid": uid,
                 "address": resource_address,
@@ -1747,16 +1742,16 @@ def _build_infra_diagram_payload(
                     "env_label": stack_env_label,
                 },
             }
-
+            
             nodes.append(node)
             nodes_by_uid[uid] = node
             stack_resource_counts[stack.id] += 1
-
+    
     for node in nodes:
         resolved_dependencies: list[str] = []
         unresolved_dependencies: list[str] = []
         stack_id = node["stack"]["id"]
-
+        
         for dependency_key in node.get("depends_on_raw", []):
             resolved_uid = address_lookup_by_stack.get(stack_id, {}).get(dependency_key)
             if not resolved_uid:
@@ -1767,14 +1762,14 @@ def _build_infra_diagram_payload(
                 resolved_dependencies.append(resolved_uid)
             else:
                 unresolved_dependencies.append(dependency_key)
-
+        
         node["dependencies"] = resolved_dependencies
         node["external_dependencies"] = unresolved_dependencies
-
+    
     dependency_sources: set[str] = set()
     for node in nodes:
         dependency_sources.update(node.get("dependencies", []))
-
+    
     filtered_nodes: list[dict[str, Any]] = []
     for node in nodes:
         if not node.get("arn"):
@@ -1782,33 +1777,33 @@ def _build_infra_diagram_payload(
         if node["uid"] in dependency_sources:
             continue
         filtered_nodes.append(node)
-
+    
     nodes = filtered_nodes
     nodes_by_uid = {node["uid"]: node for node in nodes}
-
+    
     stack_resource_counts = defaultdict(int)
     for node in nodes:
         stack_resource_counts[node["stack"]["id"]] += 1
-
+    
     level_cache: dict[str, int] = {}
-
+    
     def _resolve_level(node_uid: str, ancestry: set[str] | None = None) -> int:
         if node_uid in level_cache:
             return level_cache[node_uid]
-
+        
         node_payload = nodes_by_uid.get(node_uid)
         if not node_payload:
             level_cache[node_uid] = 0
             return 0
-
+        
         dependencies = node_payload.get("dependencies") or []
         if not dependencies:
             level_cache[node_uid] = 0
             return 0
-
+        
         if ancestry is None:
             ancestry = set()
-
+        
         if node_uid in ancestry:
             logger.warning(
                 "Detected dependency cycle while computing architecture diagram levels",
@@ -1816,7 +1811,7 @@ def _build_infra_diagram_payload(
             )
             level_cache[node_uid] = 0
             return 0
-
+        
         ancestry.add(node_uid)
         dependency_levels = [
             _resolve_level(dep_uid, ancestry)
@@ -1824,17 +1819,17 @@ def _build_infra_diagram_payload(
             if dep_uid in nodes_by_uid
         ]
         ancestry.remove(node_uid)
-
+        
         level_value = (max(dependency_levels) + 1) if dependency_levels else 0
         level_cache[node_uid] = level_value
         return level_value
-
+    
     levels: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for node in nodes:
         node_level = _resolve_level(node["uid"])
         node["level"] = node_level
         levels[node_level].append(node)
-
+    
     level_entries: list[dict[str, Any]] = []
     for level_number in sorted(levels.keys()):
         resources_in_level = levels[level_number]
@@ -1849,7 +1844,7 @@ def _build_infra_diagram_payload(
         for order_index, resource in enumerate(resources_in_level):
             resource["order_index"] = order_index
             resource["dom_id"] = f"architecture-node-{resource['uid']}"
-
+        
         region_group_map: dict[str, dict[str, Any]] = OrderedDict()
         for resource in resources_in_level:
             region_key = resource.get("region_key") or "unknown-region"
@@ -1862,7 +1857,7 @@ def _build_infra_diagram_payload(
                     "subnet_map": OrderedDict(),
                 },
             )
-
+            
             subnet_key = resource.get("subnet_key") or "no-subnet"
             subnet_label = resource.get("subnet_label") or "No Subnet"
             subnet_entry = region_entry["subnet_map"].setdefault(
@@ -1874,47 +1869,47 @@ def _build_infra_diagram_payload(
                 },
             )
             subnet_entry["nodes"].append(resource)
-
+        
         region_groups: list[dict[str, Any]] = []
         ungrouped_nodes: list[dict[str, Any]] = []
-
+        
         for region_entry in region_group_map.values():
             subnet_groups = list(region_entry["subnet_map"].values())
             subnet_groups.sort(key=lambda item: item["label"] or "")
-
+            
             region_label_value = _safe_string(region_entry.get("label")) or ""
             region_key_value = region_entry.get("key") or ""
             is_placeholder_region = (
-                not region_label_value
-                or region_label_value.lower() == "unknown region"
-                or region_key_value == "unknown-region"
+                    not region_label_value
+                    or region_label_value.lower() == "unknown region"
+                    or region_key_value == "unknown-region"
             )
-
+            
             all_region_nodes: list[dict[str, Any]] = []
             for subnet_entry in subnet_groups:
                 all_region_nodes.extend(subnet_entry.get("nodes", []))
-
+            
             if is_placeholder_region:
                 ungrouped_nodes.extend(all_region_nodes)
                 continue
-
+            
             meaningful_subnet_groups: list[dict[str, Any]] = []
             subnet_free_nodes: list[dict[str, Any]] = []
-
+            
             for subnet_entry in subnet_groups:
                 subnet_label_value = _safe_string(subnet_entry.get("label")) or ""
                 subnet_key_value = subnet_entry.get("key") or ""
                 is_placeholder_subnet = (
-                    not subnet_label_value
-                    or subnet_label_value.lower() == "no subnet"
-                    or subnet_key_value == "no-subnet"
+                        not subnet_label_value
+                        or subnet_label_value.lower() == "no subnet"
+                        or subnet_key_value == "no-subnet"
                 )
-
+                
                 if is_placeholder_subnet:
                     subnet_free_nodes.extend(subnet_entry.get("nodes", []))
                 else:
                     meaningful_subnet_groups.append(subnet_entry)
-
+            
             region_groups.append(
                 {
                     "key": region_entry["key"],
@@ -1923,9 +1918,9 @@ def _build_infra_diagram_payload(
                     "nodes": subnet_free_nodes,
                 }
             )
-
+        
         region_groups.sort(key=lambda item: item["label"] or "")
-
+        
         level_entries.append(
             {
                 "level": level_number,
@@ -1934,15 +1929,15 @@ def _build_infra_diagram_payload(
                 "ungrouped_nodes": ungrouped_nodes,
             }
         )
-
+    
     edges: list[dict[str, str]] = []
     for node in nodes:
         for dependency_uid in node.get("dependencies", []):
             if dependency_uid in nodes_by_uid:
                 edges.append({"from": dependency_uid, "to": node["uid"]})
-
+    
     total_resources = len(nodes)
-
+    
     stack_meta_lookup = {str(entry.get("id")): entry for entry in stack_entries}
     stack_summaries: list[dict[str, Any]] = []
     for stack in stack_list:
@@ -1960,7 +1955,7 @@ def _build_infra_diagram_payload(
                 "resource_count": stack_resource_counts.get(stack.id, 0),
             }
         )
-
+    
     return {
         "stacks": stack_summaries,
         "nodes": nodes,
@@ -1983,19 +1978,19 @@ def _initiative_tab_context_infra_diagram(initiative: Initiative) -> dict:
         .all()
         .order_by("env_type", "stack_type", "created_timestamp")
     )
-
+    
     stack_entries = _build_infrastructure_stack_entries(
         stacks,
         scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
     )
-
+    
     architecture_diagram = _build_infra_diagram_payload(
         stacks,
         stack_entries=stack_entries,
         diagram_namespace=f"initiative-architecture-{initiative.id}",
         scope_label_fn=lambda stack: "Initiative" if stack.initiative_id == initiative.id else "Business",
     )
-
+    
     return {
         "architecture_diagram": architecture_diagram,
     }
@@ -2073,11 +2068,11 @@ def _build_infrastructure_stack_entries(
         stack_type_enum = InfrastructureStackType.valid_or(getattr(stack, "stack_type", None), None)
         env_enum = EnvironmentType.valid_or(getattr(stack, "env_type", None), None)
         region = env_enum.get_aws_region() if env_enum else default_region
-
+        
         metadata = stack.get_iac_state_metadata() if hasattr(stack, "get_iac_state_metadata") else {}
         provider = stack.iac_provider if hasattr(stack, "iac_provider") else getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
         provider = (provider or "unknown").lower()
-
+        
         cloud_account = getattr(stack, "cloud_account", None)
         cloud_account_name = getattr(cloud_account, "name", None)
         cloud_account_provider = getattr(cloud_account, "provider", None)
@@ -2086,7 +2081,7 @@ def _build_infrastructure_stack_entries(
             provider_enum = CloudProvider.valid_or(cloud_account_provider, None)
             if provider_enum:
                 cloud_account_provider_label = provider_enum.label()
-
+        
         console_url = metadata.get("console_url")
         if provider == "cloudformation" and not console_url:
             if stack.stack_arn:
@@ -2172,22 +2167,22 @@ def _initiative_tab_context_infrastructure_stacks(initiative: Initiative) -> dic
         .order_by("env_type", "stack_type", "created_timestamp")
     )
     stacks = list(stacks_qs)
-
+    
     def scope_label_fn(stack: InfrastructureStack) -> str:
         return "Initiative" if stack.initiative_id == initiative.id else "Business"
-
+    
     stack_entries = _build_infrastructure_stack_entries(
         stacks,
         scope_label_fn=scope_label_fn,
     )
-
+    
     architecture_diagram = _build_infra_diagram_payload(
         stacks,
         stack_entries=stack_entries,
         diagram_namespace=f"initiative-infrastructure-stacks-{initiative.id}",
         scope_label_fn=scope_label_fn,
     )
-
+    
     return {
         "stack_entries": stack_entries,
         "child_task_count": initiative.tasks.count(),
@@ -3026,7 +3021,7 @@ def view_self_driver_iteration(request, iteration_id, tab='routing'):
         running_processes_count=running_processes_count,
         llm_requests=llm_requests_page,
     )
-
+    
     context = {
         "iteration": iteration,
         "previous_iteration": previous_iteration,
@@ -3295,7 +3290,7 @@ def action_business_define_architecture(request, business_id):
     
     business.architecture = "Architecture generation in progress"
     business.save()
-
+    
     PubSubManager.publish(
         PubSubMessageType.BUSINESS_ARCHITECTURE_GENERATION_REQUESTED,
         payload={
@@ -3716,15 +3711,19 @@ def action_business_production_push(request, business_id):
         }
     )
     
+    latest_git_commit_id, latest_git_commit_msg = GitWrapper.get_latest_commit(business.github_repo_url)
+    
     task = Task.objects.create(
         id=f"task_production_push_{business.service_token}_{common.gen_random_token(8)}",
         initiative=initiative,
         task_type=TaskType.PRODUCTION_DEPLOYMENT,
         status=TaskStatus.NOT_STARTED,
-        description=(
-            "Production push requested on "
-            f"{formats.date_format(timezone.now(), 'DATETIME_FORMAT')}"
-        ),
+        description=textwrap.dedent(f"""
+            Production push requested on {formats.date_format(timezone.now(), 'DATETIME_FORMAT')}
+            
+            Latest commit: {latest_git_commit_id}
+            {latest_git_commit_msg}
+        """),
         risk_notes="",
         completion_criteria=["Deployment completed successfully in production."],
         comment_requests=[],
@@ -3734,6 +3733,8 @@ def action_business_production_push(request, business_id):
         requires_test=False,
         created_by=getattr(request.user, "username", None) or "system",
     )
+    
+    PubSubManager.publish_id(PubSubMessageType.DEPLOYMENT_WORK_REQUESTED, task.id)
     
     messages.success(
         request,
@@ -3983,19 +3984,19 @@ def action_update_task(request, task_id):
 def action_business_green_light(request, business_id):
     if request.method != 'POST':
         raise Exception()
-
+    
     try:
         business = get_object_or_404(Business, pk=business_id)
-
+        
         Business.objects.filter(id=business_id).update(
             status=BusinessStatus.ACTIVE.value
         )
-
+        
         PubSubManager.publish_id(
             PubSubMessageType.BOARD_GUIDANCE_UPDATED,
             business_id,
         )
-
+        
         messages.success(request, f'"{business.name}" is now green lit and active!')
         return redirect(reverse('view_business', args=[business_id]))
     except Business.DoesNotExist:
@@ -4019,7 +4020,7 @@ def action_update_business(request, business_id):
         erie_iron_business = Business.get_erie_iron_business()
         if business.id == erie_iron_business.id:
             name = erie_iron_business.name
-            
+        
         summary = rget(request, 'summary', '').strip()
         raw_idea = rget(request, 'raw_idea', '').strip()
         value_prop = rget(request, 'value_prop', '').strip()
@@ -4040,7 +4041,7 @@ def action_update_business(request, business_id):
         needs_domain = request.POST.get('needs_domain') == 'on'
         domain = rget(request, 'domain', '').strip()
         domain_certificate_arn = rget(request, 'domain_certificate_arn', '').strip()
-
+        
         # Prepare update data
         update_data = {
             'name': name,
@@ -4236,10 +4237,10 @@ def action_destroy_stack(request, stack_id):
     if EnvironmentType.PRODUCTION.eq(stack.env_type):
         messages.error(request, 'Production stacks cannot be destroyed from this interface.')
         return redirect(reverse('view_stack', args=[stack_id]))
-
+    
     stack_display = stack.stack_name or stack.stack_namespace_token or str(stack.id)
     business_id = stack.business_id
-
+    
     try:
         stack.delete_resources()
     except Exception as exc:
@@ -4249,14 +4250,14 @@ def action_destroy_stack(request, stack_id):
             f'Failed to destroy infrastructure resources for stack "{stack_display}": {exc}'
         )
         return redirect(reverse('view_stack', args=[stack_id]))
-
+    
     try:
         stack.delete()
     except Exception as exc:
         logger.exception(exc)
         messages.error(request, f'Failed to delete stack "{stack_display}": {exc}')
         return redirect(reverse('view_stack', args=[stack_id]))
-
+    
     messages.success(request, f'Stack "{stack_display}" destroyed successfully.')
     return redirect(reverse('view_business_tab', args=['infrastructure-stacks', business_id]))
 
@@ -4281,7 +4282,7 @@ def view_stack(request, stack_id):
         if stack.initiative_id
         else "Business"
     )
-   
+    
     stack_vars_pretty = common.json_format_pretty(stack.stack_vars)
     iac_state_metadata = stack_entry.get("iac_state_metadata")
     iac_state_metadata_pretty = common.json_format_pretty(iac_state_metadata)
@@ -4573,7 +4574,7 @@ def api_codefile_content(request, codefile_id):
 def api_business_cloud_accounts(request, business_id):
     if request.method not in ("GET",):
         raise ValueError("Unsupported method")
-
+    
     business = get_object_or_404(Business, pk=business_id)
     accounts = [
         _serialize_cloud_account(account)
@@ -4600,25 +4601,25 @@ def api_business_cloud_account_create(request, business_id):
         payload = _parse_json_body(request)
     except ValueError as exc:
         return {"error": str(exc)}
-
+    
     name = (payload.get("name") or "").strip()
     if not name:
         return {"error": "Name is required."}
-
+    
     provider = CloudProvider.valid_or(payload.get("provider"), CloudProvider.AWS)
     account_identifier = (payload.get("account_identifier") or "").strip() or None
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-
+    
     if provider.eq(CloudProvider.AWS):
         region = (payload.get("region") or metadata.get("region") or "").strip()
         if region:
             metadata["region"] = region
     elif provider is not None and CloudProvider.AWS.neq(provider):
         return {"error": f"Provider {provider.value} is not supported yet."}
-
+    
     raw_credentials = payload.get("credentials")
     credentials_payload = raw_credentials if isinstance(raw_credentials, dict) else {}
-
+    
     if provider.eq(CloudProvider.AWS):
         if not credentials_payload.get("role_arn"):
             return {"error": "AWS role_arn is required."}
@@ -4629,10 +4630,10 @@ def api_business_cloud_account_create(request, business_id):
                     raise ValueError
             except (TypeError, ValueError):
                 return {"error": "session_duration must be between 900 and 43200 seconds."}
-
+    
     is_default_dev = common.parse_bool(payload.get("is_default_dev"))
     is_default_production = common.parse_bool(payload.get("is_default_production"))
-
+    
     try:
         with transaction.atomic():
             cloud_account = CloudAccount.objects.create(
@@ -4659,7 +4660,7 @@ def api_business_cloud_account_create(request, business_id):
     except IntegrityError as exc:
         logger.exception(exc)
         return {"error": "A cloud account with this name already exists."}
-
+    
     return {
         "account": _serialize_cloud_account(cloud_account),
     }
@@ -4669,30 +4670,30 @@ def api_business_cloud_account_create(request, business_id):
 def api_business_cloud_account_update(request, business_id, account_id):
     if request.method not in ("POST", "PUT", "PATCH"):
         raise ValueError("Unsupported method")
-
+    
     business = get_object_or_404(Business, pk=business_id)
     cloud_account = get_object_or_404(CloudAccount, pk=account_id, business=business)
-
+    
     try:
         payload = _parse_json_body(request)
     except ValueError as exc:
         return {"error": str(exc)}
-
+    
     updates: list[str] = []
     default_updates: dict[str, bool] = {}
-
+    
     if "name" in payload:
         name = (payload.get("name") or "").strip()
         if not name:
             return {"error": "Name cannot be blank."}
         cloud_account.name = name
         updates.append("name")
-
+    
     if "account_identifier" in payload:
         identifier = (payload.get("account_identifier") or "").strip() or None
         cloud_account.account_identifier = identifier
         updates.append("account_identifier")
-
+    
     if "metadata" in payload:
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         if cloud_account.provider == CloudProvider.AWS.value:
@@ -4706,22 +4707,22 @@ def api_business_cloud_account_update(request, business_id, account_id):
         metadata["region"] = (payload.get("region") or "").strip()
         cloud_account.metadata = metadata
         updates.append("metadata")
-
+    
     if "is_default_dev" in payload:
         new_val = common.parse_bool(payload.get("is_default_dev"))
         cloud_account.is_default_dev = new_val
         updates.append("is_default_dev")
         default_updates["dev"] = new_val
-
+    
     if "is_default_production" in payload:
         new_val = common.parse_bool(payload.get("is_default_production"))
         cloud_account.is_default_production = new_val
         updates.append("is_default_production")
         default_updates["production"] = new_val
-
+    
     raw_credentials = payload.get("credentials")
     credentials_payload = raw_credentials if isinstance(raw_credentials, dict) and raw_credentials else None
-
+    
     try:
         with transaction.atomic():
             if updates:
@@ -4740,7 +4741,7 @@ def api_business_cloud_account_update(request, business_id, account_id):
     except IntegrityError as exc:
         logger.exception(exc)
         return {"error": "A cloud account with this name already exists."}
-
+    
     return {
         "account": _serialize_cloud_account(cloud_account),
     }
@@ -4751,7 +4752,7 @@ def api_business_cloud_account_update(request, business_id, account_id):
 def api_business_cloud_account_delete(request, business_id, account_id):
     business = get_object_or_404(Business, pk=business_id)
     cloud_account = get_object_or_404(CloudAccount, pk=account_id, business=business)
-
+    
     cloud_accounts.clear_cached_credentials(cloud_account.id)
     cloud_account.delete()
     return {"success": True}
@@ -4986,17 +4987,17 @@ def fetch_llm_requests(request, scope: str, entity_id: str):
     except (TypeError, ValueError):
         page_size = LLM_REQUESTS_PAGE_SIZE
     page_size = max(page_size, 1)
-
+    
     try:
         page_number = int(request.POST.get('page_number', 0))
     except (TypeError, ValueError):
         page_number = 0
     page_number = max(page_number, 0)
-
+    
     sort_by = request.POST.get('sort_by', 'timestamp') or 'timestamp'
     if sort_by not in {'timestamp'}:
         sort_by = 'timestamp'
-
+    
     scope = (scope or '').lower()
     if scope == 'business':
         owner = get_object_or_404(Business, pk=entity_id)
@@ -5012,7 +5013,7 @@ def fetch_llm_requests(request, scope: str, entity_id: str):
         queryset = owner.llmrequest_set.all()
     else:
         raise Http404
-
+    
     search_term = (request.POST.get('search') or '').strip()
     if search_term:
         queryset = queryset.annotate(
@@ -5025,14 +5026,14 @@ def fetch_llm_requests(request, scope: str, entity_id: str):
             | Q(input_messages_text__icontains=search_term)
             | Q(resp_json_text__icontains=search_term)
         )
-
+    
     ordered_qs = queryset.order_by(f"-{sort_by}")
     page_rows, _ = _paginate_llm_requests(ordered_qs, page_number=page_number, page_size=page_size)
-
+    
     context = {
         "llm_requests": page_rows,
     }
-
+    
     return render(request, "llm_requests/request_cards_partial.html", context)
 
 
@@ -5041,25 +5042,25 @@ def fetch_pubsub_messages(request):
     page_size = int(request.POST.get('page_size', 20))
     page_number = int(request.POST.get('page_number', 0))
     sort_by = request.POST.get('sort_by', 'created_at')
-
+    
     message_types_raw = request.POST.get('message_types', '')
     statuses_raw = request.POST.get('statuses', '')
-
+    
     message_types = [value for value in message_types_raw.split(',') if value]
     statuses = [value for value in statuses_raw.split(',') if value]
-
+    
     offset = page_number * page_size
     messages_qs = PubSubMessage.objects.all()
     if message_types:
         messages_qs = messages_qs.filter(message_type__in=message_types)
     else:
         messages_qs = messages_qs.exclude(message_type__in=DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES)
-
+    
     if statuses:
         messages_qs = messages_qs.filter(status__in=statuses)
-
+    
     messages = messages_qs.order_by(f"-{sort_by}")[offset:offset + page_size]
-
+    
     context = {
         "pubsub_messages": messages,
         "redirect_target": reverse('view_portfolio_tab', args=['pubsub-messages']),
@@ -5083,9 +5084,9 @@ def action_retry_pubsub_message(request, message_id):
     
     PubSubMessage.reprocess([message.id], message.env)
     messages.success(request, f"PubSub message {str(message_id)[:8]} has been marked for retry.")
-
+    
     next_url = request.POST.get('next') or request.META.get('HTTP_REFERER')
     if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}, request.is_secure()):
         return HttpResponseRedirect(next_url)
-
+    
     return HttpResponseRedirect(reverse('view_pubsub_message_details', args=[message_id]))

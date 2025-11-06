@@ -1,10 +1,8 @@
-import glob
 import logging
 import os
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import requests
@@ -23,7 +21,7 @@ class GitWrapper:
             source_root.mkdir(parents=True, exist_ok=True)
         
         self.source_root = source_root
-
+    
     def exec(self, *commands) -> 'GitWrapper':
         github_token = get_github_token()
         if not github_token:
@@ -99,7 +97,7 @@ class GitWrapper:
             except:
                 # If pop fails due to conflicts, keep the stash for manual resolution
                 logging.warning("Stash pop failed - conflicts may need manual resolution")
-                raise 
+                raise
         
         return self
     
@@ -172,7 +170,7 @@ class GitWrapper:
     def mk_venv(self) -> Path:
         venv_path = self.source_root / "venv"
         pip_executable = venv_path / "bin" / "pip" if os.name != "nt" else venv_path / "Scripts" / "pip.exe"
-
+        
         if not pip_executable.exists():
             run_cmd(
                 self.source_root,
@@ -213,6 +211,71 @@ class GitWrapper:
         
         return venv_path
     
-   
+    @staticmethod
+    def get_latest_commit(repo_url: str | None = None) -> tuple[str, str]:
+        remote_url = repo_url.strip() if repo_url else None
+        if not remote_url:
+            raise Exception("Git remote origin URL is not configured or provided")
+        
+        cleaned = remote_url.strip()
+        if not cleaned:
+            raise Exception("no remote url")
+        
+        github_token = get_github_token()
+        if not github_token:
+            raise Exception("unable to fetch github token from aws secrets")
+        
+        if cleaned.endswith(".git"):
+            cleaned = cleaned[:-4]
+        
+        path_fragment = None
+        
+        if cleaned.startswith("git@github.com:"):
+            path_fragment = cleaned.split(":", 1)[1]
+        elif "github.com/" in cleaned:
+            path_fragment = cleaned.split("github.com/", 1)[1]
+        elif "github.com:" in cleaned:
+            path_fragment = cleaned.split("github.com:", 1)[1]
+        
+        if not path_fragment:
+            raise Exception("no path fragment")
+        
+        path_fragment = path_fragment.lstrip("/")
+        owner, repo = path_fragment.split("/", 2)
+        
+        response = requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}/commits",
+            headers={
+                "Authorization": f"token {github_token}",
+                "Accept": "application/vnd.github+json",
+            },
+            params={"per_page": 1},
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            error_message = (
+                f"GitHub API returned {response.status_code} for {owner}/{repo}: {response.text}"
+            )
+            raise Exception(error_message)
+        
+        payload = response.json()
+        if not isinstance(payload, list) or not payload:
+            raise Exception(f"GitHub API response for {owner}/{repo} did not include commits")
+        
+        commit_obj = payload[0]
+        commit_sha = commit_obj.get("sha")
+        commit_message = ""
+        
+        commit_details = commit_obj.get("commit") or {}
+        if isinstance(commit_details, dict):
+            commit_message = commit_details.get("message") or ""
+        
+        if not commit_sha:
+            raise Exception("GitHub API response missing commit SHA")
+        
+        return commit_sha, commit_message
+
+
 def get_github_token():
     return aws_utils.get_secret("github-token").get("token")

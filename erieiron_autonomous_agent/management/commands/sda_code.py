@@ -31,8 +31,12 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
-        initiative_id = os.getenv("LOCAL_DEV_INITIATIVE", options.get("initiative_id"))
-        if initiative_id:
+        task_id = options.get("task_id")
+        if not task_id:
+            initiative_id = os.getenv("LOCAL_DEV_INITIATIVE", options.get("initiative_id"))
+            if not initiative_id:
+                raise Exception(f"need a task or initiative id")
+            
             task: Task = (
                 Initiative.objects.get(id=initiative_id)
                 .tasks.exclude(status__in=[TaskStatus.BLOCKED, TaskStatus.COMPLETE])
@@ -40,8 +44,6 @@ class Command(BaseCommand):
                 .first()
             )
             task_id = task.id
-        else:
-            task_id = options.get("task_id")
         
         print(textwrap.dedent(f"""
         

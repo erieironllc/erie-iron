@@ -3,40 +3,40 @@
 <div class="task-overview">
     <header class="task-overview__header">
         <div class="d-flex justify-content-between align-items-start flex-wrap w-100">
-            <div class="task-overview__intro">
-                <div class="d-flex justify-content-between align-content-start">
-                    <h1 class="task-overview__title">{{ task.get_name }}</h1>
-                    <div class="task-overview__meta ">
-                        <div class="d-flex justify-content-between align-items-start gap-3 w-100">
-                            <div class="task-overview__chips w-100">
-                                <div style="white-space: nowrap" class="d-flex justify-content-center  task-overview__chip w-100
+            <div class="d-flex justify-content-between align-content-start w-100">
+                <h1 class="task-overview__title">{{ task.get_name }}</h1>
+                <div class="task-overview__meta ">
+                    <div class="d-flex justify-content-between align-items-start gap-3 w-100">
+                        <div class="task-overview__chips w-100">
+                            <div style="white-space: nowrap" class="d-flex justify-content-center  task-overview__chip w-100
                                     {% if task.status == "COMPLETE" %}text-bg-success
                                     {% elif task.status == "BLOCKED" %}text-bg-danger
                                     {% elif task.status == "IN_PROGRESS" %}text-bg-primary
                                     {% else %}text-bg-secondary
                                     {% endif %}">
-                                    {{ task.status|label }}
-                                </div>
+                                {{ task.status|label }}
                             </div>
                         </div>
-                        {% if task.role_assignee %}
-                            <div class="task-overview__meta-item">
-                                <span class="task-overview__meta-label">Owner</span>
-                                <span class="task-overview__meta-value">{{ task.role_assignee|label }}</span>
-                            </div>
-                        {% endif %}
-                        <div class="task-overview__meta-item">
-                            <span class="task-overview__meta-label">Created</span>
-                            <span class="task-overview__meta-value">{{ task.created_timestamp|date:"M j, Y" }}</span>
-                        </div>
-                        {% if task.max_budget_usd %}
-                            <div class="task-overview__meta-item">
-                                <span class="task-overview__meta-label">Budget</span>
-                                <span class="task-overview__meta-value">${{ task.max_budget_usd|floatformat:0 }}</span>
-                            </div>
-                        {% endif %}
                     </div>
+                    {% if task.role_assignee %}
+                        <div class="task-overview__meta-item">
+                            <span class="task-overview__meta-label">Owner</span>
+                            <span class="task-overview__meta-value">{{ task.role_assignee|label }}</span>
+                        </div>
+                    {% endif %}
+                    <div class="task-overview__meta-item">
+                        <span class="task-overview__meta-label">Created</span>
+                        <span class="task-overview__meta-value">{{ task.created_timestamp|date:"M j, Y" }}</span>
+                    </div>
+                    {% if task.max_budget_usd %}
+                        <div class="task-overview__meta-item">
+                            <span class="task-overview__meta-label">Budget</span>
+                            <span class="task-overview__meta-value">${{ task.max_budget_usd|floatformat:0 }}</span>
+                        </div>
+                    {% endif %}
                 </div>
+            </div>
+            <div class="task-overview__intro">
 
                 <div class="task-overview__summary markdown-container">
                     {{ task.description|markdown }}

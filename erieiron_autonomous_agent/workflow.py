@@ -133,6 +133,10 @@ def business_workflow(pubsub_manager: PubSubManager):
         T.CODING_WORK_REQUESTED,
         worker_coder.do_work,
         T.TASK_UPDATED
+    ).on(
+        T.DEPLOYMENT_WORK_REQUESTED,
+        worker_coder.do_work,
+        T.TASK_UPDATED
     )
     
     # Human

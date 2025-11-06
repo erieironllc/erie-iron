@@ -247,6 +247,7 @@ class PubSubMessageType(ErieEnum):
     INITIATIVE_DEFINITION_REQUESTED = auto()
     INITIATIVE_DEFINED = auto()
     INITIATIVE_GREEN_LIT = auto()
+    DEPLOYMENT_WORK_REQUESTED = auto()
     CODING_WORK_REQUESTED = auto()
     DESIGN_WORK_REQUESTED = auto()
     HUMAN_WORK_REQUESTED = auto()

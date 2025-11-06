@@ -49,7 +49,7 @@ from erieiron_autonomous_agent.models import (
     InfrastructureStack, Initiative,
 )
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-from erieiron_autonomous_agent.utils import cloud_accounts, codegen_utils
+from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader
 from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda, get_full_image_uri
@@ -278,6 +278,12 @@ def handle_agent_blocked(task_id, agent_blocked):
 
 
 def handle_goal_achieved(config):
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
+        Task.objects.filter(id=config.task.id).update(
+            status=TaskStatus.COMPLETE
+        )
+        return
+
     if TaskType.CODING_ML.eq(config.task_type):
         from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
         package_ml_artifacts(config)
@@ -1581,7 +1587,6 @@ def get_env_var_names(config: SelfDriverConfig) -> str:
     return ", ".join(env.keys())
 
 
-
 def build_env_flags(env):
     env_flags: list[str] = []
     for k in list(env.keys()):
@@ -1978,12 +1983,10 @@ def store_deploy_and_execution_logs(
                     "stderr": plan_result.get("stderr")
                 })
     
-    if not deploy_errors:
-        deploy_errors.append("No deployment errors.  Deploment completed successfully for all stacks")
-    
     config.current_iteration.log_content_deployment = {
         "schema": "opentofu/v1",
         "deployment_window_start": datetime.fromtimestamp(deployment_start_epoch, tz=dt_timezone.utc).isoformat(),
+        "deployment_successful": len(deploy_errors) == 0,
         "deployment_logs": deployment_logs,
         "deploy_errors": deploy_errors
     }
@@ -2511,51 +2514,15 @@ def compute_goal_achievement_gate(config: SelfDriverConfig, ) -> tuple[bool, str
 def evaluate_iteration(
         config: SelfDriverConfig
 ):
-    return
+    iteration = config.current_iteration
+    
     log_output = config.set_phase(SdaPhase.EVALUATE)
     if "no space left on device" in common.default_str(log_output).lower():
         subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
     
-    iteration = config.current_iteration
-    
     deploy_errors = common.get(iteration.log_content_deployment, "deploy_errors")
     runtime_errors = common.get(iteration.log_content_cloudwatch, "errors")
-    
-    logs_data = {
-        "Deployment Errors": deploy_errors,
-        "Runtime Errors (cloudwatch)": runtime_errors
-    }
-    
-    if iteration.log_content_execution:
-        logs_data["Runtime Logs (other)"] = iteration.log_content_execution
-    
-    iteration.exceptions = llm_chat(
-        "Error Extraction",
-        [
-            get_sys_prompt("log_parser_tofu.md"),
-            LlmMessage.user_from_data("Logs", logs_data)
-        ],
-        model=LlmModel.OPENAI_GPT_5_MINI,
-        tag_entity=config.current_iteration
-    ).text
-    iteration.save()
-    
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
-        goal_achieved_critera = textwrap.dedent(f"""
-            - Set `"goal_achieved": true` only if the logs contain no errors and the OpenTofu plan/apply completed successfully
-            - This is a production deployment task, so no automated tests should have been run
-         """)
-    else:
-        goal_achieved_critera = textwrap.dedent(f"""
-            **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
-            **if the OpenTofu plan/apply did not complete successfully, set `"goal_achieved": false`.**  
-            **If the test output shows "Ran 0 tests", set `"goal_achieved": false`.**  
-            **If any tests were skipped, set 'goal_achieved': false. Goal can only be set to true if all tests ran successfully without skips and the acceptance criteria are fully covered by the test suite.**  
-            - Set `"goal_achieved": true` only if the logs contain no errors, the task output clearly meets the stated GOAL, and test logs show that one or more tests were actually run.  
-            - If any errors or incomplete behaviors are detected in the logs, set `"goal_achieved": false`.  
-            - Base this determination only on the current logs—do not consider prior iterations.
-        """)
     
     if (
             TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type)
@@ -2563,6 +2530,31 @@ def evaluate_iteration(
             and not (runtime_errors or deploy_errors)
     ):
         raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
+    
+    iteration.exceptions = llm_chat(
+        "Error Extraction",
+        [
+            get_sys_prompt("log_parser_tofu.md"),
+            LlmMessage.user_from_data("Logs", {
+                "Deployment Errors": deploy_errors,
+                "Runtime Errors (cloudwatch)": runtime_errors,
+                "Runtime Logs (other)": iteration.log_content_execution or ""
+            })
+        ],
+        model=LlmModel.OPENAI_GPT_5_MINI,
+        tag_entity=config.current_iteration
+    ).text
+    iteration.save()
+    
+    goal_achieved_critera = textwrap.dedent(f"""
+        **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
+        **if the OpenTofu plan/apply did not complete successfully, set `"goal_achieved": false`.**  
+        **If the test output shows "Ran 0 tests", set `"goal_achieved": false`.**  
+        **If any tests were skipped, set 'goal_achieved': false. Goal can only be set to true if all tests ran successfully without skips and the acceptance criteria are fully covered by the test suite.**  
+        - Set `"goal_achieved": true` only if the logs contain no errors, the task output clearly meets the stated GOAL, and test logs show that one or more tests were actually run.  
+        - If any errors or incomplete behaviors are detected in the logs, set `"goal_achieved": false`.  
+        - Base this determination only on the current logs—do not consider prior iterations.
+    """)
     
     allow_goal_achieved, goal_achieved_reason = compute_goal_achievement_gate(
         config
