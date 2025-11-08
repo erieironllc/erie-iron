@@ -125,7 +125,7 @@ class OpenTofuStackManager:
         workdir = str(self.workspace_dir)
         command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *common.strings(args)]
         started_at = common.get_now()
-        logging.debug("Running OpenTofu command", extra={"command": command, "cwd": str(workdir)})
+        logging.info(f"{stage}: {command}")
         try:
             completed_process = subprocess.run(
                 common.strings(command),

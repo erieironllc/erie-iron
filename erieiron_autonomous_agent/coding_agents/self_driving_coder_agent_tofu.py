@@ -283,7 +283,7 @@ def handle_goal_achieved(config):
             status=TaskStatus.COMPLETE
         )
         return
-
+    
     if TaskType.CODING_ML.eq(config.task_type):
         from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
         package_ml_artifacts(config)
@@ -1424,8 +1424,8 @@ def build_container_image(
     ]
     
     # force a new container image tag to make sure OpenTofu updates
-    # if config.one_off_action:
-    #     container_image_tag_parts.append(str(time.time())[-5:])
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) or config.one_off_action:
+        container_image_tag_parts.append(str(time.time())[-5:])
     
     container_image_tag = sanitize_aws_name(container_image_tag_parts, max_length=128)
     
@@ -2240,7 +2240,12 @@ def build_iteration(config, container_env):
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
     
-    if config.current_iteration.version_number > 1:
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) or config.current_iteration.version_number < 2:
+        required_build_steps = {
+            BuildStep.CONTAINERS.value: True,
+            BuildStep.LAMBDAS.value: True
+        }
+    else:
         required_build_steps = llm_chat(
             "Plan Build Steps",
             [
@@ -2252,11 +2257,6 @@ def build_iteration(config, container_env):
             tag_entity=config.current_iteration,
             reasoning_effort=LlmReasoningEffort.LOW
         ).json()
-    else:
-        required_build_steps = {
-            BuildStep.CONTAINERS.value: True,
-            BuildStep.LAMBDAS.value: True
-        }
     
     if required_build_steps.get(BuildStep.LAMBDAS.value):
         lambda_datas = build_lambda_packages(
