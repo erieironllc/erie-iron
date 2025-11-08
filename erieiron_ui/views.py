@@ -50,7 +50,7 @@ from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, Busine
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import PubSubMessage
+from erieiron_common.models import PubSubMessage, Person
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
 logger = logging.getLogger(__name__)
@@ -404,6 +404,23 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
 
 def _portfolio_tab_available_logout(_: Business) -> bool:
     return True
+
+
+def _portfolio_tab_context_profile(_: Business, request: HttpRequest) -> dict:
+    user_email = getattr(request.user, 'email', '') or getattr(request.user, 'username', '')
+    
+    # Try to get the Person object by email
+    person = None
+    if user_email:
+        try:
+            person = Person.objects.get(email=user_email)
+        except Person.DoesNotExist:
+            pass
+    
+    return {
+        'user_email': user_email,
+        'personalization_info': person.personalization_info if person else '',
+    }
 
 
 def _portfolio_tab_context_logout(_: Business) -> dict:
@@ -897,6 +914,22 @@ def view_portfolio(request, tab: str = 'portfolio'):
     active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
     if not active_tab_entry or not active_tab_entry.get('available'):
         raise Http404
+    
+    # Handle profile form submission
+    if request.method == 'POST' and tab_slug == 'profile':
+        user_email = getattr(request.user, 'email', '') or getattr(request.user, 'username', '')
+        personalization_info = request.POST.get('personalization_info', '')
+        
+        if user_email:
+            try:
+                person = Person.objects.get(email=user_email)
+                person.personalization_info = personalization_info
+                person.save()
+                messages.success(request, 'Profile updated successfully.')
+            except Person.DoesNotExist:
+                messages.error(request, 'User profile not found.')
+        
+        return redirect('view_portfolio_tab', tab='profile')
     
     context = {
         "erieiron_business": erieiron_business,

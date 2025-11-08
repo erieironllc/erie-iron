@@ -58,6 +58,12 @@ class Person(BaseErieIronModel):
         default=None,
     )
     
+    personalization_info = models.TextField(
+        blank=True,
+        null=True,
+        help_text="User's personalization preferences and notes"
+    )
+    
     @staticmethod
     @lru_cache
     def get_system_person() -> 'Person':

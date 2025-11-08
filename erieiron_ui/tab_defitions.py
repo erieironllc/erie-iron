@@ -143,12 +143,10 @@ PORTFOLIO_TAB_DEFINITIONS = [
     # },
     TAB_DIVIDER,
     {
-        "slug": "logout",
-        "label": "Log Out",
-        "availability_fn": views._portfolio_tab_available_logout,
-        "context_fn": views._portfolio_tab_context_logout,
-        "is_action_tab": True,
-        "url_name": "action_logout",
+        "slug": "profile",
+        "label": "Profile",
+        "template": "portfolio/tabs/profile.html",
+        "context_fn": views._portfolio_tab_context_profile,
     },
 ]
 
