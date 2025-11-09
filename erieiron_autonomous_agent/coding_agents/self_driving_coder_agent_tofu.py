@@ -2265,12 +2265,16 @@ def build_iteration(config, container_env):
     else:
         lambda_datas = []
     
-    previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
-    tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
-        config.ecr_repo_name,
-        previous_container_tag,
-        config.env_type.get_aws_region()
-    )
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
+        previous_container_tag = None
+        tag_exists_in_ecr = False
+    else:
+        previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
+        tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
+            config.ecr_repo_name,
+            previous_container_tag,
+            config.env_type.get_aws_region()
+        )
     
     if (
             tag_exists_in_ecr or
