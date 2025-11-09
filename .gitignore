@@ -189,3 +189,4 @@ __pycache__/
 /.claude/
 /opentofu/workspaces/
 /opentofu/swizzled_modules/
+/.ai_coding
