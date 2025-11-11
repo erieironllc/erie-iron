@@ -534,12 +534,15 @@ class CloudformationResourceType(ErieEnum):
 class InfrastructureStackType(ErieEnum):
     FOUNDATION = auto()
     APPLICATION = auto()
+    TARGET_ACCOUNT_BOOTSTRAP = auto()
     
     def get_opentofu_config(self) -> str:
         if InfrastructureStackType.FOUNDATION.eq(self):
             return "./opentofu/foundation/stack.tf"
         elif InfrastructureStackType.APPLICATION.eq(self):
             return "./opentofu/application/stack.tf"
+        elif InfrastructureStackType.TARGET_ACCOUNT_BOOTSTRAP.eq(self):
+            return "./opentofu/target_account_provisioning/stack.tf"
         else:
             raise Exception(f"unhandled stack type {self}")
     
