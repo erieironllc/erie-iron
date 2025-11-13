@@ -337,18 +337,30 @@ def put_secret(secret_name: str, val: dict):
     
     secrets_manager = client('secretsmanager')
     
+    # Debug: Log current AWS context and operation details
+    try:
+        import boto3
+        current_identity = boto3.client('sts').get_caller_identity()
+        region = secrets_manager.meta.region_name
+        logging.info(f"put_secret: account={current_identity.get('Account')}, region={region}, secret={secret_name}")
+    except Exception as e:
+        logging.warning(f"Could not get AWS identity in put_secret: {e}")
+    
     secret_string = json.dumps(val)
     
     try:
         # Check if the secret exists
         try:
-            secrets_manager.describe_secret(SecretId=secret_name)
+            describe_resp = secrets_manager.describe_secret(SecretId=secret_name)
             exists = True
+            logging.info(f"Secret exists: {secret_name}, ARN: {describe_resp.get('ARN', 'unknown')}")
         except ClientError as e:
             err = e.response.get('Error', {}).get('Code')
             if err in ("ResourceNotFoundException",):
                 exists = False
+                logging.info(f"Secret does not exist, will create: {secret_name}")
             else:
+                logging.error(f"Error checking secret existence: {e}")
                 raise
         
         if exists:
@@ -356,13 +368,13 @@ def put_secret(secret_name: str, val: dict):
                 SecretId=secret_name,
                 SecretString=secret_string
             )
-            logging.info(f"Updated secret value for {secret_name}")
+            logging.info(f"Updated secret value for {secret_name}, Version: {resp.get('VersionId')}")
         else:
             resp = secrets_manager.create_secret(
                 Name=secret_name,
                 SecretString=secret_string
             )
-            logging.info(f"Created secret {secret_name}")
+            logging.info(f"Created secret {secret_name}, ARN: {resp.get('ARN')}")
         
         # Normalize return
         arn = resp.get('ARN') if 'ARN' in resp else resp.get('ARN', None)
@@ -370,7 +382,7 @@ def put_secret(secret_name: str, val: dict):
         
         return arn
     except ClientError as e:
-        logging.exception(e)
+        logging.exception(f"Failed to put secret {secret_name}: {e}")
         raise
 
 

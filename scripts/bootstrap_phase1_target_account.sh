@@ -1,0 +1,366 @@
+#!/bin/bash
+set -euo pipefail
+
+# Phase 1: Target Account Bootstrap Script
+# Creates IAM role in target account using target account credentials
+# No Django dependencies to avoid cross-account database access issues
+#
+# ⚠️  CRITICAL: This script must output ONLY the file path to stdout
+# ALL debug/info output MUST use stderr (>&2) or print_* functions
+# Violating this will cause Phase 2 to fail with corrupted $PHASE1_OUTPUT
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output to stderr (so it doesn't interfere with stdout file path)
+print_info() {
+    echo -e "${BLUE}[PHASE1-INFO]${NC} $1" >&2
+}
+
+print_success() {
+    echo -e "${GREEN}[PHASE1-SUCCESS]${NC} $1" >&2
+}
+
+print_warning() {
+    echo -e "${YELLOW}[PHASE1-WARNING]${NC} $1" >&2
+}
+
+print_error() {
+    echo -e "${RED}[PHASE1-ERROR]${NC} $1" >&2
+}
+
+# Validate arguments
+if [[ $# -ne 6 ]]; then
+    print_error "Usage: $0 <target_account_id> <business_name> <env_type> <external_id> <state_bucket_name> <state_key>"
+    exit 1
+fi
+
+TARGET_ACCOUNT_ID="$1"
+BUSINESS_NAME="$2"
+ENV_TYPE="$3"
+EXTERNAL_ID="$4"
+STATE_BUCKET_NAME="$5"
+STATE_KEY="$6"
+
+print_info "=== Phase 1: Target Account IAM Role Creation ==="
+print_info "Target Account ID: $TARGET_ACCOUNT_ID"
+print_info "Business Name: $BUSINESS_NAME"
+print_info "Environment Type: $ENV_TYPE"
+print_info "External ID: $EXTERNAL_ID"
+print_info "State Bucket: $STATE_BUCKET_NAME"
+print_info "State Key: $STATE_KEY"
+
+# Validate we're using target account credentials
+CURRENT_ACCOUNT=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null || echo "UNKNOWN")
+if [[ "$CURRENT_ACCOUNT" != "$TARGET_ACCOUNT_ID" ]]; then
+    print_error "Current AWS credentials are for account $CURRENT_ACCOUNT, but target account is $TARGET_ACCOUNT_ID"
+    print_error "Please ensure AWS_PROFILE is set to the correct target account profile"
+    exit 1
+fi
+
+print_success "AWS credentials verified for target account $TARGET_ACCOUNT_ID"
+
+# Create S3 bucket for OpenTofu state storage
+print_info "Creating S3 bucket for OpenTofu state storage..."
+CURRENT_REGION=$(aws configure get region || echo "us-west-2")
+
+# Check if bucket already exists
+if aws s3api head-bucket --bucket "$STATE_BUCKET_NAME" >/dev/null 2>&1; then
+    print_success "S3 bucket '$STATE_BUCKET_NAME' already exists"
+else
+    # Create bucket with appropriate configuration for region
+    if [[ "$CURRENT_REGION" == "us-east-1" ]]; then
+        # us-east-1 doesn't need location constraint
+        aws s3api create-bucket --bucket "$STATE_BUCKET_NAME" >/dev/null 2>&1 || {
+            print_error "Failed to create S3 bucket '$STATE_BUCKET_NAME'"
+            exit 1
+        }
+    else
+        aws s3api create-bucket \
+            --bucket "$STATE_BUCKET_NAME" \
+            --create-bucket-configuration LocationConstraint="$CURRENT_REGION" >/dev/null 2>&1 || {
+            print_error "Failed to create S3 bucket '$STATE_BUCKET_NAME' in region $CURRENT_REGION"
+            exit 1
+        }
+    fi
+    
+    print_success "Created S3 bucket '$STATE_BUCKET_NAME' in region $CURRENT_REGION"
+    
+    # Enable versioning on the bucket
+    aws s3api put-bucket-versioning \
+        --bucket "$STATE_BUCKET_NAME" \
+        --versioning-configuration Status=Enabled >/dev/null 2>&1 || {
+        print_warning "Failed to enable versioning on bucket '$STATE_BUCKET_NAME'"
+    }
+    
+    # Enable server-side encryption
+    aws s3api put-bucket-encryption \
+        --bucket "$STATE_BUCKET_NAME" \
+        --server-side-encryption-configuration '{
+            "Rules": [{
+                "ApplyServerSideEncryptionByDefault": {
+                    "SSEAlgorithm": "AES256"
+                },
+                "BucketKeyEnabled": true
+            }]
+        }' >/dev/null 2>&1 || {
+        print_warning "Failed to enable encryption on bucket '$STATE_BUCKET_NAME'"
+    }
+    
+    # Block public access
+    aws s3api put-public-access-block \
+        --bucket "$STATE_BUCKET_NAME" \
+        --public-access-block-configuration \
+        BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null 2>&1 || {
+        print_warning "Failed to block public access on bucket '$STATE_BUCKET_NAME'"
+    }
+    
+    print_success "Configured S3 bucket security settings"
+fi
+
+# Prepare OpenTofu variables
+TOFU_VARS_FILE="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfvars"
+cat > "$TOFU_VARS_FILE" << EOF
+target_account_id = "$TARGET_ACCOUNT_ID"
+business_name = "$BUSINESS_NAME"
+env_type = "$ENV_TYPE"
+external_id = "$EXTERNAL_ID"
+control_plane_account_id = "782005355493"
+EOF
+
+print_info "Created OpenTofu variables file: $TOFU_VARS_FILE"
+
+# Run OpenTofu deployment for IAM role creation
+print_info "Deploying IAM role via OpenTofu..."
+cd opentofu/target_account_provisioning
+
+# Create temporary log file for all OpenTofu output  
+TOFU_LOG_FILE="/tmp/bootstrap_phase1_tofu_${TARGET_ACCOUNT_ID}.log"
+
+print_info $(
+  aws sts get-caller-identity | jq  -r '.Arn'
+)
+
+# Clean up any existing OpenTofu state to avoid migration prompts
+print_info "Cleaning up any existing OpenTofu state..."
+rm -rf .terraform terraform.tfstate terraform.tfstate.backup .terraform.lock.hcl
+
+# Initialize with dynamic backend configuration - capture ALL output
+print_info "Initializing OpenTofu with backend configuration..."
+if ! tofu init \
+    -backend-config="bucket=$STATE_BUCKET_NAME" \
+    -backend-config="key=$STATE_KEY" \
+    -backend-config="region=$CURRENT_REGION" \
+    -input=false \
+    >> "$TOFU_LOG_FILE" 2>&1; then
+    print_error "OpenTofu init failed. Check log: $TOFU_LOG_FILE"
+    exit 1
+fi
+
+# Plan - capture ALL output to log file
+print_info "Planning OpenTofu deployment..."
+if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+    print_error "OpenTofu plan failed. Check log: $TOFU_LOG_FILE"
+    exit 1
+fi
+
+# Import existing resources if they exist
+print_info "Checking for and importing existing AWS resources..."
+
+# Note: S3 bucket is created directly via AWS CLI and is not managed by OpenTofu
+# Only import the DynamoDB table and IAM resources
+
+# Check if DynamoDB table exists and import it  
+if aws dynamodb describe-table --table-name opentofu-locks >> "$TOFU_LOG_FILE" 2>&1; then
+    print_info "DynamoDB table opentofu-locks already exists, importing into state..."
+    if ! tofu import -var-file="$TOFU_VARS_FILE" aws_dynamodb_table.opentofu_locks opentofu-locks >> "$TOFU_LOG_FILE" 2>&1; then
+        print_warning "Failed to import DynamoDB table, continuing with apply..."
+    fi
+fi
+
+# Check if IAM role exists and import it
+if aws iam get-role --role-name ErieIronTargetAccountAgentRole >> "$TOFU_LOG_FILE" 2>&1; then
+    print_info "IAM role ErieIronTargetAccountAgentRole already exists, importing into state..."
+    if ! tofu import -var-file="$TOFU_VARS_FILE" aws_iam_role.erie_iron_target_account_agent_role ErieIronTargetAccountAgentRole >> "$TOFU_LOG_FILE" 2>&1; then
+        print_warning "Failed to import IAM role, continuing with apply..."
+    fi
+    
+    # Import the role policy if it exists (try both old and new naming patterns)
+    POLICY_NAME="ErieIronAgentPermissions-$TARGET_ACCOUNT_ID"
+    if aws iam get-role-policy --role-name ErieIronTargetAccountAgentRole --policy-name "$POLICY_NAME" >> "$TOFU_LOG_FILE" 2>&1; then
+        print_info "IAM role policy $POLICY_NAME already exists, importing into state..."
+        if ! tofu import -var-file="$TOFU_VARS_FILE" aws_iam_role_policy.agent_permissions "ErieIronTargetAccountAgentRole:$POLICY_NAME" >> "$TOFU_LOG_FILE" 2>&1; then
+            print_warning "Failed to import IAM role policy, continuing with apply..."
+        fi
+    elif aws iam get-role-policy --role-name ErieIronTargetAccountAgentRole --policy-name ErieIronAgentPermissions >> "$TOFU_LOG_FILE" 2>&1; then
+        print_info "IAM role policy ErieIronAgentPermissions (old format) already exists, importing into state..."
+        if ! tofu import -var-file="$TOFU_VARS_FILE" aws_iam_role_policy.agent_permissions ErieIronTargetAccountAgentRole:ErieIronAgentPermissions >> "$TOFU_LOG_FILE" 2>&1; then
+            print_warning "Failed to import IAM role policy, continuing with apply..."
+        fi
+    fi
+fi
+
+# Re-plan after imports to account for existing resources
+print_info "Re-planning after imports..."
+if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+    print_error "OpenTofu re-plan failed after imports. Check log: $TOFU_LOG_FILE"
+    exit 1
+fi
+
+# Apply - capture ALL output to log file
+print_info "Applying OpenTofu deployment..."
+if ! tofu apply "/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+    # Check if the failure is due to resources already existing
+    if grep -q "already exists" "$TOFU_LOG_FILE" || grep -q "ResourceConflictException" "$TOFU_LOG_FILE" || grep -q "EntityAlreadyExistsException" "$TOFU_LOG_FILE" || grep -q "BucketAlreadyExists" "$TOFU_LOG_FILE"; then
+        print_warning "OpenTofu apply failed due to existing resources - updating existing role with new external ID"
+        print_info "Check log for details: $TOFU_LOG_FILE"
+        
+        # Update the existing role's trust policy with the new external ID
+        print_info "Updating IAM role trust policy with new external ID..."
+        print_info "Target Account ID: $TARGET_ACCOUNT_ID"
+        print_info "External ID: $EXTERNAL_ID"
+        
+        TRUST_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::782005355493:role/xxbev-task-execution-role",
+          "arn:aws:iam::${TARGET_ACCOUNT_ID}:role/ErieIronTargetAccountAgentRole"
+        ]
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "${EXTERNAL_ID}"
+        }
+      }
+    }
+  ]
+}
+EOF
+)
+        
+        print_info "Trust policy being applied:"
+        # CRITICAL: Must redirect to stderr (>&2) - stdout is reserved for file path output only
+        # Any stdout output here will corrupt $PHASE1_OUTPUT in the calling script
+        echo "$TRUST_POLICY" | jq . >&2 || echo "$TRUST_POLICY" >&2
+        
+        # Update the role's trust policy
+        if aws iam update-assume-role-policy \
+            --role-name ErieIronTargetAccountAgentRole \
+            --policy-document "$TRUST_POLICY" >> "$TOFU_LOG_FILE" 2>&1; then
+            print_success "Updated IAM role trust policy with new external ID: $EXTERNAL_ID"
+            print_info "Waiting 5 seconds for AWS to propagate role changes..."
+            sleep 5
+        else
+            print_error "Failed to update IAM role trust policy. Check log: $TOFU_LOG_FILE"
+            exit 1
+        fi
+        
+        # Update the existing role's inline policy with the latest template
+        print_info "Updating IAM role inline policy with latest permissions template..."
+        
+        # Get the current AWS region and generate the templated policy
+        CURRENT_REGION=$(aws configure get region || echo "us-west-2")
+        CONTROL_PLANE_ACCOUNT_ID="782005355493"
+        
+        # Generate the policy document from the template
+        # Note: We need to simulate the templatefile() function that Terraform uses
+        # Also remove the Description field as it's not allowed in inline policies
+        AGENT_POLICY=$(cat target_account_agent_permissions.json.tftpl | \
+            sed "s/\${account_id}/$TARGET_ACCOUNT_ID/g" | \
+            sed "s/\${region}/$CURRENT_REGION/g" | \
+            sed "s/\${control_plane_account_id}/$CONTROL_PLANE_ACCOUNT_ID/g" | \
+            sed "s/\${control_plane_region}/$CURRENT_REGION/g" | \
+            sed "s|\${state_bucket_arn}|arn:aws:s3:::$STATE_BUCKET_NAME|g" | \
+            sed "s|\${state_bucket_objects_arn}|arn:aws:s3:::$STATE_BUCKET_NAME/*|g" | \
+            jq 'del(.Description)')
+        
+        print_info "Agent policy being applied:"
+        # CRITICAL: Must redirect to stderr (>&2) - stdout is reserved for file path output only
+        echo "$AGENT_POLICY" | jq . >&2 || echo "$AGENT_POLICY" >&2
+        
+        # Update the role's inline policy (use account-specific policy name)
+        POLICY_NAME="ErieIronAgentPermissions-$TARGET_ACCOUNT_ID"
+        if aws iam put-role-policy \
+            --role-name ErieIronTargetAccountAgentRole \
+            --policy-name "$POLICY_NAME" \
+            --policy-document "$AGENT_POLICY" >> "$TOFU_LOG_FILE" 2>&1; then
+            print_success "Updated IAM role inline policy with latest permissions template"
+            print_info "Waiting 5 seconds for AWS to propagate policy changes..."
+            sleep 5
+        else
+            print_error "Failed to update IAM role inline policy. Check log: $TOFU_LOG_FILE"
+            exit 1
+        fi
+    else
+        print_error "OpenTofu apply failed with unexpected error. Check log: $TOFU_LOG_FILE"
+        exit 1
+    fi
+fi
+
+# Extract role information from OpenTofu outputs - capture ALL output to log file
+print_info "Extracting role information..."
+ROLE_ARN=$(tofu output -raw role_arn 2>> "$TOFU_LOG_FILE" || echo "")
+ACTUAL_EXTERNAL_ID=$(tofu output -raw external_id 2>> "$TOFU_LOG_FILE" || echo "")
+
+# If outputs failed, try to construct from known values (for existing resources)
+if [[ -z "$ROLE_ARN" || -z "$ACTUAL_EXTERNAL_ID" ]]; then
+    print_warning "Could not extract role information from OpenTofu outputs"
+    print_info "Attempting to construct role ARN from existing IAM role..."
+    
+    # Try to get the role ARN directly from AWS IAM
+    if aws iam get-role --role-name ErieIronTargetAccountAgentRole >> "$TOFU_LOG_FILE" 2>&1; then
+        ROLE_ARN="arn:aws:iam::${TARGET_ACCOUNT_ID}:role/ErieIronTargetAccountAgentRole"
+        ACTUAL_EXTERNAL_ID="$EXTERNAL_ID"  # Use the provided external ID
+        print_success "Constructed role ARN from existing IAM role: $ROLE_ARN"
+    else
+        print_error "Failed to extract role information and role does not exist. Check log: $TOFU_LOG_FILE"
+        exit 1
+    fi
+fi
+
+# Validate role creation - capture ALL output to log file
+print_info "Verifying IAM role creation..."
+if ! aws iam get-role --role-name ErieIronTargetAccountAgentRole >> "$TOFU_LOG_FILE" 2>&1; then
+    print_error "Failed to verify IAM role creation. Check log: $TOFU_LOG_FILE"
+    exit 1
+fi
+
+print_success "IAM role created successfully: $ROLE_ARN"
+
+# Output role information for Phase 2
+PHASE1_OUTPUT_FILE="/tmp/bootstrap_phase1_output_${TARGET_ACCOUNT_ID}.json"
+cat > "$PHASE1_OUTPUT_FILE" << EOF
+{
+  "target_account_id": "$TARGET_ACCOUNT_ID",
+  "business_name": "$BUSINESS_NAME", 
+  "env_type": "$ENV_TYPE",
+  "role_arn": "$ROLE_ARN",
+  "external_id": "$ACTUAL_EXTERNAL_ID"
+}
+EOF
+
+print_success "Phase 1 completed successfully!"
+print_info "Role information saved to: $PHASE1_OUTPUT_FILE"
+print_info "Ready for Phase 2 (Control Plane Integration)"
+
+# Cleanup temporary files
+rm -f "$TOFU_VARS_FILE"
+rm -f "/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan"
+
+# Show log file location for debugging (to stderr)
+print_info "OpenTofu logs saved to: $TOFU_LOG_FILE"
+
+# CRITICAL: This script MUST output ONLY the file path to stdout
+# ALL other output must go to stderr (>&2) or it will corrupt $PHASE1_OUTPUT
+# in the calling script and cause Phase 2 to fail with "file not found"
+echo "$PHASE1_OUTPUT_FILE"

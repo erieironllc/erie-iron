@@ -18,52 +18,108 @@ This guide provides developers with practical instructions for implementing and 
 
 ## Phase 1: Target Account Bootstrap
 
-This phase must be run for each new target AWS account that will host business infrastructure.
+This phase must be run for each new target AWS account that will host business infrastructure. The bootstrap process uses a **two-phase approach** to separate credential concerns and avoid cross-account access issues during Django initialization.
 
 ### Prerequisites:
 - Target AWS account exists and you have admin access
-- Account ID is known
+- AWS CLI installed and configured
+- `jq` command-line tool installed (for JSON parsing)
 - Business record exists in the system
 
 ### Manual Steps Required:
 
-1. **Prepare account information**:
+1. **Configure AWS SSO profile for target account**:
    ```bash
-   export TARGET_ACCOUNT_ID="123456789012"
-   export BUSINESS_NAME="example-business"  
-   export ENV_TYPE="dev"  # or "production"
+   # Configure AWS SSO profile (one-time setup)
+   aws configure sso --profile target-account-sso
+   # Follow prompts to configure SSO settings including:
+   # - SSO start URL (your organization's SSO URL)
+   # - SSO region (region where your SSO is configured)
+   # - CLI default client Region: us-east-1
+   # - CLI default output format: json
+   # - Select the target account when prompted
+   # - Choose an appropriate role (e.g., AdministratorAccess)
    ```
 
-2. **Run target account bootstrap**:
+2. **Run target account bootstrap** (with automatic SSO login, account detection, and business name inference):
    ```bash
-   ./scripts/apply_target_account_bootstrap.sh $TARGET_ACCOUNT_ID $BUSINESS_NAME $ENV_TYPE
+   ./scripts/apply_target_account_bootstrap.sh $PROFILE $ENV_TYPE
    ```
-
-3. **Create CloudAccount database record** (via Django admin or management command):
-   ```python
-   CloudAccount.objects.create(
-       business=business,
-       name=f"{business.name}-{ENV_TYPE}",
-       account_identifier=TARGET_ACCOUNT_ID,
-       credentials_secret_arn=f"{business.secrets_root}/cloud-accounts/{TARGET_ACCOUNT_ID}",
-       is_default_dev=(ENV_TYPE == "dev"),
-       is_default_production=(ENV_TYPE == "production")
-   )
+   
+   Example:
+   ```bash
+   ./scripts/apply_target_account_bootstrap.sh curators-sso dev
    ```
+   
+   **What this command does**:
+   - Performs `aws sso login --profile $PROFILE` to authenticate
+   - Automatically infers target account ID from profile using `aws sts get-caller-identity`
+   - Automatically infers business name from AWS Organizations API (with fallback to profile name parsing)
+   - Generates secure external ID for role assumption security
+   - Validates account ID format and authentication
+   - Executes two-phase bootstrap process automatically
 
-### What The Bootstrap Script Does:
 
-**OpenTofu Stack Deployed**: `TARGET_ACCOUNT_BOOTSTRAP` (using `./opentofu/target_account_provisioning/stack.tf`)
+### What The Bootstrap Script Does (Two-Phase Process):
 
-**AWS Operations in Target Account**:
+The bootstrap process uses a **two-phase approach** to solve credential separation issues and avoid cross-account database access problems.
+
+#### **Phase 1: Target Account IAM Role Creation**
+*Uses target account credentials (specified SSO profile)*
+
+**Script**: `./scripts/bootstrap_phase1_target_account.sh`
+**OpenTofu Stack**: `TARGET_ACCOUNT_BOOTSTRAP` (using `./opentofu/target_account_provisioning/stack.tf`)
+
+**Operations in Target Account**:
+- **Creates S3 State Bucket**: Generates bucket with pattern `erieiron-opentofu-state-{business}-{account}`
+- **Configures S3 Security**: Enables versioning, encryption (AES256), and server-side encryption
 - **Creates IAM Role**: `ErieIronTargetAccountAgentRole` with trust to control plane account
-- **Attaches Permissions**: Comprehensive policy for all agent operations  
-- **Sets External ID**: Unique security token for role assumption
+- **Attaches Permissions**: Comprehensive policy for all agent operations including S3 state access
+- **Creates DynamoDB Table**: `opentofu-locks` table for OpenTofu state locking
+- **Configures Trust Policy**: Allow your control plane account to assume role
+- **Sets External ID**: Unique security token for role assumption security
 - **Tags Resources**: Consistent tagging for identification and cost tracking
+- **Outputs Role Information**: Saves role ARN and external ID to temporary file
+- **Verifies IAM Role Creation**: Confirms role exists in target account
 
-**AWS Operations in Control Plane Account**:
+**Key Benefits**:
+- No Django dependencies = No database credential conflicts
+- Direct infrastructure creation using appropriate target account credentials
+- Isolated IAM role creation process
+- Self-contained state management infrastructure in target account
+- Solves "chicken-and-egg" problem by creating S3 bucket before OpenTofu initialization
+
+#### **Phase 2: Control Plane Integration**
+*Uses control plane credentials (automatically detected profile)*
+
+**Script**: `./scripts/bootstrap_phase2_control_plane.sh`
+**Django Command**: `bootstrap_target_account_phase2`
+
+**Control Plane Profile Auto-Detection**:
+- Script automatically detects available control plane profile:
+  - First choice: `erieiron-control`
+  - Second choice: `erieiron` 
+  - Fallback: `default`
+- Switches AWS_PROFILE to control plane credentials
+
+**Operations in Control Plane Account**:
+- **Reads Role Information**: From Phase 1 output file
+- **Tests Cross-Account Role Assumption**: To validate setup
 - **Stores Credentials**: Creates Secrets Manager secret with role ARN and external ID
-- **Updates Database**: Links CloudAccount record to credential secret
+- **Creates CloudAccount Database Record**: Using `LOCAL_DB_NAME` to prevent AWS credential conflicts
+- **Links Business**: Associates the business with the target account
+- **Sets Default Account**: Configures cloud account as default for specified environment
+
+**Automated Verification**:
+- **Validates Control Plane Credentials**: Before operations
+- **Confirms Cross-Account Role Assumption**: Works correctly
+- **Verifies CloudAccount Database Record**: Creation successful
+- **Final Validation**: IAM role exists in target account
+
+**Credential Security**:
+- Uses appropriate credentials for each phase
+- Prevents AWS Secrets Manager access issues during Django initialization
+- Clean temporary file cleanup between phases
 
 ### Generated Secret Structure:
 ```json
@@ -143,21 +199,57 @@ def deploy_infrastructure(business, initiative):
    - Ensure all agent operations are covered
    - Apply least-privilege principles
 
-4. **Create `./scripts/apply_target_account_bootstrap.sh`**:
-   - Deploy target account OpenTofu stack
+4. **Two-Phase Bootstrap Scripts**:
+
+   **a. `./scripts/apply_target_account_bootstrap.sh`** (Main orchestrator):
+   - Generates external ID for secure role assumption
+   - Generates OpenTofu state bucket configuration with sanitized business name  
+   - Validates S3 bucket name length and format compliance
+   - Executes Phase 1 with target account credentials
+   - Switches to control plane credentials for Phase 2
+   - Automatic control plane profile detection
+   - End-to-end verification of both phases
+
+   **b. `./scripts/bootstrap_phase1_target_account.sh`** (Target account operations):
+   - Create S3 bucket for OpenTofu state storage with security configurations
+   - Deploy target account OpenTofu stack using S3 backend with dynamic configuration
+   - Create IAM role with permissions for S3 state bucket access
+   - Create DynamoDB table for state locking
+   - Output role information to temporary file for Phase 2
+   - Validate role creation in target account
+
+   **c. `./scripts/bootstrap_phase2_control_plane.sh`** (Control plane operations):
    - Store generated credentials in control plane Secrets Manager
-   - Validate role assumption from control plane
+   - Use `LOCAL_DB_NAME` to avoid AWS database credential conflicts
+   - Test cross-account role assumption
+   - Create CloudAccount database record with state bucket configuration
+
+5. **Django Management Command `bootstrap_target_account_phase2.py`**:
+   - Simplified Phase 2-only command (no OpenTofu deployment)
+   - Handles credential storage and CloudAccount creation
+   - Input validation for role ARN and external ID
+   - Set default cloud account flags based on environment
 
 
 ### Testing Checklist:
 
-**Target Account Bootstrap**:
+**Phase 1: Target Account Bootstrap**:
+- [ ] Target account credentials validated before Phase 1
 - [ ] IAM role created in target account
 - [ ] Trust policy allows control plane account access
 - [ ] External ID configured correctly
 - [ ] Permissions policy attached
+- [ ] Role information output file created successfully
+- [ ] Phase 1 completes without Django database access
+
+**Phase 2: Control Plane Integration**:
+- [ ] Control plane credentials detected and validated
+- [ ] Role information successfully read from Phase 1 output
+- [ ] Cross-account role assumption test passes
 - [ ] Credentials stored in control plane Secrets Manager
-- [ ] CloudAccount database record created
+- [ ] CloudAccount database record created using local database
+- [ ] Default environment flags set correctly
+- [ ] Phase 2 completes without credential conflicts
 
 **Cross-Account Operations**:
 - [ ] Role assumption succeeds from control plane

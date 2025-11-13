@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -44,11 +45,7 @@ class OpenTofuStackManager:
         
         self.swizzled_module_file = self.get_swizzled_module_file()
         
-        self.tf_env = self.build_opentofu_env()
-        
-        self.full_env: MutableMapping[str, str] = os.environ.copy()
-        self.full_env.update(self.container_env)
-        self.full_env.update(self.tf_env)
+        self.full_env = self.tf_env = self.build_opentofu_env()
         
         self.stage = "init"
         self.run_results: list[OpenTofuRunResult] = []
@@ -74,6 +71,63 @@ class OpenTofuStackManager:
             f.write(swizzled_contents)
         
         return swizzled_path
+    
+    def _sanitize_business_name(self, business_name: str) -> str:
+        """
+        Sanitize business name for S3 bucket naming requirements.
+        S3 bucket names must be lowercase, only letters/numbers/hyphens, start/end with letter/number.
+        """
+        if not business_name:
+            raise ValueError("Business name cannot be empty")
+        
+        # Convert to lowercase and remove invalid characters
+        sanitized = business_name.lower()
+        sanitized = re.sub(r'[^a-z0-9-]', '', sanitized)
+        # Remove leading/trailing hyphens and collapse multiple hyphens
+        sanitized = re.sub(r'^-+|-+$', '', sanitized)
+        sanitized = re.sub(r'-+', '-', sanitized)
+        
+        # Validate sanitized name
+        if not sanitized or len(sanitized) < 3:
+            raise ValueError(f"Business name '{business_name}' cannot be sanitized to valid S3 bucket format")
+        
+        return sanitized
+    
+    def _get_terraform_state_bucket_name(self) -> str:
+        """
+        Generate the S3 bucket name for OpenTofu state storage.
+        Follows the same pattern as apply_target_account_bootstrap.sh:
+        erieiron-opentofu-state-{sanitized_business_name}-{account_id}
+        """
+        business_name = self.stack.business.name
+        sanitized_business_name = self._sanitize_business_name(business_name)
+        
+        # Get account ID from cloud_account if available, otherwise use current account context
+        if self.stack.cloud_account and self.stack.cloud_account.account_identifier:
+            account_id = self.stack.cloud_account.account_identifier
+        else:
+            # For development stacks or when cloud_account is not set,
+            # the bucket should be in the same account where the operation is running
+            # This will be determined by the AWS credentials context at runtime
+            import boto3
+            try:
+                sts = boto3.client('sts')
+                account_id = sts.get_caller_identity()['Account']
+            except Exception as e:
+                logging.error(f"Failed to get current AWS account ID: {e}")
+                raise ValueError("Could not determine target AWS account ID for state bucket")
+        
+        bucket_name = f"erieiron-opentofu-state-{sanitized_business_name}-{account_id}"
+        
+        # Validate bucket name length (S3 limit is 63 characters)
+        if len(bucket_name) > 63:
+            raise ValueError(
+                f"Generated bucket name '{bucket_name}' exceeds 63 character limit ({len(bucket_name)} chars). "
+                f"Consider using a shorter business name."
+            )
+        
+        logging.debug(f"Generated state bucket name: {bucket_name} (business: {business_name}, account: {account_id})")
+        return bucket_name
     
     def record(self, stage: str, result: OpenTofuCommandResult) -> None:
         self.stage = stage
@@ -201,8 +255,16 @@ class OpenTofuStackManager:
             args.append("-upgrade")
         
         key_value = f"{self.stack.stack_namespace_token}/stack.tfstate"
-        args.append(f"-backend-config=key={key_value}")
-        args.append(f"-backend-config=region={EnvironmentType(self.stack.env_type).get_aws_region()}")
+        
+        # Generate bucket name following same pattern as apply_target_account_bootstrap.sh
+        terraform_state_bucket = self._get_terraform_state_bucket_name()
+        
+        storage_key_args = [
+            f"-backend-config=bucket={terraform_state_bucket}",
+            f"-backend-config=key={key_value}",
+            f"-backend-config=region={EnvironmentType(self.stack.env_type).get_aws_region()}"
+        ]
+        args += storage_key_args
         
         last_exception = None
         
@@ -210,15 +272,14 @@ class OpenTofuStackManager:
             try:
                 return self.run_tofu_command("init", args)
             except OpenTofuCommandError as e:
-                if "state data in S3 does not have the expected content" in e.result.stderr:
-                    time.sleep(10 * (attempt + 1))
-                    try:
-                        self.run_tofu_command("init", ["init", "-reconfigure", "-input=false", "-no-color"])
-                    except OpenTofuCommandError as e2:
-                        logging.exception(e2)
-                        raise e2
-                    
                 last_exception = e
+                time.sleep(10 * (attempt + 1))
+                try:
+                    self.run_tofu_command("init", ["init", "-reconfigure", "-input=false", "-no-color"] + storage_key_args)
+                except OpenTofuCommandError as e2:
+                    logging.exception(e2)
+                    raise e2
+                    
         
         raise last_exception
     
@@ -467,10 +528,13 @@ class OpenTofuStackManager:
         return tfvars_path
     
     def build_opentofu_env(self) -> dict[str, str]:
-        env: dict[str, str] = {
-            key: str(value)
-            for key, value in os.environ.items()
-        }
+        # env: dict[str, str] = {
+        #     key: str(value)
+        #     for key, value in os.environ.items() 
+        #     if key not in ["AWS_PROFILE"]
+        # }
+        
+        env = {}
         for key, value in self.container_env.items():
             if value is None:
                 continue

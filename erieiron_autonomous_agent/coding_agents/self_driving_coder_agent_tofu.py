@@ -68,6 +68,9 @@ def execute(
         task_id: str,
         one_off_action: SdaInitialAction = None
 ):
+    sts = boto3.client("sts")
+    print(f"Running as {sts.get_caller_identity()['Arn']}")
+    
     try:
         self_driving_task = bootstrap_selfdriving_agent(task_id)
         
@@ -2277,7 +2280,7 @@ def build_iteration(config, container_env):
         )
     
     if (
-            tag_exists_in_ecr or
+            tag_exists_in_ecr and
             (previous_container_tag and not required_build_steps.get(BuildStep.CONTAINERS.value))
     ):
         container_image_tag = previous_container_tag

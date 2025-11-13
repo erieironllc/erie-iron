@@ -288,9 +288,26 @@ resource "aws_iam_role" "web_execution" {
   }
 }
 
+
 resource "aws_iam_role_policy_attachment" "web_execution" {
   role       = aws_iam_role.web_execution.name
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role_policy" "web_execution_assume_target" {
+  name = "${var.StackIdentifier}-assume-target-role"
+  role = aws_iam_role.web_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "sts:AssumeRole"
+        Resource = "arn:aws:iam::*:role/ErieIronTargetAccountAgentRole"
+      }
+    ]
+  })
 }
 
 resource "aws_iam_role" "web_task" {

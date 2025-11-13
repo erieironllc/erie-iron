@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 import settings
 from erieiron_autonomous_agent.models import Business, CloudAccount, InfrastructureStack
-from erieiron_autonomous_agent.utils.cloud_accounts import store_credentials_secret
+from erieiron_autonomous_agent.utils import cloud_accounts
 from erieiron_common.enums import CloudProvider, EnvironmentType, InfrastructureStackType
 from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
 
@@ -79,11 +79,18 @@ class Command(BaseCommand):
     def _validate_business(self, business_name: str) -> Business:
         """Validate business exists in database."""
         try:
+            # First try exact match
             business = Business.objects.get(name=business_name)
             logger.info(f"Found business: {business}")
             return business
         except Business.DoesNotExist:
-            raise CommandError(f"Business '{business_name}' not found in database")
+            # Try case-insensitive match
+            try:
+                business = Business.objects.get(name__iexact=business_name)
+                logger.info(f"Found business (case-insensitive match): {business}")
+                return business
+            except Business.DoesNotExist:
+                raise CommandError(f"Business '{business_name}' not found in database")
     
     def _validate_account_id(self, account_id: str) -> None:
         """Validate AWS account ID format."""
@@ -135,7 +142,8 @@ class Command(BaseCommand):
         """Deploy OpenTofu stack using OpenTofuStackManager."""
         self.stdout.write('Deploying OpenTofu stack...')
         
-        manager = OpenTofuStackManager(stack)
+        container_env = self._build_stack_environment(stack)
+        manager = OpenTofuStackManager(stack, container_env=container_env or None)
         deployment_result = manager.apply()
         
         if not deployment_result or not hasattr(deployment_result, 'outputs'):
@@ -187,8 +195,29 @@ class Command(BaseCommand):
             'session_duration': 3600
         }
         
-        credentials_secret_arn = store_credentials_secret(cloud_account, secret_payload)
+        credentials_secret_arn = cloud_accounts.store_credentials_secret(cloud_account, secret_payload)
         cloud_account.credentials_secret_arn = credentials_secret_arn
         cloud_account.save()
+        logger.info(
+            "Stored target account credentials",
+            extra={
+                "cloud_account_id": str(cloud_account.id),
+                "account_identifier": cloud_account.account_identifier,
+            },
+        )
         
-        logger.info(f"Credentials stored with ARN: {credentials_secret_arn}")
+    def _build_stack_environment(self, stack: InfrastructureStack) -> dict:
+        """Build AWS env vars so OpenTofu executes with the assumed target role."""
+        try:
+            env = cloud_accounts.build_cloud_credentials([stack])
+            if env:
+                self.stdout.write('Using target account credentials for OpenTofu execution...')
+            return env
+        except Exception as exc:
+            logger.warning(
+                "Falling back to ambient AWS credentials for stack %s: %s",
+                stack.id,
+                exc,
+                exc_info=True,
+            )
+        return {}

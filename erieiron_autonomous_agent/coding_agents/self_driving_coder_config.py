@@ -156,10 +156,11 @@ class SelfDriverConfig:
                 credential_service_name,
                 cred_def
             )
-            env[secret_arn_env_var] = secrent_arn
+            if secrent_arn:
+                env[secret_arn_env_var] = secrent_arn
         
         for k in list(env.keys()):
-            if k.startswith("__") or env.get(k) is None:
+            if k == "AWS_PROFILE" or k.startswith("__") or env.get(k) is None:
                 env.pop(k, None)
         
         return env

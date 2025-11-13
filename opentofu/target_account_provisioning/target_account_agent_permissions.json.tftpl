@@ -77,15 +77,56 @@
       ]
     },
     {
-      "Sid": "S3AndSSMAccess",
+      "Sid": "S3BackendBucketAccess",
       "Effect": "Allow",
       "Action": [
-        "s3:*",
+        "s3:GetBucketLocation",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCORS",
+        "s3:GetBucketWebsite",
+        "s3:GetBucketLogging",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:GetBucketTagging",
+        "s3:GetBucketNotification",
+        "s3:GetBucketPolicy",
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Resource": [
+        "${state_bucket_arn}"
+      ]
+    },
+    {
+      "Sid": "S3BackendObjectAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetObjectAcl",
+        "s3:GetObjectTagging",
+        "s3:GetObjectVersionAcl",
+        "s3:GetObjectVersionTagging",
+        "s3:PutObject",
+        "s3:PutObjectAcl",
+        "s3:PutObjectTagging",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:RestoreObject",
+        "s3:ListMultipartUploadParts",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": [
+        "${state_bucket_objects_arn}"
+      ]
+    },
+    {
+      "Sid": "SSMParameterAccess",
+      "Effect": "Allow",
+      "Action": [
         "ssm:*"
       ],
       "Resource": [
-        "arn:aws:s3:::erieiron-opentofu-state",
-        "arn:aws:s3:::erieiron-opentofu-state/*",
         "arn:aws:ssm:${region}:${account_id}:parameter/erieiron/*"
       ]
     },

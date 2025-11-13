@@ -2,6 +2,13 @@
 # Creates cross-account IAM role and permissions for Erie Iron self-driving coder agent
 
 terraform {
+
+  backend "s3" {
+    dynamodb_table = "opentofu-locks"
+    encrypt        = true
+  }
+
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -48,23 +55,29 @@ data "aws_region" "current" {}
 # Cross-account IAM role for Erie Iron agent
 resource "aws_iam_role" "erie_iron_target_account_agent_role" {
   name = "ErieIronTargetAccountAgentRole"
-  
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        AWS = "arn:aws:iam::${var.control_plane_account_id}:root"
-      }
-      Action = "sts:AssumeRole"
-      Condition = {
-        StringEquals = {
-          "sts:ExternalId" = var.external_id
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = [
+            "arn:aws:iam::${var.control_plane_account_id}:role/xxbev-task-execution-role",
+            "arn:aws:iam::${var.control_plane_account_id}:user/programatic-access",
+            "arn:aws:iam::${var.target_account_id}:role/ErieIronTargetAccountAgentRole"
+          ]
+        }
+        Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "sts:ExternalId" = var.external_id
+          }
         }
       }
-    }]
+    ]
   })
-  
+
   tags = {
     Business    = var.business_name
     Environment = var.env_type
@@ -75,16 +88,43 @@ resource "aws_iam_role" "erie_iron_target_account_agent_role" {
 
 # IAM policy attachment using permission template
 resource "aws_iam_role_policy" "agent_permissions" {
-  name = "ErieIronAgentPermissions"
+  name = "ErieIronAgentPermissions-${var.target_account_id}"
   role = aws_iam_role.erie_iron_target_account_agent_role.id
-  
+
   policy = templatefile("${path.module}/target_account_agent_permissions.json.tftpl", {
-    account_id                   = var.target_account_id
-    region                      = data.aws_region.current.name
-    control_plane_account_id    = var.control_plane_account_id
-    control_plane_region        = data.aws_region.current.name
+    account_id               = var.target_account_id
+    region                   = data.aws_region.current.name
+    control_plane_account_id = var.control_plane_account_id
+    control_plane_region     = data.aws_region.current.name
+    state_bucket_arn         = "arn:aws:s3:::erieiron-opentofu-state-${var.business_name}-${var.target_account_id}"
+    state_bucket_objects_arn = "arn:aws:s3:::erieiron-opentofu-state-${var.business_name}-${var.target_account_id}/*"
   })
 }
+
+# DynamoDB table for OpenTofu/Terraform state locking
+
+resource "aws_dynamodb_table" "opentofu_locks" {
+  name         = "opentofu-locks"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "LockID"
+
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+
+  tags = {
+    Business    = var.business_name
+    Environment = var.env_type
+    ManagedBy   = "ErieIron"
+    Purpose     = "OpenTofuStateLocking"
+  }
+}
+
+# Note: The S3 bucket for OpenTofu state is created dynamically by the bootstrap script
+# using the pattern 'erieiron-opentofu-state-{business_name}-{target_account_id}'.
+# Each target account has its own dedicated state bucket to avoid cross-account dependencies.
+# The bucket is created via AWS CLI before OpenTofu initialization.
 
 # Output values for credential storage
 output "role_arn" {

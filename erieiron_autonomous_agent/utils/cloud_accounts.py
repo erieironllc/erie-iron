@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class CachedAwsCredentials:
+    role_arn: str
     access_key_id: str
     secret_access_key: str
     session_token: Optional[str]
@@ -39,14 +40,33 @@ def store_credentials_secret(cloud_account: CloudAccount, payload: Dict[str, Any
     if not isinstance(payload, dict):
         raise ValueError("Cloud account credential payload must be a dict")
     secret_name = cloud_account.build_secret_name()
-    logger.info(
-        "Storing credential payload for cloud account",
-        extra={
-            "cloud_account_id": str(cloud_account.id),
-            "business_id": str(cloud_account.business_id),
-            "provider": cloud_account.provider,
-        },
-    )
+    
+    # Debug: Log current AWS context before storing
+    try:
+        current_identity = boto3.client('sts').get_caller_identity()
+        logger.info(
+            "Storing credential payload for cloud account",
+            extra={
+                "cloud_account_id": str(cloud_account.id),
+                "business_id": str(cloud_account.business_id),
+                "provider": cloud_account.provider,
+                "secret_name": secret_name,
+                "aws_account": current_identity.get("Account"),
+                "aws_user_arn": current_identity.get("Arn"),
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Could not get AWS identity for secret storage: {e}")
+        logger.info(
+            "Storing credential payload for cloud account",
+            extra={
+                "cloud_account_id": str(cloud_account.id),
+                "business_id": str(cloud_account.business_id),
+                "provider": cloud_account.provider,
+                "secret_name": secret_name,
+            },
+        )
+    
     arn_or_name = aws_utils.put_secret(secret_name, payload)
     return arn_or_name or secret_name
 
@@ -75,6 +95,7 @@ def _base_session_credentials() -> CachedAwsCredentials:
     # Static credentials may not expose expiration; treat as long-lived.
     expiration = _now() + timedelta(hours=8)
     return CachedAwsCredentials(
+        role_arn=frozen.role_arn,
         access_key_id=frozen.access_key,
         secret_access_key=frozen.secret_key,
         session_token=frozen.token,
@@ -113,15 +134,13 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
     if external_id:
         assume_kwargs["ExternalId"] = external_id
     
-    logger.info(
-        "Assuming role for cloud account",
-        extra={
-            "cloud_account_id": str(cloud_account.id),
-            "business_id": str(cloud_account.business_id),
-            "provider": cloud_account.provider,
-            "role_arn": role_arn,
-        },
-    )
+    d = {
+        "cloud_account_id": str(cloud_account.id),
+        "business_id": str(cloud_account.business_id),
+        "provider": cloud_account.provider,
+        "role_arn": role_arn,
+    }
+    logger.info(f"Assuming role for cloud account {d}", extra=d)
     response = sts_client.assume_role(**assume_kwargs)
     credentials = response.get("Credentials") or {}
     expiration = credentials.get("Expiration")
@@ -131,6 +150,7 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
         expiration = timezone.make_aware(expiration)
     
     cached = CachedAwsCredentials(
+        role_arn=role_arn,
         access_key_id=credentials.get("AccessKeyId"),
         secret_access_key=credentials.get("SecretAccessKey"),
         session_token=credentials.get("SessionToken"),
@@ -163,6 +183,7 @@ def build_cloud_credentials(stacks: list[InfrastructureStack]) -> Dict[str, str]
     aws_region = env_type.get_aws_region()
     env = {
         "BUSINESS_CLOUD_ACCOUNT_ID": cloud_account.account_identifier,
+        "AWS_ROLE_ARN": cloud_account_credentials.role_arn,
         "AWS_ACCESS_KEY_ID": cloud_account_credentials.access_key_id,
         "AWS_SECRET_ACCESS_KEY": cloud_account_credentials.secret_access_key,
         "AWS_DEFAULT_REGION": aws_region,

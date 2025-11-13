@@ -190,3 +190,5 @@ __pycache__/
 /opentofu/workspaces/
 /opentofu/swizzled_modules/
 /.ai_coding
+*.lock.hcl
+**/.terraform/

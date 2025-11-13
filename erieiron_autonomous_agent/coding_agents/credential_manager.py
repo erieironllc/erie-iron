@@ -1,4 +1,5 @@
 import json
+import logging
 import secrets
 import string
 
@@ -62,7 +63,7 @@ def manage_credentials(
     
     credential_service = CredentialService.valid_or(common.default_str(credential_service_name).upper())
     if not credential_service:
-        raise AgentBlocked(f"""Blocked by unsupported credential service: {credential_service_name}
+        logging.debug(f"""Blocked by unsupported credential service: {credential_service_name}
 
 Need a human to set this up
 
@@ -72,6 +73,7 @@ Env:  {env_type}
 Secret Def:
 {json.dumps(cred_def, indent=4)}
 """)
+        return None
     
     aws_secret_key, secret_dict = get_credential_secret(
         business,
