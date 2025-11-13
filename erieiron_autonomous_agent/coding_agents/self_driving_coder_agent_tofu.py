@@ -13,7 +13,6 @@ from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-import boto3
 import yaml
 from django.db import transaction
 from django.db.models import Func
@@ -52,7 +51,7 @@ from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_s
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
 from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader
-from erieiron_common.aws_utils import sanitize_aws_name, empty_s3_bucket, package_lambda, get_full_image_uri
+from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
@@ -68,9 +67,6 @@ def execute(
         task_id: str,
         one_off_action: SdaInitialAction = None
 ):
-    sts = boto3.client("sts")
-    print(f"Running as {sts.get_caller_identity()['Arn']}")
-    
     try:
         self_driving_task = bootstrap_selfdriving_agent(task_id)
         
@@ -206,7 +202,12 @@ def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialA
             """))
     
     config.set_iteration(
-        SelfDrivingTaskIteration.objects.filter(planning_json__isnull=False).order_by("-timestamp").first()
+        config
+        .self_driving_task
+        .selfdrivingtaskiteration_set
+        .filter(planning_json__isnull=False)
+        .order_by("-timestamp")
+        .first()
     )
     
     if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
@@ -1367,7 +1368,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         config.log(f"No Application Load Balancer found in stacks {config.get_stack_names()}; skipping DNS alias update")
         return
     
-    elbv2_client = boto3.client("elbv2", region_name=config.env_type.get_aws_region())
+    elbv2_client = config.aws_interface.client("elbv2")
     try:
         lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
         load_balancers = lb_resp.get("LoadBalancers", []) or []
@@ -1446,6 +1447,12 @@ def build_container_image(
         "-f", container_file,
         container_file.parent
     ])
+    
+    ecr_authenticate_for_base_image(
+        config,
+        container_file,
+        container_env
+    )
     
     config.log(f"\n\nstarting podman build with the command:\n{' '.join(container_build_cmd)}\n\n")
     build_process = subprocess.Popen(
@@ -1604,7 +1611,7 @@ def build_env_flags(env):
 
 
 def build_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
-    s3 = aws_utils.client("s3")
+    s3 = config.aws_interface.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
     if not lambda_datas:
@@ -1742,8 +1749,8 @@ def get_stack_buckets(config) -> list[dict]:
             "bucket_name": bucket_name_expr,
             "bucket_physical_name": bucket_physical_name,
             "bucket_name_param": bucket_name_param,
-            "properties": properties,
-            "metadata": resource_config.get("Metadata", {}) or {},
+            "properties": "TODO",
+            "metadata": "TODO"
         })
     
     return buckets
@@ -1770,51 +1777,57 @@ def get_infrastructure_yaml_code(config, cf_template: InfrastructureStackType):
     return infrastructure_code_version.code if infrastructure_code_version else None
 
 
-def latest_tag_from_ecr(config: SelfDriverConfig) -> str:
-    region = config.env_type.get_aws_region()
-    ecr_client = boto3.client("ecr", region_name=region)
-    account_id = aws_utils.client("sts").get_caller_identity()["Account"]
-    
-    repo_name = sanitize_aws_name(config.business.service_token)
-    
-    try:
-        ecr_client.describe_repositories(repositoryNames=[repo_name])
-    except ecr_client.exceptions.RepositoryNotFoundException:
-        raise RuntimeError(f"ECR repository {repo_name} not found")
-    
-    try:
-        response = ecr_client.describe_images(
-            repositoryName=repo_name,
-            maxResults=50
-        )
-        
-        if not response.get('imageDetails'):
-            raise RuntimeError(f"No images found in ECR repository {repo_name}")
-        
-        latest_image = max(response['imageDetails'], key=lambda x: x['imagePushedAt'])
-        
-        return latest_image['imageDigest']
-    
-    except Exception as e:
-        config.log(f"Error retrieving latest image from ECR: {e}")
-        raise
-
-
 def push_image_to_ecr(
         config: SelfDriverConfig,
         container_image_tag: str
 ):
     region = config.env_type.get_aws_region()
-    ecr_client = boto3.client("ecr", region_name=region)
+    ecr_client = config.aws_interface.client("ecr")
     repo_name = config.ecr_repo_name
     
-    full_image_uri = get_full_image_uri(
+    full_image_uri = config.aws_interface.get_full_image_uri(
         repo_name,
         container_image_tag,
         region
     )
     
+    ecr_login(config, full_image_uri, config.runtime_env)
+    
     config.log(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
+    
+    # --- BEGIN CREDENTIAL DIAGNOSTICS ---
+    try:
+        config.log("=== AWS identity before podman push ===")
+        subprocess.run(
+            ["aws", "sts", "get-caller-identity"],
+            check=True,
+            stdout=config.log_f,
+            stderr=subprocess.STDOUT,
+            env=config.runtime_env  # ensure this matches the env used for podman login
+        )
+        
+        config.log("=== Podman system info ===")
+        subprocess.run(
+            ["podman", "system", "info"],
+            check=True,
+            stdout=config.log_f,
+            stderr=subprocess.STDOUT,
+            env=config.runtime_env
+        )
+        
+        config.log("=== Podman registry auth.json ===")
+        auth_path = os.path.expanduser("~/.config/containers/auth.json")
+        subprocess.run(
+            ["cat", auth_path],
+            check=True,
+            stdout=config.log_f,
+            stderr=subprocess.STDOUT,
+            env=config.runtime_env
+        )
+    
+    except Exception as diag_e:
+        config.log(f"[WARN] Diagnostic error: {diag_e}")
+    # --- END CREDENTIAL DIAGNOSTICS ---
     
     for i in range(3):
         try:
@@ -1827,21 +1840,16 @@ def push_image_to_ecr(
                 ["podman", "tag", container_image_tag, full_image_uri],
                 check=True,
                 stdout=config.log_f,
-                stderr=subprocess.STDOUT
+                stderr=subprocess.STDOUT,
+                env=config.runtime_env
             )
-            
-            env = os.environ.copy()
-            env.pop("HTTP_PROXY", None)
-            env.pop("http_proxy", None)
-            env.pop("HTTPS_PROXY", None)
-            env.pop("https_proxy", None)
             
             subprocess.run(
                 ["podman", "push", full_image_uri],
                 check=True,
                 stdout=config.log_f,
                 stderr=subprocess.STDOUT,
-                env=env
+                env=config.runtime_env
             )
             break
         except Exception as e:
@@ -2273,7 +2281,7 @@ def build_iteration(config, container_env):
         tag_exists_in_ecr = False
     else:
         previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
-        tag_exists_in_ecr = aws_utils.tag_exists_in_ecr(
+        tag_exists_in_ecr = config.aws_interface.tag_exists_in_ecr(
             config.ecr_repo_name,
             previous_container_tag,
             config.env_type.get_aws_region()
@@ -2286,11 +2294,6 @@ def build_iteration(config, container_env):
         container_image_tag = previous_container_tag
     else:
         docker_file = config.sandbox_root_dir / "Dockerfile"
-        
-        ecr_authenticate(
-            config,
-            docker_file
-        )
         
         container_image_tag = build_container_image(
             config,
@@ -2798,7 +2801,7 @@ def _wait_for_ses_dkim_success(
         
         # ---- Try SESv2 first
         try:
-            sesv2 = boto3.client("sesv2", region_name=region)
+            sesv2 = config.aws_interface.client("sesv2")
             v2_resp = sesv2.get_email_identity(EmailIdentity=domain_name)
             dkim_attrs = v2_resp.get("DkimAttributes") or {}
             status = (dkim_attrs.get("Status") or "").upper()
@@ -2815,7 +2818,7 @@ def _wait_for_ses_dkim_success(
         # ---- Fall back to SESv1 if v2 could not confirm a SUCCESS
         if status in (None, "", "NOT_FOUND_V2"):
             try:
-                sesv1 = boto3.client("ses", region_name=region)
+                sesv1 = config.aws_interface.client("ses")
                 
                 # Identity existence and basic verification status
                 v1_ver = sesv1.get_identity_verification_attributes(
@@ -4821,7 +4824,7 @@ def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, Infrastru
 
 
 def check_ses_quota(config: SelfDriverConfig):
-    ses_client = boto3.client("ses", region_name=config.env_type.get_aws_region())
+    ses_client = config.aws_interface.client("ses")
     quota = ses_client.get_send_quota()
     sent = float(quota.get("SentLast24Hours", 0))
     max_send = float(quota.get("Max24HourSend", 0))
@@ -4860,13 +4863,13 @@ def deploy_opentofu_stack(
     stack = config.stacks[stack_type]
     opentofu_stack_manager = config.stack_managers[stack_type]
     
-    web_container_image = aws_utils.get_full_image_uri(
+    web_container_image = config.aws_interface.get_full_image_uri(
         config.ecr_repo_name,
         container_image_tag,
         config.env_type.get_aws_region()
     )
     
-    ecr_arn = aws_utils.get_ecr_arn(
+    ecr_arn = config.aws_interface.get_ecr_arn(
         config.ecr_repo_name,
         container_image_tag,
         config.env_type.get_aws_region()
@@ -4971,7 +4974,7 @@ def build_tfvars_payload(
     secrets_key = config.business.get_secrets_root_key(env_type)
     
     developer_cidr = common.get_ip_address()
-    shared_vpc = aws_utils.get_shared_vpc()
+    shared_vpc = config.aws_interface.get_shared_vpc()
     
     payload: dict[str, Any] = {
         "StackIdentifier": stack_application.stack_namespace_token,
@@ -4981,7 +4984,7 @@ def build_tfvars_payload(
         "DeletePolicy": "Retain" if EnvironmentType.PRODUCTION.eq(env_type) else "Delete",
         "AWS_ACCOUNT_ID": settings.AWS_ACCOUNT_ID,
         **get_admin_credentials(
-            env_type,
+            config,
             secrets_key
         )
     }
@@ -5092,10 +5095,10 @@ def build_tfvars_payload(
 
 
 def get_admin_credentials(
-        environment,
+        config: SelfDriverConfig,
         secrets_key
 ):
-    aws_secrets_client = boto3.client("secretsmanager", region_name=environment.get_aws_region())
+    aws_secrets_client = config.aws_interface.client("secretsmanager")
     admin_secrets_key = f"{secrets_key}/appadmin"
     
     try:
@@ -5124,7 +5127,7 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
     return json_val
 
 
-def ecr_authenticate(config: SelfDriverConfig, dockerfile):
+def ecr_authenticate_for_base_image(config: SelfDriverConfig, dockerfile, env):
     base_img = ""
     try:
         with open(dockerfile) as f:
@@ -5132,23 +5135,43 @@ def ecr_authenticate(config: SelfDriverConfig, dockerfile):
             #   FROM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
             #   FROM --platform=$TARGETPLATFORM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
             for base_img in re.findall(pattern, f.read(), flags=re.IGNORECASE):
-                ecr_login(config, base_img)
+                ecr_login(config, base_img, env)
     except Exception as e:
         config.log(e)
         raise AgentBlocked({"desc": f"Unable to authenticate with ecr for {base_img}", "error": str(e)})
 
 
-def ecr_login(config: SelfDriverConfig, ecr_repo_uri):
-    region = parse_region_from_ecr_uri(ecr_repo_uri)
-    cmd = f"aws ecr get-login-password --region {region} | podman login --username AWS --password-stdin {ecr_repo_uri.split('/')[0]}"
-    print(cmd)
-    subprocess.run(
-        cmd,
-        shell=True,
-        check=True,
-        stdout=config.log_f,
-        stderr=subprocess.STDOUT
-    )
+def ecr_login(config: SelfDriverConfig, ecr_repo_uri, env):
+    """
+    Log into the correct ECR registry for the provided image URI.
+    Ensures the registry hostname is parsed correctly (account.dkr.ecr.region.amazonaws.com).
+    """
+    try:
+        # Extract registry hostname (everything before the first slash)
+        registry = ecr_repo_uri.split("/", 1)[0].strip()
+        if not registry:
+            raise ValueError(f"Unable to extract registry from ECR URI: {ecr_repo_uri}")
+        
+        # Extract region from registry string
+        region = parse_region_from_ecr_uri(ecr_repo_uri)
+        
+        cmd = (
+            f"aws ecr get-login-password --region {region} "
+            f"| podman login --username AWS --password-stdin {registry}"
+        )
+        
+        print(cmd)
+        subprocess.run(
+            cmd,
+            shell=True,
+            check=True,
+            env=env,
+            stdout=config.log_f,
+            stderr=subprocess.STDOUT
+        )
+    except Exception as e:
+        config.log(f"ECR login failed for {ecr_repo_uri}: {e}")
+        raise
 
 
 def parse_region_from_ecr_uri(image_uri: str) -> str:
@@ -5202,4 +5225,4 @@ def empty_stack_buckets(
     logging.info(f"Found {len(bucket_definitions)} S3 bucket(s) in stack, emptying before deletion...")
     
     for bucket_resource in bucket_definitions:
-        empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)
+        config.aws_interface.empty_s3_bucket(bucket_resource["bucket_name"], delete_bucket=delete_bucket)

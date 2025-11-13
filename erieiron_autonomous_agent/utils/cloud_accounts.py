@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class CachedAwsCredentials:
-    role_arn: str
     access_key_id: str
     secret_access_key: str
     session_token: Optional[str]
@@ -26,10 +25,6 @@ class CachedAwsCredentials:
 # Cache assumed credentials keyed by cloud account id
 _CREDENTIAL_CACHE: dict[str, CachedAwsCredentials] = {}
 _CACHE_SAFETY_WINDOW = timedelta(minutes=5)
-
-
-def _now() -> timezone.datetime:
-    return timezone.now()
 
 
 def store_credentials_secret(cloud_account: CloudAccount, payload: Dict[str, Any]) -> str:
@@ -93,9 +88,8 @@ def _base_session_credentials() -> CachedAwsCredentials:
     if not frozen:
         raise RuntimeError("Unable to locate base AWS credentials for CloudAccount operations")
     # Static credentials may not expose expiration; treat as long-lived.
-    expiration = _now() + timedelta(hours=8)
+    expiration = common.get_now() + timedelta(hours=8)
     return CachedAwsCredentials(
-        role_arn=frozen.role_arn,
         access_key_id=frozen.access_key,
         secret_access_key=frozen.secret_key,
         session_token=frozen.token,
@@ -113,7 +107,7 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
     
     cache_key = str(cloud_account.id)
     cached = _CREDENTIAL_CACHE.get(cache_key)
-    if not force_refresh and cached and cached.expiration - _now() > _CACHE_SAFETY_WINDOW:
+    if not force_refresh and cached and cached.expiration - common.get_now() > _CACHE_SAFETY_WINDOW:
         return cached
     
     secret_payload = load_credentials_secret(cloud_account)
@@ -145,12 +139,11 @@ def get_aws_credentials(cloud_account: Optional[CloudAccount], *, force_refresh:
     credentials = response.get("Credentials") or {}
     expiration = credentials.get("Expiration")
     if not expiration:
-        expiration = _now() + timedelta(hours=1)
+        expiration = common.get_now() + timedelta(hours=1)
     elif not timezone.is_aware(expiration):
         expiration = timezone.make_aware(expiration)
     
     cached = CachedAwsCredentials(
-        role_arn=role_arn,
         access_key_id=credentials.get("AccessKeyId"),
         secret_access_key=credentials.get("SecretAccessKey"),
         session_token=credentials.get("SessionToken"),
@@ -183,7 +176,6 @@ def build_cloud_credentials(stacks: list[InfrastructureStack]) -> Dict[str, str]
     aws_region = env_type.get_aws_region()
     env = {
         "BUSINESS_CLOUD_ACCOUNT_ID": cloud_account.account_identifier,
-        "AWS_ROLE_ARN": cloud_account_credentials.role_arn,
         "AWS_ACCESS_KEY_ID": cloud_account_credentials.access_key_id,
         "AWS_SECRET_ACCESS_KEY": cloud_account_credentials.secret_access_key,
         "AWS_DEFAULT_REGION": aws_region,

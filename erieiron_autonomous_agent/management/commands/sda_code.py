@@ -1,6 +1,7 @@
 import os
 import textwrap
 
+import boto3
 from django.core.management.base import BaseCommand
 
 from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
@@ -48,6 +49,7 @@ class Command(BaseCommand):
         print(textwrap.dedent(f"""
         
         SDA for task id {task_id}
+        Running as {boto3.client("sts").get_caller_identity()['Arn']}
 
         """))
         self_driving_coder_agent_tofu.execute(task_id, SdaInitialAction.valid_or(options.get("action")))

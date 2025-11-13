@@ -214,7 +214,8 @@ variable "business_name" {
 - Create S3 bucket for OpenTofu state storage with versioning and encryption
 - Deploy target account bootstrap OpenTofu stack with S3 backend
 - Create `ErieIronTargetAccountAgentRole` with permissions
-- Create DynamoDB table `opentofu-locks` for state locking  
+- Create DynamoDB table `opentofu-locks` for state locking
+- Create ECR repository for business container images with scan-on-push enabled
 - Output role ARN and external ID to temporary file
 - Verify IAM role creation
 

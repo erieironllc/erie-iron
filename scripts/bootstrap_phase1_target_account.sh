@@ -337,6 +337,79 @@ fi
 
 print_success "IAM role created successfully: $ROLE_ARN"
 
+# Create ECR repository for business container images
+print_info "Creating ECR repository for container images..."
+
+# Function to derive service_token from business name (same logic as common.strip_non_alpha)
+strip_non_alpha() {
+    echo "$1" | sed 's/[^a-zA-Z]//g'
+}
+
+# Function to implement sanitize_aws_name logic
+sanitize_aws_name() {
+    local name="$1"
+    local max_length="${2:-128}"
+    
+    if [[ -z "$name" ]]; then
+        echo "t"
+        return
+    fi
+    
+    # Replace underscores and spaces with hyphens
+    name=$(echo "$name" | sed 's/[_ ]/-/g')
+    
+    # Remove invalid characters (keep only alphanumeric and hyphens)
+    name=$(echo "$name" | sed 's/[^A-Za-z0-9-]/-/g')
+    
+    # Collapse multiple hyphens
+    name=$(echo "$name" | sed 's/-\+/-/g')
+    
+    # Remove leading and trailing hyphens and convert to lowercase
+    name=$(echo "$name" | sed 's/^-\+\|-\+$//g' | tr '[:upper:]' '[:lower:]')
+    
+    # If empty, use default
+    if [[ -z "$name" ]]; then
+        name="t"
+    fi
+    
+    # Ensure name starts with a letter
+    if ! echo "$name" | grep -q "^[a-z]"; then
+        name="t${name}"
+    fi
+    
+    # Truncate to max length
+    name="${name:0:$max_length}"
+    
+    echo "$name"
+}
+
+# Derive service_token from business name (remove non-alphabetic chars and lowercase)
+SERVICE_TOKEN=$(strip_non_alpha "$BUSINESS_NAME" | tr '[:upper:]' '[:lower:]')
+
+if [[ -z "$SERVICE_TOKEN" ]]; then
+    print_warning "Could not derive service_token from business name '$BUSINESS_NAME', using fallback"
+    SERVICE_TOKEN="default"
+fi
+
+# Generate ECR repository name using same logic as self_driving_coder_config.py
+ECR_REPO_NAME=$(sanitize_aws_name "$SERVICE_TOKEN")
+
+print_info "Derived service_token: $SERVICE_TOKEN"
+print_info "ECR repository name: $ECR_REPO_NAME"
+
+# Check if ECR repository already exists
+if aws ecr describe-repositories --repository-names "$ECR_REPO_NAME" >> "$TOFU_LOG_FILE" 2>&1; then
+    print_success "ECR repository '$ECR_REPO_NAME' already exists"
+else
+    print_info "Creating ECR repository '$ECR_REPO_NAME'..."
+    if aws ecr create-repository --repository-name "$ECR_REPO_NAME" --image-scanning-configuration scanOnPush=true >> "$TOFU_LOG_FILE" 2>&1; then
+        print_success "ECR repository '$ECR_REPO_NAME' created successfully"
+    else
+        print_error "Failed to create ECR repository '$ECR_REPO_NAME'. Check log: $TOFU_LOG_FILE"
+        exit 1
+    fi
+fi
+
 # Output role information for Phase 2
 PHASE1_OUTPUT_FILE="/tmp/bootstrap_phase1_output_${TARGET_ACCOUNT_ID}.json"
 cat > "$PHASE1_OUTPUT_FILE" << EOF
@@ -345,7 +418,9 @@ cat > "$PHASE1_OUTPUT_FILE" << EOF
   "business_name": "$BUSINESS_NAME", 
   "env_type": "$ENV_TYPE",
   "role_arn": "$ROLE_ARN",
-  "external_id": "$ACTUAL_EXTERNAL_ID"
+  "external_id": "$ACTUAL_EXTERNAL_ID",
+  "service_token": "$SERVICE_TOKEN",
+  "ecr_repository_name": "$ECR_REPO_NAME"
 }
 EOF
 

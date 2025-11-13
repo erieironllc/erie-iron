@@ -90,8 +90,9 @@ The bootstrap process uses a **two-phase approach** to solve credential separati
 - Creates S3 bucket: `erieiron-opentofu-state-curators-659418876324` for OpenTofu state storage
 - Configures S3 bucket with versioning, encryption (AES256), and security features
 - Creates IAM role: `ErieIronTargetAccountAgentRole`
-- Attaches comprehensive permission policy for all agent operations including S3 state access
+- Attaches comprehensive permission policy for all agent operations including S3 state access and ECR
 - Creates DynamoDB table: `opentofu-locks` for OpenTofu state locking
+- Creates ECR repository: `curators` for container images with scan-on-push enabled
 - Configures trust policy to allow your control plane account
 - Sets external ID for secure role assumption
 - Tags all resources for identification and cost tracking

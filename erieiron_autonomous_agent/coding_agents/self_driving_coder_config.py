@@ -16,7 +16,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_autonomous_agent.utils import cloud_accounts
-from erieiron_common import common, ErieIronJSONEncoder
+from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, CredentialService, SdaPhase
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -118,6 +118,8 @@ class SelfDriverConfig:
         }
         self.all_stack_managers: list[OpenTofuStackManager] = self.stack_managers.values()
         self.ecr_repo_name = sanitize_aws_name(self.business.service_token)
+        self.cloud_account = self.all_stacks[0].cloud_account or self.all_stacks[1].cloud_account or self.business.get_default_cloud_account(self.env_type)
+        self.aws_interface = aws_utils.get_aws_interface(self.cloud_account)
         
         self.model_code_planning = LlmModel.OPENAI_GPT_5
     
@@ -223,9 +225,12 @@ class SelfDriverConfig:
             self.self_driving_task.latest_phase_change_at = now
     
     def set_iteration(self, current_iteration: SelfDrivingTaskIteration):
+        if current_iteration and current_iteration.self_driving_task_id != self.self_driving_task.id:
+            raise Exception(f"cannot set current iteration to an iteration from a different task")
+        
         self.current_iteration = current_iteration
         if not self.current_iteration:
-            raise "current_iteration cannot be None"
+            self.iterate_if_necessary()
         
         self.previous_iteration, self.iteration_to_modify = self.current_iteration.get_relevant_iterations()
         

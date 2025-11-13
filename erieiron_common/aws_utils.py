@@ -1,6 +1,5 @@
 import base64
 import datetime
-import ipaddress
 import json
 import logging
 import os
@@ -10,8 +9,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib
-import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -26,7 +23,6 @@ from botocore.exceptions import ClientError
 
 import settings
 from erieiron_common import common
-import settings
 from erieiron_common.aws_s3_local_cache import S3LocalCache
 from erieiron_common.enums import ContainerPlatform
 
@@ -59,8 +55,128 @@ class SharedVpcContext:
     private_subnet_ids: list[str]
 
 
-def client(client_name) -> 'boto3.session.Session.client':
-    return boto3.client(client_name, region_name=get_aws_region())
+def client(client_name, cloud_account=None, endpoint_url=None) -> 'boto3.session.Session.client':
+    from erieiron_autonomous_agent.utils import cloud_accounts
+    aws_credentials = cloud_accounts.get_aws_credentials(cloud_account)
+    
+    return boto3.client(
+        client_name,
+        endpoint_url=endpoint_url,
+        region_name=get_aws_region(),
+        aws_session_token=aws_credentials.session_token,
+        aws_secret_access_key=aws_credentials.secret_access_key,
+        aws_access_key_id=aws_credentials.access_key_id
+    )
+
+
+def package_lambda(
+        sandbox_root_dir: Path,
+        code_file_path: str,
+        dependencies: list[str],
+        file_name: str
+) -> Path:
+    dependencies_normalized = []
+    for d in dependencies:
+        if "erieiron-public-common" in d:
+            dependencies_normalized.append("erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git")
+        else:
+            dependencies_normalized.append(d)
+    dependencies = list(set(dependencies_normalized))
+    
+    full_lambda_path = sandbox_root_dir / code_file_path
+    if not full_lambda_path.exists():
+        raise FileNotFoundError(f"Lambda source file not found: {full_lambda_path}")
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        shutil.copy(full_lambda_path, temp_dir_path / full_lambda_path.name)
+        
+        if dependencies:
+            req_file = temp_dir_path / "requirements.txt"
+            req_file.write_text("\n".join(dependencies))
+            logging.info(f"building dependencies for {code_file_path}: {dependencies}")
+            try:
+                subprocess.run(
+                    [
+                        "podman", "run", "--rm",
+                        "--platform", ContainerPlatform.LAMBDA,
+                        "--entrypoint", "/bin/bash",
+                        "-v", f"{temp_dir_path}:/var/task",
+                        "public.ecr.aws/lambda/python:3.11",
+                        "-c",
+                        (
+                            "set -euxo pipefail && "
+                            "yum install -y git && "
+                            "pip install --no-cache-dir --only-binary=:all: "
+                            "-r /var/task/requirements.txt -t /var/task && "
+                            "ls -lh /var/task"
+                        ),
+                    ],
+                    stderr=subprocess.STDOUT,
+                    check=True
+                )
+            except Exception as e:
+                logging.exception(e)
+                raise e
+        
+        zip_path = temp_dir_path.parent / file_name
+        logging.info(f"Packaging Lambda: {code_file_path} → {file_name} with dependencies: {dependencies}. full path: {zip_path}")
+        subprocess.run(["zip", "-r", str(zip_path), "."], cwd=temp_dir_path, check=True)
+        logging.info(f"Uploading {code_file_path} package.  {zip_path} → {file_name} ({zip_path.stat().st_size / (1024 * 1024):.2f}MB)")
+        
+        return zip_path
+
+
+def aws_console_url_from_arn(arn: str) -> str:
+    match = re.match(r"arn:aws:([^:]+):([^:]*):([^:]*):(.*)", arn)
+    if not match:
+        raise ValueError(f"Invalid ARN: {arn}")
+    
+    service, region, account, resource = match.groups()
+    region_qs = f"?region={region}" if region else ""
+    console_base = "https://console.aws.amazon.com"
+    
+    if service == "s3":
+        # arn:aws:s3:::my-bucket[/key]
+        parts = resource.split("/", 1)
+        bucket = parts[0]
+        return f"https://s3.console.aws.amazon.com/s3/buckets/{bucket}"
+    
+    if service == "ec2":
+        # arn:aws:ec2:us-west-2:123456789012:instance/i-abc
+        if "instance/" in resource:
+            instance_id = resource.split("instance/")[1]
+            return f"{console_base}/ec2/v2/home{region_qs}#InstanceDetails:instanceId={instance_id}"
+    
+    if service == "iam":
+        if "role/" in resource:
+            role_name = resource.split("role/")[1]
+            return f"{console_base}/iam/home#/roles/{role_name}"
+        if "user/" in resource:
+            user_name = resource.split("user/")[1]
+            return f"{console_base}/iam/home#/users/{user_name}"
+    
+    if service == "lambda":
+        func = resource.split(":")[-1]
+        return f"{console_base}/lambda/home{region_qs}#/functions/{func}"
+    
+    if service == "rds":
+        if resource.startswith("db:"):
+            db = resource.split("db:")[1]
+            return f"{console_base}/rds/home{region_qs}#database:id={db}"
+    
+    if service == "logs":
+        if resource.startswith("log-group:"):
+            group = resource.split("log-group:")[1].split(":")[0]
+            encoded = group.replace("/", "%2F")
+            return f"{console_base}/cloudwatch/home{region_qs}#logsV2:log-groups/log-group/{encoded}"
+    
+    if service == "ecs":
+        if "cluster/" in resource:
+            cluster = resource.split("cluster/")[1]
+            return f"{console_base}/ecs/home{region_qs}#/clusters/{cluster}"
+    
+    return f"{console_base}/go/view?arn={arn}"
 
 
 def get_aws_region() -> str:
@@ -452,21 +568,30 @@ def set_aws_interface(aws_interface):
     aws_interface = cache.tl_set("aws_interface", aws_interface)
 
 
-def get_aws_interface():
+def get_aws_interface(cloud_account=None):
     from erieiron_common import cache
     aws_interface = cache.tl_get("aws_interface")
     if aws_interface is None:
-        aws_interface = AwsInterface()
+        aws_interface = AwsInterface(cloud_account)
         set_aws_interface(aws_interface)
     return aws_interface
 
 
 class AwsInterface:
-    def __init__(self):
-        self.s3_passthrough_cache = S3LocalCache(client('s3'))
+    def __init__(self, cloud_account=None):
+        from erieiron_autonomous_agent.models import CloudAccount
+        self.cloud_account: CloudAccount = cloud_account
+        self.s3_passthrough_cache = S3LocalCache(self.client('s3'))
+    
+    def client(self, service_name, endpoint_url=None):
+        return client(
+            service_name, 
+            cloud_account=self.cloud_account, 
+            endpoint_url=endpoint_url
+        )
     
     def generate_presigned_url(self, bucket: str, file_key: str, content_type: str, expiration_minutes=1000):
-        return boto3.client("s3").generate_presigned_url(
+        return self.client("s3").generate_presigned_url(
             'put_object',
             Params={
                 'Bucket': bucket,
@@ -478,53 +603,6 @@ class AwsInterface:
     
     def assert_test_interface(self):
         raise Exception("Expecting test interface, but got real one")
-    
-    def transcribe_audio(self, bucket, key):
-        transcribe = client('transcribe')
-        
-        job_name = f"{key}_{uuid.uuid4()}"
-        
-        response = transcribe.start_transcription_job(
-            TranscriptionJobName=job_name,
-            Media={'MediaFileUri': f"s3://{bucket}/{key}"},
-            MediaFormat=key.split(".")[-1],
-            LanguageCode='en-US'
-        )
-        
-        while True:
-            status = transcribe.get_transcription_job(TranscriptionJobName=job_name)
-            if status['TranscriptionJob']['TranscriptionJobStatus'] in ['COMPLETED', 'FAILED']:
-                break
-            else:
-                time.sleep(2)
-        
-        if status['TranscriptionJob']['TranscriptionJobStatus'] == 'COMPLETED':
-            result = transcribe.get_transcription_job(TranscriptionJobName=job_name)
-            result_uri = result['TranscriptionJob']['Transcript']['TranscriptFileUri']
-            
-            # noinspection PyUnresolvedReferences
-            with urllib.request.urlopen(result_uri) as response:
-                raw_json = response.read()
-            transcription_result = json.loads(raw_json)
-            
-            from erieiron_common import common
-            
-            results = transcription_result['results']
-            
-            return results
-        else:
-            return None
-    
-    def transcribe_audio_openai(self, bucket, key):
-        import openai
-        # Download the audio file from S3 using the existing download method
-        file_path = self.download(bucket, key)
-        
-        # Open the downloaded file and transcribe using OpenAI's Whisper API
-        with open(file_path, 'rb') as audio_file:
-            transcript = openai.Audio.transcribe('whisper-1', audio_file)
-        
-        return transcript
     
     def get_log_events(self, log_group, start_date: datetime.date, end_date: datetime.date = None, filter_pattern=''):
         from erieiron_common import common
@@ -540,9 +618,8 @@ class AwsInterface:
             _, end_time = common.date_to_epoch_ms(end_date)
             kwargs['endTime'] = end_time
         
-        page_iterator = boto3.client(
-            'logs',
-            region_name=settings.AWS_DEFAULT_REGION_NAME
+        page_iterator = self.client(
+            'logs'
         ).get_paginator(
             'filter_log_events'
         ).paginate(**kwargs)
@@ -567,7 +644,7 @@ class AwsInterface:
         common.log_info(f"sending email: {subject} to {recipient}")
         
         sender = common.default_str(sender, settings.FEEDBACK_EMAIL)
-        ses_client = boto3.client('ses', region_name=settings.AWS_DEFAULT_REGION_NAME)
+        ses_client = self.client('ses')
         
         # if recipient.lower() != "erieironllc@gmail.com":
         #     self.send_email(f"ccme: {subject} ({recipient})", "erieironllc@gmail.com", body)
@@ -637,16 +714,16 @@ BODY:
             return False
     
     def assert_object_exists(self, bucket: str, key: str):
-        boto3.client("s3").head_object(
+        self.client("s3").head_object(
             Bucket=bucket,
             Key=key
         )
     
     def create_empty_file(self, bucket: str, key: str) -> str:
-        boto3.client("s3").put_object(Bucket=bucket, Key=key)
+        self.client("s3").put_object(Bucket=bucket, Key=key)
     
     def delete(self, bucket: str, key: str) -> str:
-        boto3.client("s3").delete_object(Bucket=bucket, Key=key)
+        self.client("s3").delete_object(Bucket=bucket, Key=key)
     
     def download(self, bucket: str, key: str) -> str:
         return str(self.s3_passthrough_cache.get_file(bucket, key))
@@ -654,7 +731,7 @@ BODY:
     def download_all(self, dest_dir: Path, bucket_name, prefix):
         dest_dir = Path(dest_dir).expanduser()
         dest_dir.mkdir(parents=True, exist_ok=True)
-        s3 = boto3.client('s3')
+        s3 = self.client('s3')
         
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
@@ -680,9 +757,8 @@ BODY:
             raise ValueError("missing message type")
         payload = payload or {}
         
-        apigateway_client = boto3.client(
+        apigateway_client = self.client(
             'apigatewaymanagementapi',
-            region_name=settings.AWS_DEFAULT_REGION_NAME,
             endpoint_url=f"https://{settings.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}"
         )
         
@@ -758,7 +834,7 @@ BODY:
         common.log_info("Deletion complete.")
     
     def iterate_s3_bucket_keys(self, bucket_name):
-        s3 = boto3.client("s3")
+        s3 = self.client("s3")
         
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket_name):
@@ -820,668 +896,203 @@ BODY:
         # if delete_when_done:
         #     from erieiron_common.common import quietly_delete
         #     quietly_delete(file_path)
-
-
-def _describe_availability_zones(region: str) -> list[str]:
-    ec2_client = boto3.client("ec2", region_name=region)
-    zones = []
-    resp = ec2_client.describe_availability_zones(AllAvailabilityZones=False)
-    for az in resp.get("AvailabilityZones", []):
-        if az.get("State") == "available":
-            zones.append(az.get("ZoneName"))
-    return sorted(filter(None, zones)) or [f"{region}a"]
-
-
-def ensure_shared_vpc_exists(env_type) -> SharedVpcContext:
-    region = env_type.get_aws_region()
-    ec2_resource = boto3.resource("ec2", region_name=region)
-    ec2_client = boto3.client("ec2", region_name=region)
     
-    vpcs = list(
-        ec2_resource.vpcs.filter(
-            Filters=[{"Name": "tag:Name", "Values": [SHARED_VPC_NAME]}]
-        )
-    )
-    
-    if vpcs:
-        vpc = vpcs[0]
-    else:
-        logging.info("Creating shared VPC %s in %s", SHARED_VPC_NAME, region)
-        vpc = ec2_resource.create_vpc(CidrBlock=SHARED_VPC_CIDR)
-        vpc.wait_until_available()
-        vpc.create_tags(
-            Tags=[
-                {"Key": "Name", "Value": SHARED_VPC_NAME},
-                {"Key": "ManagedBy", "Value": "ErieIron"},
-            ]
-        )
-        ec2_client.modify_vpc_attribute(
-            VpcId=vpc.id,
-            EnableDnsHostnames={"Value": True}
-        )
-        ec2_client.modify_vpc_attribute(
-            VpcId=vpc.id,
-            EnableDnsSupport={"Value": True}
-        )
-    
-    azs = _describe_availability_zones(region)
-    
-    def ensure_subnet(name: str, cidr: str, az_index: int, map_public_ip: bool) -> str:
-        existing = list(
-            ec2_resource.subnets.filter(
-                Filters=[{"Name": "tag:Name", "Values": [name]}]
-            )
-        )
-        if existing:
-            subnet = existing[0]
-        else:
-            # Check for CIDR conflicts in the VPC before creating
-            try:
-                subnets_resp = ec2_client.describe_subnets(
-                    Filters=[
-                        {"Name": "vpc-id", "Values": [vpc.id]}
-                    ]
-                )
-            except Exception as exc:
-                logging.warning("Failed to describe subnets for VPC %s: %s", vpc.id, exc)
-                subnets_resp = {"Subnets": []}
-            requested_cidr = ipaddress.ip_network(cidr)
-            conflict_subnet_id = None
-            for s in subnets_resp.get("Subnets", []):
-                s_cidr = s.get("CidrBlock")
-                s_id = s.get("SubnetId")
-                if not s_cidr or not s_id:
-                    continue
-                try:
-                    s_net = ipaddress.ip_network(s_cidr)
-                except Exception:
-                    continue
-                # If there is any overlap
-                if requested_cidr.overlaps(s_net):
-                    conflict_subnet_id = s_id
-                    break
-            if conflict_subnet_id:
-                logging.warning("CIDR conflict detected for %s (%s); using existing subnet %s", name, cidr, conflict_subnet_id)
-                return conflict_subnet_id
-            az = azs[az_index % len(azs)]
-            logging.info("Creating subnet %s (%s) in %s", name, cidr, az)
-            subnet = ec2_resource.create_subnet(
-                VpcId=vpc.id,
-                CidrBlock=cidr,
-                AvailabilityZone=az
-            )
-            # Wait for subnet to become available (no built-in waiter in boto3)
-            for _ in range(10):
-                desc = ec2_client.describe_subnets(SubnetIds=[subnet.id])["Subnets"][0]
-                if desc.get("State") == "available":
-                    break
-                time.sleep(2)
-            subnet.create_tags(
-                Tags=[
-                    {"Key": "Name", "Value": name},
-                    {"Key": "ManagedBy", "Value": "ErieIron"},
-                ]
-            )
-        try:
-            ec2_client.modify_subnet_attribute(
-                SubnetId=subnet.id,
-                MapPublicIpOnLaunch={"Value": map_public_ip}
-            )
-        except ClientError as exc:
-            logging.warning("Failed to update MapPublicIpOnLaunch for %s: %s", subnet.id, exc)
-        return subnet.id
-    
-    public_subnets = [
-        ensure_subnet(name, cidr, idx, True)
-        for idx, (name, cidr) in enumerate(SHARED_PUBLIC_SUBNETS)
-    ]
-    private_subnets = [
-        ensure_subnet(name, cidr, idx, False)
-        for idx, (name, cidr) in enumerate(SHARED_PRIVATE_SUBNETS)
-    ]
-    
-    # Ensure internet gateway for the shared VPC
-    igws = list(
-        ec2_resource.internet_gateways.filter(
-            Filters=[{"Name": "attachment.vpc-id", "Values": [vpc.id]}]
-        )
-    )
-    if igws:
-        igw = igws[0]
-    else:
-        igw = ec2_resource.create_internet_gateway()
-        igw.create_tags(
-            Tags=[
-                {"Key": "Name", "Value": f"{SHARED_VPC_NAME}-igw"},
-                {"Key": "ManagedBy", "Value": "ErieIron"},
-            ]
-        )
-        igw.attach_to_vpc(VpcId=vpc.id)
-    
-    # Public route table with default route to IGW
-    def ensure_route_table(name: str):
-        tables = list(
-            ec2_resource.route_tables.filter(
-                Filters=[{"Name": "tag:Name", "Values": [name]}]
-            )
-        )
-        if tables:
-            table = tables[0]
-        else:
-            table = ec2_resource.create_route_table(VpcId=vpc.id)
-            table.create_tags(
-                Tags=[
-                    {"Key": "Name", "Value": name},
-                    {"Key": "ManagedBy", "Value": "ErieIron"},
-                ]
-            )
-        return table
-    
-    public_route_table = ensure_route_table(SHARED_PUBLIC_ROUTE_TABLE_NAME)
-    try:
-        ec2_client.create_route(
-            RouteTableId=public_route_table.id,
-            DestinationCidrBlock="0.0.0.0/0",
-            GatewayId=igw.id
-        )
-    except ClientError as exc:
-        if "RouteAlreadyExists" not in str(exc):
-            logging.warning("Failed to create default route on %s: %s", public_route_table.id, exc)
-    
-    for subnet_id in public_subnets:
-        associations = public_route_table.associations
-        if not any(getattr(assoc, "subnet_id", None) == subnet_id for assoc in associations):
-            try:
-                public_route_table.associate_with_subnet(SubnetId=subnet_id)
-            except ClientError as exc:
-                logging.warning("Failed to associate %s with %s: %s", subnet_id, public_route_table.id, exc)
-    
-    def ensure_nat_gateway(subnet_id: str) -> str:
-        nat_resp = ec2_client.describe_nat_gateways(
-            Filters=[
-                {"Name": "tag:Name", "Values": [SHARED_NAT_GATEWAY_NAME]},
-                {"Name": "state", "Values": ["available", "pending"]},
-            ]
-        )
-        nat_gateways = nat_resp.get("NatGateways", [])
-        if nat_gateways:
-            nat = nat_gateways[0]
-            nat_gateway_id = nat.get("NatGatewayId")
-            if nat.get("State") != "available" and nat_gateway_id:
-                waiter = ec2_client.get_waiter("nat_gateway_available")
-                try:
-                    waiter.wait(NatGatewayIds=[nat_gateway_id])
-                except Exception as exc:
-                    logging.warning("Waiter for NAT gateway %s failed: %s", nat_gateway_id, exc)
-            return nat_gateway_id
-        
-        eip_resp = ec2_client.describe_addresses(
-            Filters=[{"Name": "tag:Name", "Values": [SHARED_NAT_EIP_NAME]}]
-        )
-        eip_addresses = eip_resp.get("Addresses", [])
-        allocation_id = None
-        for address in eip_addresses:
-            if address.get("Domain") == "vpc" and address.get("AllocationId"):
-                allocation_id = address["AllocationId"]
-                break
-        if not allocation_id:
-            alloc_resp = ec2_client.allocate_address(
-                Domain="vpc",
-                TagSpecifications=[
-                    {
-                        "ResourceType": "elastic-ip",
-                        "Tags": [
-                            {"Key": "Name", "Value": SHARED_NAT_EIP_NAME},
-                            {"Key": "ManagedBy", "Value": "ErieIron"},
-                        ],
-                    }
-                ],
-            )
-            allocation_id = alloc_resp.get("AllocationId")
-        
-        create_resp = ec2_client.create_nat_gateway(
-            SubnetId=subnet_id,
-            AllocationId=allocation_id,
-            TagSpecifications=[
-                {
-                    "ResourceType": "natgateway",
-                    "Tags": [
-                        {"Key": "Name", "Value": SHARED_NAT_GATEWAY_NAME},
-                        {"Key": "ManagedBy", "Value": "ErieIron"},
-                    ],
-                }
-            ],
-        )
-        nat_gateway_id = (create_resp.get("NatGateway") or {}).get("NatGatewayId")
-        if nat_gateway_id:
-            waiter = ec2_client.get_waiter("nat_gateway_available")
-            try:
-                waiter.wait(NatGatewayIds=[nat_gateway_id])
-            except Exception as exc:
-                logging.warning("Waiter for NAT gateway %s failed: %s", nat_gateway_id, exc)
-        return nat_gateway_id
-    
-    nat_gateway_id = ensure_nat_gateway(public_subnets[0])
-    
-    private_route_table = ensure_route_table(SHARED_PRIVATE_ROUTE_TABLE_NAME)
-    if nat_gateway_id:
-        try:
-            ec2_client.create_route(
-                RouteTableId=private_route_table.id,
-                DestinationCidrBlock="0.0.0.0/0",
-                NatGatewayId=nat_gateway_id
-            )
-        except ClientError as exc:
-            if "RouteAlreadyExists" not in str(exc):
-                logging.warning("Failed to create private route on %s: %s", private_route_table.id, exc)
-    
-    for subnet_id in private_subnets:
-        associations = private_route_table.associations
-        if not any(getattr(assoc, "subnet_id", None) == subnet_id for assoc in associations):
-            try:
-                private_route_table.associate_with_subnet(SubnetId=subnet_id)
-            except ClientError as exc:
-                logging.warning("Failed to associate %s with %s: %s", subnet_id, private_route_table.id, exc)
-    
-    return SharedVpcContext(
-        vpc_id=vpc.id,
-        cidr_block=getattr(vpc, "cidr_block", SHARED_VPC_CIDR),
-        public_subnet_ids=public_subnets,
-        private_subnet_ids=private_subnets,
-    )
-
-
-def ensure_shared_rds_security_group(
-        env_type=None,
-        developer_cidr: str | None = None
-) -> str:
-    shared_vpc = get_shared_vpc()
-    
-    if env_type is not None:
-        region = env_type.get_aws_region()
-    else:
+    @lru_cache(maxsize=1)
+    def get_shared_vpc(self) -> SharedVpcContext:
         region = get_aws_region()
-    ec2_client = boto3.client("ec2", region_name=region)
-    ec2_resource = boto3.resource("ec2", region_name=region)
-    
-    filters = [
-        {"Name": "tag:Name", "Values": [SHARED_RDS_SECURITY_GROUP_NAME]},
-        {"Name": "vpc-id", "Values": [shared_vpc.vpc_id]}
-    ]
-    resp = ec2_client.describe_security_groups(Filters=filters)
-    groups = resp.get("SecurityGroups", [])
-    
-    if groups:
-        sg_id = groups[0]["GroupId"]
-        sg = ec2_resource.SecurityGroup(sg_id)
-    else:
-        logging.info("Creating shared RDS security group %s", SHARED_RDS_SECURITY_GROUP_NAME)
-        create_resp = ec2_client.create_security_group(
-            GroupName=SHARED_RDS_SECURITY_GROUP_NAME,
-            Description="Shared database access for Erie Iron stacks",
-            VpcId=shared_vpc.vpc_id
-        )
-        sg_id = create_resp.get("GroupId")
-        ec2_client.create_tags(
-            Resources=[sg_id],
-            Tags=[
-                {"Key": "Name", "Value": SHARED_RDS_SECURITY_GROUP_NAME},
-                {"Key": "ManagedBy", "Value": "ErieIron"},
-            ]
-        )
-        sg = ec2_resource.SecurityGroup(sg_id)
-    
-    desired_cidrs = [shared_vpc.cidr_block]
-    if developer_cidr:
-        desired_cidrs.append(developer_cidr)
-    
-    def _has_rule(cidr: str) -> bool:
-        for perm in sg.ip_permissions:
-            if perm.get("IpProtocol") != "tcp":
-                continue
-            if perm.get("FromPort") != 5432 or perm.get("ToPort") != 5432:
-                continue
-            for ip_range in perm.get("IpRanges", []):
-                if ip_range.get("CidrIp") == cidr:
-                    return True
-        return False
-    
-    for cidr in filter(None, desired_cidrs):
-        if _has_rule(cidr):
-            continue
-        try:
-            sg.authorize_ingress(
-                IpPermissions=[
-                    {
-                        "IpProtocol": "tcp",
-                        "FromPort": 5432,
-                        "ToPort": 5432,
-                        "IpRanges": [
-                            {
-                                "CidrIp": cidr,
-                                "Description": "Erie Iron shared database access",
-                            }
-                        ],
-                    }
-                ]
-            )
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") != "InvalidPermission.Duplicate":
-                logging.warning("Failed adding SG ingress for %s: %s", cidr, exc)
-    
-    return sg.id
-
-
-@lru_cache(maxsize=1)
-def get_shared_vpc() -> SharedVpcContext:
-    region = get_aws_region()
-    ec2_client = boto3.client("ec2", region_name=region)
-    
-    try:
-        vpc_resp = ec2_client.describe_vpcs(VpcIds=[SHARED_VPC_ID])
-    except ClientError as exc:
-        raise RuntimeError(
-            f"Failed to describe shared VPC {SHARED_VPC_ID} in {region}: {exc}"
-        ) from exc
-    
-    vpcs = vpc_resp.get("Vpcs", [])
-    if not vpcs:
-        raise RuntimeError(f"Shared VPC {SHARED_VPC_ID} not found in {region}")
-    
-    vpc = vpcs[0]
-    cidr_block = vpc.get("CidrBlock") or SHARED_VPC_CIDR
-    
-    def _resolve_subnets(subnet_specs):
-        if not subnet_specs:
-            return []
-        
-        expected_names = [name for name, _ in subnet_specs]
-        expected_cidrs = [cidr for _, cidr in subnet_specs]
+        ec2_client = self.client("ec2")
         
         try:
-            subnet_resp = ec2_client.describe_subnets(
-                Filters=[
-                    {"Name": "vpc-id", "Values": [SHARED_VPC_ID]},
-                    {"Name": "tag:Name", "Values": expected_names},
-                ]
-            )
+            vpc_resp = ec2_client.describe_vpcs(VpcIds=[SHARED_VPC_ID])
         except ClientError as exc:
             raise RuntimeError(
-                f"Failed describing shared subnets in {SHARED_VPC_ID}: {exc}"
+                f"Failed to describe shared VPC {SHARED_VPC_ID} in {region}: {exc}"
             ) from exc
         
-        name_to_id = {}
-        vpc_ids_for_names = {}
-        cidr_to_id = {}
-        for subnet in subnet_resp.get("Subnets", []):
-            tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
-            subnet_name = tags.get("Name")
-            subnet_id = subnet.get("SubnetId")
-            vpc_id = subnet.get("VpcId")
-            cidr_block = subnet.get("CidrBlock")
-            if subnet_name and subnet_id:
-                name_to_id[subnet_name] = subnet_id
-                vpc_ids_for_names[subnet_name] = vpc_id
-            if cidr_block and subnet_id:
-                cidr_to_id[cidr_block] = subnet_id
+        vpcs = vpc_resp.get("Vpcs", [])
+        if not vpcs:
+            raise RuntimeError(f"Shared VPC {SHARED_VPC_ID} not found in {region}")
         
-        missing = [name for name in expected_names if name not in name_to_id]
-        # If any subnets missing, try to find them anywhere (not just in SHARED_VPC_ID)
-        if missing:
+        vpc = vpcs[0]
+        cidr_block = vpc.get("CidrBlock") or SHARED_VPC_CIDR
+        
+        def _resolve_subnets(subnet_specs):
+            if not subnet_specs:
+                return []
+            
+            expected_names = [name for name, _ in subnet_specs]
+            expected_cidrs = [cidr for _, cidr in subnet_specs]
+            
             try:
-                fallback_resp = ec2_client.describe_subnets(
+                subnet_resp = ec2_client.describe_subnets(
                     Filters=[
-                        {"Name": "tag:Name", "Values": missing}
+                        {"Name": "vpc-id", "Values": [SHARED_VPC_ID]},
+                        {"Name": "tag:Name", "Values": expected_names},
                     ]
                 )
             except ClientError as exc:
                 raise RuntimeError(
-                    f"Failed fallback search for shared subnets {missing}: {exc}"
+                    f"Failed describing shared subnets in {SHARED_VPC_ID}: {exc}"
                 ) from exc
-            found_any = False
-            for subnet in fallback_resp.get("Subnets", []):
+            
+            name_to_id = {}
+            vpc_ids_for_names = {}
+            cidr_to_id = {}
+            for subnet in subnet_resp.get("Subnets", []):
                 tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
                 subnet_name = tags.get("Name")
                 subnet_id = subnet.get("SubnetId")
                 vpc_id = subnet.get("VpcId")
                 cidr_block = subnet.get("CidrBlock")
                 if subnet_name and subnet_id:
-                    if subnet_name in missing:
-                        found_any = True
-                        # Warn if found in another VPC
-                        if vpc_id != SHARED_VPC_ID:
-                            logging.warning(
-                                "Found shared subnet %s in VPC %s instead of %s; updating SHARED_VPC_ID",
-                                subnet_name, vpc_id, SHARED_VPC_ID
-                            )
-                        name_to_id[subnet_name] = subnet_id
-                        vpc_ids_for_names[subnet_name] = vpc_id
+                    name_to_id[subnet_name] = subnet_id
+                    vpc_ids_for_names[subnet_name] = vpc_id
                 if cidr_block and subnet_id:
                     cidr_to_id[cidr_block] = subnet_id
-            still_missing = [name for name in expected_names if name not in name_to_id]
-            # If still missing, try CIDR-based lookup as a fallback
-            if still_missing:
+            
+            missing = [name for name in expected_names if name not in name_to_id]
+            # If any subnets missing, try to find them anywhere (not just in SHARED_VPC_ID)
+            if missing:
                 try:
-                    cidr_fallback_resp = ec2_client.describe_subnets(
+                    fallback_resp = ec2_client.describe_subnets(
                         Filters=[
-                            {"Name": "cidr-block", "Values": [cidr for _, cidr in subnet_specs]}
+                            {"Name": "tag:Name", "Values": missing}
                         ]
                     )
                 except ClientError as exc:
                     raise RuntimeError(
-                        f"Failed CIDR fallback search for shared subnets {still_missing}: {exc}"
+                        f"Failed fallback search for shared subnets {missing}: {exc}"
                     ) from exc
-                for subnet in cidr_fallback_resp.get("Subnets", []):
-                    subnet_id = subnet.get("SubnetId")
-                    cidr_block = subnet.get("CidrBlock")
+                found_any = False
+                for subnet in fallback_resp.get("Subnets", []):
                     tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
                     subnet_name = tags.get("Name")
-                    # Try to map missing entries by CIDR
-                    for idx, expected_name in enumerate(expected_names):
-                        expected_cidr = subnet_specs[idx][1]
-                        if expected_name not in name_to_id and cidr_block == expected_cidr:
-                            name_to_id[expected_name] = subnet_id
-                            # logging.warning("Resolved missing subnet %s by CIDR match (%s -> %s)", expected_name, cidr_block, subnet_id)
+                    subnet_id = subnet.get("SubnetId")
+                    vpc_id = subnet.get("VpcId")
+                    cidr_block = subnet.get("CidrBlock")
+                    if subnet_name and subnet_id:
+                        if subnet_name in missing:
+                            found_any = True
+                            # Warn if found in another VPC
+                            if vpc_id != SHARED_VPC_ID:
+                                logging.warning(
+                                    "Found shared subnet %s in VPC %s instead of %s; updating SHARED_VPC_ID",
+                                    subnet_name, vpc_id, SHARED_VPC_ID
+                                )
+                            name_to_id[subnet_name] = subnet_id
+                            vpc_ids_for_names[subnet_name] = vpc_id
+                    if cidr_block and subnet_id:
+                        cidr_to_id[cidr_block] = subnet_id
                 still_missing = [name for name in expected_names if name not in name_to_id]
+                # If still missing, try CIDR-based lookup as a fallback
                 if still_missing:
-                    raise RuntimeError(
-                        f"Missing expected shared subnets {still_missing} in VPC {SHARED_VPC_ID} or any other VPC (including CIDR fallback)"
-                    )
+                    try:
+                        cidr_fallback_resp = ec2_client.describe_subnets(
+                            Filters=[
+                                {"Name": "cidr-block", "Values": [cidr for _, cidr in subnet_specs]}
+                            ]
+                        )
+                    except ClientError as exc:
+                        raise RuntimeError(
+                            f"Failed CIDR fallback search for shared subnets {still_missing}: {exc}"
+                        ) from exc
+                    for subnet in cidr_fallback_resp.get("Subnets", []):
+                        subnet_id = subnet.get("SubnetId")
+                        cidr_block = subnet.get("CidrBlock")
+                        tags = {tag.get("Key"): tag.get("Value") for tag in subnet.get("Tags", []) if tag.get("Key")}
+                        subnet_name = tags.get("Name")
+                        # Try to map missing entries by CIDR
+                        for idx, expected_name in enumerate(expected_names):
+                            expected_cidr = subnet_specs[idx][1]
+                            if expected_name not in name_to_id and cidr_block == expected_cidr:
+                                name_to_id[expected_name] = subnet_id
+                                # logging.warning("Resolved missing subnet %s by CIDR match (%s -> %s)", expected_name, cidr_block, subnet_id)
+                    still_missing = [name for name in expected_names if name not in name_to_id]
+                    if still_missing:
+                        raise RuntimeError(
+                            f"Missing expected shared subnets {still_missing} in VPC {SHARED_VPC_ID} or any other VPC (including CIDR fallback)"
+                        )
+            
+            return [name_to_id[name] for name in expected_names]
         
-        return [name_to_id[name] for name in expected_names]
-    
-    public_subnet_ids = _resolve_subnets(SHARED_PUBLIC_SUBNETS)
-    private_subnet_ids = _resolve_subnets(SHARED_PRIVATE_SUBNETS)
-    
-    return SharedVpcContext(
-        vpc_id=vpc.get("VpcId", SHARED_VPC_ID),
-        cidr_block=cidr_block,
-        public_subnet_ids=public_subnet_ids,
-        private_subnet_ids=private_subnet_ids,
-    )
-
-
-def empty_s3_bucket(bucket_name: str, *, delete_bucket: bool = False):
-    s3_client = boto3.client("s3")
-    
-    try:
-        # Check if bucket exists before trying to empty it
-        s3_client.head_bucket(Bucket=bucket_name)
-    except Exception as e:
-        return
-    
-    # Empty the bucket by deleting all objects and versions
-    logging.info(f"Emptying S3 bucket: {bucket_name}")
-    
-    # Delete all object versions and delete markers
-    paginator = s3_client.get_paginator('list_object_versions')
-    for page in paginator.paginate(Bucket=bucket_name):
-        objects_to_delete = []
+        public_subnet_ids = _resolve_subnets(SHARED_PUBLIC_SUBNETS)
+        private_subnet_ids = _resolve_subnets(SHARED_PRIVATE_SUBNETS)
         
-        # Add all versions
-        for version in page.get('Versions', []):
-            objects_to_delete.append({
-                'Key': version['Key'],
-                'VersionId': version['VersionId']
-            })
-        
-        # Add all delete markers
-        for marker in page.get('DeleteMarkers', []):
-            objects_to_delete.append({
-                'Key': marker['Key'],
-                'VersionId': marker['VersionId']
-            })
-        
-        # Delete objects in batches
-        if objects_to_delete:
-            s3_client.delete_objects(
-                Bucket=bucket_name,
-                Delete={'Objects': objects_to_delete}
-            )
-    
-    logging.info(f"Successfully emptied S3 bucket {bucket_name}")
-    
-    # Delete the bucket after emptying
-    if delete_bucket:
-        s3_client.delete_bucket(Bucket=bucket_name)
-        logging.info(f"Deleted S3 bucket {bucket_name}")
-
-
-def package_lambda(
-        sandbox_root_dir: Path,
-        code_file_path: str,
-        dependencies: list[str],
-        file_name: str
-) -> Path:
-    dependencies_normalized = []
-    for d in dependencies:
-        if "erieiron-public-common" in d:
-            dependencies_normalized.append("erieiron-public-common @ git+https://github.com/erieironllc/erieiron-public-common.git")
-        else:
-            dependencies_normalized.append(d)
-    dependencies = list(set(dependencies_normalized))
-    
-    full_lambda_path = sandbox_root_dir / code_file_path
-    if not full_lambda_path.exists():
-        raise FileNotFoundError(f"Lambda source file not found: {full_lambda_path}")
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_dir_path = Path(temp_dir)
-        shutil.copy(full_lambda_path, temp_dir_path / full_lambda_path.name)
-        
-        if dependencies:
-            req_file = temp_dir_path / "requirements.txt"
-            req_file.write_text("\n".join(dependencies))
-            logging.info(f"building dependencies for {code_file_path}: {dependencies}")
-            try:
-                subprocess.run(
-                    [
-                        "podman", "run", "--rm",
-                        "--platform", ContainerPlatform.LAMBDA,
-                        "--entrypoint", "/bin/bash",
-                        "-v", f"{temp_dir_path}:/var/task",
-                        "public.ecr.aws/lambda/python:3.11",
-                        "-c",
-                        (
-                            "set -euxo pipefail && "
-                            "yum install -y git && "
-                            "pip install --no-cache-dir --only-binary=:all: "
-                            "-r /var/task/requirements.txt -t /var/task && "
-                            "ls -lh /var/task"
-                        ),
-                    ],
-                    stderr=subprocess.STDOUT,
-                    check=True
-                )
-            except Exception as e:
-                logging.exception(e)
-                raise e
-        
-        zip_path = temp_dir_path.parent / file_name
-        logging.info(f"Packaging Lambda: {code_file_path} → {file_name} with dependencies: {dependencies}. full path: {zip_path}")
-        subprocess.run(["zip", "-r", str(zip_path), "."], cwd=temp_dir_path, check=True)
-        logging.info(f"Uploading {code_file_path} package.  {zip_path} → {file_name} ({zip_path.stat().st_size / (1024 * 1024):.2f}MB)")
-        
-        return zip_path
-
-
-def aws_console_url_from_arn(arn: str) -> str:
-    match = re.match(r"arn:aws:([^:]+):([^:]*):([^:]*):(.*)", arn)
-    if not match:
-        raise ValueError(f"Invalid ARN: {arn}")
-    
-    service, region, account, resource = match.groups()
-    region_qs = f"?region={region}" if region else ""
-    console_base = "https://console.aws.amazon.com"
-    
-    if service == "s3":
-        # arn:aws:s3:::my-bucket[/key]
-        parts = resource.split("/", 1)
-        bucket = parts[0]
-        return f"https://s3.console.aws.amazon.com/s3/buckets/{bucket}"
-    
-    if service == "ec2":
-        # arn:aws:ec2:us-west-2:123456789012:instance/i-abc
-        if "instance/" in resource:
-            instance_id = resource.split("instance/")[1]
-            return f"{console_base}/ec2/v2/home{region_qs}#InstanceDetails:instanceId={instance_id}"
-    
-    if service == "iam":
-        if "role/" in resource:
-            role_name = resource.split("role/")[1]
-            return f"{console_base}/iam/home#/roles/{role_name}"
-        if "user/" in resource:
-            user_name = resource.split("user/")[1]
-            return f"{console_base}/iam/home#/users/{user_name}"
-    
-    if service == "lambda":
-        func = resource.split(":")[-1]
-        return f"{console_base}/lambda/home{region_qs}#/functions/{func}"
-    
-    if service == "rds":
-        if resource.startswith("db:"):
-            db = resource.split("db:")[1]
-            return f"{console_base}/rds/home{region_qs}#database:id={db}"
-    
-    if service == "logs":
-        if resource.startswith("log-group:"):
-            group = resource.split("log-group:")[1].split(":")[0]
-            encoded = group.replace("/", "%2F")
-            return f"{console_base}/cloudwatch/home{region_qs}#logsV2:log-groups/log-group/{encoded}"
-    
-    if service == "ecs":
-        if "cluster/" in resource:
-            cluster = resource.split("cluster/")[1]
-            return f"{console_base}/ecs/home{region_qs}#/clusters/{cluster}"
-    
-    return f"{console_base}/go/view?arn={arn}"
-
-
-def get_ecr_arn(ecr_repo_name, container_image_tag, region:str):
-    ecr_client = boto3.client("ecr", region_name=region)
-    repo_desc = ecr_client.describe_repositories(repositoryNames=[ecr_repo_name])
-    return repo_desc["repositories"][0]["repositoryArn"]
-
-
-def get_full_image_uri(ecr_repo_name: str, container_image_tag: str, region: str) -> str:
-    account_id = client("sts").get_caller_identity()["Account"]
-    
-    return f"{account_id}.dkr.ecr.{region}.amazonaws.com/{ecr_repo_name}:{container_image_tag}"
-
-
-def tag_exists_in_ecr(repo_name: str, container_image_tag:str, region: str) -> bool:
-    if not container_image_tag:
-        return False
-    
-    ecr_client = boto3.client("ecr", region_name=region)
-    
-    try:
-        response = ecr_client.describe_images(
-            repositoryName=repo_name,
-            imageIds=[{"imageTag": container_image_tag}]
+        return SharedVpcContext(
+            vpc_id=vpc.get("VpcId", SHARED_VPC_ID),
+            cidr_block=cidr_block,
+            public_subnet_ids=public_subnet_ids,
+            private_subnet_ids=private_subnet_ids,
         )
-        return bool(response.get("imageDetails"))
-    except Exception as e:
-        logging.exception(e)
     
-    return False
+    def empty_s3_bucket(self, bucket_name: str, *, delete_bucket: bool = False):
+        s3_client = self.client("s3")
+        
+        try:
+            # Check if bucket exists before trying to empty it
+            s3_client.head_bucket(Bucket=bucket_name)
+        except Exception as e:
+            return
+        
+        # Empty the bucket by deleting all objects and versions
+        logging.info(f"Emptying S3 bucket: {bucket_name}")
+        
+        # Delete all object versions and delete markers
+        paginator = s3_client.get_paginator('list_object_versions')
+        for page in paginator.paginate(Bucket=bucket_name):
+            objects_to_delete = []
+            
+            # Add all versions
+            for version in page.get('Versions', []):
+                objects_to_delete.append({
+                    'Key': version['Key'],
+                    'VersionId': version['VersionId']
+                })
+            
+            # Add all delete markers
+            for marker in page.get('DeleteMarkers', []):
+                objects_to_delete.append({
+                    'Key': marker['Key'],
+                    'VersionId': marker['VersionId']
+                })
+            
+            # Delete objects in batches
+            if objects_to_delete:
+                s3_client.delete_objects(
+                    Bucket=bucket_name,
+                    Delete={'Objects': objects_to_delete}
+                )
+        
+        logging.info(f"Successfully emptied S3 bucket {bucket_name}")
+        
+        # Delete the bucket after emptying
+        if delete_bucket:
+            s3_client.delete_bucket(Bucket=bucket_name)
+            logging.info(f"Deleted S3 bucket {bucket_name}")
+    
+    def get_ecr_arn(self, ecr_repo_name, container_image_tag, region: str):
+        ecr_client = self.client("ecr")
+        repo_desc = ecr_client.describe_repositories(repositoryNames=[ecr_repo_name])
+        return repo_desc["repositories"][0]["repositoryArn"]
+    
+    def get_full_image_uri(self, ecr_repo_name: str, container_image_tag: str, region: str) -> str:
+        account_id = self.client("sts").get_caller_identity()["Account"]
+        
+        return f"{account_id}.dkr.ecr.{region}.amazonaws.com/{ecr_repo_name}:{container_image_tag}"
+    
+    def tag_exists_in_ecr(self, repo_name: str, container_image_tag: str, region: str) -> bool:
+        if not container_image_tag:
+            return False
+        
+        ecr_client = self.client("ecr")
+        
+        try:
+            response = ecr_client.describe_images(
+                repositoryName=repo_name,
+                imageIds=[{"imageTag": container_image_tag}]
+            )
+            return bool(response.get("imageDetails"))
+        except Exception as e:
+            logging.exception(e)
+        
+        return False
