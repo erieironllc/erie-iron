@@ -85,6 +85,10 @@ class Business(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    def get_domain_manager(self, cloud_account=None):
+        from erieiron_common.domain_manager import DomainManager
+        return DomainManager(self, cloud_account)
+    
     def get_existing_required_credentials_llmm(self) -> list[LlmMessage]:
         return LlmMessage.user_from_data(
             "Existing Required Credentials.  Use for reference.  Not need to re-specify.",
@@ -390,7 +394,7 @@ class Business(BaseErieIronModel):
     
     def get_default_cloud_account(
             self,
-            env_type: EnvironmentType=None
+            env_type: EnvironmentType = None
     ) -> "CloudAccount | None":
         qs = self.cloud_accounts.all()
         
@@ -445,7 +449,6 @@ class CloudAccount(BaseErieIronModel):
         
         from erieiron_common.aws_utils import get_aws_interface
         return get_aws_interface(self).client(service_name)
-
     
     def build_secret_name(self) -> str:
         if not self.id:
@@ -847,13 +850,12 @@ class InfrastructureStack(BaseErieIronModel):
         return getattr(settings, "SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
     
     @staticmethod
-    def get(
+    def get_stack(
             initiative: Initiative,
             stack_type: InfrastructureStackType,
             env_type: EnvironmentType,
             assert_create=False,
     ) -> "InfrastructureStack":
-        from erieiron_common import domain_manager
         from erieiron_common.aws_utils import sanitize_aws_name
         
         if EnvironmentType.PRODUCTION.eq(env_type):
@@ -867,6 +869,7 @@ class InfrastructureStack(BaseErieIronModel):
             stack = InfrastructureStack.objects.filter(
                 initiative=initiative, stack_type=stack_type, env_type=env_type
             ).first()
+        
         if stack:
             if assert_create:
                 raise Exception("was supposed to create new but did not")
@@ -876,9 +879,7 @@ class InfrastructureStack(BaseErieIronModel):
         # create a new stack
         stack_namespace_token = None
         for i in range(100):
-            stack_namespace_token_candidate = common.gen_random_token(
-                DEV_STACK_TOKEN_LENGTH
-            )
+            stack_namespace_token_candidate = common.gen_random_token(DEV_STACK_TOKEN_LENGTH)
             if not InfrastructureStack.objects.filter(
                     stack_namespace_token=stack_namespace_token_candidate
             ).exists():
@@ -898,7 +899,9 @@ class InfrastructureStack(BaseErieIronModel):
                 [stack_namespace_token, initiative.id, stack_type]
             )
         
-        cloud_account = business.get_default_cloud_account(env_type)
+        domain_manager = business.get_domain_manager()
+        cloud_account = domain_manager.cloud_account
+        
         stack = InfrastructureStack.objects.create(
             business=business,
             initiative=(
@@ -911,28 +914,21 @@ class InfrastructureStack(BaseErieIronModel):
             env_type=env_type,
         )
         
-        if InfrastructureStackType.FOUNDATION.eq(stack_type) and EnvironmentType.DEV.eq(
-                env_type
-        ):
-            new_sub_domain = sanitize_aws_name(stack_name, 63)
-            new_domain = f"{new_sub_domain}.{business.domain}"
+        if InfrastructureStackType.FOUNDATION.eq(stack_type) and EnvironmentType.DEV.eq(env_type):
+            new_sub_domain = f"{sanitize_aws_name(stack_name, 63)}.{business.domain}"
             
-            Initiative.objects.filter(id=initiative.id).update(domain=new_domain)
+            Initiative.objects.filter(id=initiative.id).update(domain=new_sub_domain)
             initiative.refresh_from_db(fields=["domain"])
             
             zone_id = business.route53_hosted_zone_id
             if not zone_id:
                 from erieiron_common import aws_utils
                 
-                zone_id = domain_manager.find_hosted_zone_id(
-                    cloud_account,
-                    business.domain 
-                )
+                zone_id = domain_manager.find_hosted_zone_id(business.domain)
             
             domain_manager.add_dns_records(
-                cloud_account, 
-                zone_id, 
-                new_domain
+                zone_id,
+                new_sub_domain
             )
         
         return stack
@@ -947,7 +943,7 @@ class InfrastructureStack(BaseErieIronModel):
         
         InfrastructureStack.objects.filter(id=self.id).delete()
         
-        return InfrastructureStack.get(
+        return InfrastructureStack.get_stack(
             initiative=initiative,
             stack_type=stack_type,
             env_type=env_type,
@@ -1862,18 +1858,15 @@ class CodeFile(BaseErieIronModel):
             )
     
     def get_version_for_iteration(
-            self, iteration: SelfDrivingTaskIteration
+            self,
+            iteration: SelfDrivingTaskIteration
     ) -> "CodeVersion":
-        return (
-                self.get_version(iteration)
-                or self.get_latest_version()
-                or self.init_from_codefile(
-            iteration,
-            common.assert_exists(
-                Path(iteration.self_driving_task.sandbox_path) / self.file_path
-            ),
-        )
-        )
+        return self.get_version(iteration) \
+            or self.get_latest_version() \
+            or self.init_from_codefile(
+                iteration, 
+                common.assert_exists(Path(iteration.self_driving_task.sandbox_path) / self.file_path) 
+            )
 
 
 class CodeVersion(BaseErieIronModel):

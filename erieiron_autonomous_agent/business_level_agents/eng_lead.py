@@ -10,7 +10,7 @@ from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Initiative, Task, ProductRequirement, Business, SelfDrivingTask
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat, llm_chat, get_sys_prompt
-from erieiron_common import common, domain_manager
+from erieiron_common import common
 from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType, LlmModel, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
@@ -320,7 +320,7 @@ def process_response(initiative, eng_lead_response):
 def bootstrap_buiness(business_id):
     business = Business.objects.get(id=business_id)
     
-    domain_manager.manage_domain(business)
+    business.get_domain_manager().bootstrap_domain()
     
     if business.id == Business.get_erie_iron_business().id:
         return
@@ -430,7 +430,7 @@ def get_source_repo_url(business: Business) -> str:
     return "https://github.com/erieironllc/erieiron_bootstrap"
 
 
-def write_business_architecture(business, user_input:str=None):
+def write_business_architecture(business, user_input: str = None):
     business_architecture = llm_chat(
         "Write business architecture",
         [

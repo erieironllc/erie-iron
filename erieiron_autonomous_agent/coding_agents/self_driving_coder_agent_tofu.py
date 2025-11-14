@@ -50,7 +50,7 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader, ses_manager
+from erieiron_common import common, aws_utils, opentofu_log_utils, aws_log_reader, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
@@ -1349,10 +1349,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
                 include_erie_common=False
             )
         
-        ssl_cert = domain_manager.ensure_wildcard_certificate(
-            config.cloud_account,
-            wait=True
-        )
+        ssl_cert = config.domain_manager.ensure_wildcard_certificate(wait=True)
     
     return self_driving_task
 
@@ -1363,10 +1360,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     else:
         domain_name = config.initiative.domain
     
-    hosted_zone_id = domain_manager.find_hosted_zone_id(
-        config.cloud_account,
-        config.business.domain
-    )
+    hosted_zone_id = config.domain_manager.find_hosted_zone_id(config.business.domain)
     
     if not domain_name or not hosted_zone_id:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
@@ -1398,8 +1392,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     dual_stack = ip_address_type == "dualstack"
     
     try:
-        domain_manager.upsert_subdomain_alias(
-            config.cloud_account,
+        config.domain_manager.upsert_subdomain_alias(
             hosted_zone_id=hosted_zone_id,
             record_name=domain_name,
             target_dns_name=dns_name,
@@ -1408,7 +1401,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
             dual_stack=dual_stack
         )
         
-        domain_manager.wait_for_dns_propagation(
+        config.domain_manager.wait_for_dns_propagation(
             domain_name,
             dns_name
         )
@@ -4705,13 +4698,13 @@ def sync_stack_identity(
 
 
 def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, InfrastructureStack]:
-    stack_application = InfrastructureStack.get(
+    stack_application = InfrastructureStack.get_stack(
         config.initiative,
         InfrastructureStackType.APPLICATION,
         config.env_type
     )
     
-    stack_foundation = InfrastructureStack.get(
+    stack_foundation = InfrastructureStack.get_stack(
         config.initiative,
         InfrastructureStackType.FOUNDATION,
         config.env_type
@@ -4940,12 +4933,10 @@ def build_tfvars_payload(
         )
     
     payload["DomainName"] = domain_name
-    payload["DomainHostedZoneId"] = domain_manager.get_hosted_zone_id_by_domain(
-        config.cloud_account,
+    payload["DomainHostedZoneId"] = config.domain_manager.get_hosted_zone_id_by_domain(
         config.business.domain
     )
-    payload["AlbCertificateArn"] = domain_manager.find_certificate_arn(
-        config.cloud_account,
+    payload["AlbCertificateArn"] = config.domain_manager.find_certificate_arn(
         business.domain,
         config.env_type.get_aws_region()
     )

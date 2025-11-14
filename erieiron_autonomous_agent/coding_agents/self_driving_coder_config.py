@@ -105,7 +105,7 @@ class SelfDriverConfig:
         self.deployment_logs = defaultdict(list)
         
         self.stacks = {
-            stack_type: InfrastructureStack.get(self.initiative, stack_type, self.env_type)
+            stack_type: InfrastructureStack.get_stack(self.initiative, stack_type, self.env_type)
             for stack_type in [InfrastructureStackType.FOUNDATION, InfrastructureStackType.APPLICATION]
         }
         self.all_stacks = list(self.stacks.values())
@@ -120,7 +120,8 @@ class SelfDriverConfig:
         self.ecr_repo_name = sanitize_aws_name(self.business.service_token)
         self.cloud_account = self.all_stacks[0].cloud_account or self.all_stacks[1].cloud_account or self.business.get_default_cloud_account(self.env_type)
         self.aws_interface = aws_utils.get_aws_interface(self.cloud_account)
-        
+        self.domain_manager = self.business.get_domain_manager(self.cloud_account)
+
         self.model_code_planning = LlmModel.OPENAI_GPT_5
     
     def get_runtime_env(self) -> dict:

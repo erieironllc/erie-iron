@@ -44,7 +44,7 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_autonomous_agent.utils import cloud_accounts
-from erieiron_common import common, domain_manager, ErieIronJSONEncoder
+from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
 from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider
 from erieiron_common.git_utils import GitWrapper
@@ -121,7 +121,7 @@ def _serialize_cloud_account(account: CloudAccount) -> dict:
 
 
 def _build_simple_auth_token(email: str) -> str:
-    issued_at = datetime.utcnow()
+    issued_at = common.get_now()
     expires_at = issued_at + timedelta(seconds=settings.SIMPLE_AUTH_TOKEN_TTL_SECONDS)
     payload = {
         "email": email,
@@ -929,7 +929,7 @@ def view_portfolio(request, tab: str = 'portfolio'):
             except Person.DoesNotExist:
                 messages.error(request, 'User profile not found.')
         
-        return redirect('view_portfolio_tab', tab='profile')
+        return redirect(reverse('view_portfolio_tab', args=['profile']))
     
     context = {
         "erieiron_business": erieiron_business,
@@ -4127,7 +4127,7 @@ def action_business_new_domain(request, business_id):
     business.domain = None
     business.save(update_fields=["domain", "needs_domain"])
     
-    domain_manager.manage_domain(business)
+    business.get_domain_manager().bootstrap_domain()
     
     return redirect(reverse('view_business_tab', args=['edit', business_id]))
 
@@ -4990,7 +4990,8 @@ def view_llm_request(request, llm_request_id):
 
 def view_pubsub_message_details(request, message_id):
     message = get_object_or_404(PubSubMessage, id=message_id)
-    
+    # return send_response(request, "pubsub/message_details.html", context, breadcrumbs=breadcrumbs)
+
     return send_response(
         request,
         "portfolio/portfolio_base.html",
@@ -5009,7 +5010,6 @@ def view_pubsub_message_details(request, message_id):
         ]
     )
     
-    return send_response(request, "pubsub/message_details.html", context, breadcrumbs=breadcrumbs)
 
 
 @require_POST
