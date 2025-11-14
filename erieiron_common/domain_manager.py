@@ -12,7 +12,6 @@ from django.db import transaction
 import settings
 from erieiron_autonomous_agent.models import Business, CloudAccount
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-from erieiron_common import aws_utils
 from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
@@ -51,6 +50,8 @@ def _manage_domain_core(business: Business):
     if not business.needs_domain:
         return
     
+    cloud_account = business.get_default_cloud_account()
+    
     if not business.domain:
         cloud_account = business.get_default_cloud_account()
         chosen_domain = find_domain(business)
@@ -64,15 +65,24 @@ def _manage_domain_core(business: Business):
         business.domain = normalized_domain
         _persist_business_domain(business)
     
-    hosted_zone_id = _ensure_business_hosted_zone(business, normalized_domain)
-    ensure_wildcard_certificate(business.get_default_cloud_account(), normalized_domain, hosted_zone_id)
-    add_dns_records(hosted_zone_id, normalized_domain)
+    hosted_zone_id = get_business_hosted_zone(
+        cloud_account,
+        normalized_domain
+    )
+    
+    ensure_wildcard_certificate(
+        business.get_default_cloud_account()
+    )
+    
+    add_dns_records(
+        cloud_account,
+        hosted_zone_id,
+        normalized_domain
+    )
 
 
 def register_domain(cloud_account, chosen_domain):
-    route53domains_client = aws_utils.get_aws_interface(cloud_account).client("route53domains")
-    
-    route53domains_client.register_domain(
+    cloud_account.get_service_client("route53domains").register_domain(
         DomainName=chosen_domain,
         DurationInYears=1,
         AdminContact=settings.DOMAIN_CONTACT_INFO,
@@ -85,10 +95,23 @@ def register_domain(cloud_account, chosen_domain):
     )
 
 
-def ensure_wildcard_certificate(cloud_account: CloudAccount, chosen_domain: str, hosted_zone_id: str | None = None) -> str | None:
-    """Guarantee an ACM certificate request exists and publish DNS validation records."""
-    aws_interace = aws_utils.get_aws_interface(cloud_account)
-    acm = aws_interace.client("acm")
+def ensure_wildcard_certificate(
+        cloud_account: CloudAccount,
+        wait: bool = False
+) -> str | None:
+    """Guarantee an ACM certificate request exists and publish DNS validation records.
+    
+    Args:
+        cloud_account: CloudAccount instance
+        wait: If True, wait for certificate to be issued after DNS validation
+    
+    Returns:
+        Certificate ARN if successful, None otherwise
+    """
+    business = cloud_account.business
+    chosen_domain = business.domain or ""
+    acm = cloud_account.get_service_client("acm")
+    hosted_zone_id = find_hosted_zone_id(cloud_account, business.domain)
     
     root_domain = chosen_domain.rstrip('.')
     wildcard_domain = f"*.{root_domain}"
@@ -111,7 +134,11 @@ def ensure_wildcard_certificate(cloud_account: CloudAccount, chosen_domain: str,
     
     if existing_cert_arn:
         if hosted_zone_id:
-            _ensure_certificate_dns_validation(acm, existing_cert_arn, hosted_zone_id)
+            _ensure_certificate_dns_validation(cloud_account, acm, existing_cert_arn, hosted_zone_id)
+        
+        if wait:
+            _wait_for_certificate_issued(acm, existing_cert_arn)
+        
         return existing_cert_arn
     
     idempotency_token = uuid.uuid4().hex[:32]
@@ -124,12 +151,31 @@ def ensure_wildcard_certificate(cloud_account: CloudAccount, chosen_domain: str,
     certificate_arn = response.get("CertificateArn")
     
     if hosted_zone_id and certificate_arn:
-        _ensure_certificate_dns_validation(acm, certificate_arn, hosted_zone_id)
+        _ensure_certificate_dns_validation(
+            cloud_account,
+            acm,
+            certificate_arn,
+            hosted_zone_id
+        )
+    
+    if wait and certificate_arn:
+        _wait_for_certificate_issued(
+            acm,
+            certificate_arn
+        )
     
     return certificate_arn
 
 
-def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_zone_id: str, *, max_attempts: int = 10, delay_seconds: float = 2.0) -> None:
+def _ensure_certificate_dns_validation(
+        cloud_account,
+        acm_client,
+        certificate_arn: str,
+        hosted_zone_id: str,
+        *,
+        max_attempts: int = 10,
+        delay_seconds: float = 2.0
+) -> None:
     """Create/ensure DNS validation records for the ACM certificate."""
     if not certificate_arn or not hosted_zone_id:
         return
@@ -150,7 +196,7 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
     if not validation_records:
         return
     
-    route53 = aws_utils.client("route53")
+    route53 = cloud_account.get_service_client("route53")
     
     change_lookup: dict[tuple[str, str], dict] = {}
     for record in validation_records:
@@ -191,13 +237,73 @@ def _ensure_certificate_dns_validation(acm_client, certificate_arn: str, hosted_
         raise
 
 
-def create_hosted_zone(chosen_domain):
+def _wait_for_certificate_issued(
+        acm_client,
+        certificate_arn: str,
+        *,
+        max_wait_time: int = 600,
+        check_interval: float = 10.0
+) -> None:
+    """Wait for an ACM certificate to reach ISSUED status.
+    
+    Args:
+        acm_client: ACM client instance
+        certificate_arn: ARN of the certificate to monitor
+        max_wait_time: Maximum time to wait in seconds (default: 600 = 10 minutes)
+        check_interval: Time between status checks in seconds (default: 10 seconds)
+        
+    Raises:
+        TimeoutError: If certificate doesn't reach ISSUED status within max_wait_time
+        ClientError: If there are issues accessing the certificate
+    """
+    if not certificate_arn:
+        return
+    
+    logging.info(f"Waiting for certificate {certificate_arn} to be issued...")
+    start_time = time.time()
+    deadline = start_time + max_wait_time
+    
+    while time.time() < deadline:
+        try:
+            response = acm_client.describe_certificate(CertificateArn=certificate_arn)
+            certificate = response.get("Certificate", {})
+            status = certificate.get("Status")
+            
+            if status == "ISSUED":
+                elapsed = int(time.time() - start_time)
+                logging.info(f"Certificate {certificate_arn} issued successfully after {elapsed} seconds")
+                return
+            elif status == "FAILED":
+                failure_reason = certificate.get("FailureReason", "Unknown")
+                raise RuntimeError(f"Certificate {certificate_arn} failed to be issued: {failure_reason}")
+            elif status in ["PENDING_VALIDATION", "VALIDATION_TIMED_OUT"]:
+                elapsed = int(time.time() - start_time)
+                logging.info(f"Certificate {certificate_arn} status: {status} (waiting {elapsed}/{max_wait_time}s)")
+            else:
+                logging.warning(f"Certificate {certificate_arn} has unexpected status: {status}")
+        
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code")
+            if error_code == "ResourceNotFoundException":
+                raise RuntimeError(f"Certificate {certificate_arn} not found")
+            logging.warning(f"Error checking certificate status: {exc}")
+        
+        time.sleep(check_interval)
+    
+    elapsed = int(time.time() - start_time)
+    raise TimeoutError(
+        f"Certificate {certificate_arn} did not reach ISSUED status within {max_wait_time} seconds "
+        f"(waited {elapsed} seconds)"
+    )
+
+
+def create_hosted_zone(cloud_account, chosen_domain):
     normalized_domain = _normalize_domain_name(chosen_domain)
-    route53 = aws_utils.client("route53")
+    route53 = cloud_account.get_service_client("route53")
     
     # Reuse an existing hosted zone if one already exists; repeated stack rotations or
     # fallback domain handling should not create duplicate hosted zones in Route53.
-    existing_hosted_zone_id = find_hosted_zone_id(normalized_domain, route53)
+    existing_hosted_zone_id = find_hosted_zone_id(cloud_account, normalized_domain)
     if existing_hosted_zone_id:
         return existing_hosted_zone_id
     
@@ -211,21 +317,21 @@ def create_hosted_zone(chosen_domain):
     except ClientError as e:
         # If already exists, find it
         if "HostedZoneAlreadyExists" in str(e):
-            hosted_zone_id = _resolve_existing_hosted_zone(route53, normalized_domain)
+            hosted_zone_id = _resolve_existing_hosted_zone(cloud_account, normalized_domain)
         else:
             raise e
     
     return hosted_zone_id
 
 
-def add_dns_records(hosted_zone_id, chosen_domain):
-    route53 = aws_utils.client("route53")
+def add_dns_records(cloud_account, hosted_zone_id, chosen_domain):
+    route53 = cloud_account.get_service_client("route53")
     
     if not chosen_domain:
         raise Exception(f"chosen_domain is required")
     
     if not hosted_zone_id:
-        hosted_zone_id = find_hosted_zone_id(chosen_domain, route53)
+        hosted_zone_id = find_hosted_zone_id(cloud_account, chosen_domain)
         if not hosted_zone_id:
             raise Exception(f"hosted_zone_id is required")
     
@@ -253,6 +359,7 @@ def add_dns_records(hosted_zone_id, chosen_domain):
         }
     })
     
+    from erieiron_common import aws_utils
     upsert_record({
         "Action": "UPSERT",
         "ResourceRecordSet": {
@@ -266,7 +373,7 @@ def add_dns_records(hosted_zone_id, chosen_domain):
 
 def domain_available(cloud_account: CloudAccount, domain: str) -> bool:
     try:
-        route53domains_client = aws_utils.get_aws_interface(cloud_account).client("route53domains")
+        route53domains_client = cloud_account.get_service_client("route53domains")
         resp = route53domains_client.check_domain_availability(
             DomainName=domain
         )
@@ -322,8 +429,8 @@ def find_domain(business: Business):
     raise Exception(f"unable to find a domain for {business.service_token}")
 
 
-def execute_subdomain_action(business_domain: str, sub_domain: str, action: str, comment: str):
-    r53 = aws_utils.client("route53")
+def execute_subdomain_action(cloud_account, business_domain: str, sub_domain: str, action: str, comment: str):
+    r53 = cloud_account.get_service_client("route53")
     
     hz_resp = r53.list_hosted_zones_by_name(DNSName=business_domain.rstrip('.') + ".", MaxItems="1")
     hosted_zones = hz_resp.get("HostedZones", [])
@@ -404,6 +511,7 @@ def _delete_record_if_exists(route53_client, hosted_zone_id: str, record_name: s
 
 
 def upsert_subdomain_alias(
+        cloud_account: CloudAccount,
         hosted_zone_id: str,
         record_name: str,
         target_dns_name: str,
@@ -420,7 +528,7 @@ def upsert_subdomain_alias(
     fqdn = _ensure_fqdn(record_name)
     alias_dns = _ensure_fqdn(target_dns_name)
     
-    route53_client = aws_utils.client("route53")
+    route53_client = cloud_account.get_service_client("route53")
     
     cleanup_comment = comment or f"Cleanup prior records for {fqdn}"
     _delete_record_if_exists(route53_client, normalized_zone_id, fqdn, "CNAME", cleanup_comment)
@@ -596,12 +704,12 @@ def _match_hosted_zone_id(
     return fallback_id
 
 
-def find_hosted_zone_id(domain: str, route53_client=None) -> Optional[str]:
+def find_hosted_zone_id(cloud_account, domain: str) -> Optional[str]:
     normalized_domain = _normalize_domain_name(domain)
     if not normalized_domain:
         return None
     
-    route53_client = route53_client or aws_utils.client("route53")
+    route53_client = cloud_account.get_service_client("route53")
     caller_ref = _deterministic_caller_reference(normalized_domain)
     
     try:
@@ -656,7 +764,7 @@ def _wait_for_hosted_zone_visible(
 
 
 def _resolve_existing_hosted_zone(
-        route53_client,
+        cloud_account: CloudAccount,
         domain: str,
         *,
         max_attempts: int = 20,
@@ -666,7 +774,7 @@ def _resolve_existing_hosted_zone(
     last_error: Exception | None = None
     for attempt in range(max_attempts):
         try:
-            hosted_zone_id = find_hosted_zone_id(domain, route53_client)
+            hosted_zone_id = find_hosted_zone_id(cloud_account, domain)
             if hosted_zone_id:
                 return hosted_zone_id
         except Exception as exc:  # pragma: no cover - defensive
@@ -679,15 +787,16 @@ def _resolve_existing_hosted_zone(
     raise RuntimeError(f"Existing hosted zone for {domain} not found after {max_attempts} attempts")
 
 
-def _ensure_business_hosted_zone(business: Business, domain: str) -> str:
-    route53_client = aws_utils.client("route53")
+def get_business_hosted_zone(cloud_account: CloudAccount, normalized_domain: str) -> str:
+    business = cloud_account.business
+    route53_client = cloud_account.get_service_client("route53")
     stored_id = _normalize_hosted_zone_id(business.route53_hosted_zone_id)
     
-    if stored_id and not _hosted_zone_matches(route53_client, stored_id, domain):
+    if stored_id and not _hosted_zone_matches(route53_client, stored_id, normalized_domain):
         stored_id = None
     
     if not stored_id:
-        stored_id = create_hosted_zone(domain)
+        stored_id = create_hosted_zone(cloud_account, normalized_domain)
         _persist_business_hosted_zone_id(business, stored_id)
     else:
         _persist_business_hosted_zone_id(business, stored_id, only_if_changed=True)
@@ -730,11 +839,9 @@ def find_certificate_arn(cloud_account: CloudAccount, domain: str, region: str) 
     if not domain:
         return None
     
-    aws_interface = aws_utils.get_aws_interface(cloud_account)
-    acm_client = aws_interface.client("acm")
-    paginator = acm_client.get_paginator("list_certificates")
-    
     best_candidate: tuple[int, str] | None = None
+    
+    paginator = cloud_account.get_service_client("acm").get_paginator("list_certificates")
     for page in paginator.paginate(CertificateStatuses=["ISSUED"]):
         for summary in page.get("CertificateSummaryList", []) or []:
             match_quality = _certificate_match_quality(domain, summary)
@@ -789,8 +896,12 @@ def _match_domain_to_cert_name(domain: str, cert_name: str) -> Optional[int]:
     return None
 
 
-def ensure_subdomain_record(current_domain: str, zone_id: str) -> None:
-    route53_client = aws_utils.client("route53")
+def ensure_subdomain_record(
+        cloud_account: CloudAccount,
+        current_domain: str,
+        zone_id: str
+) -> None:
+    route53_client = cloud_account.get_service_client("route53")
     
     normalized_current = current_domain.rstrip('.').lower()
     parent_domain = current_domain.split('.', 1)[1]
@@ -822,6 +933,7 @@ def ensure_subdomain_record(current_domain: str, zone_id: str) -> None:
         logging.warning("Unable to verify existing Route53 record for %s: %s", current_domain, exc)
     
     execute_subdomain_action(
+        cloud_account,
         parent_domain.rstrip('.'),
         current_domain.rstrip('.'),
         "UPSERT",
@@ -829,7 +941,7 @@ def ensure_subdomain_record(current_domain: str, zone_id: str) -> None:
     )
 
 
-def delete_subdomain(domain_name):
+def delete_subdomain(cloud_account: CloudAccount, domain_name):
     if not domain_name:
         return
     
@@ -837,8 +949,8 @@ def delete_subdomain(domain_name):
     if not normalized_domain:
         return
     
-    route53_client = aws_utils.client("route53")
-    hosted_zone_id = find_hosted_zone_id(normalized_domain, route53_client)
+    route53_client = cloud_account.get_service_client("route53")
+    hosted_zone_id = find_hosted_zone_id(cloud_account, normalized_domain)
     if not hosted_zone_id:
         logging.warning("Unable to locate hosted zone for %s; skipping subdomain deletion", normalized_domain)
         return

@@ -50,7 +50,7 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader, ErieIronJSONEncoder, ses_manager
+from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
@@ -1348,6 +1348,11 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
                 config.current_iteration,
                 include_erie_common=False
             )
+        
+        ssl_cert = domain_manager.ensure_wildcard_certificate(
+            config.cloud_account,
+            wait=True
+        )
     
     return self_driving_task
 
@@ -1358,7 +1363,10 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     else:
         domain_name = config.initiative.domain
     
-    hosted_zone_id = domain_manager.find_hosted_zone_id(config.business.domain)
+    hosted_zone_id = domain_manager.find_hosted_zone_id(
+        config.cloud_account,
+        config.business.domain
+    )
     
     if not domain_name or not hosted_zone_id:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
@@ -1391,6 +1399,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
     
     try:
         domain_manager.upsert_subdomain_alias(
+            config.cloud_account,
             hosted_zone_id=hosted_zone_id,
             record_name=domain_name,
             target_dns_name=dns_name,
@@ -4709,7 +4718,6 @@ def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, Infrastru
     )
     
     return stack_foundation, stack_application
-
 
 
 def deploy_opentofu_stack(

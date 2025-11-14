@@ -888,21 +888,23 @@ class InfrastructureStack(BaseErieIronModel):
         if not stack_namespace_token:
             raise Exception(f"unable to find a unique stack_namespace_token")
         
+        business = initiative.business
         if EnvironmentType.PRODUCTION.eq(env_type):
             stack_name = sanitize_aws_name(
-                [stack_namespace_token, initiative.business.service_token, stack_type]
+                [stack_namespace_token, business.service_token, stack_type]
             )
         else:
             stack_name = sanitize_aws_name(
                 [stack_namespace_token, initiative.id, stack_type]
             )
         
+        cloud_account = business.get_default_cloud_account(env_type)
         stack = InfrastructureStack.objects.create(
-            business=initiative.business,
+            business=business,
             initiative=(
                 initiative if not EnvironmentType.PRODUCTION.eq(env_type) else None
             ),
-            cloud_account=initiative.business.get_default_cloud_account(env_type),
+            cloud_account=cloud_account,
             stack_type=stack_type,
             stack_name=stack_name,
             stack_namespace_token=stack_namespace_token,
@@ -913,20 +915,25 @@ class InfrastructureStack(BaseErieIronModel):
                 env_type
         ):
             new_sub_domain = sanitize_aws_name(stack_name, 63)
-            new_domain = f"{new_sub_domain}.{initiative.business.domain}"
+            new_domain = f"{new_sub_domain}.{business.domain}"
             
             Initiative.objects.filter(id=initiative.id).update(domain=new_domain)
             initiative.refresh_from_db(fields=["domain"])
             
-            zone_id = initiative.business.route53_hosted_zone_id
+            zone_id = business.route53_hosted_zone_id
             if not zone_id:
                 from erieiron_common import aws_utils
                 
                 zone_id = domain_manager.find_hosted_zone_id(
-                    initiative.business.domain, aws_utils.client("route53")
+                    cloud_account,
+                    business.domain 
                 )
             
-            domain_manager.add_dns_records(zone_id, new_domain)
+            domain_manager.add_dns_records(
+                cloud_account, 
+                zone_id, 
+                new_domain
+            )
         
         return stack
     
