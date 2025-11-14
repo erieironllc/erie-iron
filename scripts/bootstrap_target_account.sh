@@ -130,7 +130,6 @@ if [[ -z "$AWS_ACCOUNT_INFO" ]]; then
 fi
 echo ""
 
-# Confirm execution
 print_warning "This script will create an IAM role 'ErieIronTargetAccountAgentRole' in the target account"
 print_warning "and store cross-account access credentials in the control plane's Secrets Manager."
 echo ""
@@ -182,7 +181,7 @@ print_info "Using target account credentials to create IAM role..."
 export AWS_PROFILE="$PROFILE"
 
 # Execute Phase 1: Target account operations (no Django dependencies)
-PHASE1_OUTPUT=$(./scripts/bootstrap_phase1_target_account.sh "$TARGET_ACCOUNT_ID" "$SANITIZED_BUSINESS_NAME" "$ENV_TYPE" "$EXTERNAL_ID" "$STATE_BUCKET_NAME" "$STATE_KEY") || {
+PHASE1_OUTPUT=$(./scripts/bootstrap_target_account_phase_1.sh "$TARGET_ACCOUNT_ID" "$SANITIZED_BUSINESS_NAME" "$ENV_TYPE" "$EXTERNAL_ID" "$STATE_BUCKET_NAME" "$STATE_KEY") || {
     print_error "Phase 1 (Target Account) bootstrap failed"
     print_error "Check the logs above for detailed error information"
     exit 1
@@ -202,7 +201,7 @@ export AWS_PROFILE="$CONTROL_PLANE_PROFILE"
 print_info "Executing Phase 2 with file: $PHASE1_OUTPUT"
 if [[ -f "$PHASE1_OUTPUT" ]]; then
     print_info "Phase 1 output file exists, proceeding with Phase 2..."
-    ./scripts/bootstrap_phase2_control_plane.sh "$PHASE1_OUTPUT"
+    ./scripts/bootstrap_target_account_phase_2.sh "$PHASE1_OUTPUT"
     PHASE2_EXIT_CODE=$?
     print_info "Phase 2 exit code: $PHASE2_EXIT_CODE"
     if [[ $PHASE2_EXIT_CODE -ne 0 ]]; then

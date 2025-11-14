@@ -17,7 +17,13 @@ from django.dispatch import receiver
 from pgvector.django import VectorField
 
 import settings
-from erieiron_autonomous_agent.enums import BusinessStatus, BusinessGuidanceRating, TrafficLight, TaskStatus, BusinessOperationType
+from erieiron_autonomous_agent.enums import (
+    BusinessStatus,
+    BusinessGuidanceRating,
+    TrafficLight,
+    TaskStatus,
+    BusinessOperationType,
+)
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
@@ -44,8 +50,13 @@ from erieiron_common.models import BaseErieIronModel
 class Business(BaseErieIronModel):
     name = models.TextField(unique=True)
     source = models.TextField(null=False, choices=BusinessIdeaSource.choices())
-    status = models.TextField(default=BusinessStatus.IDEA, choices=BusinessStatus.choices())
-    operation_type = models.TextField(default=BusinessOperationType.ERIE_IRON_AUTONOMOUS, choices=BusinessOperationType.choices())
+    status = models.TextField(
+        default=BusinessStatus.IDEA, choices=BusinessStatus.choices()
+    )
+    operation_type = models.TextField(
+        default=BusinessOperationType.ERIE_IRON_AUTONOMOUS,
+        choices=BusinessOperationType.choices(),
+    )
     
     service_token = models.TextField(null=True)
     summary = models.TextField(null=True)
@@ -75,9 +86,10 @@ class Business(BaseErieIronModel):
     updated_at = models.DateTimeField(auto_now=True)
     
     def get_existing_required_credentials_llmm(self) -> list[LlmMessage]:
-        return LlmMessage.user_from_data("Existing Required Credentials.  Use for reference.  Not need to re-specify.", {
-            "required_credentials": self.required_credentials or {}
-        })
+        return LlmMessage.user_from_data(
+            "Existing Required Credentials.  Use for reference.  Not need to re-specify.",
+            {"required_credentials": self.required_credentials or {}},
+        )
     
     def llm_data(self):
         business_analysis, legal_analysis = self.get_latest_analysist()
@@ -95,45 +107,66 @@ class Business(BaseErieIronModel):
             "autonomy_level": self.autonomy_level,
             "kpis": [kpi.description for kpi in self.businesskpi_set.all()],
             "goal": [goal.description for goal in self.businessgoal_set.all()],
-            "business_analysis": business_analysis.summary if business_analysis else None
+            "business_analysis": (
+                business_analysis.summary if business_analysis else None
+            ),
         }
     
     def get_iam_role_name(self):
         return f"erieiron-{self.service_token}-role"
     
     def get_latest_board_guidance(self):
-        return BusinessGuidance.objects.filter(business=self).order_by("created_timestamp").last()
+        return (
+            BusinessGuidance.objects.filter(business=self)
+            .order_by("created_timestamp")
+            .last()
+        )
     
     def get_latest_capacity(self):
-        return BusinessCapacityAnalysis.objects.filter(business=self).order_by("created_timestamp").last()
+        return (
+            BusinessCapacityAnalysis.objects.filter(business=self)
+            .order_by("created_timestamp")
+            .last()
+        )
     
-    def get_latest_analysist(self) -> tuple['BusinessAnalysis', 'BusinessLegalAnalysis']:
-        return (BusinessAnalysis.objects.filter(business=self).order_by("created_timestamp").last(),
-                BusinessLegalAnalysis.objects.filter(business=self).order_by("created_timestamp").last())
+    def get_latest_analysist(
+            self,
+    ) -> tuple["BusinessAnalysis", "BusinessLegalAnalysis"]:
+        return (
+            BusinessAnalysis.objects.filter(business=self)
+            .order_by("created_timestamp")
+            .last(),
+            BusinessLegalAnalysis.objects.filter(business=self)
+            .order_by("created_timestamp")
+            .last(),
+        )
     
     @staticmethod
-    def get_erie_iron_business() -> 'Business':
+    def get_erie_iron_business() -> "Business":
         return Business.objects.get_or_create(
-            name="Erie Iron, LLC",
-            defaults={
-                "source": BusinessIdeaSource.HUMAN
-            }
+            name="Erie Iron, LLC", defaults={"source": BusinessIdeaSource.HUMAN}
         )[0]
     
     def needs_bank_balance_update(self):
-        return not BusinessBankBalanceSnapshot.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(days=1)).exists()
+        return not BusinessBankBalanceSnapshot.objects.filter(
+            business=self, created_timestamp__gt=common.get_now() - timedelta(days=1)
+        ).exists()
     
     def needs_capacity_analysis(self):
         """
         Returns True if no BusinessCapacityAnalysis has been created in the past 1 hours.
         """
-        return not BusinessCapacityAnalysis.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(hours=1)).exists()
+        return not BusinessCapacityAnalysis.objects.filter(
+            business=self, created_timestamp__gt=common.get_now() - timedelta(hours=1)
+        ).exists()
     
     def needs_analysis(self):
         """
         Returns True if no BusinessAnalysis has been created in the past 14 days.
         """
-        return not BusinessAnalysis.objects.filter(business=self, created_timestamp__gt=common.get_now() - timedelta(days=14)).exists()
+        return not BusinessAnalysis.objects.filter(
+            business=self, created_timestamp__gt=common.get_now() - timedelta(days=14)
+        ).exists()
     
     def get_human_capacity(self):
         return {
@@ -145,29 +178,33 @@ class Business(BaseErieIronModel):
                     "available_hours_per_week": 10,
                     "current_task_load": 0,
                     "tasks_pending": 0,
-                    "status": "HAS_CAPACITY"
+                    "status": "HAS_CAPACITY",
                 }
             ],
             "total_human_capacity_hours": 18,
             "total_pending_task_hours": 0,
-            "capacity_utilization_percent": 0
+            "capacity_utilization_percent": 0,
         }
     
     def get_new_business_budget_capacity(self):
-        bank_balance = BusinessBankBalanceSnapshot.objects.filter(business=self).order_by("created_timestamp").last()
+        bank_balance = (
+            BusinessBankBalanceSnapshot.objects.filter(business=self)
+            .order_by("created_timestamp")
+            .last()
+        )
         if not bank_balance:
-            return {
-                "status": "bank balance is unknown"
-            }
+            return {"status": "bank balance is unknown"}
         else:
-            return bank_balance.get_aggregate_balance_data(.5)
+            return bank_balance.get_aggregate_balance_data(0.5)
     
     def get_budget_capacity(self):
-        bank_balance = BusinessBankBalanceSnapshot.objects.filter(business=self).order_by("created_timestamp").last()
+        bank_balance = (
+            BusinessBankBalanceSnapshot.objects.filter(business=self)
+            .order_by("created_timestamp")
+            .last()
+        )
         if not bank_balance:
-            return {
-                "status": "bank balance is unknown"
-            }
+            return {"status": "bank balance is unknown"}
         else:
             return bank_balance.get_aggregate_balance_data()
         
@@ -204,71 +241,51 @@ class Business(BaseErieIronModel):
                 "ec2_instances_available": {
                     "t3.medium": 20,
                     "g4dn.xlarge": 2,
-                    "c5.large": 10
+                    "c5.large": 10,
                 },
                 "autoscaling_groups": [
                     {
                         "name": "collaya-inference-asg",
                         "desired_capacity": 2,
                         "max_capacity": 5,
-                        "current_capacity": 2
+                        "current_capacity": 2,
                     }
                 ],
-                "lambda_invocations_per_minute": {
-                    "limit": 1000,
-                    "current_usage": 540
-                },
+                "lambda_invocations_per_minute": {"limit": 1000, "current_usage": 540},
                 "ecs_clusters": [
                     {
                         "name": "collaya-prod",
                         "running_tasks": 12,
-                        "available_capacity_percent": 40
+                        "available_capacity_percent": 40,
                     }
-                ]
+                ],
             },
             "gpu": {
-                "available_gpus": {
-                    "g4dn.xlarge": 2,
-                    "p3.2xlarge": 0
-                },
+                "available_gpus": {"g4dn.xlarge": 2, "p3.2xlarge": 0},
                 "inference_queue_length": 3,
-                "expected_wait_time_seconds": 120
+                "expected_wait_time_seconds": 120,
             },
             "storage": {
-                "s3": {
-                    "total_objects": 120000,
-                    "total_size_gb": 310.4
-                },
-                "ebs": {
-                    "total_volumes": 12,
-                    "used_storage_gb": 240
-                },
-                "efs": {
-                    "used_storage_gb": 38
-                }
+                "s3": {"total_objects": 120000, "total_size_gb": 310.4},
+                "ebs": {"total_volumes": 12, "used_storage_gb": 240},
+                "efs": {"used_storage_gb": 38},
             },
             "network": {
                 "api_gateway": {
-                    "requests_per_second": {
-                        "limit": 5000,
-                        "current_usage": 1300
-                    }
+                    "requests_per_second": {"limit": 5000, "current_usage": 1300}
                 },
-                "bandwidth_mbps": {
-                    "ingress": 220,
-                    "egress": 180
-                }
+                "bandwidth_mbps": {"ingress": 220, "egress": 180},
             },
             "cost": {
                 "month_to_date_spend_usd": 342.18,
                 "forecasted_monthly_spend_usd": 720,
-                "budget_limit_usd": 1000
+                "budget_limit_usd": 1000,
             },
             "alerts": [
                 "Low GPU availability in us-west-2",
                 "Lambda usage > 50% of quota",
-                "S3 nearing 90% of cost allocation warning threshold"
-            ]
+                "S3 nearing 90% of cost allocation warning threshold",
+            ],
         }
     
     def get_kpis_status(self):
@@ -292,8 +309,7 @@ class Business(BaseErieIronModel):
         else:
             goals_status = {
                 "summary": "\n".join(
-                    f"{g.goal_id} (kpi_id={g.kpi.kpi_id}): {g.status}"
-                    for g in goals
+                    f"{g.goal_id} (kpi_id={g.kpi.kpi_id}): {g.status}" for g in goals
                 )
             }
         
@@ -301,29 +317,54 @@ class Business(BaseErieIronModel):
     
     def snapshot_code(
             self,
-            self_driving_task_iteration: 'SelfDrivingTaskIteration',
-            include_erie_common=True
+            self_driving_task_iteration: "SelfDrivingTaskIteration",
+            include_erie_common=True,
     ):
         if True:
             return
         
-        instructions = common.get(self_driving_task_iteration, ['evaluation_json', 'instructions'])
+        instructions = common.get(
+            self_driving_task_iteration, ["evaluation_json", "instructions"]
+        )
         sandbox_path = Path(self_driving_task_iteration.self_driving_task.sandbox_path)
         
-        files_to_index = list(common.iterate_files_deep(
-            sandbox_path,
-            file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh", ".txt", "Dockerfile"],
-            gitignore_patterns=["core/migrations/"]
-        ))
+        files_to_index = list(
+            common.iterate_files_deep(
+                sandbox_path,
+                file_extensions=[
+                    ".py",
+                    ".html",
+                    ".js",
+                    ".css",
+                    ".scss",
+                    ".yaml",
+                    ".sh",
+                    ".txt",
+                    "Dockerfile",
+                ],
+                gitignore_patterns=["core/migrations/"],
+            )
+        )
         
         if include_erie_common:
             erie_common_path = "venv/lib/python3.11/site-packages/erieiron_public"
-            files_to_index += [f"{erie_common_path}/{f}" for f in common.iterate_files_deep(
-                sandbox_path / erie_common_path,
-                file_extensions=[".py", ".html", ".js", ".css", ".scss", ".yaml", ".sh"],
-                respect_git_ignore=False,
-                gitignore_patterns=["migrations/"]
-            )]
+            files_to_index += [
+                f"{erie_common_path}/{f}"
+                for f in common.iterate_files_deep(
+                    sandbox_path / erie_common_path,
+                    file_extensions=[
+                        ".py",
+                        ".html",
+                        ".js",
+                        ".css",
+                        ".scss",
+                        ".yaml",
+                        ".sh",
+                    ],
+                    respect_git_ignore=False,
+                    gitignore_patterns=["migrations/"],
+                )
+            ]
         
         for relative_file_path in common.strings(files_to_index):
             code_file = CodeFile.get(self, relative_file_path)
@@ -331,28 +372,38 @@ class Business(BaseErieIronModel):
             
             if not version:
                 code_file.init_from_codefile(
-                    self_driving_task_iteration,
-                    relative_file_path
+                    self_driving_task_iteration, relative_file_path
                 )
             else:
                 if (sandbox_path / relative_file_path).read_text() != version.code:
                     CodeFile.update_from_path(
                         self_driving_task_iteration,
                         (sandbox_path / relative_file_path),
-                        instructions
+                        instructions,
                     )
     
     def get_secrets_root_key(self, env_type: EnvironmentType):
         from erieiron_common import aws_utils
+        
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
         return f"z/{project_name}/{env_type.value}"
     
-    def get_default_cloud_account(self, env_type: EnvironmentType) -> 'CloudAccount | None':
+    def get_default_cloud_account(
+            self,
+            env_type: EnvironmentType=None
+    ) -> "CloudAccount | None":
         qs = self.cloud_accounts.all()
-        if EnvironmentType.PRODUCTION.eq(env_type):
+        
+        if not env_type:
+            if qs.filter(is_default_production=True).exists():
+                return qs.filter(is_default_production=True).first()
+            else:
+                return qs.filter(is_default_dev=True).first()
+        elif EnvironmentType.PRODUCTION.eq(env_type):
             return qs.filter(is_default_production=True).first()
-        if EnvironmentType.DEV.eq(env_type):
+        elif EnvironmentType.DEV.eq(env_type):
             return qs.filter(is_default_dev=True).first()
+        
         return None
     
     def iter_cloud_accounts(self) -> models.QuerySet:
@@ -360,9 +411,13 @@ class Business(BaseErieIronModel):
 
 
 class CloudAccount(BaseErieIronModel):
-    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="cloud_accounts")
+    business = models.ForeignKey(
+        Business, on_delete=models.CASCADE, related_name="cloud_accounts"
+    )
     name = models.TextField()
-    provider = models.TextField(choices=CloudProvider.choices(), default=CloudProvider.AWS)
+    provider = models.TextField(
+        choices=CloudProvider.choices(), default=CloudProvider.AWS
+    )
     account_identifier = models.TextField(null=True, blank=True)
     credentials_secret_arn = models.TextField(null=True, blank=True)
     metadata = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
@@ -376,11 +431,21 @@ class CloudAccount(BaseErieIronModel):
             models.Index(fields=["business", "provider"]),
         ]
         constraints = [
-            models.UniqueConstraint(fields=["business", "name"], name="cloudaccount_unique_business_name"),
+            models.UniqueConstraint(
+                fields=["business", "name"], name="cloudaccount_unique_business_name"
+            ),
         ]
     
     def __str__(self):
         return f"{self.name} ({self.provider})"
+    
+    def get_service_client(self, service_name):
+        if CloudProvider.AWS.neq(self.provider):
+            raise Exception(f"{self.provider} not supported")
+        
+        from erieiron_common.aws_utils import get_aws_interface
+        return get_aws_interface(self).client(service_name)
+
     
     def build_secret_name(self) -> str:
         if not self.id:
@@ -388,7 +453,9 @@ class CloudAccount(BaseErieIronModel):
         base = self.business.get_secrets_root_key(EnvironmentType.PRODUCTION)
         return f"{base}/cloud-accounts/{self.id}"
     
-    def set_default_flags(self, *, dev: bool | None = None, production: bool | None = None) -> None:
+    def set_default_flags(
+            self, *, dev: bool | None = None, production: bool | None = None
+    ) -> None:
         updates: dict[str, bool] = {}
         if dev is not None:
             updates["is_default_dev"] = dev
@@ -400,9 +467,84 @@ class CloudAccount(BaseErieIronModel):
             setattr(self, field, value)
         self.save(update_fields=list(updates.keys()))
         if updates.get("is_default_dev"):
-            CloudAccount.objects.filter(business=self.business, is_default_dev=True).exclude(id=self.id).update(is_default_dev=False)
+            CloudAccount.objects.filter(
+                business=self.business, is_default_dev=True
+            ).exclude(id=self.id).update(is_default_dev=False)
         if updates.get("is_default_production"):
-            CloudAccount.objects.filter(business=self.business, is_default_production=True).exclude(id=self.id).update(is_default_production=False)
+            CloudAccount.objects.filter(
+                business=self.business, is_default_production=True
+            ).exclude(id=self.id).update(is_default_production=False)
+    
+    def has_vpc_config(self) -> bool:
+        """Check if VPC configuration exists in metadata."""
+        return bool(self.metadata.get("vpc"))
+    
+    def get_vpc_config(self) -> dict | None:
+        """Retrieve VPC configuration from metadata with validation."""
+        vpc_config = self.metadata.get("vpc")
+        if not vpc_config:
+            return None
+        
+        # Validate required fields
+        required_fields = ["vpc_id", "cidr_block", "public_subnets", "private_subnets"]
+        for field in required_fields:
+            if field not in vpc_config:
+                logging.warning(
+                    f"CloudAccount {self.id} VPC config missing required field: {field}"
+                )
+                return None
+        
+        # Validate subnet structure
+        for subnet_type in ["public_subnets", "private_subnets"]:
+            subnets = vpc_config.get(subnet_type, [])
+            if not isinstance(subnets, list):
+                logging.warning(
+                    f"CloudAccount {self.id} VPC config {subnet_type} must be a list"
+                )
+                return None
+            for subnet in subnets:
+                if not isinstance(subnet, dict):
+                    logging.warning(
+                        f"CloudAccount {self.id} VPC config {subnet_type} items must be dicts"
+                    )
+                    return None
+                if "name" not in subnet and "cidr_block" not in subnet:
+                    logging.warning(
+                        f"CloudAccount {self.id} VPC subnet entries must include a name or cidr_block"
+                    )
+                    return None
+        
+        return vpc_config
+    
+    def set_vpc_config(self, vpc_data: dict) -> None:
+        """Store VPC configuration in metadata with schema validation."""
+        if not isinstance(vpc_data, dict):
+            raise ValueError("VPC data must be a dictionary")
+        
+        # Validate schema structure
+        required_fields = ["vpc_id", "cidr_block", "public_subnets", "private_subnets"]
+        for field in required_fields:
+            if field not in vpc_data:
+                raise ValueError(f"VPC config missing required field: {field}")
+        
+        # Validate subnet structure
+        for subnet_type in ["public_subnets", "private_subnets"]:
+            subnets = vpc_data.get(subnet_type, [])
+            if not isinstance(subnets, list):
+                raise ValueError(f"VPC config {subnet_type} must be a list")
+            for subnet in subnets:
+                if not isinstance(subnet, dict):
+                    raise ValueError(f"VPC config {subnet_type} items must be dicts")
+                if "name" not in subnet and "cidr_block" not in subnet:
+                    raise ValueError(
+                        "VPC subnet entries must include at least a name or cidr_block"
+                    )
+        
+        # Store in metadata
+        if "vpc" not in self.metadata:
+            self.metadata["vpc"] = {}
+        self.metadata["vpc"] = vpc_data
+        self.save(update_fields=["metadata"])
 
 
 class BusinessAnalysis(BaseErieIronModel):
@@ -427,7 +569,9 @@ class BusinessAnalysis(BaseErieIronModel):
     macro_trends_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     risks_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     monthly_expenses_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
-    potential_competitors_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    potential_competitors_data = models.JSONField(
+        null=True, encoder=ErieIronJSONEncoder
+    )
     use_of_funds_data = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
 
 
@@ -444,9 +588,13 @@ class BusinessLegalAnalysis(BaseErieIronModel):
     
     approved = models.BooleanField()
     justification = models.TextField(null=True)
-    required_disclaimers_or_terms = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    required_disclaimers_or_terms = models.JSONField(
+        null=True, encoder=ErieIronJSONEncoder
+    )
     risk_rating = models.TextField(null=True, choices=Level.choices())
-    recommended_entity_structure = models.TextField(choices=LlcStructure.choices(), null=False)
+    recommended_entity_structure = models.TextField(
+        choices=LlcStructure.choices(), null=False
+    )
     entity_structure_justification = models.TextField(null=True)
 
 
@@ -464,14 +612,17 @@ class BusinessBankBalanceSnapshot(BaseErieIronModel):
             status.append(account.status)
         
         return {
-            "available_balance": common.safe_sum(available_balance) * (1 - reserve_percent),
+            "available_balance": common.safe_sum(available_balance)
+                                 * (1 - reserve_percent),
             "current_balance": common.safe_sum(current_balance) * (1 - reserve_percent),
-            "status": common.join_with_and(list(set(status)))
+            "status": common.join_with_and(list(set(status))),
         }
 
 
 class BusinessBankBalanceSnapshotAccount(BaseErieIronModel):
-    snapshot = models.ForeignKey("BusinessBankBalanceSnapshot", on_delete=models.CASCADE)
+    snapshot = models.ForeignKey(
+        "BusinessBankBalanceSnapshot", on_delete=models.CASCADE
+    )
     account_name = models.TextField()
     account_id = models.TextField()
     available_balance = models.FloatField(null=True)
@@ -535,45 +686,59 @@ class Initiative(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     architecture = models.TextField(null=True)
     user_documentation = models.TextField(null=True)
-    initiative_type = models.TextField(choices=InitiativeType.choices(), default=InitiativeType.PRODUCT)
+    initiative_type = models.TextField(
+        choices=InitiativeType.choices(), default=InitiativeType.PRODUCT
+    )
     created_timestamp = models.DateTimeField(auto_now_add=True)
     title = models.TextField()
     description = models.TextField()
     priority = models.TextField(choices=Level.choices())
-    linked_kpis = models.ManyToManyField("BusinessKPI", related_name="initiatives", blank=True)
-    linked_goals = models.ManyToManyField("BusinessGoal", related_name="initiatives", blank=True)
+    linked_kpis = models.ManyToManyField(
+        "BusinessKPI", related_name="initiatives", blank=True
+    )
+    linked_goals = models.ManyToManyField(
+        "BusinessGoal", related_name="initiatives", blank=True
+    )
     expected_kpi_lift = models.JSONField(default=dict)
     requires_unit_tests = models.BooleanField(default=True)
     domain = models.TextField(null=True)
     green_lit = models.BooleanField(default=False)
     
     def write_user_documentation(self):
-        from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu import get_existing_test_context_messages
+        from erieiron_autonomous_agent.system_agent_llm_interface import (
+            llm_chat,
+            get_sys_prompt,
+        )
+        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu import (
+            get_existing_test_context_messages,
+        )
         
         self.user_documentation = llm_chat(
             "Write User Documentation",
             [
                 get_sys_prompt("initiative--user_documentation_writer.md"),
-                textwrap.dedent(f"""
+                textwrap.dedent(
+                    f"""
                     ## Feature Description
                     {self.description}
-                """),
-                textwrap.dedent(f"""
+                """
+                ),
+                textwrap.dedent(
+                    f"""
                     ## Architecture
                     {self.architecture}
-                """),
-                get_existing_test_context_messages(
-                    self,
-                    title="Automated Tests"
+                """
                 ),
-                textwrap.dedent(f"""
+                get_existing_test_context_messages(self, title="Automated Tests"),
+                textwrap.dedent(
+                    f"""
                 ## Domain Name to use in docs:
                 {self.business.domain}
-            """),
+            """
+                ),
             ],
             verbosity=LlmVerbosity.HIGH,
-            tag_entity=self
+            tag_entity=self,
         ).text
         self.save()
     
@@ -589,17 +754,19 @@ class Initiative(BaseErieIronModel):
             "title": self.title,
             "description": self.description,
             "priority": self.priority,
-            "requirements": [{
-                "summary": req.summary,
-                "acceptance_criteria": req.acceptance_criteria,
-                "testable": req.testable
-            } for req in self.requirements.order_by()]
+            "requirements": [
+                {
+                    "summary": req.summary,
+                    "acceptance_criteria": req.acceptance_criteria,
+                    "testable": req.testable,
+                }
+                for req in self.requirements.order_by()
+            ],
         }
     
-    def get_first_task_to_implement(self) -> 'Task':
+    def get_first_task_to_implement(self) -> "Task":
         return (
-            self
-            .tasks.exclude(status__in=[TaskStatus.BLOCKED, TaskStatus.COMPLETE])
+            self.tasks.exclude(status__in=[TaskStatus.BLOCKED, TaskStatus.COMPLETE])
             .order_by("created_timestamp")
             .first()
         )
@@ -615,7 +782,7 @@ class InfrastructureStack(BaseErieIronModel):
         related_name="cloudformation_stacks",
     )
     cloud_account = models.ForeignKey(
-        'CloudAccount',
+        "CloudAccount",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -684,8 +851,8 @@ class InfrastructureStack(BaseErieIronModel):
             initiative: Initiative,
             stack_type: InfrastructureStackType,
             env_type: EnvironmentType,
-            assert_create=False
-    ) -> 'InfrastructureStack':
+            assert_create=False,
+    ) -> "InfrastructureStack":
         from erieiron_common import domain_manager
         from erieiron_common.aws_utils import sanitize_aws_name
         
@@ -694,13 +861,11 @@ class InfrastructureStack(BaseErieIronModel):
                 business_id=initiative.business_id,
                 initiative__isnull=True,
                 stack_type=stack_type,
-                env_type=env_type
+                env_type=env_type,
             ).first()
         else:
             stack = InfrastructureStack.objects.filter(
-                initiative=initiative,
-                stack_type=stack_type,
-                env_type=env_type
+                initiative=initiative, stack_type=stack_type, env_type=env_type
             ).first()
         if stack:
             if assert_create:
@@ -711,8 +876,12 @@ class InfrastructureStack(BaseErieIronModel):
         # create a new stack
         stack_namespace_token = None
         for i in range(100):
-            stack_namespace_token_candidate = common.gen_random_token(DEV_STACK_TOKEN_LENGTH)
-            if not InfrastructureStack.objects.filter(stack_namespace_token=stack_namespace_token_candidate).exists():
+            stack_namespace_token_candidate = common.gen_random_token(
+                DEV_STACK_TOKEN_LENGTH
+            )
+            if not InfrastructureStack.objects.filter(
+                    stack_namespace_token=stack_namespace_token_candidate
+            ).exists():
                 stack_namespace_token = stack_namespace_token_candidate
                 break
         
@@ -720,69 +889,62 @@ class InfrastructureStack(BaseErieIronModel):
             raise Exception(f"unable to find a unique stack_namespace_token")
         
         if EnvironmentType.PRODUCTION.eq(env_type):
-            stack_name = sanitize_aws_name([
-                stack_namespace_token,
-                initiative.business.service_token,
-                stack_type
-            ])
+            stack_name = sanitize_aws_name(
+                [stack_namespace_token, initiative.business.service_token, stack_type]
+            )
         else:
-            stack_name = sanitize_aws_name([
-                stack_namespace_token,
-                initiative.id,
-                stack_type
-            ])
+            stack_name = sanitize_aws_name(
+                [stack_namespace_token, initiative.id, stack_type]
+            )
         
         stack = InfrastructureStack.objects.create(
             business=initiative.business,
-            initiative=initiative if not EnvironmentType.PRODUCTION.eq(env_type) else None,
+            initiative=(
+                initiative if not EnvironmentType.PRODUCTION.eq(env_type) else None
+            ),
             cloud_account=initiative.business.get_default_cloud_account(env_type),
             stack_type=stack_type,
             stack_name=stack_name,
             stack_namespace_token=stack_namespace_token,
-            env_type=env_type
+            env_type=env_type,
         )
         
-        if (
-                InfrastructureStackType.FOUNDATION.eq(stack_type)
-                and EnvironmentType.DEV.eq(env_type)
+        if InfrastructureStackType.FOUNDATION.eq(stack_type) and EnvironmentType.DEV.eq(
+                env_type
         ):
             new_sub_domain = sanitize_aws_name(stack_name, 63)
             new_domain = f"{new_sub_domain}.{initiative.business.domain}"
             
-            Initiative.objects.filter(id=initiative.id).update(
-                domain=new_domain
-            )
+            Initiative.objects.filter(id=initiative.id).update(domain=new_domain)
             initiative.refresh_from_db(fields=["domain"])
             
             zone_id = initiative.business.route53_hosted_zone_id
             if not zone_id:
                 from erieiron_common import aws_utils
-                zone_id = domain_manager.find_hosted_zone_id(initiative.business.domain, aws_utils.client("route53"))
+                
+                zone_id = domain_manager.find_hosted_zone_id(
+                    initiative.business.domain, aws_utils.client("route53")
+                )
             
-            domain_manager.add_dns_records(
-                zone_id,
-                new_domain
-            )
+            domain_manager.add_dns_records(zone_id, new_domain)
         
         return stack
     
     @transaction.atomic
-    def tombstone(self) -> 'InfrastructureStack':
+    def tombstone(self) -> "InfrastructureStack":
         env_type = self.env_type
         initiative = self.initiative
         stack_type = self.stack_type
         
         self.delete_resources()
         
-        InfrastructureStack.objects.filter(
-            id=self.id
-        ).delete()
+        InfrastructureStack.objects.filter(id=self.id).delete()
         
         return InfrastructureStack.get(
             initiative=initiative,
             stack_type=stack_type,
             env_type=env_type,
-            assert_create=True
+            assert_create=True,
         )
     
     def delete_resources(self):
@@ -794,6 +956,7 @@ class InfrastructureStack(BaseErieIronModel):
         
         from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
         from erieiron_autonomous_agent.utils import cloud_accounts
+        
         try:
             container_env = cloud_accounts.build_cloud_credentials(self)
             OpenTofuStackManager(self, container_env=container_env).destroy_stack()
@@ -817,7 +980,9 @@ class InfrastructureStack(BaseErieIronModel):
 
 class ProductRequirement(BaseErieIronModel):
     id = models.TextField(primary_key=True)  # requirement_token
-    initiative = models.ForeignKey(Initiative, on_delete=models.CASCADE, related_name='requirements')
+    initiative = models.ForeignKey(
+        Initiative, on_delete=models.CASCADE, related_name="requirements"
+    )
     product_initiative = models.TextField(null=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     summary = models.TextField()
@@ -828,19 +993,22 @@ class ProductRequirement(BaseErieIronModel):
 class Task(BaseErieIronModel):
     id = models.TextField(primary_key=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
-    initiative = models.ForeignKey(Initiative, on_delete=models.CASCADE, related_name="tasks")
+    initiative = models.ForeignKey(
+        Initiative, on_delete=models.CASCADE, related_name="tasks"
+    )
     product_initiative = models.TextField(null=True)
-    task_type = models.TextField(choices=TaskType.choices(), default=TaskType.CODING_APPLICATION, null=False)
+    task_type = models.TextField(
+        choices=TaskType.choices(), default=TaskType.CODING_APPLICATION, null=False
+    )
     status = models.TextField(null=False, choices=TaskStatus.choices())
     debug_steps = models.TextField(null=True)
     
-    validated_requirements = models.ManyToManyField(ProductRequirement, blank=True, related_name="validation_tasks")
+    validated_requirements = models.ManyToManyField(
+        ProductRequirement, blank=True, related_name="validation_tasks"
+    )
     description = models.TextField()
     depends_on = models.ManyToManyField(
-        'self',
-        symmetrical=False,
-        related_name='dependent_tasks',
-        blank=True
+        "self", symmetrical=False, related_name="dependent_tasks", blank=True
     )
     risk_notes = models.TextField()
     completion_criteria = models.JSONField(default=list)
@@ -854,7 +1022,9 @@ class Task(BaseErieIronModel):
     output_fields = models.JSONField(default=list)
     
     requires_test = models.BooleanField(default=True)
-    execution_schedule = models.TextField(choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE)
+    execution_schedule = models.TextField(
+        choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE
+    )
     execution_start_time = models.DateTimeField(null=True, blank=True)
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
@@ -867,17 +1037,21 @@ class Task(BaseErieIronModel):
         
         return d
     
-    def create_execution(self, input_data=None, iteration=None) -> 'TaskExecution':
+    def create_execution(self, input_data=None, iteration=None) -> "TaskExecution":
         with transaction.atomic():
             return TaskExecution.objects.create(
                 task=self,
                 iteration=iteration,
                 status=TaskStatus.NOT_STARTED,
-                input=input_data or {}
+                input=input_data or {},
             )
     
-    def get_last_execution(self) -> Optional['TaskExecution']:
-        return self.taskexecution_set.filter(executed_time__isnull=False).order_by("executed_time").last()
+    def get_last_execution(self) -> Optional["TaskExecution"]:
+        return (
+            self.taskexecution_set.filter(executed_time__isnull=False)
+            .order_by("executed_time")
+            .last()
+        )
     
     def are_dependencies_complete(self):
         return all(dep.status == TaskStatus.COMPLETE for dep in self.depends_on.all())
@@ -896,9 +1070,14 @@ class Task(BaseErieIronModel):
     def update_dependent_tasks(self):
         from erieiron_common.message_queue.pubsub_manager import PubSubManager
         from erieiron_common.enums import PubSubMessageType
-        for t in self.depends_on.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
+        
+        for t in self.depends_on.filter(
+                status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]
+        ):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
-        for t in self.dependent_tasks.filter(status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]):
+        for t in self.dependent_tasks.filter(
+                status__in=[TaskStatus.NOT_STARTED, TaskStatus.BLOCKED]
+        ):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
     
     def allow_execution(self):
@@ -912,7 +1091,7 @@ class Task(BaseErieIronModel):
         
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
     
-    def create_self_driving_env(self, reset_code_dir=False) -> 'SelfDrivingTask':
+    def create_self_driving_env(self, reset_code_dir=False) -> "SelfDrivingTask":
         business = self.initiative.business
         
         self_driving_task, created = SelfDrivingTask.objects.get_or_create(
@@ -921,8 +1100,8 @@ class Task(BaseErieIronModel):
                 "sandbox_path": os.path.abspath(tempfile.TemporaryDirectory().name),
                 "main_name": common.safe_filename(self.id),
                 "goal": self.get_work_desc(),
-                "business": business
-            }
+                "business": business,
+            },
         )
         
         if reset_code_dir and not created:
@@ -934,7 +1113,10 @@ class Task(BaseErieIronModel):
             )
             self_driving_task.refresh_from_db(fields=["sandbox_path"])
         
-        from erieiron_autonomous_agent.business_level_agents.eng_lead import bootstrap_repo
+        from erieiron_autonomous_agent.business_level_agents.eng_lead import (
+            bootstrap_repo,
+        )
+        
         git = self_driving_task.get_git()
         try:
             if git.source_exists():
@@ -955,12 +1137,12 @@ class Task(BaseErieIronModel):
     
     def get_upstream_outputs(self):
         return {
-            task.id: task.get_last_execution().output
-            for task in self.depends_on.all()
+            task.id: task.get_last_execution().output for task in self.depends_on.all()
         }
     
     def get_sub_domain(self) -> str:
         from erieiron_common.aws_utils import sanitize_aws_name
+        
         return sanitize_aws_name([str(self.id)], max_length=63).lower()
     
     def get_name(self):
@@ -971,10 +1153,7 @@ class Task(BaseErieIronModel):
         
         root_str = root_str.split("--")[-1]
         
-        return (root_str
-                .replace("_", " ")
-                .replace("-", " ")
-                .capitalize())
+        return root_str.replace("_", " ").replace("-", " ").capitalize()
 
 
 # Design system and handoff models
@@ -986,8 +1165,12 @@ class DesignComponent(BaseErieIronModel):
 
 class TaskExecution(BaseErieIronModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE)
-    iteration = models.ForeignKey("SelfDrivingTaskIteration", on_delete=models.CASCADE, null=True)
-    status = models.TextField(default=TaskStatus.NOT_STARTED, null=False, choices=TaskStatus.choices())
+    iteration = models.ForeignKey(
+        "SelfDrivingTaskIteration", on_delete=models.CASCADE, null=True
+    )
+    status = models.TextField(
+        default=TaskStatus.NOT_STARTED, null=False, choices=TaskStatus.choices()
+    )
     created_time = models.DateTimeField(auto_now_add=True)
     executed_time = models.DateTimeField(null=True)
     input = models.JSONField(default=dict, null=True)
@@ -1000,7 +1183,7 @@ class TaskExecution(BaseErieIronModel):
                 status=status,
                 error_msg=error_msg,
                 output=output or {},
-                executed_time=common.get_now()
+                executed_time=common.get_now(),
             )
         
         self.refresh_from_db()
@@ -1008,7 +1191,9 @@ class TaskExecution(BaseErieIronModel):
 
 
 class TaskDesignRequirements(BaseErieIronModel):
-    task = models.OneToOneField("Task", on_delete=models.CASCADE, related_name="design_handoff")
+    task = models.OneToOneField(
+        "Task", on_delete=models.CASCADE, related_name="design_handoff"
+    )
     component_ids = models.ManyToManyField(DesignComponent, blank=True)
     layout = models.JSONField(default=dict, null=True)
     component_tree = models.JSONField(default=dict, null=True)
@@ -1021,7 +1206,9 @@ class SelfDrivingTask(BaseErieIronModel):
     test_file_path = models.TextField(null=True)
     sandbox_path = models.TextField(null=False)
     goal = models.TextField(null=False)
-    task = models.OneToOneField("Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
+    task = models.OneToOneField(
+        "Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True
+    )
     initial_tests_pass = models.BooleanField(null=False, default=False)
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1045,7 +1232,7 @@ class SelfDrivingTask(BaseErieIronModel):
                     {
                         "path": test_file.file_path,
                         "alternatives": "none",
-                        "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression"
+                        "description": "This is an existing test that asserts another tasks behavior.  This test must never be modifified.  If this test is failing, that means the code you wrote for this task caused a regression",
                     }
                 )
         
@@ -1054,15 +1241,12 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_git(self) -> GitWrapper:
         return GitWrapper(self.sandbox_path)
     
-    def rollback_to(self, iteraton: 'SelfDrivingTaskIteration'):
+    def rollback_to(self, iteraton: "SelfDrivingTaskIteration"):
         # we don't want any files created in future iterations hanging around, so delete everything
         # there's prob a more efficient way to do this, but this is fine for now
         for cf in CodeFile.objects.filter(codeversion__task_iteration__task=self):
             common.quietly_delete(
-                common.assert_in_sandbox(
-                    self.sandbox_path,
-                    cf.file_path
-                )
+                common.assert_in_sandbox(self.sandbox_path, cf.file_path)
             )
         
         for i in self.selfdrivingtaskiteration_set.order_by("timestamp"):
@@ -1070,15 +1254,17 @@ class SelfDrivingTask(BaseErieIronModel):
             if i.id == iteraton.id:
                 break
     
-    def get_best_iteration(self) -> 'SelfDrivingTaskIteration':
+    def get_best_iteration(self) -> "SelfDrivingTaskIteration":
         best = self.selfdrivingtaskbestiteration_set.order_by("timestamp").last()
         
         return best.iteration if best else self.get_most_recent_iteration()
     
-    def get_most_recent_iteration(self) -> 'SelfDrivingTaskIteration':
+    def get_most_recent_iteration(self) -> "SelfDrivingTaskIteration":
         return self.selfdrivingtaskiteration_set.order_by("timestamp").last()
     
-    def get_active_iteration(self, *, create_if_missing: bool = True) -> Optional['SelfDrivingTaskIteration']:
+    def get_active_iteration(
+            self, *, create_if_missing: bool = True
+    ) -> Optional["SelfDrivingTaskIteration"]:
         iteration = self.get_most_recent_iteration()
         if iteration or not create_if_missing:
             return iteration
@@ -1091,11 +1277,11 @@ class SelfDrivingTask(BaseErieIronModel):
                 self_driving_task=self,
                 version_number=1,
                 planning_model="",
-                coding_model=""
+                coding_model="",
             )
         return iteration
     
-    def get_most_recent_code_version(self) -> Optional['CodeVersion']:
+    def get_most_recent_code_version(self) -> Optional["CodeVersion"]:
         last_iteration = self.get_most_recent_iteration()
         if last_iteration:
             last_code_version: CodeVersion = last_iteration.codeversion_set.first()
@@ -1114,12 +1300,10 @@ class SelfDrivingTask(BaseErieIronModel):
     def get_cost(self) -> float:
         result = LlmRequest.objects.filter(
             task_iteration__self_driving_task=self
-        ).aggregate(
-            total=Sum("price")
-        )
+        ).aggregate(total=Sum("price"))
         return result["total"] or 0.0
     
-    def iterate(self) -> 'SelfDrivingTaskIteration':
+    def iterate(self) -> "SelfDrivingTaskIteration":
         iteration_to_modify = None
         most_recent_iteration = self.get_most_recent_iteration()
         
@@ -1133,23 +1317,27 @@ class SelfDrivingTask(BaseErieIronModel):
         if not iteration_to_modify:
             iteration_to_modify = most_recent_iteration
         
-        max_version = SelfDrivingTaskIteration.objects.filter(
-            self_driving_task=self
-        ).aggregate(
-            models.Max("version_number")
-        )["version_number__max"] or 0
+        max_version = (
+                SelfDrivingTaskIteration.objects.filter(self_driving_task=self).aggregate(
+                    models.Max("version_number")
+                )["version_number__max"]
+                or 0
+        )
         
         with transaction.atomic():
             current_iteration = SelfDrivingTaskIteration.objects.create(
-                self_driving_task=self,
-                version_number=max_version + 1
+                self_driving_task=self, version_number=max_version + 1
             )
         
         if not iteration_to_modify:
             iteration_to_modify = current_iteration
         
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            start_iteration=iteration_to_modify if iteration_to_modify.id != current_iteration.id else None
+            start_iteration=(
+                iteration_to_modify
+                if iteration_to_modify.id != current_iteration.id
+                else None
+            )
         )
         
         return current_iteration
@@ -1168,8 +1356,12 @@ class SelfDrivingTask(BaseErieIronModel):
 
 
 class SelfDrivingTaskIteration(BaseErieIronModel):
-    self_driving_task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
-    start_iteration = models.ForeignKey('SelfDrivingTaskIteration', on_delete=models.CASCADE, null=True)
+    self_driving_task = models.ForeignKey(
+        SelfDrivingTask, on_delete=models.CASCADE, null=True
+    )
+    start_iteration = models.ForeignKey(
+        "SelfDrivingTaskIteration", on_delete=models.CASCADE, null=True
+    )
     achieved_goal = models.BooleanField(null=False, default=False)
     version_number = models.IntegerField(null=False, default=0)
     test_module = models.TextField(null=True)
@@ -1187,30 +1379,46 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
     
     planning_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     evaluation_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
-    slowest_cloudformation_resources = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    slowest_cloudformation_resources = models.JSONField(
+        null=True, encoder=ErieIronJSONEncoder
+    )
     routing_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     strategic_unblocking_json = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     timestamp = models.DateTimeField(auto_now_add=True)
     
     def get_all_log_content(self):
-        return "\n\n".join(common.filter_none([
-            self.log_content_init,
-            self.log_content_coding,
-            self.log_content_execution,
-            self.log_content_evaluation
-        ]))
+        return "\n\n".join(
+            common.filter_none(
+                [
+                    self.log_content_init,
+                    self.log_content_coding,
+                    self.log_content_execution,
+                    self.log_content_evaluation,
+                ]
+            )
+        )
     
-    def get_previous_iteration(self) -> 'SelfDrivingTaskIteration':
-        return self.self_driving_task.selfdrivingtaskiteration_set.filter(
-            timestamp__lt=self.timestamp
-        ).order_by("timestamp").last()
+    def get_previous_iteration(self) -> "SelfDrivingTaskIteration":
+        return (
+            self.self_driving_task.selfdrivingtaskiteration_set.filter(
+                timestamp__lt=self.timestamp
+            )
+            .order_by("timestamp")
+            .last()
+        )
     
-    def get_next_iteration(self) -> 'SelfDrivingTaskIteration':
-        return self.self_driving_task.selfdrivingtaskiteration_set.filter(
-            timestamp__gt=self.timestamp
-        ).order_by("timestamp").first()
+    def get_next_iteration(self) -> "SelfDrivingTaskIteration":
+        return (
+            self.self_driving_task.selfdrivingtaskiteration_set.filter(
+                timestamp__gt=self.timestamp
+            )
+            .order_by("timestamp")
+            .first()
+        )
     
-    def get_relevant_iterations(self) -> tuple['SelfDrivingTaskIteration', 'SelfDrivingTaskIteration']:
+    def get_relevant_iterations(
+            self,
+    ) -> tuple["SelfDrivingTaskIteration", "SelfDrivingTaskIteration"]:
         previous_iteration = None
         iteration_to_modify = None
         
@@ -1236,16 +1444,13 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             return self.self_driving_task.task.create_execution(iteration=self)
     
     def get_total_price(self) -> Tuple[float, int]:
-        return self.llmrequest_set.aggregate(
-            total_price=Sum('price')
-        )['total_price']
+        return self.llmrequest_set.aggregate(total_price=Sum("price"))["total_price"]
     
     def get_llm_cost(self) -> Tuple[float, int]:
         totals = self.llmrequest_set.aggregate(
-            total_price=Sum('price'),
-            total_tokens=Sum('token_count')
+            total_price=Sum("price"), total_tokens=Sum("token_count")
         )
-        return totals['total_price'] or 0, totals['total_tokens'] or 0
+        return totals["total_price"] or 0, totals["total_tokens"] or 0
     
     def write_to_disk(self):
         self_driving_task = self.self_driving_task
@@ -1254,12 +1459,12 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         business = self_driving_task.business
         
         for code_file in business.codefile_set.exclude(
-                file_path__in=[
-                    self_driving_task.test_file_path
-                ]
+                file_path__in=[self_driving_task.test_file_path]
         ).order_by("file_path"):
             if code_file.file_path.startswith("/"):
-                logging.error(f"code got indexed with a root path!: {code_file.file_path}")
+                logging.error(
+                    f"code got indexed with a root path!: {code_file.file_path}"
+                )
                 continue
             
             if code_file.file_path.startswith(str(os.getcwd())):
@@ -1271,13 +1476,14 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 code_version.write_to_disk(sandbox_path)
             elif code_file.allow_autonomous_delete():
                 common.quietly_delete(sandbox_path / code_file.get_path())
-                logging.info(f"{code_file.get_path()} did not exist at iteration {self.id}.  removing from disk")
+                logging.info(
+                    f"{code_file.get_path()} did not exist at iteration {self.id}.  removing from disk"
+                )
     
-    def get_code_version(self, code_file: 'CodeFile'):
+    def get_code_version(self, code_file: "CodeFile"):
         if isinstance(code_file, Path):
             code_file = CodeFile.get(
-                self.self_driving_task.business,
-                self.get_relative_path(code_file)
+                self.self_driving_task.business, self.get_relative_path(code_file)
             )
         
         code_version_to_modify = code_file.get_version(self)
@@ -1287,8 +1493,7 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         
         if not code_version_to_modify:
             code_version_to_modify = code_file.init_from_codefile(
-                self,
-                code_file.file_path
+                self, code_file.file_path
             )
         
         return code_version_to_modify
@@ -1299,23 +1504,24 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         except:
             return code_file
     
-    def get_previous_iteration_with_eval(self) -> 'SelfDrivingTaskIteration':
-        return SelfDrivingTaskIteration.objects.filter(
-            self_driving_task=self.self_driving_task,
-            evaluation_json__isnull=False,
-            timestamp__lt=self.timestamp
-        ).order_by("-timestamp").first()
+    def get_previous_iteration_with_eval(self) -> "SelfDrivingTaskIteration":
+        return (
+            SelfDrivingTaskIteration.objects.filter(
+                self_driving_task=self.self_driving_task,
+                evaluation_json__isnull=False,
+                timestamp__lt=self.timestamp,
+            )
+            .order_by("-timestamp")
+            .first()
+        )
     
     def has_error(self) -> bool:
-        return any([
-            "error" in self.evaluation_json,
-            "test_errors" in self.evaluation_json
-        ])
+        return any(
+            ["error" in self.evaluation_json, "test_errors" in self.evaluation_json]
+        )
     
     def get_unit_test_errors(self) -> list[dict]:
-        return common.ensure_list(
-            common.get(self, ["evaluation_json", "test_errors"])
-        )
+        return common.ensure_list(common.get(self, ["evaluation_json", "test_errors"]))
     
     def get_error_llm_msg(self, label: str) -> list[LlmMessage]:
         d = {
@@ -1353,17 +1559,18 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 return "unknown", "unknown"
     
     def goal_achieved(self):
-        return common.parse_bool(common.get(self, ["evaluation_json", "goal_achieved"], False))
+        return common.parse_bool(
+            common.get(self, ["evaluation_json", "goal_achieved"], False)
+        )
     
     def get_llm_data(self, description, include_details=False):
         code_changes = []
         for cv in self.codeversion_set.all().order_by("created_at"):
             diff = cv.get_diff()
             if diff:
-                code_changes.append({
-                    "file_name": cv.code_file.file_path,
-                    "changes_diff": diff
-                })
+                code_changes.append(
+                    {"file_name": cv.code_file.file_path, "changes_diff": diff}
+                )
         
         d = {
             "description": description,
@@ -1375,36 +1582,49 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 "runtime_errors": self.evaluation_json.get("error"),
                 "test_errors": self.evaluation_json.get("test_errors"),
             },
-            "important_reminder": "Learn from the past.  If there are errors, make every attempt to not repeat them"
+            "important_reminder": "Learn from the past.  If there are errors, make every attempt to not repeat them",
         }
         
         if include_details:
-            d.update({
-                "pre_planning_routing": self.routing_json,
-                "pre_coding_planning": self.planning_json,
-                "code_changes": code_changes,
-                "sysout": self.log_content_execution or "N/A"
-            })
+            d.update(
+                {
+                    "pre_planning_routing": self.routing_json,
+                    "pre_coding_planning": self.planning_json,
+                    "code_changes": code_changes,
+                    "sysout": self.log_content_execution or "N/A",
+                }
+            )
         
         return d
     
     def get_all_code_versions(self):
         return {
-            cv.code_file_id: cv for cv in self.codeversion_set.all().order_by("created_at")
+            cv.code_file_id: cv
+            for cv in self.codeversion_set.all().order_by("created_at")
         }.values()
 
 
 class SelfDrivingTaskBestIteration(BaseErieIronModel):
     task = models.ForeignKey(SelfDrivingTask, on_delete=models.CASCADE, null=True)
-    iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True)
+    iteration = models.ForeignKey(
+        SelfDrivingTaskIteration, on_delete=models.CASCADE, null=True
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
 
 
 class RunningProcess(BaseErieIronModel):
-    task_execution = models.OneToOneField(TaskExecution, on_delete=models.CASCADE, related_name="process", null=True, blank=True)
+    task_execution = models.OneToOneField(
+        TaskExecution,
+        on_delete=models.CASCADE,
+        related_name="process",
+        null=True,
+        blank=True,
+    )
     process_id = models.IntegerField(null=True, blank=True)
     container_id = models.TextField(null=True, blank=True)  # For docker processes
-    execution_type = models.TextField(max_length=20, choices=[('local', 'Local'), ('docker', 'Docker')])
+    execution_type = models.TextField(
+        max_length=20, choices=[("local", "Local"), ("docker", "Docker")]
+    )
     log_file_path = models.TextField(null=True, blank=True)
     log_tail = models.TextField(blank=True, default="")  # Store last ~1000 chars of log
     started_at = models.DateTimeField(auto_now_add=True)
@@ -1415,10 +1635,12 @@ class RunningProcess(BaseErieIronModel):
         """Update the log_tail field with the latest log content"""
         if self.log_file_path and Path(self.log_file_path).exists():
             try:
-                with open(self.log_file_path, 'r') as f:
+                with open(self.log_file_path, "r") as f:
                     content = f.read()
-                    self.log_tail = content[-max_chars:] if len(content) > max_chars else content
-                    self.save(update_fields=['log_tail'])
+                    self.log_tail = (
+                        content[-max_chars:] if len(content) > max_chars else content
+                    )
+                    self.save(update_fields=["log_tail"])
             except Exception as e:
                 logging.warning(f"Failed to update log tail for process {self.id}: {e}")
     
@@ -1432,13 +1654,13 @@ class RunningProcess(BaseErieIronModel):
         
         self.is_running = False
         self.terminated_at = common.get_now()
-        self.save(update_fields=['is_running', 'terminated_at'])
+        self.save(update_fields=["is_running", "terminated_at"])
         
         try:
-            if self.execution_type == 'docker' and self.container_id:
+            if self.execution_type == "docker" and self.container_id:
                 # Kill docker container
-                subprocess.run(['docker', 'kill', self.container_id], check=True)
-            elif self.execution_type == 'local' and self.process_id:
+                subprocess.run(["docker", "kill", self.container_id], check=True)
+            elif self.execution_type == "local" and self.process_id:
                 # Kill local process
                 os.kill(self.process_id, signal.SIGTERM)
             
@@ -1451,7 +1673,9 @@ class RunningProcess(BaseErieIronModel):
 class LlmRequest(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.SET_NULL, null=True)
     initiative = models.ForeignKey(Initiative, on_delete=models.SET_NULL, null=True)
-    task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True)
+    task_iteration = models.ForeignKey(
+        SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True
+    )
     token_count = models.IntegerField()
     chat_millis = models.IntegerField(default=0)
     title = models.TextField(null=True, default="Unknown")
@@ -1470,13 +1694,13 @@ class LlmRequest(BaseErieIronModel):
             "verbosity": self.verbosity,
             "reasoning_effort": self.reasoning_effort,
             "input_messages": self.input_messages,
-            "llm_response": self.response
+            "llm_response": self.response,
         }
 
 
 class CodeFile(BaseErieIronModel):
     class Meta:
-        unique_together = ['business', 'file_path']
+        unique_together = ["business", "file_path"]
     
     ARCHITECTURE_FILE = "docs/architecture.md"
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
@@ -1512,24 +1736,30 @@ class CodeFile(BaseErieIronModel):
         else:
             return ""
     
-    def get_latest_version(self, self_driving_task: SelfDrivingTask = None) -> 'CodeVersion':
+    def get_latest_version(
+            self, self_driving_task: SelfDrivingTask = None
+    ) -> "CodeVersion":
         if self_driving_task:
-            code_version = self.codeversion_set.filter(
-                task_iteration__self_driving_task=self_driving_task
-            ).order_by("created_at").last()
+            code_version = (
+                self.codeversion_set.filter(
+                    task_iteration__self_driving_task=self_driving_task
+                )
+                .order_by("created_at")
+                .last()
+            )
             
             return code_version if code_version else self.get_latest_version()
         else:
             return self.codeversion_set.order_by("created_at").last()
     
     def get_version(
-            self,
-            iteration: SelfDrivingTaskIteration,
-            default_to_latest=False
-    ) -> Optional['CodeVersion']:
-        code_version = self.codeversion_set.filter(
-            task_iteration=iteration
-        ).order_by("created_at").last()
+            self, iteration: SelfDrivingTaskIteration, default_to_latest=False
+    ) -> Optional["CodeVersion"]:
+        code_version = (
+            self.codeversion_set.filter(task_iteration=iteration)
+            .order_by("created_at")
+            .last()
+        )
         
         if code_version:
             return code_version
@@ -1539,28 +1769,32 @@ class CodeFile(BaseErieIronModel):
         
         # Find the code version from the iteration that is closest without being after this iteration
         # This gets the "last known version" of this file at the time of the given iteration
-        closest_version = self.codeversion_set.filter(
-            task_iteration__self_driving_task=iteration.self_driving_task,
-            task_iteration__timestamp__lte=iteration.timestamp
-        ).order_by('-task_iteration__timestamp').first()
+        closest_version = (
+            self.codeversion_set.filter(
+                task_iteration__self_driving_task=iteration.self_driving_task,
+                task_iteration__timestamp__lte=iteration.timestamp,
+            )
+            .order_by("-task_iteration__timestamp")
+            .first()
+        )
         
         return closest_version
     
     @staticmethod
-    def get(business: Business, relative_path: Path) -> 'CodeFile':
+    def get(business: Business, relative_path: Path) -> "CodeFile":
         if str(relative_path).startswith("/"):
-            raise Exception(f"CodeFile needs to be a relative path.  got {relative_path}")
+            raise Exception(
+                f"CodeFile needs to be a relative path.  got {relative_path}"
+            )
         
         return CodeFile.objects.get_or_create(
-            business=business,
-            file_path=relative_path
+            business=business, file_path=relative_path
         )[0]
     
     @staticmethod
     def init_from_codefile(
-            task_iteration: SelfDrivingTaskIteration,
-            relative_file_path: Path
-    ) -> 'CodeVersion':
+            task_iteration: SelfDrivingTaskIteration, relative_file_path: Path
+    ) -> "CodeVersion":
         sandbox_path = Path(task_iteration.self_driving_task.sandbox_path)
         file_path = sandbox_path / relative_file_path
         file_path = common.assert_exists(file_path)
@@ -1571,14 +1805,14 @@ class CodeFile(BaseErieIronModel):
         return CodeFile.update_from_path(
             task_iteration,
             file_path,
-            code_instructions=f"initial code from existing file"
+            code_instructions=f"initial code from existing file",
         )
     
     def update(
             self,
             task_iteration: SelfDrivingTaskIteration,
             code: str,
-            code_instructions=None
+            code_instructions=None,
     ):
         if code is None:
             asdfasdf = 1
@@ -1587,7 +1821,7 @@ class CodeFile(BaseErieIronModel):
             task_iteration=task_iteration,
             code_file=self,
             code_instructions=code_instructions,
-            code=code
+            code=code,
         )
         
         file_path = Path(task_iteration.self_driving_task.sandbox_path) / self.file_path
@@ -1600,8 +1834,8 @@ class CodeFile(BaseErieIronModel):
     def update_from_path(
             task_iteration: SelfDrivingTaskIteration,
             abs_file_path: Path,
-            code_instructions=None
-    ) -> 'CodeVersion':
+            code_instructions=None,
+    ) -> "CodeVersion":
         abs_file_path = common.assert_exists(abs_file_path)
         
         self_driving_task = task_iteration.self_driving_task
@@ -1617,21 +1851,29 @@ class CodeFile(BaseErieIronModel):
             return code_file.update(
                 task_iteration=task_iteration,
                 code=code,
-                code_instructions=code_instructions
+                code_instructions=code_instructions,
             )
     
-    def get_version_for_iteration(self, iteration: SelfDrivingTaskIteration) -> 'CodeVersion':
-        return (self.get_version(iteration)
+    def get_version_for_iteration(
+            self, iteration: SelfDrivingTaskIteration
+    ) -> "CodeVersion":
+        return (
+                self.get_version(iteration)
                 or self.get_latest_version()
                 or self.init_from_codefile(
-                    iteration,
-                    common.assert_exists(Path(iteration.self_driving_task.sandbox_path) / self.file_path)
-                ))
+            iteration,
+            common.assert_exists(
+                Path(iteration.self_driving_task.sandbox_path) / self.file_path
+            ),
+        )
+        )
 
 
 class CodeVersion(BaseErieIronModel):
     code_file = models.ForeignKey(CodeFile, on_delete=models.CASCADE)
-    task_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.CASCADE)
+    task_iteration = models.ForeignKey(
+        SelfDrivingTaskIteration, on_delete=models.CASCADE
+    )
     code_instructions = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     code = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1639,9 +1881,10 @@ class CodeVersion(BaseErieIronModel):
     
     def has_diff(self) -> bool:
         previous_version = (
-            CodeVersion.objects
-            .filter(code_file=self.code_file, created_at__lt=self.created_at)
-            .order_by('-created_at')
+            CodeVersion.objects.filter(
+                code_file=self.code_file, created_at__lt=self.created_at
+            )
+            .order_by("-created_at")
             .first()
         )
         
@@ -1653,9 +1896,10 @@ class CodeVersion(BaseErieIronModel):
     def get_diff(self) -> str:
         try:
             previous_version = (
-                CodeVersion.objects
-                .filter(code_file=self.code_file, created_at__lt=self.created_at)
-                .order_by('-created_at')
+                CodeVersion.objects.filter(
+                    code_file=self.code_file, created_at__lt=self.created_at
+                )
+                .order_by("-created_at")
                 .first()
             )
             
@@ -1666,7 +1910,7 @@ class CodeVersion(BaseErieIronModel):
                 common.default_str(self.code).splitlines(),
                 fromfile=f"old_{file_name}",
                 tofile=f"new_{file_name}",
-                lineterm=""
+                lineterm="",
             )
             return "\n".join(diff_lines)
         except:
@@ -1703,7 +1947,7 @@ class CodeVersion(BaseErieIronModel):
                     name=method_data["name"],
                     parameters=method_data["parameters"],
                     code=method_data["code"],
-                    codebert_embedding=get_codebert_embedding(method_data["code"])
+                    codebert_embedding=get_codebert_embedding(method_data["code"]),
                 )
     
     def get_llm_message_data(self, include_diff=True) -> dict:
@@ -1714,7 +1958,7 @@ class CodeVersion(BaseErieIronModel):
         }
         
         if include_diff:
-            d['diff_against_previous_version'] = self.get_diff()
+            d["diff_against_previous_version"] = self.get_diff()
         
         return d
 
@@ -1729,7 +1973,9 @@ class CodeMethod(BaseErieIronModel):
 
 
 @receiver(post_save, sender=CodeVersion)
-def update_codebert_embedding_on_save(sender, instance, created, update_fields, **kwargs):
+def update_codebert_embedding_on_save(
+        sender, instance, created, update_fields, **kwargs
+):
     """
     Automatically update CodeBERT embeddings when a CodeVersion is created or when the code field changes.
     """
@@ -1743,7 +1989,7 @@ def update_codebert_embedding_on_save(sender, instance, created, update_fields, 
         # update_fields is None means all fields were potentially updated
         # In this case, we'll update the embedding to be safe
         instance.update_codebert_embedding()
-    elif 'code' in update_fields:
+    elif "code" in update_fields:
         # The code field was explicitly updated
         instance.update_codebert_embedding()
 
@@ -1754,16 +2000,19 @@ def kill_running_processes_on_iteration_delete(sender, instance, **kwargs):
     Kill any running processes associated with this iteration before deletion.
     """
     running_processes = RunningProcess.objects.filter(
-        task_execution__iteration=instance,
-        is_running=True
+        task_execution__iteration=instance, is_running=True
     )
     
     for process in running_processes:
         try:
             process.kill_process()
-            logging.info(f"Killed running process {process.id} for iteration {instance.id}")
+            logging.info(
+                f"Killed running process {process.id} for iteration {instance.id}"
+            )
         except Exception as e:
-            logging.warning(f"Failed to kill process {process.id} for iteration {instance.id}: {e}")
+            logging.warning(
+                f"Failed to kill process {process.id} for iteration {instance.id}: {e}"
+            )
 
 
 class AgentTombstone(BaseErieIronModel):
@@ -1774,7 +2023,9 @@ class AgentTombstone(BaseErieIronModel):
 
 
 class AgentLesson(BaseErieIronModel):
-    source_iteration = models.ForeignKey(SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True)
+    source_iteration = models.ForeignKey(
+        SelfDrivingTaskIteration, on_delete=models.SET_NULL, null=True
+    )
     agent_step = models.TextField()
     pattern = models.TextField()
     invalid_lesson = models.BooleanField(default=False, null=True)
@@ -1785,11 +2036,14 @@ class AgentLesson(BaseErieIronModel):
     timestamp = models.DateTimeField(auto_now_add=True)
     
     @staticmethod
-    def create_from_data(agent_step, data: dict, source_iteration=None) -> 'AgentLesson':
+    def create_from_data(
+            agent_step, data: dict, source_iteration=None
+    ) -> "AgentLesson":
         tag_text = common.safe_join(data.get("context_tags", []), delim=",")
         text = f'Step: {agent_step}. {data.get("pattern_description")}. {data.get("trigger")}. {data.get("lesson")}. Tags: {tag_text}'
         
         from erieiron_common.chat_engine import language_utils
+        
         embedding = language_utils.get_text_embedding(text)
         
         lesson = AgentLesson.objects.create(
@@ -1799,7 +2053,7 @@ class AgentLesson(BaseErieIronModel):
             trigger=data.get("trigger"),
             lesson=data.get("lesson"),
             context_tags=data.get("context_tags"),
-            embedding=embedding
+            embedding=embedding,
         )
     
     def get_llm_data(self):
@@ -1809,5 +2063,5 @@ class AgentLesson(BaseErieIronModel):
             "pattern": self.pattern,
             "trigger": self.trigger,
             "lesson": self.lesson,
-            "context_tags": self.context_tags
+            "context_tags": self.context_tags,
         }

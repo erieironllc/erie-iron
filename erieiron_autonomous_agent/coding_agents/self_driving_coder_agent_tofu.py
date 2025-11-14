@@ -4897,6 +4897,7 @@ def deploy_opentofu_stack(
         plan_result = opentofu_stack_manager.plan()
         plan_summary = plan_result.extra.get("plan_change_summary")
         
+        logging.info(f"applying tofu as {opentofu_stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()}")
         apply_result = opentofu_stack_manager.apply()
         outputs = apply_result.extra["outputs"]
         
@@ -5024,6 +5025,7 @@ def build_tfvars_payload(
     payload["DomainName"] = domain_name
     payload["DomainHostedZoneId"] = config.business.route53_hosted_zone_id
     payload["AlbCertificateArn"] = domain_manager.find_certificate_arn(
+        config.cloud_account,
         business.domain,
         config.env_type.get_aws_region()
     )
@@ -5037,7 +5039,7 @@ def build_tfvars_payload(
     if len(shared_vpc.private_subnet_ids) >= 2:
         payload["PrivateSubnet1Id"] = shared_vpc.private_subnet_ids[0]
         payload["PrivateSubnet2Id"] = shared_vpc.private_subnet_ids[1]
-    payload["SecurityGroupId"] = aws_utils.SHARED_RDS_SECURITY_GROUP_ID
+    payload["SecurityGroupId"] = shared_vpc.rds_security_group_id
     
     for lambda_data in lambda_datas or []:
         param_name = lambda_data.get('s3_key_param')
@@ -5102,8 +5104,9 @@ def get_admin_credentials(
     admin_secrets_key = f"{secrets_key}/appadmin"
     
     try:
-        response = aws_secrets_client.get_secret_value(SecretId=admin_secrets_key)
-        creds = json.loads(response)
+        creds = aws_secrets_client.get_secret_value(SecretId=admin_secrets_key)
+        if isinstance(creds, str):
+            creds = json.loads(creds)
     except Exception:
         creds = set_secret(aws_secrets_client, admin_secrets_key, {
             "AdminPassword": common.random_string(20)

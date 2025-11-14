@@ -6,13 +6,11 @@ import uuid
 from typing import Iterable, Optional
 
 import dns.resolver
-
-import boto3
 from botocore.exceptions import ClientError
 from django.db import transaction
 
 import settings
-from erieiron_autonomous_agent.models import Business
+from erieiron_autonomous_agent.models import Business, CloudAccount
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_common import aws_utils
 from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
@@ -36,8 +34,9 @@ def _manage_domain_core(business: Business):
         return
     
     if not business.domain:
+        cloud_account = business.get_default_cloud_account()
         chosen_domain = find_domain(business)
-        register_domain(chosen_domain)
+        register_domain(cloud_account, chosen_domain)
         
         business.domain = chosen_domain
         _persist_business_domain(business)
@@ -48,12 +47,14 @@ def _manage_domain_core(business: Business):
         _persist_business_domain(business)
     
     hosted_zone_id = _ensure_business_hosted_zone(business, normalized_domain)
-    ensure_wildcard_certificate(normalized_domain, hosted_zone_id)
+    ensure_wildcard_certificate(business.get_default_cloud_account(), normalized_domain, hosted_zone_id)
     add_dns_records(hosted_zone_id, normalized_domain)
 
 
-def register_domain(chosen_domain):
-    get_route53domains_client().register_domain(
+def register_domain(cloud_account, chosen_domain):
+    route53domains_client = aws_utils.get_aws_interface(cloud_account).client("route53domains")
+    
+    route53domains_client.register_domain(
         DomainName=chosen_domain,
         DurationInYears=1,
         AdminContact=settings.DOMAIN_CONTACT_INFO,
@@ -66,10 +67,10 @@ def register_domain(chosen_domain):
     )
 
 
-def ensure_wildcard_certificate(chosen_domain: str, hosted_zone_id: str | None = None) -> str | None:
+def ensure_wildcard_certificate(cloud_account: CloudAccount, chosen_domain: str, hosted_zone_id: str | None = None) -> str | None:
     """Guarantee an ACM certificate request exists and publish DNS validation records."""
-    region = aws_utils.get_aws_region()
-    acm = boto3.client("acm", region_name=region)
+    aws_interace = aws_utils.get_aws_interface(cloud_account)
+    acm = aws_interace.client("acm")
     
     root_domain = chosen_domain.rstrip('.')
     wildcard_domain = f"*.{root_domain}"
@@ -210,7 +211,6 @@ def add_dns_records(hosted_zone_id, chosen_domain):
         if not hosted_zone_id:
             raise Exception(f"hosted_zone_id is required")
     
-    
     def upsert_record(record):
         try:
             route53.change_resource_record_sets(
@@ -246,9 +246,10 @@ def add_dns_records(hosted_zone_id, chosen_domain):
     })
 
 
-def domain_available(domain: str) -> bool:
+def domain_available(cloud_account: CloudAccount, domain: str) -> bool:
     try:
-        resp = get_route53domains_client().check_domain_availability(
+        route53domains_client = aws_utils.get_aws_interface(cloud_account).client("route53domains")
+        resp = route53domains_client.check_domain_availability(
             DomainName=domain
         )
     except ClientError as exc:
@@ -259,10 +260,6 @@ def domain_available(domain: str) -> bool:
         logging.warning("Failed to check domain availability for %s: %s", domain, exc)
         return False
     return resp.get("Availability") == "AVAILABLE"
-
-
-def get_route53domains_client():
-    return boto3.client("route53domains", region_name="us-east-1")
 
 
 def find_domain(business: Business):
@@ -299,7 +296,7 @@ def find_domain(business: Business):
         ).json()
         
         for d in resp.get("suggested_domains"):
-            if domain_available(d):
+            if domain_available(business.get_default_cloud_account(), d):
                 return d
             else:
                 unavail_domains.append(d)
@@ -617,10 +614,10 @@ def find_hosted_zone_id(domain: str, route53_client=None) -> Optional[str]:
 
 
 def _wait_for_hosted_zone_visible(
-        route53_client, 
-        hosted_zone_id: str, 
-        domain: str, *, 
-        max_attempts: int = 10, 
+        route53_client,
+        hosted_zone_id: str,
+        domain: str, *,
+        max_attempts: int = 10,
         delay_seconds: float = 1.0
 ) -> None:
     normalized_id = _normalize_hosted_zone_id(hosted_zone_id)
@@ -711,11 +708,12 @@ def _persist_business_domain(business: Business) -> None:
         business.save()
 
 
-def find_certificate_arn(domain: str, region: str) -> Optional[str]:
+def find_certificate_arn(cloud_account: CloudAccount, domain: str, region: str) -> Optional[str]:
     if not domain:
         return None
     
-    acm_client = boto3.client("acm", region_name=region)
+    aws_interface = aws_utils.get_aws_interface(cloud_account)
+    acm_client = aws_interface.client("acm")
     paginator = acm_client.get_paginator("list_certificates")
     
     best_candidate: tuple[int, str] | None = None

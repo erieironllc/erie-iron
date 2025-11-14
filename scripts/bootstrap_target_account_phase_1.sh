@@ -33,6 +33,18 @@ print_error() {
     echo -e "${RED}[PHASE1-ERROR]${NC} $1" >&2
 }
 
+# Function to cleanup temporary files
+cleanup_temp_files() {
+    local target_account_id="$1"
+    print_info "Cleaning up temporary files..."
+    
+    # Remove OpenTofu variables and plan files
+    rm -f "/tmp/bootstrap_phase1_${target_account_id}.tfvars" 2>/dev/null
+    rm -f "/tmp/bootstrap_phase1_${target_account_id}.tfplan" 2>/dev/null
+    
+    # Note: Log files and output files are preserved for debugging and phase transitions
+}
+
 # Validate arguments
 if [[ $# -ne 6 ]]; then
     print_error "Usage: $0 <target_account_id> <business_name> <env_type> <external_id> <state_bucket_name> <state_key>"
@@ -45,6 +57,9 @@ ENV_TYPE="$3"
 EXTERNAL_ID="$4"
 STATE_BUCKET_NAME="$5"
 STATE_KEY="$6"
+
+# Setup cleanup trap for unexpected exits
+trap 'cleanup_temp_files "$TARGET_ACCOUNT_ID"' EXIT
 
 print_info "=== Phase 1: Target Account IAM Role Creation ==="
 print_info "Target Account ID: $TARGET_ACCOUNT_ID"
@@ -311,6 +326,7 @@ fi
 print_info "Extracting role information..."
 ROLE_ARN=$(tofu output -raw role_arn 2>> "$TOFU_LOG_FILE" || echo "")
 ACTUAL_EXTERNAL_ID=$(tofu output -raw external_id 2>> "$TOFU_LOG_FILE" || echo "")
+VPC_CONFIG=$(tofu output -json vpc_config 2>> "$TOFU_LOG_FILE" || echo "")
 
 # If outputs failed, try to construct from known values (for existing resources)
 if [[ -z "$ROLE_ARN" || -z "$ACTUAL_EXTERNAL_ID" ]]; then
@@ -326,6 +342,11 @@ if [[ -z "$ROLE_ARN" || -z "$ACTUAL_EXTERNAL_ID" ]]; then
         print_error "Failed to extract role information and role does not exist. Check log: $TOFU_LOG_FILE"
         exit 1
     fi
+fi
+
+if [[ -z "$VPC_CONFIG" || "$VPC_CONFIG" == "null" ]]; then
+    print_error "Failed to extract VPC configuration from OpenTofu outputs. Check log: $TOFU_LOG_FILE"
+    exit 1
 fi
 
 # Validate role creation - capture ALL output to log file
@@ -420,7 +441,8 @@ cat > "$PHASE1_OUTPUT_FILE" << EOF
   "role_arn": "$ROLE_ARN",
   "external_id": "$ACTUAL_EXTERNAL_ID",
   "service_token": "$SERVICE_TOKEN",
-  "ecr_repository_name": "$ECR_REPO_NAME"
+  "ecr_repository_name": "$ECR_REPO_NAME",
+  "vpc_config": $VPC_CONFIG
 }
 EOF
 
@@ -428,9 +450,8 @@ print_success "Phase 1 completed successfully!"
 print_info "Role information saved to: $PHASE1_OUTPUT_FILE"
 print_info "Ready for Phase 2 (Control Plane Integration)"
 
-# Cleanup temporary files
-rm -f "$TOFU_VARS_FILE"
-rm -f "/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan"
+# Cleanup temporary files using standardized function
+cleanup_temp_files "$TARGET_ACCOUNT_ID"
 
 # Show log file location for debugging (to stderr)
 print_info "OpenTofu logs saved to: $TOFU_LOG_FILE"

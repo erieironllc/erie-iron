@@ -52,10 +52,16 @@ BUSINESS_NAME=$(jq -r '.business_name' "$PHASE1_OUTPUT_FILE")
 ENV_TYPE=$(jq -r '.env_type' "$PHASE1_OUTPUT_FILE")
 ROLE_ARN=$(jq -r '.role_arn' "$PHASE1_OUTPUT_FILE")
 EXTERNAL_ID=$(jq -r '.external_id' "$PHASE1_OUTPUT_FILE")
+VPC_CONFIG_JSON=$(jq -c '.vpc_config // empty' "$PHASE1_OUTPUT_FILE")
 print_info "Target Account ID: $TARGET_ACCOUNT_ID"
 print_info "Business Name: $BUSINESS_NAME"
 print_info "Environment Type: $ENV_TYPE"
 print_info "Role ARN: $ROLE_ARN"
+if [[ -n "$VPC_CONFIG_JSON" ]]; then
+    print_info "VPC configuration found in Phase 1 output"
+else
+    print_warning "VPC configuration missing from Phase 1 output; CloudAccount metadata will not be updated"
+fi
 
 # Validate we're using control plane credentials
 CURRENT_ACCOUNT=$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null || echo "UNKNOWN")
@@ -94,13 +100,21 @@ print_info "Current AWS profile: ${AWS_PROFILE:-default}"
 
 # Explicitly pass AWS credentials environment to Django
 export AWS_PROFILE="$AWS_PROFILE"
-python manage.py bootstrap_target_account_phase2 \
-    "$TARGET_ACCOUNT_ID" \
-    "$BUSINESS_NAME" \
-    "$ENV_TYPE" \
-    --role-arn "$ROLE_ARN" \
-    --external-id "$EXTERNAL_ID" \
-    --force
+CMD=(
+    python manage.py bootstrap_target_account_phase2 \
+        "$TARGET_ACCOUNT_ID" \
+        "$BUSINESS_NAME" \
+        "$ENV_TYPE" \
+        --role-arn "$ROLE_ARN" \
+        --external-id "$EXTERNAL_ID" \
+        --force
+)
+
+if [[ -n "$VPC_CONFIG_JSON" ]]; then
+    CMD+=(--vpc-config "$VPC_CONFIG_JSON")
+fi
+
+"${CMD[@]}"
 
 if [[ $? -ne 0 ]]; then
     print_error "Django management command failed"

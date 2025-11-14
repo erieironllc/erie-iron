@@ -47,6 +47,8 @@
       "Sid": "SecretsManagerAccess",
       "Effect": "Allow",
       "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret",
         "secretsmanager:ListSecrets"
