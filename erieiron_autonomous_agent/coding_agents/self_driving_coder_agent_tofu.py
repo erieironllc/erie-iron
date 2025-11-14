@@ -50,7 +50,7 @@ from erieiron_autonomous_agent.models import (
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader
+from erieiron_common import common, aws_utils, domain_manager, opentofu_log_utils, aws_log_reader, ErieIronJSONEncoder, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
@@ -2754,118 +2754,6 @@ def get_previous_iteration_summaries_msg(config):
     )
 
 
-def _wait_for_ses_dkim_success(
-        config: SelfDriverConfig,
-        domain_name: str,
-        poll_interval_seconds: int = 30,
-        max_wait_minutes: int = 15
-) -> None:
-    """
-    Wait for SES DKIM verification to reach SUCCESS for the given domain.
-
-    This is robust to:
-    - Region mismatches (defaults to us-west-2 if the config has no region)
-    - SES API flavor mismatch (tries SESv2, then falls back to SESv1)
-    - Transient API errors
-
-    SUCCESS conditions (short-circuits the wait):
-    - SESv2: DkimAttributes.Status == 'SUCCESS'
-    - SESv1: GetIdentityDkimAttributes.DkimVerificationStatus == 'SUCCESS'
-             OR GetIdentityVerificationAttributes.VerificationStatus == 'SUCCESS' (fallback)
-
-    Raises AgentBlocked with context on timeout or terminal DKIM failure.
-    """
-    poll_interval_seconds = max(int(poll_interval_seconds or 5), 5)
-    region = (config.env_type.get_aws_region() or "us-west-2").strip()
-    
-    config.log(
-        f"Waiting for SES DKIM SUCCESS for {domain_name} in region {region} "
-        f"(poll={poll_interval_seconds}s, timeout={max_wait_minutes}m)."
-    )
-    
-    deadline = time.time() + (max_wait_minutes * 60)
-    last_status = None
-    
-    while True:
-        if time.time() > deadline:
-            raise AgentBlocked({
-                "desc": f"Timed out waiting for SES DKIM verification to reach SUCCESS for {domain_name}",
-                "dkim_status": last_status or "UNKNOWN",
-                "domain": domain_name,
-                "region": region
-            })
-        
-        status = None
-        signing_enabled = None
-        tokens = []
-        
-        # ---- Try SESv2 first
-        try:
-            sesv2 = config.aws_interface.client("sesv2")
-            v2_resp = sesv2.get_email_identity(EmailIdentity=domain_name)
-            dkim_attrs = v2_resp.get("DkimAttributes") or {}
-            status = (dkim_attrs.get("Status") or "").upper()
-            tokens = dkim_attrs.get("Tokens") or []
-            signing_enabled = dkim_attrs.get("SigningEnabled")
-        except Exception as exc:
-            # Normalize NotFound across possible client shapes; fall through to v1.
-            msg = str(exc)
-            if "NotFound" in msg or "NotFoundException" in msg:
-                status = "NOT_FOUND_V2"
-            else:
-                config.log(f"SESv2 get_email_identity error for {domain_name} in {region}: {exc}")
-        
-        # ---- Fall back to SESv1 if v2 could not confirm a SUCCESS
-        if status in (None, "", "NOT_FOUND_V2"):
-            try:
-                sesv1 = config.aws_interface.client("ses")
-                
-                # Identity existence and basic verification status
-                v1_ver = sesv1.get_identity_verification_attributes(
-                    Identities=[domain_name]
-                ).get("VerificationAttributes", {})
-                ver_status = ((v1_ver.get(domain_name) or {}).get("VerificationStatus") or "").upper()
-                
-                # DKIM-specific status and tokens
-                v1_dkim = sesv1.get_identity_dkim_attributes(
-                    Identities=[domain_name]
-                ).get("DkimAttributes", {})
-                dkim_attrs = (v1_dkim.get(domain_name) or {})
-                dkim_status = (dkim_attrs.get("DkimVerificationStatus") or "").upper()
-                tokens = dkim_attrs.get("DkimTokens") or tokens
-                
-                # Prefer DKIM status; fall back to verification status if DKIM is unavailable
-                status = dkim_status or ver_status or "NOT_FOUND"
-            except Exception as exc:
-                config.log(f"SESv1 fallback error for {domain_name} in {region}: {exc}")
-                # Keep status as-is; we'll loop again.
-        
-        # Log on status change
-        if status != last_status:
-            token_preview = ", ".join(tokens) if tokens else "<no tokens>"
-            config.log(
-                f"SES DKIM wait status for {domain_name}: {status or 'UNKNOWN'}; "
-                f"SigningEnabled={signing_enabled}; Tokens={token_preview}"
-            )
-            last_status = status
-        
-        # Terminal conditions
-        if status in {"SUCCESS", "VERIFIED"}:
-            config.log(f"SES DKIM verification succeeded for {domain_name} in {region}.")
-            return
-        
-        if status in {"FAILED", "TEMPORARY_FAILURE"}:
-            raise AgentBlocked({
-                "desc": f"SES DKIM verification {status.lower()} for {domain_name}",
-                "dkim_status": status,
-                "domain": domain_name,
-                "region": region,
-                "dkim_tokens": tokens
-            })
-        
-        time.sleep(poll_interval_seconds)
-
-
 def build_opentofu_plan_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
     iteration_to_modify = config.iteration_to_modify
     if not iteration_to_modify:
@@ -4823,33 +4711,6 @@ def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, Infrastru
     return stack_foundation, stack_application
 
 
-def check_ses_quota(config: SelfDriverConfig):
-    ses_client = config.aws_interface.client("ses")
-    quota = ses_client.get_send_quota()
-    sent = float(quota.get("SentLast24Hours", 0))
-    max_send = float(quota.get("Max24HourSend", 0))
-    if max_send > 0 and sent >= max_send:
-        raise AgentBlocked(
-            json.dumps({
-                "description": "SES send quota exhausted",
-                "sent_last_24_hours": sent,
-                "max_24_hour_send": max_send,
-                "hint": "Request SES production access or switch to SES simulator addresses to continue sending email."
-            }, indent=4)
-        )
-
-
-def manage_ses_domain_settings(
-        config: SelfDriverConfig,
-        tfvars_payload: Mapping[str, Any]
-):
-    domain_name = str(tfvars_payload.get("DomainName") or "").strip()
-    if not domain_name:
-        return
-    
-    check_ses_quota(config)
-    _wait_for_ses_dkim_success(config, domain_name)
-
 
 def deploy_opentofu_stack(
         config: SelfDriverConfig,
@@ -4902,7 +4763,10 @@ def deploy_opentofu_stack(
         outputs = apply_result.extra["outputs"]
         
         if opentofu_stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
-            manage_ses_domain_settings(config, tfvars_payload)
+            ses_manager.manage_ses_domain_settings(
+                config.cloud_account,
+                str(tfvars_payload.get("DomainName") or "").strip()
+            )
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
             stack_type=stack_type.value,
@@ -4918,12 +4782,57 @@ def deploy_opentofu_stack(
         
         return outputs
     except OpenTofuCommandError as exc:
+        # Enhanced error logging and context
+        logging.error(f"[DEPLOY_DEBUG] OpenTofu command failed during {opentofu_stack_manager.stage} stage")
+        logging.error(f"[DEPLOY_DEBUG] Command: {' '.join(exc.result.command)}")
+        logging.error(f"[DEPLOY_DEBUG] Exit code: {exc.result.returncode}")
+        logging.error(f"[DEPLOY_DEBUG] Stdout: {exc.result.stdout}")
+        logging.error(f"[DEPLOY_DEBUG] Stderr: {exc.result.stderr}")
+        
+        # Debug: Re-verify AWS credentials during error to help diagnose permission issues
+        try:
+            caller_identity = opentofu_stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()
+            logging.error(f"[DEPLOY_DEBUG] AWS credentials at time of error: {caller_identity}")
+        except Exception as cred_error:
+            logging.error(f"[DEPLOY_DEBUG] Failed to verify AWS credentials during error: {cred_error}")
+        
+        # Parse stderr for common permission error patterns and provide troubleshooting hints
+        troubleshooting_hints = []
+        stderr_lower = exc.result.stderr.lower() if exc.result.stderr else ""
+        
+        if "accessdenied" in stderr_lower or "unauthorized" in stderr_lower:
+            troubleshooting_hints.append("PERMISSION_ISSUE: Check IAM role permissions in target account")
+            
+            if "ssm" in stderr_lower and "describeparameters" in stderr_lower:
+                troubleshooting_hints.append("SSM_ISSUE: Add 'ssm:DescribeParameters' permission with global resource access")
+            
+            if "secretsmanager" in stderr_lower and "create" in stderr_lower:
+                troubleshooting_hints.append("SECRETS_ISSUE: Add comprehensive Secrets Manager permissions for RDS secret creation")
+            
+            if "route53" in stderr_lower and "hostedzone" in stderr_lower:
+                troubleshooting_hints.append("ROUTE53_ISSUE: Hosted zone may be in different account or need cross-account permissions")
+            
+            if "kms" in stderr_lower:
+                troubleshooting_hints.append("KMS_ISSUE: Add KMS permissions for encryption operations or check key policies")
+        
+        if "bucket" in stderr_lower and "exist" in stderr_lower:
+            troubleshooting_hints.append("S3_ISSUE: Check if S3 bucket exists and is accessible")
+        
+        if "dynamodb" in stderr_lower and "lock" in stderr_lower:
+            troubleshooting_hints.append("LOCK_ISSUE: Check DynamoDB table for OpenTofu state locking")
+        
         error_payload = {
             "message": str(exc),
             "stderr": exc.result.stderr,
             "stdout": exc.result.stdout,
             "command": " ".join(exc.result.command),
+            "stage": opentofu_stack_manager.stage,
+            "troubleshooting_hints": troubleshooting_hints,
         }
+        
+        # Enhanced error logging with troubleshooting hints
+        if troubleshooting_hints:
+            logging.error(f"[DEPLOY_DEBUG] Troubleshooting hints: {troubleshooting_hints}")
         
         opentofu_stack_manager.record(
             opentofu_stack_manager.stage,
@@ -5023,7 +4932,10 @@ def build_tfvars_payload(
         )
     
     payload["DomainName"] = domain_name
-    payload["DomainHostedZoneId"] = config.business.route53_hosted_zone_id
+    payload["DomainHostedZoneId"] = domain_manager.get_hosted_zone_id_by_domain(
+        config.cloud_account,
+        config.business.domain
+    )
     payload["AlbCertificateArn"] = domain_manager.find_certificate_arn(
         config.cloud_account,
         business.domain,

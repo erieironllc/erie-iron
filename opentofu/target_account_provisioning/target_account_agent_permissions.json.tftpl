@@ -34,12 +34,18 @@
       "Resource": "*"
     },
     {
-      "Sid": "EC2RDSDescribeAccess",
+      "Sid": "EC2FullAccess",
       "Effect": "Allow",
       "Action": [
-        "ec2:*",
-        "rds:Describe*",
-        "rds:ListTagsForResource"
+        "ec2:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RDSFullAccess",
+      "Effect": "Allow",
+      "Action": [
+        "rds:*"
       ],
       "Resource": "*"
     },
@@ -51,9 +57,21 @@
         "secretsmanager:PutSecretValue",
         "secretsmanager:GetSecretValue",
         "secretsmanager:DescribeSecret",
-        "secretsmanager:ListSecrets"
+        "secretsmanager:ListSecrets",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource"
       ],
       "Resource": "arn:aws:secretsmanager:${region}:${account_id}:secret:*"
+    },
+    {
+      "Sid": "SecretsManagerServiceAccess",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetRandomPassword"
+      ],
+      "Resource": "*"
     },
     {
       "Sid": "AppRunnerAndCognito",
@@ -126,11 +144,28 @@
       "Sid": "SSMParameterAccess",
       "Effect": "Allow",
       "Action": [
-        "ssm:*"
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:PutParameter",
+        "ssm:DeleteParameter",
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+        "ssm:ListTagsForResource"
       ],
       "Resource": [
-        "arn:aws:ssm:${region}:${account_id}:parameter/erieiron/*"
+        "arn:aws:ssm:${region}:${account_id}:parameter/erieiron/*",
+        "arn:aws:ssm:${region}:${account_id}:parameter/z57th/*",
+        "arn:aws:ssm:${region}:${account_id}:parameter/*"
       ]
+    },
+    {
+      "Sid": "SSMGlobalAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeParameters"
+      ],
+      "Resource": "*"
     },
     {
       "Sid": "Route53Access",
@@ -139,7 +174,42 @@
         "route53:ChangeResourceRecordSets",
         "route53:ListHostedZonesByName",
         "route53:ListHostedZones",
-        "route53:ListResourceRecordSets"
+        "route53:ListResourceRecordSets",
+        "route53:GetHostedZone",
+        "route53:CreateHostedZone",
+        "route53:DeleteHostedZone",
+        "route53:GetChange",
+        "route53:ListTagsForResource",
+        "route53:ChangeTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Route53CrossAccountAccess",
+      "Effect": "Allow",
+      "Action": [
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ChangeResourceRecordSets"
+      ],
+      "Resource": [
+        "arn:aws:route53:::hostedzone/*",
+        "arn:aws:route53:::change/*"
+      ]
+    },
+    {
+      "Sid": "SESFullAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ses:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3FullAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:*"
       ],
       "Resource": "*"
     },
@@ -152,6 +222,34 @@
         "acm:GetCertificate",
         "acm:RequestCertificate",
         "acm:AddTagsToCertificate"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KMSAccess",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateKey",
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListAliases",
+        "kms:ListKeys",
+        "kms:ListResourceTags",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:PutKeyPolicy",
+        "kms:EnableKeyRotation",
+        "kms:Decrypt",
+        "kms:Encrypt",
+        "kms:GenerateDataKey",
+        "kms:GenerateDataKeyWithoutPlaintext",
+        "kms:ReEncryptFrom",
+        "kms:ReEncryptTo",
+        "kms:CreateGrant",
+        "kms:ListGrants",
+        "kms:RetireGrant",
+        "kms:RevokeGrant"
       ],
       "Resource": "*"
     }

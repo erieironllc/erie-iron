@@ -29,6 +29,24 @@ def manage_domain(business: Business):
     _manage_domain_core(business)
 
 
+def get_hosted_zone_id_by_domain(cloud_account: CloudAccount, domain_name: str) -> str | None:
+    # Ensure domain name ends with a dot for exact match
+    search_domain = domain_name if domain_name.endswith('.') else f"{domain_name}."
+    
+    response = cloud_account.get_service_client(
+        "route53"
+    ).list_hosted_zones_by_name(
+        DNSName=search_domain
+    )
+    
+    for hosted_zone in response['HostedZones']:
+        if hosted_zone['Name'] == search_domain:
+            # Remove '/hostedzone/' prefix from ID
+            return hosted_zone['Id'].replace('/hostedzone/', '')
+    
+    return None
+
+
 def _manage_domain_core(business: Business):
     if not business.needs_domain:
         return
