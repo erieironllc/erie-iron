@@ -63,6 +63,79 @@ from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
 MIN_PODMAN_STORAGE_FREE_GB = 4.0
 
 
+def diagnose_target_group_health(config, target_group_arn: str) -> None:
+    """Diagnose current target group health status and provide detailed information"""
+    elbv2_client = aws_utils.client("elbv2")
+    
+    try:
+        response = elbv2_client.describe_target_health(TargetGroupArn=target_group_arn)
+        targets = response.get('TargetHealthDescriptions', [])
+        
+        config.log(f"🔍 Target Group Health Diagnosis for {target_group_arn}")
+        
+        if not targets:
+            config.log("❌ No targets registered in target group")
+            config.log("   → Check if ECS service is running and tasks have started")
+            config.log("   → Verify ECS service load balancer configuration")
+            return
+        
+        config.log(f"Found {len(targets)} registered targets:")
+        
+        for i, target in enumerate(targets, 1):
+            target_id = target['Target']['Id']
+            target_port = target['Target']['Port']
+            health = target['TargetHealth']
+            state = health['State']
+            reason = health.get('Reason', 'No reason provided')
+            description = health.get('Description', 'No description provided')
+            
+            status_icon = {
+                'healthy': '✅',
+                'unhealthy': '❌',
+                'initial': '🔄',
+                'unused': '⚪',
+                'draining': '⏳',
+                'unavailable': '🚫'
+            }.get(state.lower(), '❓')
+            
+            config.log(f"  {i}. Target {target_id}:{target_port}")
+            config.log(f"     Status: {status_icon} {state.upper()}")
+            config.log(f"     Reason: {reason}")
+            config.log(f"     Description: {description}")
+            
+            # Provide specific troubleshooting guidance
+            if state.lower() == 'unhealthy':
+                config.log(f"     🔧 Troubleshooting for {target_id}:")
+                if 'timeout' in reason.lower():
+                    config.log("       - Health check timing out - check if app responds on port 8006")
+                    config.log("       - Verify application binds to 0.0.0.0:8006 (not 127.0.0.1)")
+                elif 'connection refused' in reason.lower():
+                    config.log("       - Connection refused - check if service is running on port 8006")
+                    config.log("       - Verify security group allows traffic on port 8006")
+                elif 'target not found' in reason.lower():
+                    config.log("       - Target not found - check ECS task networking")
+                    config.log("       - Verify ENI and private IP assignment")
+                else:
+                    config.log(f"       - HTTP health check failed - check /health/ endpoint")
+                    config.log(f"       - Verify endpoint returns 200-399 status codes")
+            elif state.lower() == 'initial':
+                config.log("     ℹ️  Target is in initial state (normal for new deployments)")
+        
+        healthy_count = sum(1 for t in targets if t['TargetHealth']['State'] == 'healthy')
+        config.log(f"📊 Health Summary: {healthy_count}/{len(targets)} targets healthy")
+        
+        if healthy_count == 0:
+            config.log("⚠️  No healthy targets detected - investigating common issues:")
+            config.log("   1. Check ECS task logs for startup errors")
+            config.log("   2. Verify /health/ endpoint works: curl http://<task-ip>:8006/health/")
+            config.log("   3. Check security group ingress rules for port 8006")
+            config.log("   4. Verify application binds to 0.0.0.0:8006")
+    
+    except Exception as e:
+        config.log(f"❌ Error diagnosing target group health: {e}")
+        raise
+
+
 def execute(
         task_id: str,
         one_off_action: SdaInitialAction = None
@@ -1354,14 +1427,70 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     return self_driving_task
 
 
-def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
+def ensure_lb_alias_record(
+        config: SelfDriverConfig,
+        app_stack: InfrastructureStack,
+        app_outputs
+):
+    aws_interface = config.aws_interface
+    
     if EnvironmentType.PRODUCTION.eq(config.env_type):
         domain_name = config.business.domain
     else:
         domain_name = config.initiative.domain
     
-    hosted_zone_id = config.domain_manager.find_hosted_zone_id(config.business.domain)
+    # Post-deployment validation to ensure ECS tasks are accessible via ALB
+    security_group_id = app_stack.stack_vars["SecurityGroupId"]
+    vpc_cidr = app_stack.stack_vars["VpcCidr"]
+    target_group_arn = app_outputs["TargetGroupArn"]
+    cluster_name = app_outputs["EcsClusterName"]
+    service_name = f"{app_stack.stack_namespace_token}-service"
     
+    config.log("Starting post-deployment validation...")
+    
+    # Validate security group rules allow ALB to reach ECS tasks
+    aws_interface.validate_security_group_rules(
+        security_group_id,
+        vpc_cidr
+    )
+    config.log("Security group validation passed")
+    
+    print(textwrap.dedent(
+        f"""
+        CLOUDWATCH
+
+
+
+        {aws_log_reader.get_cloudwatch_content(
+            config.all_stack_tokens,
+            config.start_time
+        )}
+
+
+
+         """
+    ))
+    
+    # Wait for ECS service to be stable
+    aws_interface.wait_for_ecs_service_stable(
+        cluster_name,
+        service_name,
+        timeout_minutes=10
+    )
+    config.log("ECS service stability validation passed")
+    
+    # Diagnose current target group health before waiting
+    diagnose_target_group_health(config, target_group_arn)
+    
+    # Wait for targets to be healthy in target group
+    aws_interface.wait_for_target_group_healthy(
+        target_group_arn,
+        timeout_minutes=10
+    )
+    config.log("Target group health validation passed")
+    config.log("✅ All post-deployment validations passed successfully")
+    
+    hosted_zone_id = config.domain_manager.find_hosted_zone_id(config.business.domain)
     if not domain_name or not hosted_zone_id:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
     
@@ -1370,7 +1499,7 @@ def ensure_lb_alias_record(config: SelfDriverConfig) -> None:
         config.log(f"No Application Load Balancer found in stacks {config.get_stack_names()}; skipping DNS alias update")
         return
     
-    elbv2_client = config.aws_interface.client("elbv2")
+    elbv2_client = aws_interface.client("elbv2")
     try:
         lb_resp = elbv2_client.describe_load_balancers(LoadBalancerArns=[load_balancer_arn])
         load_balancers = lb_resp.get("LoadBalancers", []) or []
@@ -2165,6 +2294,7 @@ def deploy_iteration(
         lambda_datas: list
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
+    stack_foundation, stack_application = get_stacks(config)
     task = config.task
     
     validate_infrastructure(config)
@@ -2203,7 +2333,11 @@ def deploy_iteration(
         previous_stack_outputs=foundation_outputs
     )
     
-    ensure_lb_alias_record(config)
+    ensure_lb_alias_record(
+        config,
+        stack_application,
+        app_outputs
+    )
 
 
 def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outputs: dict):
@@ -4951,6 +5085,7 @@ def build_tfvars_payload(
         payload["PrivateSubnet1Id"] = shared_vpc.private_subnet_ids[0]
         payload["PrivateSubnet2Id"] = shared_vpc.private_subnet_ids[1]
     payload["SecurityGroupId"] = shared_vpc.rds_security_group_id
+    payload["CreateIngressRule"] = True  # Explicitly ensure ALB can reach ECS tasks
     
     for lambda_data in lambda_datas or []:
         param_name = lambda_data.get('s3_key_param')

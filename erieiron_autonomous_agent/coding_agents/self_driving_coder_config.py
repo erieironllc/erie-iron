@@ -65,6 +65,7 @@ class SelfDriverConfig:
     def __init__(self, self_driving_task: SelfDrivingTask, one_off_action=None):
         self._finalizer = weakref.finalize(self, self.close_log)
         self.debug = True
+        self.start_time = common.get_now()
         self.one_off_action = True
         self.self_driving_task: SelfDrivingTask = self_driving_task
         self.task: Task = self_driving_task.task

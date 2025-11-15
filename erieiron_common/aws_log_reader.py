@@ -179,7 +179,7 @@ def get_cloudwatch_content(stack_tokens, deployment_start_datetime):
         "errors": []
     }
     
-    effective_end_time = to_utc(time.time())
+    effective_end_time = to_utc(common.get_now())
     start_epoch = max(0, int(to_utc(deployment_start_datetime).timestamp()) - 60)
     end_epoch = int(effective_end_time.timestamp()) + 60
     data["time_window"] = {
@@ -207,6 +207,7 @@ def get_cloudwatch_content(stack_tokens, deployment_start_datetime):
             data["alb_error_logs"] = alb_error_logs
     
     except Exception as stack_log_ex:
+        logging.exception(stack_log_ex)
         data["errors"].append(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}")
     
     return data
@@ -486,6 +487,9 @@ def extract_cloudwatch_stack_logs_for_window(
     window_start_dt = datetime.fromtimestamp(int(start_time), tz=timezone.utc)
     
     log_groups = get_log_groups(stack_tokens)
+    if not log_groups:
+        logging.info(f"No matching log groups found for stack tokens {stack_tokens}")
+        return ""
     
     # Logs Insights query over the time window - no RequestId filter, just the window
     query_str = (
