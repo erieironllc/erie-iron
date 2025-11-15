@@ -66,8 +66,10 @@ urlpatterns = [
     path("lesson/toggle/<uuid:lesson_id>", views.action_toggle_lesson_validity, name="action_toggle_lesson_validity"),
     
     path("pubsub/message/<uuid:message_id>", views.view_pubsub_message_details, name="view_pubsub_message_details"),
+    path("message-processor/<str:instance_id>", views.view_message_processor_details, name="view_message_processor_details"),
     
     path("_pubsub/fetch_messages", views.fetch_pubsub_messages, name="fetch_pubsub_messages"),
+    path("_message_processors/fetch", views.fetch_message_processors, name="fetch_message_processors"),
     path("_llmrequests/fetch/<str:scope>/<str:entity_id>", views.fetch_llm_requests, name="fetch_llm_requests"),
     path("_pubsub/delete/<uuid:message_id>", views.action_delete_pubsub_message, name="action_delete_pubsub_message"),
     path("_pubsub/retry/<uuid:message_id>", views.action_retry_pubsub_message, name="action_retry_pubsub_message"),

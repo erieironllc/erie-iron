@@ -57,7 +57,13 @@
                 {% if message.handler_instance_id %}
                     <div class="pubsub-details-card__item">
                         <span class="pubsub-details-card__label">Handler Instance</span>
-                        <span class="pubsub-details-card__value"><code>{{ message.handler_instance_id }}</code></span>
+                        <span class="pubsub-details-card__value">
+                            <code>{{ message.handler_instance_id }}</code>
+                            <a href="{% url 'view_message_processor_details' message.handler_instance_id %}" 
+                               class="btn btn-outline-primary btn-sm ms-2">
+                                View Processor
+                            </a>
+                        </span>
                     </div>
                 {% endif %}
                 {% if message.error_message %}

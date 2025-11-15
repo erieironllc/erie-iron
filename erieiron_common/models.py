@@ -652,7 +652,7 @@ class PubSubHanderInstance(BaseErieIronModel):
     gpu_percent = models.IntegerField(null=True, default=0)
     compute_device = models.TextField(null=True, choices=ComputeDevice.choices())
     first_heard_from = models.DateTimeField(null=True, auto_now_add=True)
-    last_heard_from = models.DateTimeField(null=True, auto_now_add=True)
+    last_heard_from = models.DateTimeField(null=True)
     
     job_limits_def = models.TextField(null=True)
     desired_process_count = models.IntegerField(null=True, default=0)
@@ -887,7 +887,7 @@ class PubSubHanderInstanceProcess(BaseErieIronModel):
     cmd = models.TextField(null=True)
     exclusive_priority = models.TextField(null=True, choices=PubSubMessagePriority.choices(), default=None)
     first_heard_from = models.DateTimeField(null=False, auto_now_add=True)
-    last_heard_from = models.DateTimeField(null=False, auto_now_add=True)
+    last_heard_from = models.DateTimeField(null=False)
     current_threads = models.JSONField(null=False, blank=False, default=dict, encoder=ErieIronJSONEncoder)
     lock = threading.Lock()
     

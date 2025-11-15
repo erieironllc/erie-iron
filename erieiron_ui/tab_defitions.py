@@ -134,6 +134,13 @@ PORTFOLIO_TAB_DEFINITIONS = [
         "availability_fn": views._portfolio_tab_available_pubsub_messages,
         "context_fn": views._portfolio_tab_context_pubsub_messages,
     },
+    {
+        "slug": "message-processors",
+        "label": "Message Processors",
+        "template": "portfolio/tabs/message_processors.html",
+        "availability_fn": views._portfolio_tab_available_message_processors,
+        "context_fn": views._portfolio_tab_context_message_processors,
+    },
     # {
     #     "slug": "tools",
     #     "label": "Tools",

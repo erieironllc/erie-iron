@@ -1,0 +1,46 @@
+{% load erieiron_common_tags %}
+
+{% for instance_data in handler_instances %}
+    <tr>
+        <td>
+            <code>{{ instance_data.instance.id }}</code>
+        </td>
+        <td>
+            <span class="badge {% if instance_data.instance.instance_status == 'AVAILABLE' %}bg-success{% elif instance_data.instance.instance_status == 'BUSY' %}bg-warning{% else %}bg-secondary{% endif %}">
+                {{ instance_data.instance.instance_status }}
+            </span>
+        </td>
+        <td>{{ instance_data.instance.env }}</td>
+        <td>
+            <span class="badge bg-primary">{{ instance_data.active_processes }}</span>
+            <span class="text-muted">/ {{ instance_data.total_processes }}</span>
+        </td>
+        <td>
+            <div class="d-flex align-items-center">
+                <div class="progress me-2" style="height: 6px; width: 60px;">
+                    <div class="progress-bar {% if instance_data.instance.mem_percent > 80 %}bg-danger{% elif instance_data.instance.mem_percent > 60 %}bg-warning{% else %}bg-success{% endif %}" 
+                         style="width: {{ instance_data.instance.mem_percent }}%"></div>
+                </div>
+                <small class="text-muted">{{ instance_data.instance.mem_percent }}%</small>
+            </div>
+        </td>
+        <td>
+            <div class="d-flex align-items-center">
+                <div class="progress me-2" style="height: 6px; width: 60px;">
+                    <div class="progress-bar {% if instance_data.instance.cpu_percent > 80 %}bg-danger{% elif instance_data.instance.cpu_percent > 60 %}bg-warning{% else %}bg-success{% endif %}" 
+                         style="width: {{ instance_data.instance.cpu_percent }}%"></div>
+                </div>
+                <small class="text-muted">{{ instance_data.instance.cpu_percent }}%</small>
+            </div>
+        </td>
+        <td>
+            <small class="text-muted">{{ instance_data.instance.last_heard_from|date:"M j, H:i" }}</small>
+        </td>
+        <td>
+            <a href="{% url 'view_message_processor_details' instance_data.instance.id %}" 
+               class="btn btn-outline-primary btn-sm">
+                View Details
+            </a>
+        </td>
+    </tr>
+{% endfor %}

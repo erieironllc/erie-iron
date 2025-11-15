@@ -50,7 +50,7 @@ from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, Busine
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import PubSubMessage, Person
+from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance, PubSubHanderInstanceProcess
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
 logger = logging.getLogger(__name__)
@@ -400,6 +400,78 @@ def _portfolio_tab_context_pubsub_messages(_: Business, request: HttpRequest | N
         "default_hidden_message_type_labels": default_hidden_message_type_labels,
         "default_hidden_message_type_values": hidden_types_in_data,
     }
+
+
+def _portfolio_tab_available_message_processors(_: Business) -> bool:
+    return True
+
+
+def _portfolio_tab_context_message_processors(_: Business) -> dict:
+    page_size = 20
+    handler_instances_qs = PubSubHanderInstance.objects.select_related('environment').order_by('-last_heard_from')
+    
+    # Get first page of instances
+    handler_instances = list(handler_instances_qs[:page_size])
+    has_more = handler_instances_qs.count() > page_size
+    
+    result_data = []
+    for instance in handler_instances:
+        process_count = instance.pubsubhanderinstanceprocess_set.count()
+        active_process_count = instance.pubsubhanderinstanceprocess_set.filter(
+            process_status__in=['AVAILABLE', 'BUSY']
+        ).count()
+        
+        result_data.append({
+            'instance': instance,
+            'total_processes': process_count,
+            'active_processes': active_process_count
+        })
+    
+    return {
+        'handler_instances': result_data,
+        'total_instances': handler_instances_qs.count(),
+        'has_more': has_more,
+    }
+
+
+def view_message_processor_details(request, instance_id):
+    try:
+        instance = PubSubHanderInstance.objects.select_related('environment').get(id=instance_id)
+    except PubSubHanderInstance.DoesNotExist:
+        raise Http404("Message processor not found")
+    
+    processes = instance.pubsubhanderinstanceprocess_set.all().order_by('-last_heard_from')
+    
+    process_data = []
+    for process in processes:
+        inprogress_messages = process.get_inprogress_messages()[:10]
+        thread_count = len(process.current_threads) if process.current_threads else 0
+        
+        process_data.append({
+            'process': process,
+            'inprogress_messages': inprogress_messages,
+            'thread_count': thread_count
+        })
+    
+    return send_response(
+        request,
+        "portfolio/portfolio_base.html",
+        {
+            "business": Business.get_erie_iron_business(),
+            "tabs": _build_portfolio_tabs(Business.get_erie_iron_business()),
+            "instance": instance,
+            "processes": process_data,
+            "total_processes": len(processes),
+            "active_processes": len([p for p in processes if p.process_status in ['AVAILABLE', 'BUSY']]),
+            "tab_template": "message_processor_details_partial.html",
+            "redirect_target": reverse('view_portfolio_tab', args=['message-processors']),
+        },
+        breadcrumbs=[
+            (reverse('view_portfolio'), Business.get_erie_iron_business().name),
+            (reverse('view_portfolio_tab', args=['message-processors']), 'Message Processors'),
+            (None, f'Processor {str(instance_id)[:8]}'),
+        ]
+    )
 
 
 def _portfolio_tab_available_logout(_: Business) -> bool:
@@ -5099,6 +5171,33 @@ def fetch_pubsub_messages(request):
     }
     
     return render(request, "pubsub/message_list_partial.html", context)
+
+
+def fetch_message_processors(request):
+    page_size = int(request.POST.get('page_size', 20))
+    page_number = int(request.POST.get('page_number', 0))
+    
+    offset = page_number * page_size
+    handler_instances = PubSubHanderInstance.objects.select_related('environment').order_by('-last_heard_from')[offset:offset + page_size]
+    
+    result_data = []
+    for instance in handler_instances:
+        process_count = instance.pubsubhanderinstanceprocess_set.count()
+        active_process_count = instance.pubsubhanderinstanceprocess_set.filter(
+            process_status__in=['AVAILABLE', 'BUSY']
+        ).count()
+        
+        result_data.append({
+            'instance': instance,
+            'total_processes': process_count,
+            'active_processes': active_process_count
+        })
+    
+    context = {
+        'handler_instances': result_data,
+    }
+    
+    return render(request, "portfolio/message_processors_partial.html", context)
 
 
 @require_POST

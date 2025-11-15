@@ -1,0 +1,241 @@
+{% load erieiron_common_tags %}
+
+<div class="card mb-4">
+    <div class="card-header">
+        <div class="row align-items-center">
+            <div class="col">
+                <h5 class="mb-0">
+                    <strong>{{ instance.id }}</strong>
+                    <span class="badge {% if instance.instance_status == 'AVAILABLE' %}bg-success{% elif instance.instance_status == 'BUSY' %}bg-warning{% else %}bg-secondary{% endif %} ms-2">
+                        {{ instance.instance_status }}
+                    </span>
+                </h5>
+                <small class="text-muted">
+                    Environment: {{ instance.env }} |
+                    {{ active_processes }}/{{ total_processes }} active processes
+                </small>
+            </div>
+            <div class="col-auto">
+                <small class="text-muted">
+                    Last heard: {{ instance.last_heard_from|date:"M j, H:i:s" }}
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <!-- System Performance Metrics -->
+        <div class="mb-4">
+            <h6 class="mb-3 text-muted">System Performance</h6>
+            <div class="row g-3">
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-2 d-flex justify-content-between">
+                                <div>Memory Usage</div>
+                                <div>{{ instance.mem_percent }}%</div>
+                            </div>
+                            <div class="progress mb-2" style="height: 10px;">
+                                <div class="progress-bar {% if instance.mem_percent > 80 %}bg-danger{% elif instance.mem_percent > 60 %}bg-warning{% else %}bg-success{% endif %}" 
+                                     role="progressbar" 
+                                     style="width: {{ instance.mem_percent }}%">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-2 d-flex justify-content-between">
+                                <div>CPU Usage</div>
+                                <div>{{ instance.cpu_percent }}%</div>
+                            </div>
+                            <div class="progress mb-2" style="height: 10px;">
+                                <div class="progress-bar {% if instance.cpu_percent > 80 %}bg-danger{% elif instance.cpu_percent > 60 %}bg-warning{% else %}bg-success{% endif %}" 
+                                     role="progressbar" 
+                                     style="width: {{ instance.cpu_percent }}%">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-2 d-flex justify-content-between">
+                                <div>DB Connections</div>
+                                <div>{{ instance.used_db_connections }}/{{ instance.max_db_connections }}</div>
+                            </div>
+                            <div class="progress mb-2" style="height: 10px;">
+                                {% widthratio instance.used_db_connections instance.max_db_connections 100 as db_percent %}
+                                <div class="progress-bar {% if db_percent > 80 %}bg-danger{% elif db_percent > 60 %}bg-warning{% else %}bg-info{% endif %}" 
+                                     role="progressbar" 
+                                     style="width: {{ db_percent }}%">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% if instance.gpu_percent is not None %}
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-2 d-flex justify-content-between">
+                                <div>GPU Usage</div>
+                                <div>{{ instance.gpu_percent }}%</div>
+                            </div>
+                            <div class="progress mb-2" style="height: 10px;">
+                                <div class="progress-bar {% if instance.gpu_percent > 80 %}bg-danger{% elif instance.gpu_percent > 60 %}bg-warning{% else %}bg-primary{% endif %}" 
+                                     role="progressbar" 
+                                     style="width: {{ instance.gpu_percent }}%">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- System Status & Configuration -->
+        <div class="mb-4">
+            <h6 class="mb-3 text-muted">Configuration & Status</h6>
+            <div class="row g-3">
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-1">System Capacity</div>
+                            <div>
+                                {% if instance.system_capacity %}
+                                    <span class="badge fs-6 {% if instance.system_capacity == 'HIGH' %}bg-success{% elif instance.system_capacity == 'MEDIUM' %}bg-warning{% else %}bg-danger{% endif %}">
+                                        {{ instance.system_capacity }}
+                                    </span>
+                                {% else %}
+                                    <span class="text-secondary">Unknown</span>
+                                {% endif %}
+                            </div>
+                            {% if instance.system_capacity_explanation %}
+                                <div class="small text-secondary mt-1">{{ instance.system_capacity_explanation|truncatechars:40 }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-1">Desired Process Count</div>
+                            <div class="text-secondary">{{ instance.desired_process_count|default:"Not set" }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-1">Threads Per Process</div>
+                            <div class="text-secondary">{{ instance.threads_per_process|default:"Not set" }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% if instance.compute_device %}
+                <div class="col-lg-3 col-md-6">
+                    <div class="card shadow-sm">
+                        <div class="card-body">
+                            <div class="small text-secondary mb-1">Compute Device</div>
+                            <div class="text-secondary">{{ instance.compute_device }}</div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Processes Table -->
+        <h6 class="mt-4 mb-3">Processes ({{ total_processes }})</h6>
+        {% if processes %}
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>PID</th>
+                            <th>Status</th>
+                            <th>Priority</th>
+                            <th>Threads</th>
+                            <th>In-Progress Messages</th>
+                            <th>First Heard</th>
+                            <th>Last Heard</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for process_data in processes %}
+                            <tr>
+                                <td><code>{{ process_data.process.pid }}</code></td>
+                                <td>
+                                    <span class="badge {% if process_data.process.process_status == 'AVAILABLE' %}bg-success{% elif process_data.process.process_status == 'BUSY' %}bg-warning{% else %}bg-secondary{% endif %}">
+                                        {{ process_data.process.process_status }}
+                                    </span>
+                                </td>
+                                <td>
+                                    {% if process_data.process.exclusive_priority %}
+                                        <span class="badge bg-info">{{ process_data.process.exclusive_priority }}</span>
+                                    {% else %}
+                                        <span class="text-muted">Any</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge bg-secondary">{{ process_data.thread_count }}</span>
+                                </td>
+                                <td>
+                                    {% if process_data.inprogress_messages %}
+                                        <button class="btn btn-link btn-sm p-0" 
+                                                data-bs-toggle="collapse" 
+                                                data-bs-target="#messages-{{ process_data.process.pid }}"
+                                                aria-expanded="false">
+                                            {{ process_data.inprogress_messages|length }} message{{ process_data.inprogress_messages|length|pluralize }}
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">None</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small class="text-muted">{{ process_data.process.first_heard_from|date:"M j, H:i:s" }}</small>
+                                </td>
+                                <td>
+                                    <small class="text-muted">{{ process_data.process.last_heard_from|date:"M j, H:i:s" }}</small>
+                                </td>
+                            </tr>
+                            {% if process_data.inprogress_messages %}
+                                <tr class="collapse" id="messages-{{ process_data.process.pid }}">
+                                    <td colspan="7">
+                                        <div class="ms-3 py-2">
+                                            <strong class="small">In-Progress Messages:</strong>
+                                            <div class="mt-2">
+                                                {% for message in process_data.inprogress_messages %}
+                                                    <div class="card card-body bg-light mb-2 small">
+                                                        <div class="d-flex justify-content-between align-items-start">
+                                                            <div>
+                                                                <span class="badge bg-primary me-2">{{ message.status }}</span>
+                                                                <strong>{{ message.message_type|default:"Unknown type" }}</strong>
+                                                            </div>
+                                                            <small class="text-muted">{{ message.created_at|date:"M j, H:i:s" }}</small>
+                                                        </div>
+                                                        {% if message.message_data %}
+                                                            <div class="text-muted mt-1" style="font-size: 0.8rem;">
+                                                                {{ message.message_data|truncatechars:200 }}
+                                                            </div>
+                                                        {% endif %}
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="text-muted">No processes found for this handler instance.</p>
+        {% endif %}
+    </div>
+</div>
