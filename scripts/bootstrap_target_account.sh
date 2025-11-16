@@ -5,6 +5,9 @@ set -euo pipefail
 
 # Target Account Bootstrap Script
 # Sets up cross-account IAM role and permissions for Erie Iron self-driving coder agent
+# 
+# Options:
+#   --reset    Destroy existing OpenTofu infrastructure and recreate (fixes state drift)
 
 # Color codes for output
 RED='\033[0;31m'
@@ -13,7 +16,17 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-CONTROL_PLANE_PROFILE="erieiron"
+# Automatically detect control plane profile from current AWS session
+if [[ -n "$AWS_PROFILE" ]]; then
+    # Use currently set AWS profile
+    CONTROL_PLANE_PROFILE="$AWS_PROFILE"
+elif [[ -n "$AWS_DEFAULT_PROFILE" ]]; then
+    # Use AWS default profile environment variable
+    CONTROL_PLANE_PROFILE="$AWS_DEFAULT_PROFILE"
+else
+    # Fallback to original default
+    CONTROL_PLANE_PROFILE="erieiron"
+fi
 
 # Function to print colored output
 print_info() {
@@ -32,9 +45,28 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Parse flags
+RESET_FLAG=false
+FORCE_CLEAN=false
+
+if [[ $# -ge 1 && "$1" == "--reset" ]]; then
+    RESET_FLAG=true
+    shift  # Remove --reset from arguments
+    
+    # Check for additional --force-clean flag
+    if [[ $# -ge 1 && "$1" == "--force-clean" ]]; then
+        FORCE_CLEAN=true
+        shift  # Remove --force-clean from arguments
+    fi
+fi
+
 # Validate arguments
 if [[ $# -ne 2 ]]; then
-    print_error "Usage: $0 <profile> <env_type>"
+    print_error "Usage: $0 [--reset [--force-clean]] <profile> <env_type>"
+    echo ""
+    echo "Options:"
+    echo "  --reset          - Destroy existing OpenTofu state and recreate (fixes state conflicts)"
+    echo "  --force-clean    - Skip hanging destroy operations and force clean state (use with --reset)"
     echo ""
     echo "Parameters:"
     echo "  profile          - AWS credentials profile for target account authentication"
@@ -42,6 +74,7 @@ if [[ $# -ne 2 ]]; then
     echo ""
     echo "Example:"
     echo "  $0 curators-sso dev"
+    echo "  $0 --reset curators-sso dev"
     echo ""
     echo "Note: Business name and target account ID will be automatically inferred from AWS"
     echo "      Business name: Retrieved from AWS Organizations API (fallback: profile name parsing)"
@@ -146,6 +179,311 @@ print_info "Generating external ID for secure role assumption..."
 EXTERNAL_ID=$(python -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)))")
 print_info "External ID: $EXTERNAL_ID"
 
+# Function to reset OpenTofu infrastructure
+reset_opentofu_infrastructure() {
+    local profile="$1"
+    local target_account_id="$2"
+    local env_type="$3"
+    local business_name="$4"
+    
+    print_warning "=== RESET MODE ACTIVATED ==="
+    print_warning "This will DESTROY and RECREATE all infrastructure in $env_type environment"
+    print_warning "Target Account: $target_account_id"
+    if [[ "$FORCE_CLEAN" == "true" ]]; then
+        print_warning "FORCE CLEAN: Will skip hanging destroy operations and force clean state"
+    fi
+    echo ""
+    
+    # Single confirmation for reset (all environments)
+    read -p "Are you sure you want to reset? (yes/no): " confirmation
+    if [[ "$confirmation" != "yes" ]]; then
+        print_error "Reset cancelled by user"
+        exit 1
+    fi
+    
+    # Set AWS profile for target account operations
+    export AWS_PROFILE="$profile"
+    
+    # Navigate to target account provisioning directory
+    if [[ ! -d "opentofu/target_account_provisioning" ]]; then
+        print_error "OpenTofu directory not found: opentofu/target_account_provisioning"
+        return 1
+    fi
+    
+    cd opentofu/target_account_provisioning
+    
+    # Create temporary variables file for destroy operations
+    local temp_vars_file="/tmp/reset_vars_${target_account_id}.tfvars"
+    cat > "$temp_vars_file" << EOF
+target_account_id = "$target_account_id"
+business_name = "$(echo "$business_name" | tr '[:upper:]' '[:lower:]')"
+env_type = "$env_type"
+external_id = "dummy-external-id-for-destroy"
+control_plane_account_id = "782005355493"
+vpc_cidr = "10.90.0.0/16"
+public_subnet_cidrs = ["10.90.0.0/20", "10.90.16.0/20"]
+private_subnet_cidrs = ["10.90.32.0/20", "10.90.48.0/20"]
+enable_nat_gateway = true
+single_nat_gateway = true
+enable_vpc_endpoints = true
+cost_optimized_for_dev = true
+EOF
+    
+    if [[ "$FORCE_CLEAN" == "true" ]]; then
+        print_info "Step 1: Skipping destroy (force-clean mode) - cleaning state directly..."
+        
+        # Skip the hanging destroy and go straight to state cleanup
+        print_info "Cleaning remote state to force fresh deployment..."
+        local state_bucket="erieiron-opentofu-state-${business_name,,}-${target_account_id}"
+        local state_key="${business_name,,}/${target_account_id}/target-account-bootstrap/terraform.tfstate"
+        
+        if aws s3 rm "s3://$state_bucket/$state_key" >/dev/null 2>&1; then
+            print_success "Removed remote state file"
+        else
+            print_info "Remote state file cleanup skipped (may not exist)"
+        fi
+        
+        # Clean DynamoDB lock table entirely for force-clean
+        print_info "Cleaning DynamoDB lock table entirely (force-clean mode)..."
+        if aws dynamodb delete-table --table-name opentofu-locks >/dev/null 2>&1; then
+            print_success "Deleted DynamoDB lock table"
+            print_info "Waiting for table deletion to complete..."
+            # Wait for the table to be fully deleted before proceeding
+            for i in {1..30}; do
+                if ! aws dynamodb describe-table --table-name opentofu-locks >/dev/null 2>&1; then
+                    print_success "DynamoDB table deletion confirmed"
+                    break
+                fi
+                if [ $i -eq 30 ]; then
+                    print_warning "Table deletion taking longer than expected, continuing..."
+                    break
+                fi
+                sleep 2
+            done
+        else
+            print_info "DynamoDB lock table cleanup skipped (may not exist)"
+        fi
+        
+        # Clean up all VPC infrastructure from previous runs
+        print_info "Cleaning up conflicting VPC infrastructure (force-clean mode)..."
+        
+        # Get all ErieIron-managed VPCs
+        local vpc_ids=$(aws ec2 describe-vpcs --filters "Name=tag:ManagedBy,Values=ErieIron" --query 'Vpcs[].VpcId' --output text)
+        
+        for vpc_id in $vpc_ids; do
+            if [[ -n "$vpc_id" && "$vpc_id" != "None" ]]; then
+                print_info "Cleaning up VPC: $vpc_id"
+                
+                # Clean up NAT gateways first
+                aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$vpc_id" --query 'NatGateways[?State==`available`].NatGatewayId' --output text | tr '\t' '\n' | while read -r nat_id; do
+                    if [[ -n "$nat_id" && "$nat_id" != "None" ]]; then
+                        print_info "Deleting NAT Gateway: $nat_id"
+                        aws ec2 delete-nat-gateway --nat-gateway-id "$nat_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Clean up route table associations (non-main)
+                aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[?Associations[?!Main]].Associations[?!Main].RouteTableAssociationId' --output text | tr '\t' '\n' | while read -r assoc_id; do
+                    if [[ -n "$assoc_id" && "$assoc_id" != "None" ]]; then
+                        print_info "Disassociating route table: $assoc_id"
+                        aws ec2 disassociate-route-table --association-id "$assoc_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Clean up custom route tables
+                aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[?Associations[?!Main]].RouteTableId' --output text | tr '\t' '\n' | while read -r rt_id; do
+                    if [[ -n "$rt_id" && "$rt_id" != "None" ]]; then
+                        print_info "Deleting route table: $rt_id"
+                        aws ec2 delete-route-table --route-table-id "$rt_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Clean up subnets
+                aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[].SubnetId' --output text | tr '\t' '\n' | while read -r subnet_id; do
+                    if [[ -n "$subnet_id" && "$subnet_id" != "None" ]]; then
+                        print_info "Deleting subnet: $subnet_id"
+                        aws ec2 delete-subnet --subnet-id "$subnet_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Clean up internet gateways
+                aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query 'InternetGateways[].InternetGatewayId' --output text | tr '\t' '\n' | while read -r igw_id; do
+                    if [[ -n "$igw_id" && "$igw_id" != "None" ]]; then
+                        print_info "Detaching and deleting IGW: $igw_id"
+                        aws ec2 detach-internet-gateway --internet-gateway-id "$igw_id" --vpc-id "$vpc_id" >/dev/null 2>&1 || true
+                        aws ec2 delete-internet-gateway --internet-gateway-id "$igw_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Clean up security groups (except default)
+                aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text | tr '\t' '\n' | while read -r sg_id; do
+                    if [[ -n "$sg_id" && "$sg_id" != "None" ]]; then
+                        print_info "Deleting security group: $sg_id"
+                        aws ec2 delete-security-group --group-id "$sg_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Clean up VPC endpoints
+                aws ec2 describe-vpc-endpoints --filters "Name=vpc-id,Values=$vpc_id" --query 'VpcEndpoints[].VpcEndpointId' --output text | tr '\t' '\n' | while read -r vpe_id; do
+                    if [[ -n "$vpe_id" && "$vpe_id" != "None" ]]; then
+                        print_info "Deleting VPC endpoint: $vpe_id"
+                        aws ec2 delete-vpc-endpoint --vpc-endpoint-id "$vpe_id" >/dev/null 2>&1 || true
+                    fi
+                done
+                
+                # Finally delete the VPC
+                print_info "Deleting VPC: $vpc_id"
+                aws ec2 delete-vpc --vpc-id "$vpc_id" >/dev/null 2>&1 || true
+            fi
+        done
+        
+        # Wait a moment for deletions to propagate
+        print_info "Waiting 30 seconds for VPC cleanup to propagate..."
+        sleep 30
+        
+        # Clean up IAM role for complete fresh start
+        print_info "Cleaning up existing IAM role (force-clean mode)..."
+        if aws iam get-role --role-name ErieIronTargetAccountAgentRole >/dev/null 2>&1; then
+            # Remove role policies first
+            aws iam list-role-policies --role-name ErieIronTargetAccountAgentRole --query 'PolicyNames' --output text | tr '\t' '\n' | while read -r policy_name; do
+                if [[ -n "$policy_name" && "$policy_name" != "None" ]]; then
+                    print_info "Deleting role policy: $policy_name"
+                    aws iam delete-role-policy --role-name ErieIronTargetAccountAgentRole --policy-name "$policy_name" >/dev/null 2>&1 || true
+                fi
+            done
+            
+            # Remove attached managed policies
+            aws iam list-attached-role-policies --role-name ErieIronTargetAccountAgentRole --query 'AttachedPolicies[].PolicyArn' --output text | tr '\t' '\n' | while read -r policy_arn; do
+                if [[ -n "$policy_arn" && "$policy_arn" != "None" ]]; then
+                    print_info "Detaching managed policy: $policy_arn"
+                    aws iam detach-role-policy --role-name ErieIronTargetAccountAgentRole --policy-arn "$policy_arn" >/dev/null 2>&1 || true
+                fi
+            done
+            
+            print_info "Deleting IAM role: ErieIronTargetAccountAgentRole"
+            aws iam delete-role --role-name ErieIronTargetAccountAgentRole >/dev/null 2>&1 || true
+            print_success "IAM role cleaned up"
+        else
+            print_info "IAM role already doesn't exist"
+        fi
+        
+        # Remove local state files
+        rm -f terraform.tfstate terraform.tfstate.backup .terraform.lock.hcl
+        rm -rf .terraform/
+        
+        print_success "Force clean completed - will create fresh infrastructure"
+        
+    else
+        print_info "Step 1: Attempting to destroy existing infrastructure..."
+        
+        # Try to destroy with current state first - but with timeout
+        if timeout 120s tofu destroy -auto-approve -var-file="$temp_vars_file" 2>/dev/null; then
+            print_success "Infrastructure destroyed successfully"
+        else
+        print_warning "Normal destroy failed or timed out (likely due to hanging subnet deletion)"
+        print_info "Step 2: Attempting destroy with disabled locking and timeout..."
+        
+        # Try destroy without locking in case DynamoDB lock table is missing - with timeout  
+        if timeout 120s tofu destroy -auto-approve -lock=false -var-file="$temp_vars_file" 2>/dev/null; then
+            print_success "Infrastructure destroyed successfully (with disabled locking)"
+        else
+            print_warning "Destroy with disabled locking also failed or timed out"
+            print_info "Step 3: Manual cleanup of hanging resources..."
+            
+            # Manual cleanup of resources that commonly hang
+            print_info "Attempting manual cleanup of network resources..."
+            
+            # Find and clean up network interfaces that might be blocking subnet deletion
+            local vpc_id=$(aws ec2 describe-vpcs --filters "Name=tag:ManagedBy,Values=ErieIron" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
+            
+            if [[ -n "$vpc_id" && "$vpc_id" != "None" && "$vpc_id" != "null" ]]; then
+                print_info "Found VPC: $vpc_id - cleaning up resources..."
+                
+                # Clean up NAT gateways first (they block subnet deletion)
+                aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$vpc_id" --query 'NatGateways[?State==`available`].NatGatewayId' --output text 2>/dev/null | tr '\t' '\n' | while read -r nat_id; do
+                    if [[ -n "$nat_id" && "$nat_id" != "None" ]]; then
+                        print_info "Deleting NAT Gateway: $nat_id"
+                        aws ec2 delete-nat-gateway --nat-gateway-id "$nat_id" 2>/dev/null || true
+                    fi
+                done
+                
+                # Wait a moment for NAT gateway deletion to propagate
+                print_info "Waiting 30 seconds for NAT gateway deletion..."
+                sleep 30
+                
+                # Now try subnet deletion again
+                aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[].SubnetId' --output text 2>/dev/null | tr '\t' '\n' | while read -r subnet_id; do
+                    if [[ -n "$subnet_id" && "$subnet_id" != "None" ]]; then
+                        print_info "Attempting to delete subnet: $subnet_id"
+                        aws ec2 delete-subnet --subnet-id "$subnet_id" 2>/dev/null || true
+                    fi
+                done
+            fi
+            
+            print_info "Step 4: Force state cleanup (bypass hanging resources)..."
+            
+            # Backup existing state files
+            if [[ -f terraform.tfstate ]]; then
+                cp terraform.tfstate "terraform.tfstate.backup.$(date +%Y%m%d_%H%M%S)"
+                print_info "Backed up existing state file"
+            fi
+            
+            # Clean remote state (S3) to force fresh start
+            print_info "Cleaning remote state to force fresh deployment..."
+            local state_bucket="erieiron-opentofu-state-${business_name,,}-${target_account_id}"
+            local state_key="${business_name,,}/${target_account_id}/target-account-bootstrap/terraform.tfstate"
+            
+            if aws s3 rm "s3://$state_bucket/$state_key" 2>/dev/null; then
+                print_success "Removed remote state file"
+            else
+                print_info "Remote state file cleanup skipped (may not exist)"
+            fi
+            
+            # Remove local problematic state files
+            rm -f terraform.tfstate terraform.tfstate.backup .terraform.lock.hcl
+            rm -rf .terraform/
+            
+            print_warning "State cleaned - bootstrap will create fresh infrastructure"
+            print_warning "Note: Some AWS resources may still exist and will need manual cleanup later"
+            
+            print_info "Step 4: Attempting manual resource cleanup..."
+            
+            # Try to remove specific problematic resources directly
+            print_info "Cleaning up route table associations..."
+            
+            # Find VPC by business name tag (use business name from bootstrap script context)
+            # Note: This runs in opentofu/target_account_provisioning directory, so we need to get business name from parent context
+            local vpc_id=$(aws ec2 describe-vpcs --filters "Name=tag:ManagedBy,Values=ErieIron" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
+            
+            if [[ -n "$vpc_id" && "$vpc_id" != "None" && "$vpc_id" != "null" ]]; then
+                print_info "Found VPC: $vpc_id"
+                aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[].Associations[?Main==`false`].RouteTableAssociationId' --output text 2>/dev/null | tr '\t' '\n' | while read -r assoc_id; do
+                    if [[ -n "$assoc_id" && "$assoc_id" != "None" ]]; then
+                        print_info "Cleaning up route table association: $assoc_id"
+                        aws ec2 disassociate-route-table --association-id "$assoc_id" 2>/dev/null || true
+                    fi
+                done
+            else
+                print_info "No VPC found for cleanup"
+            fi
+            
+            print_warning "If AWS resources still exist, they may need manual cleanup"
+            print_warning "Check AWS Console for orphaned VPC resources in account $target_account_id"
+        fi
+    fi
+    fi
+    
+    # Clean up temporary variables file
+    rm -f "$temp_vars_file" 2>/dev/null
+    
+    # Return to project root
+    cd ../../
+    
+    print_success "Reset preparation complete"
+    print_info "Bootstrap will now proceed with clean infrastructure creation"
+    echo ""
+}
+
 # Generate OpenTofu state storage configuration
 print_info "Generating OpenTofu state storage configuration..."
 
@@ -176,16 +514,32 @@ print_info "State bucket: $STATE_BUCKET_NAME (${#STATE_BUCKET_NAME} chars)"
 print_info "State key: $STATE_KEY"
 
 echo ""
+# Execute reset if requested
+if [[ "$RESET_FLAG" == "true" ]]; then
+    reset_opentofu_infrastructure "$PROFILE" "$TARGET_ACCOUNT_ID" "$ENV_TYPE" "$BUSINESS_NAME" || {
+        print_error "Reset operation failed"
+        exit 1
+    }
+fi
+
 print_info "=== Phase 1: Target Account IAM Role Creation ==="
 print_info "Using target account credentials to create IAM role..."
 export AWS_PROFILE="$PROFILE"
 
 # Execute Phase 1: Target account operations (no Django dependencies)
-PHASE1_OUTPUT=$(./scripts/bootstrap_target_account_phase_1.sh "$TARGET_ACCOUNT_ID" "$SANITIZED_BUSINESS_NAME" "$ENV_TYPE" "$EXTERNAL_ID" "$STATE_BUCKET_NAME" "$STATE_KEY") || {
-    print_error "Phase 1 (Target Account) bootstrap failed"
-    print_error "Check the logs above for detailed error information"
-    exit 1
-}
+if [[ "$RESET_FLAG" == "true" ]]; then
+    PHASE1_OUTPUT=$(./scripts/bootstrap_target_account_phase_1.sh "$TARGET_ACCOUNT_ID" "$SANITIZED_BUSINESS_NAME" "$ENV_TYPE" "$EXTERNAL_ID" "$STATE_BUCKET_NAME" "$STATE_KEY" "--reset") || {
+        print_error "Phase 1 (Target Account) bootstrap failed"
+        print_error "Check the logs above for detailed error information"
+        exit 1
+    }
+else
+    PHASE1_OUTPUT=$(./scripts/bootstrap_target_account_phase_1.sh "$TARGET_ACCOUNT_ID" "$SANITIZED_BUSINESS_NAME" "$ENV_TYPE" "$EXTERNAL_ID" "$STATE_BUCKET_NAME" "$STATE_KEY") || {
+        print_error "Phase 1 (Target Account) bootstrap failed"
+        print_error "Check the logs above for detailed error information"
+        exit 1
+    }
+fi
 
 print_success "Phase 1 completed successfully"
 

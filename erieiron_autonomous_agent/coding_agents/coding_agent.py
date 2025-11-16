@@ -4756,6 +4756,7 @@ def deploy_opentofu_stack(
         plan_summary = plan_result.extra.get("plan_change_summary")
         
         logging.info(f"applying tofu as {opentofu_stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()}")
+        
         apply_result = opentofu_stack_manager.apply()
         outputs = apply_result.extra["outputs"]
         add_rds_vals_to_env(config, outputs)
@@ -4817,6 +4818,37 @@ def deploy_opentofu_stack(
         
         if "dynamodb" in stderr_lower and "lock" in stderr_lower:
             troubleshooting_hints.append("LOCK_ISSUE: Check DynamoDB table for OpenTofu state locking")
+        
+        # [DEPLOY_DEBUG] Enhanced DNS/networking error detection
+        if "no such host" in stderr_lower or "dial tcp" in stderr_lower:
+            troubleshooting_hints.append("DNS_ISSUE: Cannot resolve AWS service endpoints - check DNS configuration")
+            
+            # Additional network debugging when DNS errors occur
+            try:
+                import socket
+                aws_region = config.env_type.get_aws_region()
+                ecs_endpoint = f"ecs.{aws_region}.amazonaws.com"
+                try:
+                    ip = socket.gethostbyname(ecs_endpoint)
+                    logging.error(f"[DEPLOY_DEBUG] DNS resolution works from Python: {ecs_endpoint} -> {ip}")
+                    troubleshooting_hints.append("DNS_MISMATCH: Python can resolve DNS but OpenTofu cannot - environment issue")
+                except socket.gaierror as dns_err:
+                    logging.error(f"[DEPLOY_DEBUG] DNS resolution also fails from Python: {dns_err}")
+                    troubleshooting_hints.append("DNS_SYSTEM: System-wide DNS resolution failure")
+            except Exception as dns_debug_err:
+                logging.error(f"[DEPLOY_DEBUG] DNS debugging failed: {dns_debug_err}")
+                
+        if "ecs" in stderr_lower and ("create" in stderr_lower or "cluster" in stderr_lower):
+            troubleshooting_hints.append("ECS_SPECIFIC: ECS cluster creation failed - may be VPC/network configuration issue")
+            
+            # Check if we're in a VPC context that might affect outbound connections
+            try:
+                vpc_id = tfvars_payload.get('VpcId')
+                if vpc_id:
+                    logging.error(f"[DEPLOY_DEBUG] Stack uses VPC: {vpc_id} - check NAT Gateway and routing")
+                    troubleshooting_hints.append(f"VPC_CONTEXT: Using VPC {vpc_id} - verify NAT Gateway and route tables")
+            except Exception:
+                pass
         
         error_payload = {
             "message": str(exc),

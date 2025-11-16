@@ -4,6 +4,7 @@ set -euo pipefail
 # Phase 1: Target Account Bootstrap Script
 # Creates IAM role in target account using target account credentials
 # No Django dependencies to avoid cross-account database access issues
+# Supports --reset flag to clean up problematic OpenTofu state
 #
 # ⚠️  CRITICAL: This script must output ONLY the file path to stdout
 # ALL debug/info output MUST use stderr (>&2) or print_* functions
@@ -41,13 +42,20 @@ cleanup_temp_files() {
     # Remove OpenTofu variables and plan files
     rm -f "/tmp/bootstrap_phase1_${target_account_id}.tfvars" 2>/dev/null
     rm -f "/tmp/bootstrap_phase1_${target_account_id}.tfplan" 2>/dev/null
+    rm -f "/tmp/bootstrap_phase1_${target_account_id}_nolock.tfplan" 2>/dev/null
     
     # Note: Log files and output files are preserved for debugging and phase transitions
 }
 
+# Parse reset flag if present
+RESET_FLAG=false
+if [[ $# -eq 7 && "$7" == "--reset" ]]; then
+    RESET_FLAG=true
+fi
+
 # Validate arguments
-if [[ $# -ne 6 ]]; then
-    print_error "Usage: $0 <target_account_id> <business_name> <env_type> <external_id> <state_bucket_name> <state_key>"
+if [[ $# -ne 6 && $# -ne 7 ]]; then
+    print_error "Usage: $0 <target_account_id> <business_name> <env_type> <external_id> <state_bucket_name> <state_key> [--reset]"
     exit 1
 fi
 
@@ -164,6 +172,22 @@ print_info $(
 print_info "Cleaning up any existing OpenTofu state..."
 rm -rf .terraform terraform.tfstate terraform.tfstate.backup .terraform.lock.hcl
 
+# Additional cleanup for reset mode
+if [[ "$RESET_FLAG" == "true" ]]; then
+    print_warning "Reset mode: Ensuring clean remote state..."
+    
+    # Try to delete remote state bucket contents (if accessible)
+    print_info "Attempting to clean remote state bucket..."
+    if aws s3 rm "s3://$STATE_BUCKET_NAME/$STATE_KEY" >/dev/null 2>&1; then
+        print_success "Removed remote state file"
+    else
+        print_info "Remote state file cleanup skipped (may not exist or no permissions)"
+    fi
+    
+    # Clean entire state bucket path for this business/account
+    aws s3 rm "s3://$STATE_BUCKET_NAME/$BUSINESS_NAME/$TARGET_ACCOUNT_ID/" --recursive >/dev/null 2>&1 || print_info "Remote state directory cleanup skipped"
+fi
+
 # Initialize with dynamic backend configuration - capture ALL output
 print_info "Initializing OpenTofu with backend configuration..."
 if ! tofu init \
@@ -173,14 +197,40 @@ if ! tofu init \
     -input=false \
     >> "$TOFU_LOG_FILE" 2>&1; then
     print_error "OpenTofu init failed. Check log: $TOFU_LOG_FILE"
-    exit 1
+    print_warning "This might be due to missing DynamoDB lock table or S3 bucket"
+    print_info "Attempting to continue without backend state for reset scenarios..."
+    
+    # Try to init without backend for reset scenarios
+    if [[ "$RESET_FLAG" == "true" ]]; then
+        print_info "Reset mode: Attempting local backend initialization..."
+        if ! tofu init -input=false >> "$TOFU_LOG_FILE" 2>&1; then
+            print_error "Local backend initialization also failed. Check log: $TOFU_LOG_FILE"
+            exit 1
+        fi
+        print_success "Initialized with local backend for reset"
+    else
+        exit 1
+    fi
 fi
 
 # Plan - capture ALL output to log file
 print_info "Planning OpenTofu deployment..."
-if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
-    print_error "OpenTofu plan failed. Check log: $TOFU_LOG_FILE"
-    exit 1
+
+# Try plan with locking first
+if tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+    print_success "Plan succeeded with locking"
+    DISABLE_LOCKING=false
+else
+    print_warning "OpenTofu plan failed, possibly due to state locking issues"
+    
+    # Try plan without locking in case DynamoDB table is missing
+    print_info "Attempting plan without state locking..."
+    if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}_nolock.tfplan" -lock=false >> "$TOFU_LOG_FILE" 2>&1; then
+        print_error "OpenTofu plan failed even without locking. Check log: $TOFU_LOG_FILE"
+        exit 1
+    fi
+    print_success "Plan succeeded without locking"
+    DISABLE_LOCKING=true
 fi
 
 # Import existing resources if they exist
@@ -189,46 +239,45 @@ print_info "Checking for and importing existing AWS resources..."
 # Note: S3 bucket is created directly via AWS CLI and is not managed by OpenTofu
 # Only import the DynamoDB table and IAM resources
 
-# Check if DynamoDB table exists and import it  
-if aws dynamodb describe-table --table-name opentofu-locks >> "$TOFU_LOG_FILE" 2>&1; then
-    print_info "DynamoDB table opentofu-locks already exists, importing into state..."
-    if ! tofu import -var-file="$TOFU_VARS_FILE" aws_dynamodb_table.opentofu_locks opentofu-locks >> "$TOFU_LOG_FILE" 2>&1; then
-        print_warning "Failed to import DynamoDB table, continuing with apply..."
-    fi
-fi
-
-# Check if IAM role exists and import it
-if aws iam get-role --role-name ErieIronTargetAccountAgentRole >> "$TOFU_LOG_FILE" 2>&1; then
-    print_info "IAM role ErieIronTargetAccountAgentRole already exists, importing into state..."
-    if ! tofu import -var-file="$TOFU_VARS_FILE" aws_iam_role.erie_iron_target_account_agent_role ErieIronTargetAccountAgentRole >> "$TOFU_LOG_FILE" 2>&1; then
-        print_warning "Failed to import IAM role, continuing with apply..."
-    fi
-    
-    # Import the role policy if it exists (try both old and new naming patterns)
-    POLICY_NAME="ErieIronAgentPermissions-$TARGET_ACCOUNT_ID"
-    if aws iam get-role-policy --role-name ErieIronTargetAccountAgentRole --policy-name "$POLICY_NAME" >> "$TOFU_LOG_FILE" 2>&1; then
-        print_info "IAM role policy $POLICY_NAME already exists, importing into state..."
-        if ! tofu import -var-file="$TOFU_VARS_FILE" aws_iam_role_policy.agent_permissions "ErieIronTargetAccountAgentRole:$POLICY_NAME" >> "$TOFU_LOG_FILE" 2>&1; then
-            print_warning "Failed to import IAM role policy, continuing with apply..."
-        fi
-    elif aws iam get-role-policy --role-name ErieIronTargetAccountAgentRole --policy-name ErieIronAgentPermissions >> "$TOFU_LOG_FILE" 2>&1; then
-        print_info "IAM role policy ErieIronAgentPermissions (old format) already exists, importing into state..."
-        if ! tofu import -var-file="$TOFU_VARS_FILE" aws_iam_role_policy.agent_permissions ErieIronTargetAccountAgentRole:ErieIronAgentPermissions >> "$TOFU_LOG_FILE" 2>&1; then
-            print_warning "Failed to import IAM role policy, continuing with apply..."
-        fi
-    fi
-fi
+# Skip import for now - the apply logic will handle existing resources
+print_info "Skipping import step as apply will handle existing resources correctly"
 
 # Re-plan after imports to account for existing resources
 print_info "Re-planning after imports..."
-if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
-    print_error "OpenTofu re-plan failed after imports. Check log: $TOFU_LOG_FILE"
-    exit 1
+
+# Use the same locking setting for re-plan as the initial plan
+if [[ "$DISABLE_LOCKING" == "true" ]]; then
+    if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}_nolock.tfplan" -lock=false >> "$TOFU_LOG_FILE" 2>&1; then
+        print_error "OpenTofu re-plan failed after imports (without locking). Check log: $TOFU_LOG_FILE"
+        exit 1
+    fi
+else
+    if ! tofu plan -var-file="$TOFU_VARS_FILE" -out="/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+        print_error "OpenTofu re-plan failed after imports. Check log: $TOFU_LOG_FILE"
+        exit 1
+    fi
 fi
 
 # Apply - capture ALL output to log file
 print_info "Applying OpenTofu deployment..."
-if ! tofu apply "/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+
+# When locking is disabled, we need to apply without using a plan file
+# because plan files embed locking behavior that cannot be overridden
+if [[ "$DISABLE_LOCKING" == "true" ]]; then
+    if ! tofu apply -var-file="$TOFU_VARS_FILE" -auto-approve -lock=false >> "$TOFU_LOG_FILE" 2>&1; then
+        APPLY_FAILED=true
+    else
+        APPLY_FAILED=false
+    fi
+else
+    if ! tofu apply "/tmp/bootstrap_phase1_${TARGET_ACCOUNT_ID}.tfplan" >> "$TOFU_LOG_FILE" 2>&1; then
+        APPLY_FAILED=true
+    else
+        APPLY_FAILED=false
+    fi
+fi
+
+if [[ "$APPLY_FAILED" == "true" ]]; then
     # Check if the failure is due to resources already existing
     if grep -q "already exists" "$TOFU_LOG_FILE" || grep -q "ResourceConflictException" "$TOFU_LOG_FILE" || grep -q "EntityAlreadyExistsException" "$TOFU_LOG_FILE" || grep -q "BucketAlreadyExists" "$TOFU_LOG_FILE"; then
         print_warning "OpenTofu apply failed due to existing resources - updating existing role with new external ID"

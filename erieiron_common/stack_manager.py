@@ -1,5 +1,7 @@
 """Utilities for working with OpenTofu (Terraform) configurations."""
 from __future__ import annotations
+import os
+import socket
 
 import json
 import logging
@@ -529,13 +531,16 @@ class StackManager:
         return tfvars_path
     
     def build_opentofu_env(self) -> dict[str, str]:
-        # env: dict[str, str] = {
-        #     key: str(value)
-        #     for key, value in os.environ.items() 
-        #     if key not in ["AWS_PROFILE"]
-        # }
+        # Start with full parent environment instead of empty env
+        # This fixes the DNS resolution issue by ensuring OpenTofu has access to all system environment variables
+        env: dict[str, str] = {
+            key: str(value)
+            for key, value in os.environ.items() 
+            if key not in ["AWS_PROFILE"]  # Exclude AWS_PROFILE to avoid credential conflicts
+        }
+        logging.info(f"[SUBPROCESS_ENV_DEBUG] Started with {len(env)} variables from parent environment")
         
-        env = {}
+        # Override/add container-specific environment variables
         for key, value in self.container_env.items():
             if value is None:
                 continue
@@ -551,6 +556,7 @@ class StackManager:
         env["TF_DATA_DIR"] = str(tf_data_dir)
         env.setdefault("TF_PLUGIN_CACHE_DIR", str(tf_plugin_cache))
         env["TF_WORKSPACE"] = self.get_workspace_name()
+        
         return env
     
     def validate_stack(self):

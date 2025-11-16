@@ -61,19 +61,19 @@ variable "env_type" {
 variable "vpc_cidr" {
   description = "CIDR block for the VPC"
   type        = string
-  default     = "10.90.0.0/16"
+  default     = "10.91.0.0/16"
 }
 
 variable "public_subnet_cidrs" {
   description = "CIDR blocks for public subnets"
   type        = list(string)
-  default     = ["10.90.0.0/20", "10.90.16.0/20"]
+  default     = ["10.91.0.0/20", "10.91.16.0/20"]
 }
 
 variable "private_subnet_cidrs" {
   description = "CIDR blocks for private subnets"
   type        = list(string)
-  default     = ["10.90.32.0/20", "10.90.48.0/20"]
+  default     = ["10.91.32.0/20", "10.91.48.0/20"]
 }
 
 variable "enable_nat_gateway" {
@@ -153,8 +153,7 @@ resource "aws_iam_role" "erie_iron_target_account_agent_role" {
         Principal = {
           AWS = [
             "arn:aws:iam::${var.control_plane_account_id}:role/xxbev-task-execution-role",
-            "arn:aws:iam::${var.control_plane_account_id}:user/programatic-access",
-            "arn:aws:iam::${var.target_account_id}:role/ErieIronTargetAccountAgentRole"
+            "arn:aws:iam::${var.control_plane_account_id}:user/programatic-access"
           ]
         }
         Action = "sts:AssumeRole"
@@ -348,6 +347,9 @@ resource "aws_route_table" "private" {
     Purpose     = "PrivateRouteTable"
     CostOptimization = local.enable_nat_gateway_final ? (local.single_nat_gateway_final ? "true" : "false") : "max"
   }
+
+  # Ensure route tables are destroyed before NAT Gateway they reference
+  depends_on = [aws_nat_gateway.main]
 }
 
 # Associate public subnets with public route table
@@ -362,6 +364,9 @@ resource "aws_route_table_association" "private" {
   count          = length(aws_subnet.private)
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[count.index].id
+
+  # Ensure associations are destroyed before route tables they reference
+  depends_on = [aws_route_table.private]
 }
 
 # RDS Security Group
@@ -428,6 +433,9 @@ resource "aws_vpc_endpoint" "s3" {
     Service     = "S3"
     CostOptimization = "true"
   }
+
+  # Ensure VPC endpoints are destroyed before route tables they reference
+  depends_on = [aws_route_table.public, aws_route_table.private]
 }
 
 # DynamoDB VPC Gateway Endpoint (free, cost optimization)
@@ -452,6 +460,9 @@ resource "aws_vpc_endpoint" "dynamodb" {
     Service     = "DynamoDB"
     CostOptimization = "true"
   }
+
+  # Ensure VPC endpoints are destroyed before route tables they reference
+  depends_on = [aws_route_table.public, aws_route_table.private]
 }
 
 # Note: The S3 bucket for OpenTofu state is created dynamically by the bootstrap script
