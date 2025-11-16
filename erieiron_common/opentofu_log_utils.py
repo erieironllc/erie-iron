@@ -64,14 +64,12 @@ def summarize_plan_changes(plan_json: Mapping[str, Any]) -> Mapping[str, int]:
 
 def build_opentofu_log_payload(
         *,
-        stack_type: str,
         plan_summary: Mapping[str, Any] | None,
         results: Sequence[Mapping[str, Any]],
         tfvars: Mapping[str, Any] | None,
         error: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "stack_type": stack_type,
         "plan_summary": plan_summary or {},
         "plan_results": list(results),
         "outputs": common.get(results, "outputs"),
@@ -84,4 +82,3 @@ def build_opentofu_log_payload(
 def write_log_payload(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str))
-

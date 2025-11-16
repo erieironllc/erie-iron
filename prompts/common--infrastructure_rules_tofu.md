@@ -48,11 +48,10 @@
   - For test environments, prefer options like `db.t4g.micro`, `t4g.nano`, or similarly low-cost configurations.
   - Avoid overprovisioning or selecting higher tiers by default.
   - IAM roles must follow the **principle of least privilege**—grant only the permissions required to perform the specific task.
-- Erie Iron maintains **two** OpenTofu templates, stored at `opentofu/foundation/stack.tf` and `opentofu/application/stack.tf`:
-  - `opentofu/foundation/stack.tf` holds persistent, slow-to-create resources such as RDS, SES identities, Route53 verification records, and long-lived SSM parameters. This stack survives task iterations. In DEV it is namespaced to the initiative; in PROD it is namespaced to the business. Never add autonomous cleanup logic for this stack.
-  - `opentofu/application/stack.tf` (application delivery stack) contains fast-redeploy components—ALBs, listeners, target groups, ECS services, task roles, Lambdas, log groups, DNS aliases, etc. This stack remains namespaced to the active task in DEV and can be cleaned up when the task finishes.
-- Place each resource in the correct template; do **not** mix persistent assets into the application stack or vice versa.
-- Keep foundation stack names stable; only trigger stack rotation as a recovery fallback when deletes or updates wedge in a terminal rollback state. Application stacks likewise reuse a consistent name and rotate only when stuck.
+- Erie Iron maintains **one** OpenTofu template, stored at `opentofu/application/stack.tf`:
+  - `opentofu/application/stack.tf` contains all infrastructure resources including persistent components (RDS, SES identities, Route53 verification records, SSM parameters) and application delivery components (ALBs, listeners, target groups, ECS services, task roles, Lambdas, log groups, DNS aliases, etc.). This unified stack is namespaced to the active task in DEV and to the business in PROD.
+- All infrastructure resources should be placed in the single APPLICATION stack template.
+- Keep stack names stable; only trigger stack rotation as a recovery fallback when deletes or updates wedge in a terminal rollback state.
 - ECS/Fargate task definitions must always:
     - Configure `DeploymentConfiguration` with:
         - `MaximumPercent: 100`
@@ -86,7 +85,7 @@
 - To prevent duplicate rule errors, always:
   - Prefer **conditional creation** using a `count` guard variable (e.g., `count = var.CreateIngressRule ? 1 : 0`) when multiple stacks might target the same Security Group.
   - Avoid defining identical ingress or egress rules in multiple modules pointing to the same Security Group ID.
-  - For shared security groups, manage rules in the **foundation stack** only, and reference them from application stacks.
+  - For shared security groups, manage rules in the **APPLICATION stack** as all security group resources are now co-located.
 - When a duplicate rule error occurs (e.g., `InvalidPermission.Duplicate`), do **not** modify the Security Group manually. Instead:
   - Identify the conflicting rule via `aws ec2 describe-security-group-rules --filters Name=group-id,Values=<sg-id>`.
   - Remove or conditionally disable the redundant rule in the relevant stack template.
@@ -149,19 +148,25 @@
   This ensures every web service can respond to ALB health checks and traffic within the shared network. Do **not** hardcode any source CIDRs or security group IDs for this rule—always use `!Ref VpcCidr`.
 - ECS/Fargate web services must run inside this shared VPC using the provided private subnets. Configure `AwsvpcConfiguration.Subnets` with `!Ref PrivateSubnet1Id` and `!Ref PrivateSubnet2Id` (keeping `AssignPublicIp: DISABLED`) so tasks stay on the internal network.
 - Proposals should scope networking changes to stack-owned resources such as security groups, ECS services, and ALB listeners. Route53 subdomain routing supplies tenant isolation for tenants sharing the same VPC.
-    - `opentofu/foundation/stack.tf` owns the initiative-level root domain used for SES verification. Preserve its `DomainName` parameter as the bare domain (e.g., `initiative.example.com`).
-    - `opentofu/application/stack.tf` must publish ALB aliases on task-scoped subdomains derived from the foundation domain (e.g., `!Sub "${StackIdentifier}.${FoundationDomain}"`). Do **not** register unrelated subdomains or hardcode alternate roots.
+    - `opentofu/application/stack.tf` owns both the initiative-level root domain used for SES verification and publishes ALB aliases on task-scoped subdomains. Preserve the `DomainName` parameter as the bare domain (e.g., `initiative.example.com`) and derive task subdomains as needed (e.g., `${StackIdentifier}.${DomainName}`). Do **not** register unrelated subdomains or hardcode alternate roots.
 - The Dockerfile **must always** extend this base image: "782005355493.dkr.ecr.us-west-2.amazonaws.com/base-images:python-3.11-slim"
 - You can safely ignore this warning:  "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)"
 - If Lambda code requires `AWS_DEFAULT_REGION` or `AWS_REGION`, the OpenTofu configuration must pass these in from the `${AWS::Region}` variable.
 
-- If `DomainName` is managed in Route53 in the same AWS account, publish SES verification TXT/DKIM/MX records from `opentofu/foundation/stack.tf` and place the ALB-facing alias records in `opentofu/application/stack.tf` using the task subdomain described above. All DNS automation for the provided `DomainName` must live in the stacks—no manual zone edits.
+- If `DomainName` is managed in Route53 in the same AWS account, publish SES verification TXT/DKIM/MX records and ALB-facing alias records in `opentofu/application/stack.tf` using the task subdomain described above. All DNS automation for the provided `DomainName` must live in the stack—no manual zone edits.
+
 
 - **Route53 TXT Record Quoting Rule**  
   - When defining TXT records in OpenTofu (for DMARC, SPF, SES verification, etc.), do **not** include extra inner quotes within the `records` value.  
   - Correct form: `records = ["v=DMARC1; p=quarantine; rua=mailto:postmaster@${var.DomainName}"]`  
   - Incorrect form (causes `InvalidCharacterString`): `records = ["\"v=DMARC1; p=quarantine; rua=mailto:postmaster@${var.DomainName}\""]`  
   - Terraform automatically wraps TXT record strings in quotes when applying, so inner quoting leads to double-quoted invalid values.
+
+### Route53 Allow Overwrite Rule
+- All `aws_route53_record` resources must include `allow_overwrite = true`.
+- This ensures stacks can safely adopt pre-existing SES, DKIM, SPF, DMARC, and verification records without manual cleanup.
+- Required for all TXT and CNAME records created for SES validation, DKIM tokens, SPF, DMARC, and any other stack-managed DNS records.
+- Omission of this property will cause `InvalidChangeBatch` errors when records already exist in the hosted zone.
 
 - Email ingestion requirements mean the stacks must provision an `AWS::SES::ReceiptRuleSet` (namespaced with `!Ref StackIdentifier`) and one or more `AWS::SES::ReceiptRule` resources that deliver to the task-specific targets (S3 buckets, Lambdas, SNS). Do not leave the rule set empty.
 - Include a `Custom::ActivateSesRuleSet` (or equivalent Lambda-backed custom resource) that calls `ses:SetActiveReceiptRuleSet` with the stack-owned rule set on create/update so it becomes the account's active set. On delete, the same custom resource must clear the active rule set back to `""` before OpenTofu deletes the receipt rule set. Wire explicit `DependsOn` relationships so activation waits for the rule set and rules to exist and deactivation happens before the rule set is removed.
@@ -229,7 +234,7 @@
 - **Rule:** mark only genuinely secret data as sensitive, not general identifiers or connection metadata.
 
 -### OpenTofu File Enforcement
-- Keep OpenTofu definitions inside the two stack templates—persistent resources in `opentofu/foundation/stack.tf`, application delivery resources in `opentofu/application/stack.tf`.
+- Keep OpenTofu definitions inside the single stack template at `opentofu/application/stack.tf`—all infrastructure resources including both persistent and application delivery components belong here.
 - Inline IAM policy attachments (e.g., `AWS::IAM::Policy` targeting stack-defined roles) belong next to the role in whichever template owns it; runtime code must not create or modify IAM.
 - **When attaching IAM policies:**  
     - Prefer `Roles: [!Ref <RoleLogicalId>]` when the role is defined in this template and assigns a concrete `RoleName`.  
@@ -285,7 +290,7 @@ The RDS opentofu configuration should always look like this:
           Value: !Sub ${StackIdentifier}-db-instance
 ```
 
-- The `DBSubnetGroup` defined in `opentofu/foundation/stack.tf` must list `!Ref PublicSubnet1Id` and `!Ref PublicSubnet2Id` so the database resides in the public subnets and remains reachable from JJ's laptop. Any historical guidance that mentioned private subnets is **deprecated**.
+- The `DBSubnetGroup` defined in `opentofu/application/stack.tf` must list `!Ref PublicSubnet1Id` and `!Ref PublicSubnet2Id` so the database resides in the public subnets and remains reachable from JJ's laptop. Any historical guidance that mentioned private subnets is **deprecated**.
   - Migration steps when you encounter a private-subnet DB subnet group:
     1. Update the `DBSubnetGroup` resource to reference `PublicSubnet1Id` / `PublicSubnet2Id` exactly as shown below.
     2. Confirm the associated security group still allows developer CIDR + application ingress on tcp/5432.

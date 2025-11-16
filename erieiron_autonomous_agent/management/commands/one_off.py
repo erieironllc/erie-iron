@@ -10,13 +10,7 @@ from erieiron_autonomous_agent.models import Initiative, Business, SelfDrivingTa
 from erieiron_common import aws_utils, common
 from erieiron_common.enums import EnvironmentType, InfrastructureStackType
 
-asdf = {
-    "cef7bfac-9d17-40e8-83cd-40aa3fab6b9c": "ap_app.tf",
-    "6b8eba23-68b4-4f4f-b52a-461cfad5fd06": "ap_foundation.tf",
-    "b270dd96-b505-4787-9435-3627349c4463": "ei_app.tf",
-    "25a5b26b-32cd-4d3e-b09f-e1a43db54a3b": "ei_foundation.tf",
-}
 
 class Command(BaseCommand):
     def handle(self, env_type=None, *args, **options):
-        print("ASDF")
+        ...

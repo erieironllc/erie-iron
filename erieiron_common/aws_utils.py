@@ -36,6 +36,8 @@ class SharedVpcContext:
     public_subnet_ids: list[str]
     private_subnet_ids: list[str]
     security_groups: Optional[dict[str, str]] = None
+    nat_gateway_ids: Optional[list[str]] = None
+    private_route_table_ids: Optional[list[str]] = None
     
     @property
     def rds_security_group_id(self) -> str:
@@ -47,23 +49,8 @@ class SharedVpcContext:
         return rds_sg
 
 
-def client(
-        client_name,
-        cloud_account=None,
-        endpoint_url=None
-) -> "boto3.session.Session.client":
-    from erieiron_autonomous_agent.utils import cloud_accounts
-    
-    aws_credentials = cloud_accounts.get_aws_credentials(cloud_account)
-    
-    return boto3.client(
-        client_name,
-        endpoint_url=endpoint_url,
-        region_name=get_aws_region(),
-        aws_session_token=aws_credentials.session_token,
-        aws_secret_access_key=aws_credentials.secret_access_key,
-        aws_access_key_id=aws_credentials.access_key_id,
-    )
+def get_default_client(client_name) -> "boto3.session.Session.client":
+    return boto3.client(client_name, region_name=get_aws_region())
 
 
 def package_lambda(
@@ -189,8 +176,8 @@ def get_aws_region() -> str:
 
 
 def ensure_network_access(db_host: str, aws_region=settings.AWS_DEFAULT_REGION_NAME):
-    rds = client("rds")
-    ec2 = client("ec2")
+    rds = get_default_client("rds")
+    ec2 = get_default_client("ec2")
     
     my_cidr = common.get_ip_address()
     db_instance, db_cluster = get_db_instance_and_cluster(db_host, aws_region)
@@ -246,7 +233,7 @@ def get_db_instance_and_cluster(db_host: str, aws_region: str) -> tuple:
     db_instance = None
     db_cluster = None
     
-    rds = client("rds")
+    rds = get_default_client("rds")
     paginator = rds.get_paginator("describe_db_instances")
     for page in paginator.paginate():
         for inst in page.get("DBInstances", []):
@@ -402,7 +389,7 @@ def assert_account_name(required_account_name):
 
 
 def get_asg_size(auto_scaling_group) -> Tuple[int, int, int]:
-    response = client("autoscaling").describe_auto_scaling_groups(
+    response = get_default_client("autoscaling").describe_auto_scaling_groups(
         AutoScalingGroupNames=[auto_scaling_group.value]
     )
     
@@ -426,13 +413,13 @@ def set_asg_desired_capacity(auto_scaling_group, count: int):
         return
     
     common.log_info(f"UPDATING ASG Capacity {auto_scaling_group.value} to {count}")
-    response = client("autoscaling").update_auto_scaling_group(
+    response = get_default_client("autoscaling").update_auto_scaling_group(
         AutoScalingGroupName=auto_scaling_group.value, DesiredCapacity=count
     )
 
 
 def set_ecs_service_tasks(cluster_name, service_name, desired_count):
-    client("ecs").update_service(
+    get_default_client("ecs").update_service(
         cluster=cluster_name, service=service_name, desiredCount=desired_count
     )
 
@@ -469,7 +456,7 @@ def get_secret_arn(secret_name: str):
         return secret_name
     
     try:
-        resp = client("secretsmanager").describe_secret(SecretId=secret_name)
+        resp = get_default_client("secretsmanager").describe_secret(SecretId=secret_name)
         arn = resp.get("ARN")
         if not arn:
             raise RuntimeError(f"DescribeSecret returned no ARN for {secret_name}")
@@ -492,7 +479,7 @@ def put_secret(secret_name: str, val: dict):
     if not isinstance(val, dict):
         raise ValueError("put_secret expects `val` to be a dict")
     
-    secrets_manager = client("secretsmanager")
+    secrets_manager = get_default_client("secretsmanager")
     
     # Debug: Log current AWS context and operation details
     try:
@@ -578,7 +565,7 @@ def get_secret(secret_name: str):
 
 @lru_cache
 def get_cloudfron_url_signing_private_key():
-    response = client("secretsmanager").get_secret_value(
+    response = get_default_client("secretsmanager").get_secret_value(
         SecretId=settings.CLOUDFRONT_PRIVATE_KEY_SECRET_NAME
     )
     
@@ -639,8 +626,9 @@ class AwsInterface:
         self.s3_passthrough_cache = S3LocalCache(self.client("s3"))
     
     def client(self, service_name, endpoint_url=None):
-        return client(
-            service_name, cloud_account=self.cloud_account, endpoint_url=endpoint_url
+        return self.cloud_account.get_service_client(
+            service_name,
+            endpoint_url
         )
     
     def generate_presigned_url(
@@ -969,6 +957,11 @@ BODY:
         public_subnet_ids = self._extract_subnet_ids(vpc_config["public_subnets"])
         private_subnet_ids = self._extract_subnet_ids(vpc_config["private_subnets"])
         
+        # Extract NAT gateway configuration
+        nat_config = vpc_config.get("nat_gateway_config", {})
+        nat_gateway_ids = nat_config.get("nat_gateway_ids", [])
+        private_route_table_ids = nat_config.get("private_route_table_ids", [])
+        
         logging.info(
             "Using VPC %s from CloudAccount %s metadata",
             vpc_config.get("vpc_id"),
@@ -981,7 +974,152 @@ BODY:
             public_subnet_ids=public_subnet_ids,
             private_subnet_ids=private_subnet_ids,
             security_groups=security_groups,
+            nat_gateway_ids=nat_gateway_ids,
+            private_route_table_ids=private_route_table_ids,
         )
+    
+    def configure_nat_gateway(self):
+        ec2 = self.client("ec2")
+        
+        vpc_config = self.cloud_account.get_vpc_config()
+        
+        # Extract NAT gateway configuration
+        nat_config = vpc_config.get("nat_gateway_config", {})
+        private_subnet_ids = self._extract_subnet_ids(vpc_config["private_subnets"])
+        if not private_subnet_ids:
+            raise Exception(
+                f"Cannot cofigure NAT routing  "
+                "Account has no private subnets"
+                "❌ System will have major problems related to networking ❌"
+            )
+        
+        nat_gateway_id = common.first(nat_config.get("nat_gateway_ids", []))
+        if not nat_gateway_id:
+            raise Exception(
+                f"Cannot cofigure NAT routing  "
+                "Account has no NAT Gateway "
+                "❌ System will have major problems related to networking ❌"
+            )
+        
+        private_route_table_ids = nat_config.get("private_route_table_ids", [])
+        if not private_route_table_ids:
+            raise Exception(
+                f"Cannot cofigure NAT routing  "
+                "nat gateway has no private_route_table_ids"
+                "❌ System will have major problems related to networking ❌"
+            )
+        
+        # Ensure the desired route table has a default route to a known NAT gateway
+        for desired_rt_id in private_route_table_ids:
+            rt = common.first(
+                ec2.describe_route_tables(RouteTableIds=[desired_rt_id]).get(
+                    "RouteTables", []
+                )
+            )
+            if not rt:
+                raise RuntimeError(f"Could not describe route table {desired_rt_id} ")
+            
+            has_correct_route = any(
+                r.get("DestinationCidrBlock") == "0.0.0.0/0"
+                and r.get("NatGatewayId") == nat_gateway_id
+                for r in common.get_list(rt, "Routes")
+            )
+            
+            if not has_correct_route:
+                logging.info(
+                    f"Creating or updating 0.0.0.0/0 route via NAT gateway {nat_gateway_id} "
+                    f"on route table {desired_rt_id}"
+                )
+                try:
+                    ec2.create_route(
+                        RouteTableId=desired_rt_id,
+                        DestinationCidrBlock="0.0.0.0/0",
+                        NatGatewayId=nat_gateway_id,
+                    )
+                except ClientError as e:
+                    err_code = e.response.get("Error", {}).get("Code")
+                    if err_code == "RouteAlreadyExists":
+                        ec2.replace_route(
+                            RouteTableId=desired_rt_id,
+                            DestinationCidrBlock="0.0.0.0/0",
+                            NatGatewayId=nat_gateway_id,
+                        )
+                    else:
+                        raise
+        
+        # Validate that each private subnet is associated with a route table that routes 0.0.0.0/0 through one of the NAT gateways
+        for subnet_id in private_subnet_ids:
+            desired_rt_id = common.first(private_route_table_ids)
+            rt_assoc = common.first(ec2.describe_route_tables(
+                Filters=[{"Name": "association.subnet-id", "Values": [subnet_id]}]
+            ).get("RouteTables", []))
+            
+            if any(
+                    route.get("NatGatewayId") == nat_gateway_id
+                    and route.get("DestinationCidrBlock") == "0.0.0.0/0"
+                    for route in common.get_list(rt_assoc, "Routes")
+            ):
+                # NAT Gateway properly set up - has a route that goes through the nat gateway
+                continue
+            
+            logging.warning(
+                f"Private subnet {subnet_id} is NOT routed through nat gateway {nat_gateway_id} "
+                "ECS tasks in this subnet currently will NOT be able to reach ECR. "
+                "Will now work to fix this situation now"
+            )
+            
+            # ok, lets remediate.  first, let's identify the current association
+            
+            assoc_data = ec2.describe_route_tables(
+                Filters=[{"Name": "association.subnet-id", "Values": [subnet_id]}]
+            ).get("RouteTables", [])
+            
+            current_assoc = None
+            for rt in assoc_data:
+                for assoc in rt.get("Associations", []):
+                    if assoc.get("SubnetId") == subnet_id and not assoc.get("Main", False):
+                        current_assoc = assoc
+                        break
+                if current_assoc:
+                    break
+            
+            if current_assoc:
+                current_rt_id = current_assoc.get("RouteTableId")
+                current_assoc_id = current_assoc.get("RouteTableAssociationId")
+                
+                if current_rt_id != desired_rt_id:
+                    logging.info(
+                        f"Disassociating subnet {subnet_id} from route table {current_rt_id} "
+                        f"(association {current_assoc_id})"
+                    )
+                    ec2.disassociate_route_table(AssociationId=current_assoc_id)
+                    
+                    logging.info(
+                        f"Associating subnet {subnet_id} with NAT route table {desired_rt_id}..."
+                    )
+                    ec2.associate_route_table(
+                        SubnetId=subnet_id,
+                        RouteTableId=desired_rt_id,
+                    )
+                    logging.info(
+                        f"✅ Successfully associated subnet {subnet_id} with route table {desired_rt_id}"
+                    )
+                else:
+                    logging.info(
+                        f"Subnet {subnet_id} already associated with desired route table {desired_rt_id}"
+                    )
+            else:
+                logging.info(
+                    f"Subnet {subnet_id} has no explicit route table association. "
+                    f"Associating with {desired_rt_id}..."
+                )
+                ec2.associate_route_table(
+                    SubnetId=subnet_id,
+                    RouteTableId=desired_rt_id,
+                )
+                logging.info(
+                    f"✅ Successfully associated subnet {subnet_id} with route table {desired_rt_id}"
+                )
     
     def _extract_subnet_ids(self, subnets: list[dict]) -> list[str]:
         subnet_ids = [subnet.get("subnet_id") for subnet in subnets]
@@ -1240,3 +1378,106 @@ BODY:
         except Exception as e:
             logging.info(f"❌ ECS service did not stabilize: {e}")
             raise
+    
+    def diagnose_target_group_health(self, target_group_arn: str) -> None:
+        """Diagnose current target group health status and provide detailed information"""
+        
+        try:
+            response = self.client("elbv2").describe_target_health(TargetGroupArn=target_group_arn)
+            targets = response.get('TargetHealthDescriptions', [])
+            
+            logging.info(f"🔍 Target Group Health Diagnosis for {target_group_arn}")
+            
+            if not targets:
+                logging.info("❌ No targets registered in target group")
+                logging.info("   → Check if ECS service is running and tasks have started")
+                logging.info("   → Verify ECS service load balancer configuration")
+                return
+            
+            logging.info(f"Found {len(targets)} registered targets:")
+            
+            for i, target in enumerate(targets, 1):
+                target_id = target['Target']['Id']
+                target_port = target['Target']['Port']
+                health = target['TargetHealth']
+                state = health['State']
+                reason = health.get('Reason', 'No reason provided')
+                description = health.get('Description', 'No description provided')
+                
+                status_icon = {
+                    'healthy': '✅',
+                    'unhealthy': '❌',
+                    'initial': '🔄',
+                    'unused': '⚪',
+                    'draining': '⏳',
+                    'unavailable': '🚫'
+                }.get(state.lower(), '❓')
+                
+                logging.info(f"  {i}. Target {target_id}:{target_port}")
+                logging.info(f"     Status: {status_icon} {state.upper()}")
+                logging.info(f"     Reason: {reason}")
+                logging.info(f"     Description: {description}")
+                
+                # Provide specific troubleshooting guidance
+                if state.lower() == 'unhealthy':
+                    logging.info(f"     🔧 Troubleshooting for {target_id}:")
+                    if 'timeout' in reason.lower():
+                        logging.info("       - Health check timing out - check if app responds on port 8006")
+                        logging.info("       - Verify application binds to 0.0.0.0:8006 (not 127.0.0.1)")
+                    elif 'connection refused' in reason.lower():
+                        logging.info("       - Connection refused - check if service is running on port 8006")
+                        logging.info("       - Verify security group allows traffic on port 8006")
+                    elif 'target not found' in reason.lower():
+                        logging.info("       - Target not found - check ECS task networking")
+                        logging.info("       - Verify ENI and private IP assignment")
+                    else:
+                        logging.info(f"       - HTTP health check failed - check /health/ endpoint")
+                        logging.info(f"       - Verify endpoint returns 200-399 status codes")
+                elif state.lower() == 'initial':
+                    logging.info("     ℹ️  Target is in initial state (normal for new deployments)")
+            
+            healthy_count = sum(1 for t in targets if t['TargetHealth']['State'] == 'healthy')
+            logging.info(f"📊 Health Summary: {healthy_count}/{len(targets)} targets healthy")
+            
+            if healthy_count == 0:
+                logging.info("⚠️  No healthy targets detected - investigating common issues:")
+                logging.info("   1. Check ECS task logs for startup errors")
+                logging.info("   2. Verify /health/ endpoint works: curl http://<task-ip>:8006/health/")
+                logging.info("   3. Check security group ingress rules for port 8006")
+                logging.info("   4. Verify application binds to 0.0.0.0:8006")
+        
+        except Exception as e:
+            logging.info(f"❌ Error diagnosing target group health: {e}")
+            raise
+    
+    def _find_sgr_import_id(self, cidr: str):
+        """
+        Shared helper to locate an existing security group rule for the given CIDR
+        and return the correct OpenTofu composite import ID.
+
+        If no matching rule exists, return None.
+        """
+        shared_vpc = self.get_shared_vpc()
+        sg_id = shared_vpc.rds_security_group_id
+        
+        ec2 = self.client("ec2")
+        response = ec2.describe_security_group_rules(
+            Filters=[{"Name": "group-id", "Values": [sg_id]}]
+        )
+        
+        for rule in response.get("SecurityGroupRules", []):
+            if (
+                    rule.get("IpProtocol") == "tcp"
+                    and rule.get("FromPort") == 5432
+                    and rule.get("ToPort") == 5432
+                    and rule.get("CidrIpv4") == cidr
+            ):
+                return f"{sg_id}_ingress_tcp_5432_5432_{cidr}"
+        
+        return None
+    
+    def get_rds_ingress_vpc_rule_id(self):
+        return self._find_sgr_import_id(self.get_shared_vpc().cidr_block)
+    
+    def get_rds_ingress_securitygroup_rule_id(self):
+        return self._find_sgr_import_id(common.get_ip_address())

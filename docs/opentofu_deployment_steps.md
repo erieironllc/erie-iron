@@ -1,12 +1,11 @@
 # Erie Iron OpenTofu Deployment Guide
 
-This guide provides step-by-step instructions for deploying Erie Iron to AWS using OpenTofu (Terraform). The deployment follows a two-tier architecture pattern with foundation and application stacks.
+This guide provides step-by-step instructions for deploying Erie Iron to AWS using OpenTofu (Terraform). The deployment uses a unified single-stack architecture.
 
 ## Overview
 
-Erie Iron uses a **two-tier deployment model**:
-1. **Foundation Stack**: Core infrastructure (VPC, RDS, ECS cluster, ECR repositories)
-2. **Application Stack**: Application services (ECS services, load balancer, domain configuration)
+Erie Iron uses a **single-stack deployment model**:
+- **Application Stack**: Contains all infrastructure including core components (VPC, RDS, ECS cluster, ECR repositories) and application services (ECS services, load balancer, domain configuration)
 
 ### Automation Integration
 
@@ -94,43 +93,44 @@ terraform {
 }
 ```
 
-### Step 2: Deploy Foundation Stack
+### Step 2: Deploy Application Stack (Unified Infrastructure)
 
-**2.1 Initialize Foundation Configuration:**
+**2.1 Initialize Application Configuration:**
 ```bash
-# Navigate to foundation configuration
-cd foundation/
-# Or use the single foundation.tf file
+# Navigate to application configuration
+cd opentofu/application/
 tofu init
 ```
 
-**2.2 Plan Foundation Deployment:**
+**2.2 Plan Application Deployment:**
 ```bash
 tofu plan -var="environment_name=dev" \
          -var="project_name=ErieIron" \
          -var="db_instance_class=db.t4g.micro"
 ```
 
-**2.3 Deploy Foundation Stack:**
+**2.3 Deploy Application Stack:**
 ```bash
 tofu apply -var="environment_name=dev" \
           -var="project_name=ErieIron" \
           -var="db_instance_class=db.t4g.micro"
 ```
 
-**2.4 Capture Foundation Outputs:**
+**2.4 Capture Application Outputs:**
 ```bash
-# Save outputs for application stack
-tofu output -json > foundation-outputs.json
+# Save outputs for reference
+tofu output -json > application-outputs.json
 
-# Key outputs needed:
+# Key outputs available:
 # - vpc_id
-# - subnet_id_list
+# - subnet_id_list 
 # - cluster_name
 # - ecr_webservice_uri
 # - ecr_messageprocessor_uri
 # - database_endpoint
 # - database_secret_arn
+# - load_balancer_dns_name
+# - application_url
 ```
 
 ### Step 3: Build and Push Container Images
@@ -172,60 +172,22 @@ docker tag erieiron-messageprocessor:latest \
 docker push <ecr-messageprocessor-uri>:latest
 ```
 
-### Step 4: Deploy Application Stack
+### Step 4: Verify Deployment
 
-**4.1 Initialize Application Configuration:**
-```bash
-# Navigate to application configuration
-cd ../application/
-# Or prepare application.tf variables
-tofu init
-```
-
-**4.2 Prepare Application Variables:**
-
-Create a `terraform.tfvars` file:
-```hcl
-environment_name = "dev"
-project_name     = "ErieIron"
-domain_name      = "your-domain.com"  # Optional
-
-# Foundation stack outputs
-vpc_id                     = "vpc-xxxxxxxxx"
-subnet_ids                 = ["subnet-xxxxxxxxx", "subnet-yyyyyyyyy"]
-cluster_name              = "AppCluster-dev"
-ecr_webservice_uri        = "123456789012.dkr.ecr.us-west-2.amazonaws.com/erieiron-webservice-dev"
-ecr_messageprocessor_uri  = "123456789012.dkr.ecr.us-west-2.amazonaws.com/erieiron-messageprocessor-dev"
-database_endpoint         = "erieiron-db-dev.xxxxxxxxx.us-west-2.rds.amazonaws.com"
-database_secret_arn       = "arn:aws:secretsmanager:us-west-2:123456789012:secret:ErieIron-rds-secret-dev-xxxxxx"
-```
-
-**4.3 Plan Application Deployment:**
-```bash
-tofu plan -var-file="terraform.tfvars"
-```
-
-**4.4 Deploy Application Stack:**
-```bash
-tofu apply -var-file="terraform.tfvars"
-```
-
-### Step 5: Verify Deployment
-
-**5.1 Check ECS Services:**
+**4.1 Check ECS Services:**
 ```bash
 aws ecs describe-services \
   --cluster AppCluster-dev \
   --services ErieIron-webservice-dev ErieIron-messageprocessor-dev
 ```
 
-**5.2 Check Load Balancer:**
+**4.2 Check Load Balancer:**
 ```bash
 aws elbv2 describe-load-balancers \
   --names erieiron-alb-dev
 ```
 
-**5.3 Test Application:**
+**4.3 Test Application:**
 ```bash
 # Get load balancer DNS name
 LB_DNS=$(tofu output -raw load_balancer_dns)
@@ -360,14 +322,8 @@ aws ecs describe-task-definition --task-definition <task-def-name>
 
 **Remove Application Stack:**
 ```bash
-cd application/
+cd opentofu/application/
 tofu destroy -var-file="terraform.tfvars"
-```
-
-**Remove Foundation Stack:**
-```bash
-cd ../foundation/
-tofu destroy -var="environment_name=dev"
 ```
 
 ## Monitoring and Maintenance

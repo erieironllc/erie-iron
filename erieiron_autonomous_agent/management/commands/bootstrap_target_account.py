@@ -1,15 +1,13 @@
 import logging
 import secrets
 import string
-import textwrap
 
 from django.core.management.base import BaseCommand, CommandError
 
 import settings
 from erieiron_autonomous_agent.models import Business, CloudAccount, InfrastructureStack
-from erieiron_autonomous_agent.utils import cloud_accounts
 from erieiron_common.enums import CloudProvider, EnvironmentType, InfrastructureStackType
-from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
+from erieiron_common.stack_manager import StackManager
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +69,7 @@ class Command(BaseCommand):
             self.stdout.write(f'CloudAccount: {cloud_account}')
             self.stdout.write(f'Role ARN: {role_arn}')
             self.stdout.write(f'Credentials stored in Secrets Manager')
-            
+        
         except Exception as e:
             logger.exception("Bootstrap target account failed")
             raise CommandError(f"Bootstrap failed: {str(e)}")
@@ -142,8 +140,9 @@ class Command(BaseCommand):
         """Deploy OpenTofu stack using OpenTofuStackManager."""
         self.stdout.write('Deploying OpenTofu stack...')
         
-        container_env = self._build_stack_environment(stack)
-        manager = OpenTofuStackManager(stack, container_env=container_env or None)
+        stack.get_cloud_account().clear_cached_credentials()
+        container_env = stack.get_runtime_env()
+        manager = StackManager(stack, container_env=container_env or None)
         deployment_result = manager.apply()
         
         if not deployment_result or not hasattr(deployment_result, 'outputs'):
@@ -195,7 +194,7 @@ class Command(BaseCommand):
             'session_duration': 3600
         }
         
-        credentials_secret_arn = cloud_accounts.store_credentials_secret(cloud_account, secret_payload)
+        credentials_secret_arn = cloud_account.store_credentials_secret(secret_payload)
         cloud_account.credentials_secret_arn = credentials_secret_arn
         cloud_account.save()
         logger.info(
@@ -205,19 +204,3 @@ class Command(BaseCommand):
                 "account_identifier": cloud_account.account_identifier,
             },
         )
-        
-    def _build_stack_environment(self, stack: InfrastructureStack) -> dict:
-        """Build AWS env vars so OpenTofu executes with the assumed target role."""
-        try:
-            env = cloud_accounts.build_cloud_credentials([stack])
-            if env:
-                self.stdout.write('Using target account credentials for OpenTofu execution...')
-            return env
-        except Exception as exc:
-            logger.warning(
-                "Falling back to ambient AWS credentials for stack %s: %s",
-                stack.id,
-                exc,
-                exc_info=True,
-            )
-        return {}

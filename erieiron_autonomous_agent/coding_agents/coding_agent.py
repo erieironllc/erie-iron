@@ -22,7 +22,7 @@ from erieiron_public import agent_tools
 
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import (
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
     TASK_DESC_CODE_WRITING,
     MAP_TASKTYPE_TO_PLANNING_PROMPT,
     SdaPhase,
@@ -30,7 +30,7 @@ from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import (
     ERIEIRON_PUBLIC_COMMON_VERSION,
     USE_CODEX,
     SdaInitialAction,
-    SelfDriverConfig,
+    CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB,
 )
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
@@ -44,13 +44,12 @@ from erieiron_autonomous_agent.models import (
     AgentLesson,
     AgentTombstone,
     LlmRequest,
-    Business,
     InfrastructureStack, Initiative,
 )
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding, validate_dockerfile
-from erieiron_common import common, aws_utils, opentofu_log_utils, aws_log_reader, ses_manager
+from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, LlmVerbosity, LlmMessageType, ContainerPlatform, InfrastructureStackType, BuildStep
@@ -58,93 +57,15 @@ from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_T
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError
-from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
-
-MIN_PODMAN_STORAGE_FREE_GB = 4.0
+from erieiron_common.stack_manager import StackManager
 
 
-def diagnose_target_group_health(config, target_group_arn: str) -> None:
-    """Diagnose current target group health status and provide detailed information"""
-    elbv2_client = aws_utils.client("elbv2")
-    
-    try:
-        response = elbv2_client.describe_target_health(TargetGroupArn=target_group_arn)
-        targets = response.get('TargetHealthDescriptions', [])
-        
-        config.log(f"🔍 Target Group Health Diagnosis for {target_group_arn}")
-        
-        if not targets:
-            config.log("❌ No targets registered in target group")
-            config.log("   → Check if ECS service is running and tasks have started")
-            config.log("   → Verify ECS service load balancer configuration")
-            return
-        
-        config.log(f"Found {len(targets)} registered targets:")
-        
-        for i, target in enumerate(targets, 1):
-            target_id = target['Target']['Id']
-            target_port = target['Target']['Port']
-            health = target['TargetHealth']
-            state = health['State']
-            reason = health.get('Reason', 'No reason provided')
-            description = health.get('Description', 'No description provided')
-            
-            status_icon = {
-                'healthy': '✅',
-                'unhealthy': '❌',
-                'initial': '🔄',
-                'unused': '⚪',
-                'draining': '⏳',
-                'unavailable': '🚫'
-            }.get(state.lower(), '❓')
-            
-            config.log(f"  {i}. Target {target_id}:{target_port}")
-            config.log(f"     Status: {status_icon} {state.upper()}")
-            config.log(f"     Reason: {reason}")
-            config.log(f"     Description: {description}")
-            
-            # Provide specific troubleshooting guidance
-            if state.lower() == 'unhealthy':
-                config.log(f"     🔧 Troubleshooting for {target_id}:")
-                if 'timeout' in reason.lower():
-                    config.log("       - Health check timing out - check if app responds on port 8006")
-                    config.log("       - Verify application binds to 0.0.0.0:8006 (not 127.0.0.1)")
-                elif 'connection refused' in reason.lower():
-                    config.log("       - Connection refused - check if service is running on port 8006")
-                    config.log("       - Verify security group allows traffic on port 8006")
-                elif 'target not found' in reason.lower():
-                    config.log("       - Target not found - check ECS task networking")
-                    config.log("       - Verify ENI and private IP assignment")
-                else:
-                    config.log(f"       - HTTP health check failed - check /health/ endpoint")
-                    config.log(f"       - Verify endpoint returns 200-399 status codes")
-            elif state.lower() == 'initial':
-                config.log("     ℹ️  Target is in initial state (normal for new deployments)")
-        
-        healthy_count = sum(1 for t in targets if t['TargetHealth']['State'] == 'healthy')
-        config.log(f"📊 Health Summary: {healthy_count}/{len(targets)} targets healthy")
-        
-        if healthy_count == 0:
-            config.log("⚠️  No healthy targets detected - investigating common issues:")
-            config.log("   1. Check ECS task logs for startup errors")
-            config.log("   2. Verify /health/ endpoint works: curl http://<task-ip>:8006/health/")
-            config.log("   3. Check security group ingress rules for port 8006")
-            config.log("   4. Verify application binds to 0.0.0.0:8006")
-    
-    except Exception as e:
-        config.log(f"❌ Error diagnosing target group health: {e}")
-        raise
-
-
-def execute(
-        task_id: str,
-        one_off_action: SdaInitialAction = None
-):
+def execute(task_id: str, one_off_action: SdaInitialAction = None):
     try:
         self_driving_task = bootstrap_selfdriving_agent(task_id)
         
         if one_off_action:
-            with SelfDriverConfig(self_driving_task, one_off_action) as config:
+            with CodingAgentConfig(self_driving_task, one_off_action) as config:
                 execute_one_off_action(config, one_off_action)
             return
     except AgentBlocked as agent_blocked:
@@ -156,7 +77,7 @@ def execute(
     for i in range(20):
         self_driving_task.get_git().pull()
         
-        with SelfDriverConfig(self_driving_task) as config:
+        with CodingAgentConfig(self_driving_task) as config:
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
                     logging.info(f"Stopping - hit the max budget ${config.budget :.2f}")
@@ -238,7 +159,7 @@ def execute(
                 config.cleanup_iteration()
 
 
-def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivingTask):
+def bootstrap_first_cycle(config: CodingAgentConfig, self_driving_task: SelfDrivingTask):
     most_recent_iteration = self_driving_task.get_most_recent_iteration()
     
     if most_recent_iteration:
@@ -261,7 +182,7 @@ def bootstrap_first_cycle(config: SelfDriverConfig, self_driving_task: SelfDrivi
         config.set_iteration(self_driving_task.iterate())
 
 
-def execute_one_off_action(config: SelfDriverConfig, one_off_action: SdaInitialAction):
+def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitialAction):
     config.init_log()
     
     print(textwrap.dedent(f"""
@@ -432,7 +353,7 @@ def do_coding(config, planning_data):
 def on_reset_task_test(task_id):
     task = Task.objects.get(id=task_id)
     self_driving_task = task.selfdrivingtask
-    config = SelfDriverConfig(self_driving_task)
+    config = CodingAgentConfig(self_driving_task)
     if config.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
         config.log("Skipping test regeneration for production deployment task")
         return config
@@ -445,7 +366,7 @@ def on_reset_task_test(task_id):
     return config
 
 
-def codex_exec(config: SelfDriverConfig, planning_data: dict):
+def codex_exec(config: CodingAgentConfig, planning_data: dict):
     config.current_iteration.codeversion_set.all().delete()
     
     """Execute the plan using the Codex CLI pipeline."""
@@ -796,13 +717,8 @@ def codex_exec(config: SelfDriverConfig, planning_data: dict):
         common.quietly_delete([stdout_path, stderr_path, last_message_path, plan_path, prompt_path])
 
 
-def get_guidance_msg(config: SelfDriverConfig):
+def get_guidance_msg(config: CodingAgentConfig):
     return config.guidance
-
-
-def validate_infrastructure(config):
-    for stack_manager in config.all_stack_managers:
-        stack_manager.validate_stack()
 
 
 def validate_all_changed_files(config, normalized_changed, planning_data):
@@ -810,7 +726,7 @@ def validate_all_changed_files(config, normalized_changed, planning_data):
     validation_errors = []
     
     try:
-        validate_infrastructure(config)
+        config.stack_manager.validate_stack()
     except Exception as e:
         logging.exception(e)
         validation_errors.append(e)
@@ -854,7 +770,7 @@ def validate_all_changed_files(config, normalized_changed, planning_data):
 
 
 def _persist_codex_code_versions(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         changed_paths: list,
         planning_data: dict
 ) -> list[str]:
@@ -915,7 +831,7 @@ def _persist_codex_code_versions(
 
 
 def _collect_repo_changed_files(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         prior_file_checksum_map: dict[Path, int],
         readonly_entries: list
 ) -> list[Path]:
@@ -996,7 +912,7 @@ def _extract_codex_usage(
         stdout_text: str | None,
         stderr_text: str | None,
         last_message_path: Path,
-        config: SelfDriverConfig
+        config: CodingAgentConfig
 ) -> dict:
     metrics: dict[str, float | int] = {}
     sources: list[str] = []
@@ -1182,7 +1098,7 @@ def _extract_codex_usage_with_regex(text: str) -> dict:
     return metrics
 
 
-def _estimate_codex_cost(metrics: dict, config: SelfDriverConfig) -> float | None:
+def _estimate_codex_cost(metrics: dict, config: CodingAgentConfig) -> float | None:
     total_tokens = metrics.get("total_tokens")
     if not total_tokens:
         return None
@@ -1357,7 +1273,7 @@ def get_strategic_unblocking_data(config):
     ).json()
 
 
-def validate_plan(config: SelfDriverConfig, planning_data):
+def validate_plan(config: CodingAgentConfig, planning_data):
     readonly_paths = config.self_driving_task.get_readonly_files()
     
     for f in planning_data.get("code_files", []):
@@ -1403,8 +1319,10 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         self_driving_task.initial_tests_pass = True
         self_driving_task.save()
     
-    with SelfDriverConfig(self_driving_task) as config:
+    with CodingAgentConfig(self_driving_task) as config:
         config.set_phase(SdaPhase.INIT)
+        
+        config.aws_interface.configure_nat_gateway()
         
         self_driving_task.get_git().pull()
         config.iterate_if_necessary()
@@ -1428,8 +1346,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
 
 
 def ensure_lb_alias_record(
-        config: SelfDriverConfig,
-        app_stack: InfrastructureStack,
+        config: CodingAgentConfig,
         app_outputs
 ):
     aws_interface = config.aws_interface
@@ -1440,6 +1357,7 @@ def ensure_lb_alias_record(
         domain_name = config.initiative.domain
     
     # Post-deployment validation to ensure ECS tasks are accessible via ALB
+    app_stack = config.stack
     security_group_id = app_stack.stack_vars["SecurityGroupId"]
     vpc_cidr = app_stack.stack_vars["VpcCidr"]
     target_group_arn = app_outputs["TargetGroupArn"]
@@ -1461,11 +1379,7 @@ def ensure_lb_alias_record(
 
 
 
-        {aws_log_reader.get_cloudwatch_content(
-            config.all_stack_tokens,
-            config.start_time
-        )}
-
+        {config.stack_manager.get_cloudwatch_content()} 
 
 
          """
@@ -1480,7 +1394,7 @@ def ensure_lb_alias_record(
     config.log("ECS service stability validation passed")
     
     # Diagnose current target group health before waiting
-    diagnose_target_group_health(config, target_group_arn)
+    aws_interface.diagnose_target_group_health(target_group_arn)
     
     # Wait for targets to be healthy in target group
     aws_interface.wait_for_target_group_healthy(
@@ -1494,7 +1408,7 @@ def ensure_lb_alias_record(
     if not domain_name or not hosted_zone_id:
         raise Exception(f"missing domain ({domain_name}) or hosted zone id ({hosted_zone_id})")
     
-    load_balancer_arn = common.first(OpenTofuStackManager.get_cross_stack_arns(config.all_stack_managers, "aws_lb"))
+    load_balancer_arn = common.first(config.stack_manager.get_arns("aws_lb"))
     if not load_balancer_arn:
         config.log(f"No Application Load Balancer found in stacks {config.get_stack_names()}; skipping DNS alias update")
         return
@@ -1542,8 +1456,7 @@ def ensure_lb_alias_record(
 
 
 def build_container_image(
-        config: SelfDriverConfig,
-        container_env: dict,
+        config: CodingAgentConfig,
         container_file: Path
 ) -> str:
     exec_container_prune()
@@ -1581,8 +1494,7 @@ def build_container_image(
     
     ecr_authenticate_for_base_image(
         config,
-        container_file,
-        container_env
+        container_file
     )
     
     config.log(f"\n\nstarting podman build with the command:\n{' '.join(container_build_cmd)}\n\n")
@@ -1591,7 +1503,7 @@ def build_container_image(
         stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True,
-        env=container_env
+        env=config.runtime_env
     )
     
     while build_process.poll() is None:
@@ -1609,7 +1521,7 @@ def build_container_image(
 
 
 def ensure_container_storage_capacity(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         min_free_gb: float = MIN_PODMAN_STORAGE_FREE_GB
 ) -> None:
     storage_path = get_podman_storage_path()
@@ -1642,7 +1554,7 @@ def ensure_container_storage_capacity(
     raise AgentBlocked(message)
 
 
-def handle_podman_build_failure(config: SelfDriverConfig, return_code: int) -> None:
+def handle_podman_build_failure(config: CodingAgentConfig, return_code: int) -> None:
     storage_path = get_podman_storage_path()
     
     if storage_path:
@@ -1723,8 +1635,8 @@ def get_aws_region():
     return os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or settings.AWS_DEFAULT_REGION_NAME
 
 
-def get_env_var_names(config: SelfDriverConfig) -> str:
-    env = config.get_runtime_env()
+def get_env_var_names(config: CodingAgentConfig) -> str:
+    env = config.runtime_env
     return ", ".join(env.keys())
 
 
@@ -1741,7 +1653,7 @@ def build_env_flags(env):
     return env_flags
 
 
-def build_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
+def build_lambda_packages(config: CodingAgentConfig, ) -> list[dict]:
     s3 = config.aws_interface.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
@@ -1790,7 +1702,7 @@ def build_lambda_packages(config: SelfDriverConfig, ) -> list[dict]:
 def get_stack_lambdas(config) -> list[dict]:
     lambdas = []
     
-    for resource_definition in OpenTofuStackManager.get_cross_stack_resource_definitions([config.stack_managers[InfrastructureStackType.APPLICATION]], "aws_lambda_function"):
+    for resource_definition in config.stack_manager.get_resource_definitions("aws_lambda_function"):
         s3_key_ref = resource_definition['s3_key']
         resource_name = "todo"
         if s3_key_ref:
@@ -1863,7 +1775,8 @@ def get_lambda_dependencies(config, source_file: str) -> list:
 
 def get_stack_buckets(config) -> list[dict]:
     buckets = []
-    for resource_def in OpenTofuStackManager.get_cross_stack_resource_definitions(config.all_stack_managers, "aws_s3_bucket"):
+    
+    for resource_def in config.stack_manager.get_resource_definitions("aws_s3_bucket"):
         bucket_name_expr = resource_def.get("bucket")
         
         if isinstance(bucket_name_expr, str):
@@ -1887,7 +1800,7 @@ def get_stack_buckets(config) -> list[dict]:
     return buckets
 
 
-def get_infrastructure_yaml_data(config: SelfDriverConfig, cf_template: InfrastructureStackType) -> dict:
+def get_infrastructure_yaml_data(config: CodingAgentConfig, cf_template: InfrastructureStackType) -> dict:
     return agent_tools.parse_cloudformation_yaml(
         get_infrastructure_yaml_code(config, cf_template)
     )
@@ -1909,7 +1822,7 @@ def get_infrastructure_yaml_code(config, cf_template: InfrastructureStackType):
 
 
 def push_image_to_ecr(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         container_image_tag: str
 ):
     region = config.env_type.get_aws_region()
@@ -1922,7 +1835,7 @@ def push_image_to_ecr(
         region
     )
     
-    ecr_login(config, full_image_uri, config.runtime_env)
+    ecr_login(config, full_image_uri)
     
     config.log(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
     
@@ -1997,9 +1910,8 @@ def push_image_to_ecr(
 
 
 def run_container_command(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         command_args: list[str],
-        container_env: dict,
         container_image_tag: str
 ) -> None:
     command_args = common.ensure_list(command_args)
@@ -2011,7 +1923,7 @@ def run_container_command(
         "--platform", ContainerPlatform.FARGATE,
         "-v", f"{config.sandbox_root_dir}:/app",
         "-w", "/app",
-        *build_env_flags(container_env),
+        *build_env_flags(config.runtime_env),
         container_image_tag,
         "python", "manage.py",
         *command_args
@@ -2026,7 +1938,7 @@ def run_container_command(
     process = subprocess.Popen(
         common.strings(cmd),
         stdout=config.log_f,
-        env=container_env,
+        env=config.runtime_env,
         stderr=subprocess.STDOUT,
         text=True
     )
@@ -2047,32 +1959,26 @@ def run_container_command(
         raise ExecutionException(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
 
 
-def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
+def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
     deployment_start_epoch = int(time.time())
     try:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
-        for stack_manager in config.all_stack_managers:
-            stack_manager.validate_stack()
-        
-        container_env = config.get_runtime_env()
+        config.stack_manager.validate_stack()
         
         container_image_tag, lambda_datas = build_iteration(
-            config,
-            container_env
+            config
         )
         
         deploy_iteration(
             config,
-            container_env,
             container_image_tag,
             lambda_datas
         )
         
         execute_iteration(
             config,
-            container_env,
             container_image_tag
         )
         
@@ -2104,40 +2010,34 @@ def build_deploy_exec_iteration(config: SelfDriverConfig, attempt=0) -> str:
 
 
 def store_deploy_and_execution_logs(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         deployment_start_epoch: int
-) -> None:
-    config.current_iteration.log_content_cloudwatch = aws_log_reader.get_cloudwatch_content(
-        config.all_stack_tokens,
-        deployment_start_epoch
-    )
+):
+    config.current_iteration.log_content_cloudwatch = config.stack_manager.get_cloudwatch_content()
     
-    deployment_logs = common.get_dict(config.deployment_logs)
     deploy_errors = []
-    for stack_type, stack_results in deployment_logs.items():
-        for stack_result in stack_results:
-            for plan_result in common.ensure_list(stack_result.get("plan_results", [])):
-                if not plan_result.get("stderr"):
-                    continue
-                deploy_errors.append({
-                    "stack": stack_type,
-                    "stage": plan_result.get("stage"),
-                    "stderr": plan_result.get("stderr")
-                })
+    for stack_result in config.deployment_logs:
+        for plan_result in common.ensure_list(stack_result.get("plan_results", [])):
+            if not plan_result.get("stderr"):
+                continue
+            deploy_errors.append({
+                "stage": plan_result.get("stage"),
+                "stderr": plan_result.get("stderr")
+            })
     
     config.current_iteration.log_content_deployment = {
         "schema": "opentofu/v1",
         "deployment_window_start": datetime.fromtimestamp(deployment_start_epoch, tz=dt_timezone.utc).isoformat(),
         "deployment_successful": len(deploy_errors) == 0,
-        "deployment_logs": deployment_logs,
+        "deployment_logs": config.deployment_logs,
         "deploy_errors": deploy_errors
     }
+    
     config.current_iteration.save(update_fields=["log_content_deployment", "log_content_cloudwatch"])
 
 
 def execute_iteration(
-        config: SelfDriverConfig,
-        container_env: dict,
+        config: CodingAgentConfig,
         container_image_tag: str
 ):
     config.set_phase(SdaPhase.EXECUTION)
@@ -2149,7 +2049,6 @@ def execute_iteration(
     if TaskType.CODING_ML.eq(task_type):
         run_container_command(
             config=config,
-            container_env=container_env,
             command_args=self_driving_task.main_name,
             container_image_tag=container_image_tag
         )
@@ -2168,7 +2067,6 @@ def execute_iteration(
         
         run_container_command(
             config=config,
-            container_env=container_env,
             command_args=[
                 self_driving_task.main_name,
                 "--input_file", input_file,
@@ -2179,14 +2077,13 @@ def execute_iteration(
     elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION, TaskType.INITIATIVE_VERIFICATION]:
         run_automated_tests(
             config,
-            container_env,
             container_image_tag
         )
     else:
         logging.info(f"nothing to execute for task type {task_type}")
 
 
-def run_automated_tests(config: SelfDriverConfig, container_env: dict, container_image_tag: str):
+def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     import random
     import time
     random.seed(time.time())
@@ -2236,7 +2133,6 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
         try:
             run_container_command(
                 config=config,
-                container_env=container_env,
                 command_args=["test", "--keepdb", "--noinput", *first_tests],
                 container_image_tag=container_image_tag
             )
@@ -2256,7 +2152,6 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
         try:
             run_container_command(
                 config=config,
-                container_env=container_env,
                 command_args=["test", "--keepdb", "--noinput"],
                 container_image_tag=container_image_tag
             )
@@ -2288,66 +2183,64 @@ def run_automated_tests(config: SelfDriverConfig, container_env: dict, container
 
 
 def deploy_iteration(
-        config: SelfDriverConfig,
-        container_env: dict,
+        config: CodingAgentConfig,
         container_image_tag: str,
         lambda_datas: list
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
-    stack_foundation, stack_application = get_stacks(config)
     task = config.task
     
-    validate_infrastructure(config)
+    config.stack_manager.validate_stack()
     
-    foundation_outputs = deploy_opentofu_stack(
-        config=config,
-        stack_type=InfrastructureStackType.FOUNDATION,
-        container_image_tag=container_image_tag,
-        container_env=container_env,
-    )
-    
-    add_rds_vals_to_env(
-        config.business,
-        container_env,
-        foundation_outputs
-    )
-    
-    manage_db(
-        config,
-        container_env,
-        container_image_tag
-    )
-    
-    validate_web_container(
-        config,
-        container_env,
-        container_image_tag
-    )
+    db_migrations_applied = False
+    if False: # config.stack_manager.get_db_is_running():
+        try:
+            # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
+            add_rds_vals_to_env(config)
+            manage_db(
+                config,
+                container_image_tag
+            )
+            db_migrations_applied = True
+        except Exception as e:
+            logging.error(f"failed to apply db migrations {e} before deployment")
+        
+        validate_web_container(
+            config,
+            container_image_tag
+        )
     
     app_outputs = deploy_opentofu_stack(
         config=config,
-        stack_type=InfrastructureStackType.APPLICATION,
-        container_env=container_env,
         container_image_tag=container_image_tag,
         lambda_datas=lambda_datas,
-        previous_stack_outputs=foundation_outputs
+        previous_stack_outputs=None  # No foundation stack outputs needed
     )
+    
+    if not db_migrations_applied:
+        if not config.stack_manager.get_db_is_running():
+            raise Exception(f"RDS is not running after deployment")
+        
+        manage_db(
+            config,
+            container_image_tag
+        )
     
     ensure_lb_alias_record(
         config,
-        stack_application,
         app_outputs
     )
 
 
-def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outputs: dict):
-    if not foundation_outputs:
-        raise BadPlan("Foundation infrastructure stack lacks RDS outputs required for environment configuration")
+def add_rds_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):
+    if not app_outputs:
+        app_outputs = config.stack_manager.get_outputs()
     
-    rds_secret_arn = foundation_outputs.get("RdsMasterSecretArn")
+    rds_secret_arn = app_outputs.get("RdsMasterSecretArn")
     if not rds_secret_arn:
         raise BadPlan("Infrastructure stack lacks an output named RdsMasterSecretArn")
     
+    business = config.business
     if not business.required_credentials:
         raise BadPlan(f"Business missing required_credentials: {business.service_token}")
     
@@ -2356,7 +2249,7 @@ def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outp
     if not secret_arn_env_var:
         raise BadPlan("Business is missing required RDS credential definition or secret_arn_env_var")
     
-    container_env[secret_arn_env_var] = rds_secret_arn
+    config.runtime_env[secret_arn_env_var] = rds_secret_arn
     
     output_varname_to_envname = {
         "RdsInstanceDBName": "ERIEIRON_DB_NAME",
@@ -2364,10 +2257,10 @@ def add_rds_vals_to_env(business: Business, container_env: dict, foundation_outp
         "RdsInstanceEndpoint": "ERIEIRON_DB_HOST"
     }
     for output_var_name, env_name in output_varname_to_envname.items():
-        output_var_value = foundation_outputs.get(output_var_name)
+        output_var_value = app_outputs.get(output_var_name)
         if not output_var_value:
             raise BadPlan(f"Infrastructure stack lacks an output value for the required output named '{output_var_name}'")
-        container_env[env_name] = str(output_var_value)
+        config.runtime_env[env_name] = str(output_var_value)
 
 
 def get_iteration_files_msg(current_iteration):
@@ -2382,7 +2275,7 @@ def get_iteration_files_msg(current_iteration):
         return "No files modified during this iteration"
 
 
-def build_iteration(config, container_env):
+def build_iteration(config):
     config.set_phase(SdaPhase.BUILD)
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
@@ -2433,7 +2326,6 @@ def build_iteration(config, container_env):
         
         container_image_tag = build_container_image(
             config,
-            container_env,
             docker_file
         )
     
@@ -2446,7 +2338,7 @@ def build_iteration(config, container_env):
 
 
 def template_modified_this_iteration(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         cloudformation_template: InfrastructureStackType
 ) -> bool:
     code_file = config.business.codefile_set.filter(
@@ -2463,7 +2355,7 @@ def template_modified_this_iteration(
     return bool(code_version and code_version.get_diff())
 
 
-def is_lambdas_modified(config: SelfDriverConfig):
+def is_lambdas_modified(config: CodingAgentConfig):
     iteration = config.current_iteration
     
     lambda_source_files = [
@@ -2481,11 +2373,7 @@ def is_lambdas_modified(config: SelfDriverConfig):
     )
 
 
-def manage_db(
-        config: SelfDriverConfig,
-        container_env: dict,
-        container_image_tag: str
-):
+def manage_db(config: CodingAgentConfig, container_image_tag: str):
     # if (
     #         config.current_iteration.version_number > 1
     #         and not config.current_iteration.codeversion_set.filter(code_file__file_path__contains="models").exists()
@@ -2496,14 +2384,12 @@ def manage_db(
     try:
         run_container_command(
             config=config,
-            container_env=container_env,
             command_args=["makemigrations", "--noinput"],
             container_image_tag=container_image_tag
         )
         
         run_container_command(
             config=config,
-            container_env=container_env,
             command_args=["migrate"],
             container_image_tag=container_image_tag
         )
@@ -2516,8 +2402,7 @@ def manage_db(
 
 
 def validate_web_container(
-        config: SelfDriverConfig,
-        container_env: dict,
+        config: CodingAgentConfig,
         container_image_tag: str
 ):
     import socket
@@ -2543,12 +2428,12 @@ def validate_web_container(
                 "-p", f"{port}:{port}",
                 "-v", f"{config.sandbox_root_dir}:/app",
                 "-w", "/app",
-                *build_env_flags(container_env),
+                *build_env_flags(config.runtime_env),
                 container_image_tag
             ],
             stdout=config.log_f,
             stderr=subprocess.STDOUT,
-            env=container_env,
+            env=config.runtime_env,
             text=True
         )
         
@@ -2620,7 +2505,7 @@ def init_task_execution(iteration):
     )
 
 
-def assert_tests_green(config: SelfDriverConfig):
+def assert_tests_green(config: CodingAgentConfig):
     test_reviewer_output = llm_chat(
         "Assert Initial Tests Green",
         [
@@ -2639,7 +2524,7 @@ def assert_tests_green(config: SelfDriverConfig):
         })
 
 
-def compute_goal_achievement_gate(config: SelfDriverConfig, ) -> tuple[bool, str]:
+def compute_goal_achievement_gate(config: CodingAgentConfig, ) -> tuple[bool, str]:
     iteration = config.current_iteration
     
     if not iteration.log_content_deployment:
@@ -2658,7 +2543,7 @@ def compute_goal_achievement_gate(config: SelfDriverConfig, ) -> tuple[bool, str
 
 
 def evaluate_iteration(
-        config: SelfDriverConfig
+        config: CodingAgentConfig
 ):
     iteration = config.current_iteration
     
@@ -2890,7 +2775,7 @@ def get_previous_iteration_summaries_msg(config):
     )
 
 
-def build_opentofu_plan_context_messages(config: SelfDriverConfig, title=None) -> list[LlmMessage]:
+def build_opentofu_plan_context_messages(config: CodingAgentConfig, title=None) -> list[LlmMessage]:
     iteration_to_modify = config.iteration_to_modify
     if not iteration_to_modify:
         return []
@@ -2921,7 +2806,7 @@ def build_opentofu_plan_context_messages(config: SelfDriverConfig, title=None) -
 
 
 def build_previous_iteration_context_messages(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         title=None
 ) -> list[LlmMessage]:
     current_iteration = config.current_iteration
@@ -2947,7 +2832,7 @@ def build_previous_iteration_context_messages(
 
 
 def get_iteration_eval_llm_messages(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         iterations: list[SelfDrivingTaskIteration],
         title=None
 ) -> list[LlmMessage]:
@@ -3002,7 +2887,7 @@ def get_architecture_docs(initiative: Initiative):
 
 
 def perform_code_review(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         planning_data
 ):
     current_iteration = config.current_iteration
@@ -3171,7 +3056,7 @@ def get_lessons(
 
 
 def extract_lessons(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         agent_step: str,
         log_content,
         skip=False
@@ -3209,7 +3094,7 @@ def extract_lessons(
 
 
 def implement_code_changes(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         planning_data: dict,
         code_review_exception: CodeReviewException
 ) -> SelfDrivingTaskIteration:
@@ -3361,7 +3246,7 @@ def post_process_code_ouput(code_str: str, code_version_to_modify: CodeVersion) 
     return code_str
 
 
-def write_initiative_tdd_test(config: SelfDriverConfig):
+def write_initiative_tdd_test(config: CodingAgentConfig):
     config.iterate_if_necessary()
     
     task = config.task
@@ -3397,7 +3282,7 @@ def write_initiative_tdd_test(config: SelfDriverConfig):
         config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
-def write_task_tdd_test(config: SelfDriverConfig):
+def write_task_tdd_test(config: CodingAgentConfig):
     config.iterate_if_necessary()
     task = config.task
     
@@ -3484,7 +3369,7 @@ def get_existing_test_context_messages(
 
 
 def write_test(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         description: str,
         test_file_name: str,
         system_prompt_name: str,
@@ -3583,7 +3468,7 @@ def write_test(
 
 
 def update_file_contents(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         file_path: Path,
         code: str
 ):
@@ -3616,7 +3501,7 @@ You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget
     """)
 
 
-def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
+def route_code_changes(config: CodingAgentConfig) -> DevelopmentRoutingPath:
     business = config.self_driving_task.business
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
@@ -3681,7 +3566,7 @@ def route_code_changes(config: SelfDriverConfig) -> DevelopmentRoutingPath:
         return DevelopmentRoutingPath(routing_data.get("recovery_path"))
 
 
-def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
+def plan_aws_provisioning_code_changes(config: CodingAgentConfig):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -3689,7 +3574,6 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     
     context_files = routing_json.get("context_files", []) + [
         "Dockerfile",
-        InfrastructureStackType.FOUNDATION.get_template_name(),
         InfrastructureStackType.APPLICATION.get_template_name()
     ]
     
@@ -3769,7 +3653,7 @@ def plan_aws_provisioning_code_changes(config: SelfDriverConfig):
     return planning_data
 
 
-def get_readonly_files_replacement(config: SelfDriverConfig) -> tuple[str, str]:
+def get_readonly_files_replacement(config: CodingAgentConfig) -> tuple[str, str]:
     parts = []
     
     for f in config.self_driving_task.get_readonly_files():
@@ -3781,7 +3665,7 @@ def get_readonly_files_replacement(config: SelfDriverConfig) -> tuple[str, str]:
     return "<read_only_files>", "\n".join(parts)
 
 
-def plan_direct_fix_code_changes(config: SelfDriverConfig):
+def plan_direct_fix_code_changes(config: CodingAgentConfig):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -3861,7 +3745,7 @@ def plan_direct_fix_code_changes(config: SelfDriverConfig):
     return planning_data
 
 
-def plan_test_fixing_code_changes(config: SelfDriverConfig):
+def plan_test_fixing_code_changes(config: CodingAgentConfig):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -3976,7 +3860,7 @@ def plan_test_fixing_code_changes(config: SelfDriverConfig):
     return planning_data
 
 
-def get_tasktype_specific_instructions(config: SelfDriverConfig) -> str:
+def get_tasktype_specific_instructions(config: CodingAgentConfig) -> str:
     if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
         return textwrap.dedent(f"""
                 The Initiative's end-to-end test is located at 
@@ -3990,7 +3874,7 @@ def get_tasktype_specific_instructions(config: SelfDriverConfig) -> str:
         return None
 
 
-def plan_full_code_changes(config: SelfDriverConfig):
+def plan_full_code_changes(config: CodingAgentConfig):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -4108,7 +3992,7 @@ def plan_full_code_changes(config: SelfDriverConfig):
 
 
 def write_code_file(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         code_version_to_modify: CodeVersion,
         code_file_data: dict,
         code_writing_model: LlmModel,
@@ -4161,10 +4045,7 @@ def write_code_file(
         )
         if not code_file_name.endswith(".md") else []
     ]
-    if code_file_name in {
-        InfrastructureStackType.FOUNDATION.get_template_name(),
-        InfrastructureStackType.APPLICATION.get_template_name()
-    }:
+    if code_file_name == InfrastructureStackType.APPLICATION.get_template_name():
         messages += build_opentofu_plan_context_messages(config)
     
     related_code_file_versions = []
@@ -4382,10 +4263,7 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         prompt = "codewriter--eml_coder.md"
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
-    elif code_file_name in {
-        InfrastructureStackType.FOUNDATION.get_template_name(),
-        InfrastructureStackType.APPLICATION.get_template_name()
-    }:
+    elif code_file_name == InfrastructureStackType.APPLICATION.get_template_name():
         prompt = [
             "codewriter--aws_cloudformation_coder_tofu.md",
             "common--infrastructure_rules_tofu.md"
@@ -4415,7 +4293,7 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
 
 
 def validate_code(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         code_file_path: Path,
         code: str,
         validator=None
@@ -4511,7 +4389,7 @@ def validate_code(
     return code
 
 
-def get_dependencies_msg(config: SelfDriverConfig, for_planning: bool) -> list[LlmMessage]:
+def get_dependencies_msg(config: CodingAgentConfig, for_planning: bool) -> list[LlmMessage]:
     header = "The python environment has the following packages installed"
     if for_planning:
         header += ".  If you need additional packages, you'll need to add them to the requirements.txt"
@@ -4610,7 +4488,7 @@ def get_goal_msg(config, description):
 
 
 def get_relevant_code_files(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         paths: list = None
 ) -> list[LlmMessage]:
     current_iteration = config.current_iteration
@@ -4650,7 +4528,6 @@ def get_relevant_code_files(
         required_files = [
             config.self_driving_task.test_file_path,
             InfrastructureStackType.APPLICATION.get_template_name(),
-            InfrastructureStackType.FOUNDATION.get_template_name(),
             "core/views.py",
             "core/urls.py",
             "core/models.py",
@@ -4815,49 +4692,28 @@ def get_relevant_code_files(
 
 
 def sync_stack_identity(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         container_env: dict,
         cloudformation_params: dict = None
 ):
-    stack_foundation, stack_application = get_stacks(config)
+    stack_application = config.stack
     
     container_env["STACK_NAME"] = stack_application.stack_name
     container_env["STACK_IDENTIFIER"] = container_env["TASK_NAMESPACE"] = stack_application.stack_namespace_token
-    container_env["FOUNDATION_STACK_NAME"] = stack_foundation.stack_name
-    container_env["FOUNDATION_STACK_IDENTIFIER"] = stack_foundation.stack_namespace_token
     
     if cloudformation_params:
-        cloudformation_params["FoundationStackIdentifier"] = stack_foundation.stack_namespace_token
         cloudformation_params["StackIdentifier"] = stack_application.stack_namespace_token
 
 
-def get_stacks(config: SelfDriverConfig) -> tuple[InfrastructureStack, InfrastructureStack]:
-    stack_application = InfrastructureStack.get_stack(
-        config.initiative,
-        InfrastructureStackType.APPLICATION,
-        config.env_type
-    )
-    
-    stack_foundation = InfrastructureStack.get_stack(
-        config.initiative,
-        InfrastructureStackType.FOUNDATION,
-        config.env_type
-    )
-    
-    return stack_foundation, stack_application
-
-
 def deploy_opentofu_stack(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         *,
-        stack_type: InfrastructureStackType,
-        container_env: dict,
         container_image_tag: str,
         lambda_datas: list | None = None,
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    stack = config.stacks[stack_type]
-    opentofu_stack_manager = config.stack_managers[stack_type]
+    stack = config.stack
+    opentofu_stack_manager = config.stack_manager
     
     web_container_image = config.aws_interface.get_full_image_uri(
         config.ecr_repo_name,
@@ -4874,7 +4730,6 @@ def deploy_opentofu_stack(
     tfvars_payload = build_tfvars_payload(
         config,
         stack,
-        container_env=container_env,
         web_container_image=web_container_image,
         ecr_arn=ecr_arn,
         lambda_datas=lambda_datas,
@@ -4890,12 +4745,20 @@ def deploy_opentofu_stack(
     plan_summary: Mapping[str, Any] | None = None
     
     try:
+        # Construct the correct composite security group rule import ID
+        
+        opentofu_stack_manager.import_external_resources([
+            ("aws_security_group_rule.rds_ingress_client", config.aws_interface.get_rds_ingress_securitygroup_rule_id()),
+            ("aws_security_group_rule.rds_ingress_vpc", config.aws_interface.get_rds_ingress_vpc_rule_id())
+        ])
+        
         plan_result = opentofu_stack_manager.plan()
         plan_summary = plan_result.extra.get("plan_change_summary")
         
         logging.info(f"applying tofu as {opentofu_stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()}")
         apply_result = opentofu_stack_manager.apply()
         outputs = apply_result.extra["outputs"]
+        add_rds_vals_to_env(config, outputs)
         
         if opentofu_stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
             ses_manager.manage_ses_domain_settings(
@@ -4904,13 +4767,12 @@ def deploy_opentofu_stack(
             )
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
-            stack_type=stack_type.value,
             plan_summary=plan_summary,
             results=[result.to_dict() for result in opentofu_stack_manager.run_results],
             tfvars=tfvars_payload,
         )
         
-        config.add_deployment_log(stack_type, log_payload)
+        config.add_deployment_log(log_payload)
         
         stack.resources = opentofu_stack_manager.get_resources()
         stack.save()
@@ -4975,7 +4837,6 @@ def deploy_opentofu_stack(
         )
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
-            stack_type=stack_type.value,
             plan_summary=plan_summary,
             results=[result.to_dict() for result in opentofu_stack_manager.run_results],
             tfvars=tfvars_payload,
@@ -4983,23 +4844,21 @@ def deploy_opentofu_stack(
         )
         
         raise AgentBlocked(json.dumps({
-            "description": f"OpenTofu command failed for {stack_type.value}",
+            "description": f"OpenTofu command failed {config.stack.stack_name}",
             **error_payload,
         }, indent=4))
 
 
 def build_tfvars_payload(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         stack: InfrastructureStack,
         *,
-        container_env: dict,
         web_container_image: str | None,
         ecr_arn: str | None,
         lambda_datas: list | None,
         previous_stack_outputs: dict | None = None
 ) -> dict[str, Any]:
-    stack_type = InfrastructureStackType(stack.stack_type)
-    stack_variables = config.stack_managers[stack_type].get_stack_variables()
+    stack_variables = config.stack_manager.get_stack_variables()
     
     forbidden_variables = {"DBName", "DBPassword"}
     forbidden_in_module = forbidden_variables.intersection(stack_variables.keys())
@@ -5007,14 +4866,12 @@ def build_tfvars_payload(
         raise BadPlan(
             json.dumps({
                 "description": "Terraform module defines forbidden variables",
-                "stack_type": stack_type.value,
                 "forbidden_variables": sorted(forbidden_in_module),
                 "hint": "Remove these variable declarations. Database credentials are sourced from Secrets Manager."
             }, indent=4),
             config.current_iteration.planning_json
         )
     
-    stack_foundation, stack_application = get_stacks(config)
     env_type = config.env_type
     secrets_key = config.business.get_secrets_root_key(env_type)
     
@@ -5022,8 +4879,7 @@ def build_tfvars_payload(
     shared_vpc = config.aws_interface.get_shared_vpc()
     
     payload: dict[str, Any] = {
-        "StackIdentifier": stack_application.stack_namespace_token,
-        "FoundationStackIdentifier": stack_foundation.stack_namespace_token,
+        "StackIdentifier": config.stack.stack_namespace_token,
         "ClientIpForRemoteAccess": developer_cidr,
         "ErieIronEnv": config.env_type.value,
         "DeletePolicy": "Retain" if EnvironmentType.PRODUCTION.eq(env_type) else "Delete",
@@ -5034,14 +4890,7 @@ def build_tfvars_payload(
         )
     }
     
-    if previous_stack_outputs:
-        payload.update({
-            **previous_stack_outputs,
-            "RdsSecretArn": previous_stack_outputs.get("RdsMasterSecretArn"),
-            "RdsEndpointAddress": previous_stack_outputs.get("RdsInstanceEndpoint"),
-            "RdsEndpointPort": previous_stack_outputs.get("RdsInstancePort"),
-            "DatabaseName": previous_stack_outputs.get("RdsInstanceDBName"),
-        })
+    # No previous_stack_outputs logic needed since everything is in one stack now
     
     if ecr_arn:
         payload["ECRRepositoryArn"] = ecr_arn
@@ -5062,7 +4911,7 @@ def build_tfvars_payload(
         raise AgentBlocked(
             json.dumps({
                 "description": "Initiative has no domain",
-                "stack_type": stack_type.value
+                "stack_id": config.stack.id
             }, indent=4)
         )
     
@@ -5105,7 +4954,7 @@ def build_tfvars_payload(
             continue
         if variable_name not in stack_variables:
             continue
-        arn_value = container_env.get(envvar_name) if envvar_name else None
+        arn_value = config.runtime_env.get(envvar_name) if envvar_name else None
         if arn_value:
             payload[variable_name] = arn_value
         else:
@@ -5114,9 +4963,8 @@ def build_tfvars_payload(
     if missing_secret_params:
         raise BadPlan(json.dumps({
             "description": "Missing required secret ARN variables for Terraform module",
-            "stack_type": stack_type.value,
             "missing_secret_variables": sorted(missing_secret_params),
-            "available_env_vars": container_env,
+            "available_env_vars": config.runtime_env,
             "hint": "Ensure credential_manager returned the ARN and that the module variable names align with business.required_credentials"
         }, indent=4), config.current_iteration.planning_json)
     
@@ -5128,14 +4976,13 @@ def build_tfvars_payload(
     
     module_variable_names = set(stack_variables.keys())
     if module_variable_names:
-        missing_variables = OpenTofuStackManager.validate_required_variables(
+        missing_variables = StackManager.validate_required_variables(
             stack_variables,
             provided_values
         )
         if missing_variables:
             raise BadPlan(json.dumps({
                 "description": "Terraform module declares required variables without defaults, but the agent has no value for them",
-                "stack_type": stack_type.value,
                 "missing_variables": sorted(missing_variables)
             }, indent=4), config.current_iteration.planning_json)
     
@@ -5143,7 +4990,7 @@ def build_tfvars_payload(
 
 
 def get_admin_credentials(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         secrets_key
 ):
     aws_secrets_client = config.aws_interface.client("secretsmanager")
@@ -5176,7 +5023,7 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
     return json_val
 
 
-def ecr_authenticate_for_base_image(config: SelfDriverConfig, dockerfile, env):
+def ecr_authenticate_for_base_image(config: CodingAgentConfig, dockerfile):
     base_img = ""
     try:
         with open(dockerfile) as f:
@@ -5184,13 +5031,13 @@ def ecr_authenticate_for_base_image(config: SelfDriverConfig, dockerfile, env):
             #   FROM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
             #   FROM --platform=$TARGETPLATFORM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
             for base_img in re.findall(pattern, f.read(), flags=re.IGNORECASE):
-                ecr_login(config, base_img, env)
+                ecr_login(config, base_img)
     except Exception as e:
         config.log(e)
         raise AgentBlocked({"desc": f"Unable to authenticate with ecr for {base_img}", "error": str(e)})
 
 
-def ecr_login(config: SelfDriverConfig, ecr_repo_uri, env):
+def ecr_login(config: CodingAgentConfig, ecr_repo_uri):
     """
     Log into the correct ECR registry for the provided image URI.
     Ensures the registry hostname is parsed correctly (account.dkr.ecr.region.amazonaws.com).
@@ -5214,7 +5061,7 @@ def ecr_login(config: SelfDriverConfig, ecr_repo_uri, env):
             cmd,
             shell=True,
             check=True,
-            env=env,
+            env=config.runtime_env,
             stdout=config.log_f,
             stderr=subprocess.STDOUT
         )
@@ -5261,7 +5108,7 @@ def get_file_structure_msg(root_dir: Path) -> list[LlmMessage]:
 
 
 def empty_stack_buckets(
-        config: SelfDriverConfig, *,
+        config: CodingAgentConfig, *,
         delete_bucket=True
 ):
     if not EnvironmentType.DEV.eq(config.env_type):

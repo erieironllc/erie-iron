@@ -4,7 +4,6 @@ import os
 import time
 import traceback
 import weakref
-from collections import defaultdict
 from enum import auto
 from pathlib import Path
 
@@ -12,20 +11,18 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
-import settings
-from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
-from erieiron_autonomous_agent.utils import cloud_accounts
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, CredentialService, SdaPhase
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, SdaPhase
 from erieiron_common.llm_apis.llm_interface import LlmMessage
-from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
+from erieiron_common.stack_manager import StackManager
 
 ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.27"
 TASK_DESC_CODE_WRITING = "code writing"
 LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 
+MIN_PODMAN_STORAGE_FREE_GB = 4.0
 COUNT_FULL_LOGS_IN_CONTEXT = 2
 USE_CODEX = True
 
@@ -52,7 +49,7 @@ MAP_TASKTYPE_TO_PLANNING_PROMPT = {
 ARTIFACTS = "artifacts"
 
 
-class SelfDriverConfig:
+class CodingAgentConfig:
     def __enter__(self):
         return self
     
@@ -82,11 +79,7 @@ class SelfDriverConfig:
         self.log_f = None
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
-        
-        self.cloudformation_configs: list[Path] = [
-            self.sandbox_root_dir / st.get_template_name()
-            for st in [InfrastructureStackType.FOUNDATION, InfrastructureStackType.APPLICATION]
-        ]
+        self.model_code_planning = LlmModel.OPENAI_GPT_5
         
         if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
             self.env_type = EnvironmentType.PRODUCTION
@@ -103,74 +96,32 @@ class SelfDriverConfig:
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = artifacts_root
         self.git = self.self_driving_task.get_git()
-        self.deployment_logs = defaultdict(list)
-        
-        self.stacks = {
-            stack_type: InfrastructureStack.get_stack(self.initiative, stack_type, self.env_type)
-            for stack_type in [InfrastructureStackType.FOUNDATION, InfrastructureStackType.APPLICATION]
-        }
-        self.all_stacks = list(self.stacks.values())
-        self.all_stack_tokens: list[OpenTofuStackManager] = [s.stack_namespace_token for s in self.stacks.values()]
-        
-        self.runtime_env = self.get_runtime_env()
-        self.stack_managers = {
-            stack_type: OpenTofuStackManager(stack, self.runtime_env, self.sandbox_root_dir)
-            for stack_type, stack in self.stacks.items()
-        }
-        self.all_stack_managers: list[OpenTofuStackManager] = self.stack_managers.values()
+        self.deployment_logs = []
         self.ecr_repo_name = sanitize_aws_name(self.business.service_token)
-        self.cloud_account = self.all_stacks[0].cloud_account or self.all_stacks[1].cloud_account or self.business.get_default_cloud_account(self.env_type)
+        
+        self.stack = InfrastructureStack.get_stack(
+            self.initiative,
+            InfrastructureStackType.APPLICATION,
+            self.env_type
+        )
+        
+        self.runtime_env = self.stack.get_runtime_env()
+        self.cloud_account = self.stack.get_cloud_account()
+        
         self.aws_interface = aws_utils.get_aws_interface(self.cloud_account)
+        self.vpc_configuration = self.aws_interface.get_shared_vpc()
+        self.aws_interface.configure_nat_gateway()
+        
         self.domain_manager = self.business.get_domain_manager(self.cloud_account)
-
-        self.model_code_planning = LlmModel.OPENAI_GPT_5
+        
+        self.stack_manager = StackManager(
+            self.stack,
+            self.runtime_env,
+            self.sandbox_root_dir
+        )
     
-    def get_runtime_env(self) -> dict:
-        stack_foundation = self.stacks[InfrastructureStackType.FOUNDATION]
-        stack_application = self.stacks[InfrastructureStackType.APPLICATION]
-        cloud_credentials = cloud_accounts.build_cloud_credentials([stack_foundation, stack_application])
-        
-        env = {
-            **cloud_credentials,
-            "DOMAIN_NAME": self.business.domain if EnvironmentType.PRODUCTION.eq(self.env_type) else self.initiative.domain,
-            "STACK_NAME": stack_application.stack_name,
-            "STACK_IDENTIFIER": stack_application.stack_namespace_token,
-            "FOUNDATION_STACK_IDENTIFIER": stack_foundation.stack_namespace_token,
-            "FOUNDATION_STACK_NAME": stack_foundation.stack_name,
-            "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
-            "TASK_NAMESPACE": stack_application.stack_namespace_token,
-            "BUILDAH_FORMAT": "docker",
-            "PATH": os.getenv("PATH")
-        }
-        
-        hf_model_cache_s3_uri = settings.HF_MODEL_CACHE_S3_URI
-        if hf_model_cache_s3_uri:
-            env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
-        
-        for credential_service_name, cred_def in self.business.required_credentials.items():
-            if credential_service_name == CredentialService.RDS.value:
-                # OpenTofu and RDS handle the RDS secret - we update this as a special case later
-                continue
-            
-            secret_arn_env_var = cred_def.get("secret_arn_env_var")
-            secrent_arn = credential_manager.manage_credentials(
-                self.business,
-                self.task,
-                self.env_type,
-                credential_service_name,
-                cred_def
-            )
-            if secrent_arn:
-                env[secret_arn_env_var] = secrent_arn
-        
-        for k in list(env.keys()):
-            if k == "AWS_PROFILE" or k.startswith("__") or env.get(k) is None:
-                env.pop(k, None)
-        
-        return env
-    
-    def add_deployment_log(self, stack_type: InfrastructureStackType, log_results: dict):
-        self.deployment_logs[stack_type].append(log_results)
+    def add_deployment_log(self, log_results: dict):
+        self.deployment_logs.append(log_results)
     
     def get_stack_names(self) -> list[str]:
         return [

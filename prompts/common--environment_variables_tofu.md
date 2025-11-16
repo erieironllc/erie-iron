@@ -8,13 +8,13 @@ The Erie Iron platform exposes a fixed base set of environment variables plus an
 | `AWS_DEFAULT_REGION` | Primary AWS region for the stack. Pass to SDK clients; never hardcode regions. | Operator runtime |
 | `AWS_REGION` | Alias for `AWS_DEFAULT_REGION`. Treat as optional; do not depend on it exclusively. | Operator runtime |
 | `STACK_IDENTIFIER` | Task-specific namespace used for naming AWS resources. Mirrors the OpenTofu `StackIdentifier` parameter and already respects service length limits. | Application stack |
-| `FOUNDATION_STACK_IDENTIFIER` | Namespace of the foundation stack (OpenTofu foundation module). Use when referencing cross-stack exports. | Foundation stack |
+| `FOUNDATION_STACK_IDENTIFIER` | Legacy namespace (now same as `STACK_IDENTIFIER`). Maintained for backward compatibility. | Application stack |
 | `TASK_NAMESPACE` | Legacy alias for `STACK_IDENTIFIER`. Use only when existing helpers require it; prefer `STACK_IDENTIFIER` in new code. | Orchestration |
 | `DOMAIN_NAME` | Fully-qualified subdomain assigned to this task. Build URLs, email addresses, and docs from this value instead of literals. | Orchestration |
-| `RDS_SECRET_ARN` | ARN of the Secrets Manager secret created by `ManageMasterUserPassword: true`. Pass into helpers; never construct secret names manually. | Foundation stack |
-| `ERIEIRON_DB_NAME` | Logical database name (typically `appdb`). Required alongside the secret ARN. | Foundation stack |
-| `ERIEIRON_DB_HOST` | RDS endpoint address. | Foundation stack |
-| `ERIEIRON_DB_PORT` | Database port (from the RDS endpoint). Do **not** hardcode 5432. | Foundation stack |
+| `RDS_SECRET_ARN` | ARN of the Secrets Manager secret created by `ManageMasterUserPassword: true`. Pass into helpers; never construct secret names manually. | Application stack |
+| `ERIEIRON_DB_NAME` | Logical database name (typically `appdb`). Required alongside the secret ARN. | Application stack |
+| `ERIEIRON_DB_HOST` | RDS endpoint address. | Application stack |
+| `ERIEIRON_DB_PORT` | Database port (from the RDS endpoint). Do **not** hardcode 5432. | Application stack |
 
 ### Additional variables supplied per iteration
 The evaluator may append extra entries (e.g., `MESSAGE_BUS_TOPIC`, `STORAGE_BUCKET`, `LLM_PROVIDER`). Those values will appear directly beneath this section as rendered `<env_vars>`. They are permitted for the current iteration only. Any variable absent from both the table above and the rendered list is disallowed.

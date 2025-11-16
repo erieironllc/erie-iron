@@ -168,6 +168,19 @@
       "Resource": "*"
     },
     {
+      "Sid": "CloudWatchAlarmsRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmsForMetric",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:DescribeAlarmHistory"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "Route53Access",
       "Effect": "Allow",
       "Action": [

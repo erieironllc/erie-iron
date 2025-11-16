@@ -5,8 +5,8 @@ import zipfile
 from pathlib import Path
 
 import settings
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu import get_goal_msg
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig
+from erieiron_autonomous_agent.coding_agents.coding_agent import get_goal_msg
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, CodeFile, CodeVersion
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat
 from erieiron_common import common, aws_utils
@@ -14,7 +14,7 @@ from erieiron_common.enums import TaskType, S3Bucket
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 
-def package_ml_artifacts(config: SelfDriverConfig):
+def package_ml_artifacts(config: CodingAgentConfig):
     if not config:
         return
     

@@ -10,12 +10,12 @@
 | --- | --- | --- | --- |
 | `torch>=2.6` | ~2.0 GB (CPU wheel) | `erieiron_ml/gpu_utils.py:8`, `erieiron_autonomous_agent/utils/codegen_utils.py:10` | Required for vector math and GPU helpers; dominates layer size and triggers CUDA/MPS checks.
 | `transformers` | ~0.5 GB incl. deps/model cache | `erieiron_autonomous_agent/utils/codegen_utils.py:12` | Pulls in tokenizers and model configs; `Dockerfile` pre-downloads `bert-base-uncased` and `all-MiniLM-L6-v2` (Dockerfile:58-60).
-| `sentence-transformers==2.2.2` | ~100 MB plus model weights | `erieiron_common/chat_engine/language_utils.py:117`, `erieiron_autonomous_agent/coding_agents/self_driving_coder_agent_tofu.py:3074` | Wraps `torch` + `transformers`; ensures sentence embedding utilities but duplicates vector stacks.
+| `sentence-transformers==2.2.2` | ~100 MB plus model weights | `erieiron_common/chat_engine/language_utils.py:117`, `erieiron_autonomous_agent/coding_agents/coding_agent.py:3074` | Wraps `torch` + `transformers`; ensures sentence embedding utilities but duplicates vector stacks.
 | `numpy<2.0.0` | ~80 MB | `erieiron_common/common.py:31`, `erieiron_ml/gpu_utils.py:6`, `erieiron_autonomous_agent/utils/codegen_utils.py:11` | Core numerical backbone; also required transitively by `scikit-learn` and plotting helpers.
 | `scikit-learn>=1.0.0` | ~75 MB | `erieiron_common/common.py:40` | Used exclusively for cosine similarity. Consider replacing with a pure NumPy implementation if only similarity is needed.
 | `matplotlib` | ~35 MB | `erieiron_ml/gpu_utils.py:138` | Only used for plotting diagnostic curves; candidate for optional dependency to slim production image.
 | `google-*` clients (`google-analytics-data`, `google-cloud-bigquery`, `google-generativeai`, `google-api-core`) | 20–60 MB each | `erieiron_common/gcp_utils.py:3-5`, `erieiron_common/llm_apis/gemini_chat_api.py:5` | Multiple Google SDKs installed; ensure all are needed in container, especially analytics vs. runtime paths.
-| `boto3` + `botocore` | ~70 MB combined | Extensive AWS helpers e.g., `erieiron_common/aws_utils.py:22`, `erieiron_autonomous_agent/coding_agents/self_driving_coder_agent_tofu.py:15` | Heavy but essential for AWS orchestration; watch for duplicated session helpers to limit eager imports.
+| `boto3` + `botocore` | ~70 MB combined | Extensive AWS helpers e.g., `erieiron_common/aws_utils.py:22`, `erieiron_autonomous_agent/coding_agents/coding_agent.py:15` | Heavy but essential for AWS orchestration; watch for duplicated session helpers to limit eager imports.
 
 \*Footprints reflect typical Linux wheels before model downloads; cached model weights can add several hundred MB more.
 

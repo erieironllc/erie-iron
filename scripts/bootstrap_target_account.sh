@@ -300,4 +300,4 @@ print_info "  • The self-driving coder agent can now deploy infrastructure to 
 print_info "  • All infrastructure stacks for '$BUSINESS_NAME' ($ENV_TYPE) will automatically use this account"
 print_info "  • Cross-account credentials are securely stored and will be used automatically"
 echo ""
-print_info "To deploy infrastructure, simply run self_driving_coder_agent_tofu.py as normal."
+print_info "To deploy infrastructure, simply run coding_agent.py as normal."

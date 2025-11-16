@@ -87,6 +87,18 @@ variable "DatabaseName" {
   default     = "appdb"
 }
 
+variable "FoundationStackIdentifier" {
+  description = "Identifier used to name foundation resources."
+  type        = string
+  default     = null
+}
+
+variable "ClientIpForRemoteAccess" {
+  description = "Developer IPv4 address in /32 notation allowed to reach the database."
+  type        = string
+  default     = "0.0.0.0/32"
+}
+
 variable "VpcId" {
   description = "VPC identifier hosting the workload."
   type        = string
@@ -98,12 +110,12 @@ variable "VpcCidr" {
 }
 
 variable "PublicSubnet1Id" {
-  description = "Public subnet ID used by the load balancer."
+  description = "Public subnet ID used by the load balancer and database subnet group."
   type        = string
 }
 
 variable "PublicSubnet2Id" {
-  description = "Second public subnet ID used by the load balancer."
+  description = "Second public subnet ID used by the load balancer and database subnet group."
   type        = string
 }
 
@@ -122,19 +134,28 @@ variable "SecurityGroupId" {
   type        = string
 }
 
-variable "RdsSecretArn" {
-  description = "Secrets Manager ARN that stores database credentials."
+variable "DBInstanceClass" {
+  description = "RDS instance class."
   type        = string
+  default     = "db.t3.micro"
 }
 
-variable "RdsEndpointAddress" {
-  description = "Hostname of the database endpoint."
-  type        = string
+variable "DBAllocatedStorage" {
+  description = "Allocated storage in GiB for the database instance."
+  type        = number
+  default     = 20
 }
 
-variable "RdsEndpointPort" {
-  description = "Port of the database endpoint."
+variable "AdminPassword" {
+  description = "Optional generated admin password forwarded by orchestration logic."
   type        = string
+  default     = null
+}
+
+variable "AWS_ACCOUNT_ID" {
+  description = "AWS account identifier (present for compatibility)."
+  type        = string
+  default     = null
 }
 
 variable "tags" {
@@ -143,10 +164,23 @@ variable "tags" {
   default     = {}
 }
 locals {
+  retain_resources     = lower(coalesce(var.DeletePolicy, "delete")) == "retain"
+  hosted_zone_provided = length(trim(var.DomainHostedZoneId, " ")) > 0
+  database_name        = "appdb"
+  foundation_identifier = coalesce(var.FoundationStackIdentifier, var.StackIdentifier)
+
   base_tags = merge(
     {
       Name            = "${var.StackIdentifier}"
       StackIdentifier = var.StackIdentifier
+    },
+    var.tags
+  )
+  
+  foundation_tags = merge(
+    {
+      Name            = "${local.foundation_identifier}"
+      StackIdentifier = local.foundation_identifier
     },
     var.tags
   )
@@ -346,10 +380,12 @@ resource "aws_iam_role_policy" "web_secrets" {
         Sid      = "AllowReadRdsSecret"
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
-        Resource = var.RdsSecretArn
+        Resource = aws_db_instance.primary.master_user_secret[0].secret_arn
       }
     ]
   })
+
+  depends_on = [aws_db_instance.primary]
 }
 
 resource "aws_iam_role_policy" "web_llm_api_keys" {
@@ -404,11 +440,11 @@ resource "aws_ecs_task_definition" "web" {
       ]
       environment = [
         { name = "ALLOWED_HOSTS", value = "*" },
-        { name = "RDS_SECRET_ARN", value = var.RdsSecretArn },
+        { name = "RDS_SECRET_ARN", value = aws_db_instance.primary.master_user_secret[0].secret_arn },
         { name = "ERIEIRON_ENV", value = var.ErieIronEnv },
-        { name = "ERIEIRON_DB_NAME", value = var.DatabaseName },
-        { name = "ERIEIRON_DB_HOST", value = var.RdsEndpointAddress },
-        { name = "ERIEIRON_DB_PORT", value = var.RdsEndpointPort },
+        { name = "ERIEIRON_DB_NAME", value = local.database_name },
+        { name = "ERIEIRON_DB_HOST", value = aws_db_instance.primary.address },
+        { name = "ERIEIRON_DB_PORT", value = tostring(aws_db_instance.primary.port) },
         { name = "STATIC_COMPILED_DIR", value = var.StaticCompiledDir },
         { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
         { name = "DOMAIN_NAME", value = var.DomainName }
@@ -475,6 +511,101 @@ resource "aws_ecs_service" "web" {
   }
 }
 
+# Database Resources (formerly from foundation stack)
+resource "aws_db_subnet_group" "primary" {
+  name       = "${local.foundation_identifier}-db-subnet-group"
+  subnet_ids = [var.PublicSubnet1Id, var.PublicSubnet2Id]
+
+  tags = merge(local.foundation_tags, {
+    Name = "${local.foundation_identifier}-db-subnet-group"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+resource "aws_db_instance" "primary" {
+  identifier                  = "${local.foundation_identifier}-db"
+  engine                      = "postgres"
+  db_name                     = local.database_name
+  instance_class              = var.DBInstanceClass
+  allocated_storage           = var.DBAllocatedStorage
+  storage_type                = "gp3"
+  multi_az                    = false
+  publicly_accessible         = true
+  storage_encrypted           = true
+  backup_retention_period     = 7
+  manage_master_user_password = true
+  username                    = "postgres"
+  db_subnet_group_name        = aws_db_subnet_group.primary.name
+  vpc_security_group_ids      = [var.SecurityGroupId]
+  skip_final_snapshot         = true
+
+  tags = merge(local.foundation_tags, {
+    Name = "${local.foundation_identifier}-db-instance"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+resource "null_resource" "enable_pgvector" {
+  depends_on = [aws_db_instance.primary]
+
+  provisioner "local-exec" {
+    command = <<EOT
+set -e
+echo "Fetching DB credentials from Secrets Manager..."
+
+SECRET_JSON=$(aws secretsmanager get-secret-value \
+  --secret-id ${aws_db_instance.primary.master_user_secret[0].secret_arn} \
+  --query SecretString --output text)
+
+PGPASSWORD=$(echo "$SECRET_JSON" | jq -r '.password')
+PGUSER=$(echo "$SECRET_JSON" | jq -r '.username')
+
+echo "Waiting for DB to accept connections..."
+for i in {1..30}; do
+  pg_isready -h ${aws_db_instance.primary.address} -U "$PGUSER" -d ${local.database_name} && break
+  echo "Still waiting..."
+  sleep 10
+done
+
+echo "Installing pgvector extension..."
+PGPASSWORD="$PGPASSWORD" psql "host=${aws_db_instance.primary.address} user=$PGUSER dbname=${local.database_name}" \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+echo "pgvector installation complete."
+EOT
+  }
+
+  triggers = {
+    db_instance_id = aws_db_instance.primary.id
+  }
+}
+
+resource "aws_security_group_rule" "rds_ingress_vpc" {
+  security_group_id = var.SecurityGroupId
+  type              = "ingress"
+  from_port         = 5432
+  to_port           = 5432
+  protocol          = "tcp"
+  cidr_blocks       = [var.VpcCidr]
+  description       = "Allow Postgres from shared VPC CIDR for internal access"
+}
+
+resource "aws_security_group_rule" "rds_ingress_client" {
+  security_group_id = var.SecurityGroupId
+  type              = "ingress"
+  from_port         = 5432
+  to_port           = 5432
+  protocol          = "tcp"
+  cidr_blocks       = [var.ClientIpForRemoteAccess]
+  description       = "Allow developer IP to reach Postgres for migrations"
+}
+
 variable "CreateIngressRule" {
   description = "Whether to create the ECS ingress rule (useful when security group is shared)."
   type        = bool
@@ -509,4 +640,52 @@ output "EcsClusterName" {
 output "TargetGroupArn" {
   description = "Target group ARN used by the web service."
   value       = aws_lb_target_group.web.arn
+}
+
+# Database outputs (formerly from foundation stack)
+output "FoundationStackIdentifier" {
+  description = "Initiative-level identifier for persistent resources."
+  value       = local.foundation_identifier
+}
+
+output "RdsInstanceIdentifier" {
+  description = "Identifier of the provisioned RDS instance."
+  value       = aws_db_instance.primary.id
+}
+
+output "RdsInstanceEndpoint" {
+  description = "Endpoint address of the RDS instance."
+  value       = aws_db_instance.primary.address
+}
+
+output "RdsEndpointAddress" {
+  description = "Hostname of the database endpoint."
+  value       = aws_db_instance.primary.address
+}
+
+output "RdsInstancePort" {
+  description = "Endpoint port of the RDS instance."
+  value       = aws_db_instance.primary.port
+}
+
+output "RdsEndpointPort" {
+  description = "Port of the database endpoint."
+  value       = tostring(aws_db_instance.primary.port)
+}
+
+output "RdsInstanceDBName" {
+  description = "Database name configured on the RDS instance."
+  value       = local.database_name
+}
+
+output "RdsMasterSecretArn" {
+  description = "ARN of the generated Secrets Manager secret for the DB master user."
+  value       = try(aws_db_instance.primary.master_user_secret[0].secret_arn, null)
+  sensitive   = true
+}
+
+output "RdsSecretArn" {
+  description = "Alias of the generated Secrets Manager secret for the DB master user."
+  value       = try(aws_db_instance.primary.master_user_secret[0].secret_arn, null)
+  sensitive   = true
 }

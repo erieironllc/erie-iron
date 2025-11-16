@@ -6,14 +6,17 @@ import os
 import subprocess
 import tempfile
 import textwrap
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import timedelta, datetime
 from pathlib import Path
 from typing import Tuple, Optional, Any
 
+import boto3
 from django.db import models, transaction
 from django.db.models import Sum, Q
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
+from django.utils import timezone
 from pgvector.django import VectorField
 
 import settings
@@ -39,7 +42,7 @@ from erieiron_common.enums import (
     InfrastructureStackType,
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
-    CloudProvider,
+    CloudProvider, CredentialService,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -430,6 +433,15 @@ class CloudAccount(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    @dataclass(slots=True)
+    class AwsCredentials:
+        role_arn: str
+        session_name: str
+        access_key_id: str
+        secret_access_key: str
+        session_token: Optional[str]
+        expiration: datetime
+    
     class Meta:
         indexes = [
             models.Index(fields=["business", "provider"]),
@@ -443,12 +455,148 @@ class CloudAccount(BaseErieIronModel):
     def __str__(self):
         return f"{self.name} ({self.provider})"
     
-    def get_service_client(self, service_name):
+    def clear_cached_credentials(self):
+        if hasattr(self, "_cached_credentials"):
+            del self._cached_credentials
+    
+    def get_aws_credentials(self) -> 'CloudAccount.AwsCredentials':
+        cache_key = f"credentials_{self.id}"
+        from erieiron_common import cache
+        creds = cache.tl_get(cache_key)
+        
+        if creds and creds.expiration > common.get_now():
+            return creds
+        
+        return cache.tl_set(cache_key, self._build_credentials())
+    
+    def _build_credentials(self) -> 'CloudAccount.AwsCredentials':
+        if CloudProvider.AWS.neq(self.provider):
+            raise NotImplementedError(f"Provider {self.provider} is not supported yet")
+        
+        secret_payload = self.load_credentials_secret()
+        role_arn = common.get(secret_payload, "role_arn")
+        if not role_arn:
+            raise RuntimeError("CloudAccount AWS credential payload missing role_arn")
+        
+        session_name = common.get(secret_payload, "session_name") or f"erieiron-{self.id}"
+        external_id = common.get(secret_payload, "external_id")
+        # Session duration handling with validation and clamping
+        raw_duration = common.get(secret_payload, "session_duration")
+        try:
+            duration_seconds = int(raw_duration)
+        except Exception:
+            duration_seconds = 3600  # default to 1h if missing or invalid
+        
+        # Clamp to AWS STS limits: 900s (15m) to 43200s (12h)
+        if duration_seconds < 900:
+            duration_seconds = 900
+        elif duration_seconds > 43200:
+            duration_seconds = 43200
+        
+        sts_client = boto3.client("sts")
+        assume_kwargs = {
+            "RoleArn": role_arn,
+            "RoleSessionName": session_name,
+            "DurationSeconds": duration_seconds,
+        }
+        if external_id:
+            assume_kwargs["ExternalId"] = external_id
+        
+        d = {
+            "cloud_account_id": str(self.id),
+            "business_id": str(self.business_id),
+            "provider": self.provider,
+            "role_arn": role_arn,
+        }
+        logging.info(f"Assuming role for cloud account {d}", extra=d)
+        response = sts_client.assume_role(**assume_kwargs)
+        credentials = response.get("Credentials") or {}
+        expiration = credentials.get("Expiration")
+        if not expiration:
+            expiration = common.get_now() + timedelta(hours=1)
+        elif not timezone.is_aware(expiration):
+            expiration = timezone.make_aware(expiration)
+        
+        return CloudAccount.AwsCredentials(
+            role_arn=role_arn,
+            session_name=session_name,
+            access_key_id=credentials.get("AccessKeyId"),
+            secret_access_key=credentials.get("SecretAccessKey"),
+            session_token=credentials.get("SessionToken"),
+            expiration=expiration,
+        )
+    
+    def store_credentials_secret(self, payload: dict[str, Any]) -> str:
+        """Persist provider credential payload for a cloud account.
+
+        Returns the secret identifier that was written so callers can store it on the model.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("Cloud account credential payload must be a dict")
+        secret_name = self.build_secret_name()
+        
+        # Debug: Log current AWS context before storing
+        try:
+            current_identity = self.get_service_client('sts').get_caller_identity()
+            logging.info(
+                "Storing credential payload for cloud account",
+                extra={
+                    "cloud_account_id": str(self.id),
+                    "business_id": str(self.business_id),
+                    "provider": self.provider,
+                    "secret_name": secret_name,
+                    "aws_account": current_identity.get("Account"),
+                    "aws_user_arn": current_identity.get("Arn"),
+                },
+            )
+        except Exception as e:
+            logging.warning(f"Could not get AWS identity for secret storage: {e}")
+            logging.info(
+                "Storing credential payload for cloud account",
+                extra={
+                    "cloud_account_id": str(self.id),
+                    "business_id": str(self.business_id),
+                    "provider": self.provider,
+                    "secret_name": secret_name,
+                },
+            )
+        
+        from erieiron_common import aws_utils
+        arn_or_name = aws_utils.put_secret(secret_name, payload)
+        
+        return arn_or_name or secret_name
+    
+    def load_credentials_secret(self) -> dict[str, Any]:
+        secret_id = self.credentials_secret_arn or self.build_secret_name()
+        try:
+            from erieiron_common import aws_utils
+            return aws_utils.get_secret(secret_id)
+        except Exception as exc:
+            logging.exception(
+                "Failed to load credential secret for cloud account",
+                extra={
+                    "cloud_account_id": str(self.id),
+                    "business_id": str(self.business_id),
+                    "provider": self.provider,
+                },
+            )
+            raise exc
+    
+    def get_service_client(self, service_name, endpoint_url=None) -> "boto3.session.Session.client":
         if CloudProvider.AWS.neq(self.provider):
             raise Exception(f"{self.provider} not supported")
         
-        from erieiron_common.aws_utils import get_aws_interface
-        return get_aws_interface(self).client(service_name)
+        aws_credentials = self.get_aws_credentials()
+        
+        from erieiron_common.aws_utils import get_aws_region
+        return boto3.client(
+            service_name,
+            endpoint_url=endpoint_url,
+            region_name=get_aws_region(),
+            aws_session_token=aws_credentials.session_token,
+            aws_secret_access_key=aws_credentials.secret_access_key,
+            aws_access_key_id=aws_credentials.access_key_id,
+        )
     
     def build_secret_name(self) -> str:
         if not self.id:
@@ -712,7 +860,7 @@ class Initiative(BaseErieIronModel):
             llm_chat,
             get_sys_prompt,
         )
-        from erieiron_autonomous_agent.coding_agents.self_driving_coder_agent_tofu import (
+        from erieiron_autonomous_agent.coding_agents.coding_agent import (
             get_existing_test_context_messages,
         )
         
@@ -801,6 +949,75 @@ class InfrastructureStack(BaseErieIronModel):
     resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
+    
+    def get_runtime_env(self) -> dict:
+        cloud_credentials = self.get_cloud_credentials()
+        
+        env = {
+            **cloud_credentials,
+            "DOMAIN_NAME": self.business.domain if EnvironmentType.PRODUCTION.eq(self.env_type) else self.initiative.domain,
+            "STACK_NAME": self.stack_name,
+            "STACK_IDENTIFIER": self.stack_namespace_token,
+            "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
+            "TASK_NAMESPACE": self.stack_namespace_token,
+            "BUILDAH_FORMAT": "docker",
+            "PATH": os.getenv("PATH")
+        }
+        
+        hf_model_cache_s3_uri = settings.HF_MODEL_CACHE_S3_URI
+        if hf_model_cache_s3_uri:
+            env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
+        
+        for credential_service_name, cred_def in self.business.required_credentials.items():
+            if credential_service_name == CredentialService.RDS.value:
+                # OpenTofu and RDS handle the RDS secret - we update this as a special case later
+                continue
+            
+            secret_arn_env_var = cred_def.get("secret_arn_env_var")
+            from erieiron_autonomous_agent.coding_agents import credential_manager
+            secrent_arn = credential_manager.manage_credentials(
+                self,
+                credential_service_name,
+                cred_def
+            )
+            if secrent_arn:
+                env[secret_arn_env_var] = secrent_arn
+        
+        for k in list(env.keys()):
+            if k == "AWS_PROFILE" or k.startswith("__") or env.get(k) is None:
+                env.pop(k, None)
+        
+        return env
+    
+    def get_cloud_account(self) -> CloudAccount:
+        return (
+                self.cloud_account
+                or self.business.get_default_cloud_account(self.env_type)
+                or Business.get_erie_iron_business().get_default_cloud_account(self.env_type)
+        )
+    
+    def get_cloud_credentials(self) -> dict[str, str]:
+        business = self.business
+        env_type = EnvironmentType(self.env_type)
+        
+        cloud_account = self.get_cloud_account()
+        cloud_account_credentials = cloud_account.get_aws_credentials()
+        
+        aws_region = env_type.get_aws_region()
+        env = {
+            "CLOUD_ACCOUNT_IDENTIFIER": cloud_account.account_identifier,
+            "ROLE_ARN": cloud_account_credentials.role_arn,
+            "ROLE_SESSION_NAME": cloud_account_credentials.session_name,
+            "AWS_ACCESS_KEY_ID": cloud_account_credentials.access_key_id,
+            "AWS_SECRET_ACCESS_KEY": cloud_account_credentials.secret_access_key,
+            "AWS_DEFAULT_REGION": aws_region,
+            "AWS_REGION": aws_region
+        }
+        
+        if cloud_account_credentials.session_token:
+            env["AWS_SESSION_TOKEN"] = cloud_account_credentials.session_token
+        
+        return env
     
     def get_iac_state_metadata(self) -> dict[str, Any]:
         raw_value = self.stack_arn
@@ -914,7 +1131,7 @@ class InfrastructureStack(BaseErieIronModel):
             env_type=env_type,
         )
         
-        if InfrastructureStackType.FOUNDATION.eq(stack_type) and EnvironmentType.DEV.eq(env_type):
+        if InfrastructureStackType.APPLICATION.eq(stack_type) and EnvironmentType.DEV.eq(env_type):
             new_sub_domain = f"{sanitize_aws_name(stack_name, 63)}.{business.domain}"
             
             Initiative.objects.filter(id=initiative.id).update(domain=new_sub_domain)
@@ -957,12 +1174,9 @@ class InfrastructureStack(BaseErieIronModel):
         if not self.resources:
             return
         
-        from erieiron_common.opentofu_stack_manager import OpenTofuStackManager
-        from erieiron_autonomous_agent.utils import cloud_accounts
-        
         try:
-            container_env = cloud_accounts.build_cloud_credentials(self)
-            OpenTofuStackManager(self, container_env=container_env).destroy_stack()
+            from erieiron_common.stack_manager import StackManager
+            StackManager(self, container_env=self.get_runtime_env()).destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
     
@@ -1864,8 +2078,8 @@ class CodeFile(BaseErieIronModel):
         return self.get_version(iteration) \
             or self.get_latest_version() \
             or self.init_from_codefile(
-                iteration, 
-                common.assert_exists(Path(iteration.self_driving_task.sandbox_path) / self.file_path) 
+                iteration,
+                common.assert_exists(Path(iteration.self_driving_task.sandbox_path) / self.file_path)
             )
 
 

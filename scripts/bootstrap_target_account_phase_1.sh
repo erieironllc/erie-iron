@@ -412,7 +412,7 @@ if [[ -z "$SERVICE_TOKEN" ]]; then
     SERVICE_TOKEN="default"
 fi
 
-# Generate ECR repository name using same logic as self_driving_coder_config.py
+# Generate ECR repository name using same logic as coding_agent_config.py
 ECR_REPO_NAME=$(sanitize_aws_name "$SERVICE_TOKEN")
 
 print_info "Derived service_token: $SERVICE_TOKEN"

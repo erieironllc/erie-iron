@@ -4,8 +4,8 @@ import textwrap
 import boto3
 from django.core.management.base import BaseCommand
 
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SdaInitialAction
+from erieiron_autonomous_agent.coding_agents import coding_agent
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaInitialAction
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Initiative, Task
 
@@ -52,4 +52,4 @@ class Command(BaseCommand):
         Running as {boto3.client("sts").get_caller_identity()['Arn']}
 
         """))
-        self_driving_coder_agent_tofu.execute(task_id, SdaInitialAction.valid_or(options.get("action")))
+        coding_agent.execute(task_id, SdaInitialAction.valid_or(options.get("action")))

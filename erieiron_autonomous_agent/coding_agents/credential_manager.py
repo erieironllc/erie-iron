@@ -4,9 +4,9 @@ import secrets
 import string
 
 import settings
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_config import SelfDriverConfig
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked
-from erieiron_autonomous_agent.models import Business, Task
+from erieiron_autonomous_agent.models import InfrastructureStack
 from erieiron_common import aws_utils, common
 from erieiron_common.enums import CredentialService, EnvironmentType
 
@@ -48,9 +48,7 @@ def get_existing_service_schema_desc() -> str:
 
 
 def manage_credentials(
-        business:Business,
-        task:Task,
-        env_type: EnvironmentType,
+        stack: InfrastructureStack,
         credential_service_name: str,
         cred_def: dict
 ) -> str:
@@ -61,6 +59,9 @@ def manage_credentials(
     if secret_arn_env_var == "STRIPE_WEBHOOK_SECRET_ARN":
         return settings.STRIPE_WEBHOOK_SECRET_ARN
     
+    cloud_account = stack.get_cloud_account()
+    business = cloud_account.business
+    env_type = stack.env_type
     credential_service = CredentialService.valid_or(common.default_str(credential_service_name).upper())
     if not credential_service:
         logging.debug(f"""Blocked by unsupported credential service: {credential_service_name}
@@ -68,6 +69,8 @@ def manage_credentials(
 Need a human to set this up
 
 Business:  {business.name} ({business.id})
+Stack ID:  {stack.id} ({stack.env_type})
+Cloud Account ID:  {cloud_account.account_identifier} ({cloud_account.provider})
 Env:  {env_type}
 
 Secret Def:
@@ -75,12 +78,19 @@ Secret Def:
 """)
         return None
     
-    aws_secret_key, secret_dict = get_credential_secret(
-        business,
-        env_type,
-        task,
-        credential_service_name
-    )
+    aws_secret_key = [
+        business.get_secrets_root_key(env_type)
+    ]
+    if env_type not in [EnvironmentType.PRODUCTION]:
+        aws_secret_key.append(cloud_account.id)
+    aws_secret_key.append(credential_service_name)
+    
+    aws_secret_key = aws_utils.sanitize_aws_name("/".join(aws_secret_key), 512)
+    
+    try:
+        secret_dict = aws_utils.get_secret(aws_secret_key)
+    except:
+        secret_dict = {}
     
     missing_secret_vals = validate_secret(
         secret_dict,
@@ -121,7 +131,7 @@ Secret Def:
 
 
 def get_aws_role_name(
-        config: SelfDriverConfig,
+        config: CodingAgentConfig,
         env: EnvironmentType
 ):
     business = config.business
@@ -140,29 +150,6 @@ def get_aws_role_name(
     role_name = aws_utils.sanitize_aws_name(role_name, 64)
     
     return role_name
-
-
-def get_credential_secret(
-        business: Business,
-        env_type: EnvironmentType,
-        task: Task,
-        credential_service_name: str
-):
-    aws_secret_key = [
-        business.get_secrets_root_key(env_type)
-    ]
-    if env_type not in [EnvironmentType.PRODUCTION]:
-        aws_secret_key.append(task.id)
-    aws_secret_key.append(credential_service_name)
-    
-    aws_secret_key = aws_utils.sanitize_aws_name("/".join(aws_secret_key), 512)
-    
-    try:
-        secret_dict = aws_utils.get_secret(aws_secret_key)
-    except:
-        secret_dict = {}
-    
-    return aws_secret_key, secret_dict
 
 
 def validate_secret(secret_dict, credential_def):

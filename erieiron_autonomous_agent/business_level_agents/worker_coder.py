@@ -1,5 +1,5 @@
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
+from erieiron_autonomous_agent.coding_agents import coding_agent
 
 
 def do_work(task_id):
-    self_driving_coder_agent_tofu.execute(task_id)
+    coding_agent.execute(task_id)

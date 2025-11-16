@@ -112,8 +112,10 @@ data "aws_availability_zones" "available" {
 # Local values for environment-specific cost optimization and naming
 locals {
   # Apply cost optimizations based on environment and settings
-  enable_nat_gateway_final = var.env_type == "production" ? var.enable_nat_gateway : (var.cost_optimized_for_dev ? false : var.enable_nat_gateway)
-  single_nat_gateway_final = var.env_type == "dev" ? true : var.single_nat_gateway
+  # enable_nat_gateway_final = var.env_type == "production" ? var.enable_nat_gateway : (var.cost_optimized_for_dev ? false : var.enable_nat_gateway)
+  # single_nat_gateway_final = var.env_type == "dev" ? true : var.single_nat_gateway
+  enable_nat_gateway_final = true
+  single_nat_gateway_final = true
   enable_vpc_endpoints_final = var.enable_vpc_endpoints  # Always respect the setting
   
   # Calculate actual NAT gateway count
@@ -508,6 +510,8 @@ output "vpc_config" {
       enabled = local.enable_nat_gateway_final
       single_nat_gateway = local.single_nat_gateway_final
       nat_gateway_count = local.nat_gateway_count
+      nat_gateway_ids = local.enable_nat_gateway_final ? aws_nat_gateway.main[*].id : []
+      private_route_table_ids = aws_route_table.private[*].id
       cost_optimization_level = local.enable_nat_gateway_final ? (local.single_nat_gateway_final ? "medium" : "none") : "maximum"
     }
     cost_optimization = {

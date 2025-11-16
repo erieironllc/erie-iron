@@ -152,7 +152,7 @@ except Exception as e:
 # This should be the CloudAccount that manages access TO the target account
 try:
     target_cloud_account = CloudAccount.objects.get(account_identifier=target_account_id)
-    print(f'SUCCESS: CloudAccount found for target account - ID: {target_cloud_account.id}')
+    print(f'SUCCESS: CloudAccount found for {target_cloud_account.business.name} ({target_account_id}) - ID: {target_cloud_account.id}')
     print(f'Name: {target_cloud_account.name}')
     print(f'Secret ARN: {target_cloud_account.credentials_secret_arn}')
     

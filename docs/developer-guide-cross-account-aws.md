@@ -10,7 +10,7 @@ This guide provides developers with practical instructions for implementing and 
 
 1. **Control Plane Account**: The Erie Iron AWS account hosting the self-driving coder agent
 2. **Target Accounts**: Separate AWS accounts where business infrastructure is deployed
-3. **Cross-Account IAM Role**: `ErieIronTargetAccountAgentRole` - the specific IAM role in target accounts that the Erie Iron orchestration code (self_driving_coder_agent_tofu.py) assumes when running operations
+3. **Cross-Account IAM Role**: `ErieIronTargetAccountAgentRole` - the specific IAM role in target accounts that the Erie Iron orchestration code (coding_agent.py) assumes when running operations
 4. **Credential Storage**: AWS Secrets Manager storing target account access credentials
 5. **OpenTofu Stacks**: Infrastructure as Code templates for provisioning permissions and infrastructure
 
@@ -185,7 +185,7 @@ def deploy_infrastructure(business, initiative):
 
 ### Required File Modifications:
 
-1. **Update `self_driving_coder_agent_tofu.py`**:
+1. **Update `coding_agent.py`**:
    - Modify `build_cloud_credentials()` to detect target accounts
    - Add `assume_target_account_role()` function for cross-account access
    - Implement credential caching with automatic refresh

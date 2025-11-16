@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document defines the canonical architecture for enabling the self-driving coder agent (`self_driving_coder_agent_tofu.py`) to operate on AWS resources in separate accounts from the control plane. This architecture prioritizes simplicity and leverages the fact that Erie Iron owns all accounts, eliminating complex security controls in favor of a straightforward role-based approach.
+This document defines the canonical architecture for enabling the self-driving coder agent (`coding_agent.py`) to operate on AWS resources in separate accounts from the control plane. This architecture prioritizes simplicity and leverages the fact that Erie Iron owns all accounts, eliminating complex security controls in favor of a straightforward role-based approach.
 
 ## Core Design Principles
 
@@ -18,7 +18,7 @@ This document defines the canonical architecture for enabling the self-driving c
 **Purpose**: Hosts the self-driving coder agent and orchestrates all target account operations
 
 **Components**:
-- **Self-Driving Coder Agent**: `self_driving_coder_agent_tofu.py` running in ECS
+- **Self-Driving Coder Agent**: `coding_agent.py` running in ECS
 - **Credential Storage**: AWS Secrets Manager with target account role credentials
 - **State Management**: OpenTofu state stored centrally for all target accounts
 - **CloudAccount Model**: Database records tracking all target accounts and their configurations
@@ -27,7 +27,7 @@ This document defines the canonical architecture for enabling the self-driving c
 **Purpose**: Isolated AWS accounts where business infrastructure is deployed
 
 **Components**:
-- **Cross-Account IAM Role**: `ErieIronTargetAccountAgentRole` - this is the specific role that the Erie Iron orchestration code (self_driving_coder_agent_tofu.py) assumes when running operations in the target account
+- **Cross-Account IAM Role**: `ErieIronTargetAccountAgentRole` - this is the specific role that the Erie Iron orchestration code (coding_agent.py) assumes when running operations in the target account
 - **Permission Policies**: Comprehensive permissions for all agent operations including ECS, ECR, S3, RDS, IAM, and infrastructure deployment
 - **Resource Tags**: Consistent tagging for cost tracking and management
 - **External ID**: Security measure for role assumption validation between control plane and target account
@@ -102,7 +102,7 @@ graph TD
 ```
 
 ### 3. Agent Implementation Changes
-**File**: `self_driving_coder_agent_tofu.py`
+**File**: `coding_agent.py`
 
 **Modified build_cloud_credentials() Function**:
 ```python
@@ -329,7 +329,7 @@ python manage.py bootstrap_target_account_phase2 \
 4. **Maintain simplicity**: Resist adding complexity; owner trust model is sufficient
 
 ### 2. Key Files to Modify:
-- `self_driving_coder_agent_tofu.py`: Add role assumption logic
+- `coding_agent.py`: Add role assumption logic
 - `./opentofu/target_account_provisioning/stack.tf`: Create bootstrap configuration
 - `./scripts/apply_target_account_bootstrap.sh`: Create deployment script
 

@@ -1,4 +1,5 @@
 import datetime
+import logging
 import random
 from enum import StrEnum, auto
 from typing import List, Tuple
@@ -538,6 +539,7 @@ class InfrastructureStackType(ErieEnum):
     
     def get_opentofu_config(self) -> str:
         if InfrastructureStackType.FOUNDATION.eq(self):
+            logging.warning(f"{InfrastructureStackType.FOUNDATION} is deprecated")
             return "./opentofu/foundation/stack.tf"
         elif InfrastructureStackType.APPLICATION.eq(self):
             return "./opentofu/application/stack.tf"

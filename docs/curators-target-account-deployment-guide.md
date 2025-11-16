@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document provides step-by-step instructions for setting up the "curators" AWS target account (659418876324) to receive deployments from the Erie Iron self-driving coder agent. This is a one-time setup process that must be completed before running `self_driving_coder_agent_tofu.py`.
+This document provides step-by-step instructions for setting up the "curators" AWS target account (659418876324) to receive deployments from the Erie Iron self-driving coder agent. This is a one-time setup process that must be completed before running `coding_agent.py`.
 
 ## Background: Why Target Account Bootstrap is Required
 
@@ -266,7 +266,7 @@ aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE
 Once bootstrap is complete:
 
 1. The curators target account is ready to receive deployments
-2. Run `self_driving_coder_agent_tofu.py` as normal
+2. Run `coding_agent.py` as normal
 3. Infrastructure will automatically deploy to account 659418876324
 4. Monitor deployment logs for successful cross-account operations
 

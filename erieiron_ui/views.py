@@ -29,7 +29,7 @@ from django.views.decorators.http import require_POST
 import settings
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
-from erieiron_autonomous_agent.coding_agents import self_driving_coder_agent_tofu
+from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import (
     Business,
@@ -43,14 +43,13 @@ from erieiron_autonomous_agent.models import (
 )
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
-from erieiron_autonomous_agent.utils import cloud_accounts
 from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
 from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance, PubSubHanderInstanceProcess
+from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
 
 logger = logging.getLogger(__name__)
@@ -3274,7 +3273,7 @@ def action_task_regenerate_test(request, task_id):
     #     PubSubMessageType.RESET_TASK_TEST,
     #     task_id
     # )
-    self_driving_coder_agent_tofu.on_reset_task_test(task_id)
+    coding_agent.on_reset_task_test(task_id)
     
     return redirect(reverse('view_task_tab', args=['testcode', task_id]))
 
@@ -4749,7 +4748,7 @@ def api_business_cloud_account_create(request, business_id):
                 is_default_dev=is_default_dev,
                 is_default_production=is_default_production,
             )
-            secret_identifier = cloud_accounts.store_credentials_secret(cloud_account, credentials_payload)
+            secret_identifier = cloud_account.store_credentials_secret(credentials_payload)
             if secret_identifier:
                 CloudAccount.objects.filter(id=cloud_account.id).update(
                     credentials_secret_arn=secret_identifier
@@ -4759,7 +4758,7 @@ def api_business_cloud_account_create(request, business_id):
                     dev=is_default_dev if is_default_dev else None,
                     production=is_default_production if is_default_production else None,
                 )
-            cloud_accounts.clear_cached_credentials(cloud_account.id)
+            cloud_account.clear_cached_credentials()
             cloud_account.refresh_from_db()
     except IntegrityError as exc:
         logger.exception(exc)
@@ -4834,11 +4833,11 @@ def api_business_cloud_account_update(request, business_id, account_id):
             if credentials_payload:
                 if cloud_account.provider == CloudProvider.AWS.value and not credentials_payload.get("role_arn"):
                     return {"error": "AWS role_arn is required when updating credentials."}
-                secret_identifier = cloud_accounts.store_credentials_secret(cloud_account, credentials_payload)
+                secret_identifier = cloud_account.store_credentials_secret(credentials_payload)
                 CloudAccount.objects.filter(id=cloud_account.id).update(
                     credentials_secret_arn=secret_identifier
                 )
-                cloud_accounts.clear_cached_credentials(cloud_account.id)
+                cloud_account.clear_cached_credentials()
             if default_updates:
                 cloud_account.set_default_flags(**default_updates)
             cloud_account.refresh_from_db()
@@ -4857,7 +4856,7 @@ def api_business_cloud_account_delete(request, business_id, account_id):
     business = get_object_or_404(Business, pk=business_id)
     cloud_account = get_object_or_404(CloudAccount, pk=account_id, business=business)
     
-    cloud_accounts.clear_cached_credentials(cloud_account.id)
+    cloud_account.clear_cached_credentials()
     cloud_account.delete()
     return {"success": True}
 
@@ -5063,7 +5062,7 @@ def view_llm_request(request, llm_request_id):
 def view_pubsub_message_details(request, message_id):
     message = get_object_or_404(PubSubMessage, id=message_id)
     # return send_response(request, "pubsub/message_details.html", context, breadcrumbs=breadcrumbs)
-
+    
     return send_response(
         request,
         "portfolio/portfolio_base.html",
@@ -5081,7 +5080,6 @@ def view_pubsub_message_details(request, message_id):
             (None, f'Message {str(message_id)[:8]}'),
         ]
     )
-    
 
 
 @require_POST
