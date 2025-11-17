@@ -465,7 +465,7 @@ def write_business_architecture(business, user_input: str = None):
             """) if user_input else None,
             "Please write a markdown-formatted high-level design document for Business's architecture"
         ],
-        model=LlmModel.OPENAI_GPT_5,
+        model=LlmModel.OPENAI_GPT_5_1,
         tag_entity=business,
         reasoning_effort=LlmReasoningEffort.HIGH,
         verbosity=LlmVerbosity.MEDIUM
@@ -507,7 +507,7 @@ def write_initiative_architecture(initiative: Initiative):
             ),
             "Please write a markdown-formatted high-level design document for this **Initiatives's** architecture. It should **never conflict** with the supplied business's architecture - it should only clarify details needed to implement the Current Initiative."
         ],
-        model=LlmModel.OPENAI_GPT_5,
+        model=LlmModel.OPENAI_GPT_5_1,
         tag_entity=initiative,
         reasoning_effort=LlmReasoningEffort.HIGH,
         verbosity=LlmVerbosity.MEDIUM
@@ -550,7 +550,7 @@ def identify_required_credentials(business: Business):
             *business.get_existing_required_credentials_llmm(),
             "Please identify the credentials required"
         ],
-        model=LlmModel.OPENAI_GPT_5,
+        model=LlmModel.OPENAI_GPT_5_1,
         tag_entity=business,
         reasoning_effort=LlmReasoningEffort.HIGH,
         verbosity=LlmVerbosity.MEDIUM,

@@ -266,7 +266,7 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pr
 
 @register.filter(name='token_count')
 def token_count(v):
-    return get_token_count(LlmModel.OPENAI_GPT_5, json.dumps(v))
+    return get_token_count(LlmModel.OPENAI_GPT_5_1, json.dumps(v))
 
 
 @register.filter(name='json_dumps')

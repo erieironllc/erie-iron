@@ -36,7 +36,7 @@ def chat(
         ]
     
     if not model:
-        models = [LlmModel.OPENAI_GPT_5]
+        models = [LlmModel.OPENAI_GPT_5_1]
     else:
         models = common.ensure_list(model)
     
@@ -139,7 +139,7 @@ class LlmMessage:
                 role_str = "user"
             elif LlmMessageType.ASSISTANT.eq(self.message_type):
                 role_str = "model"
-        elif model in [LlmModel.CLAUDE_3_7, LlmModel.CLAUDE_3_5]:
+        elif model in [LlmModel.CLAUDE_4_5, LlmModel.CLAUDE_3_7, LlmModel.CLAUDE_3_5]:
             if LlmMessageType.SYSTEM.eq(self.message_type):
                 role_str = "user"
         
@@ -365,7 +365,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
         logging.error(f"fixing invalid json - final attempt")
         response = chat(
             messages=messages,
-            model=LlmModel.OPENAI_GPT_5,
+            model=LlmModel.OPENAI_GPT_5_1,
             verbosity=LlmVerbosity.LOW,
             reasoning_effort=LlmVerbosity.HIGH,
             code_response=True

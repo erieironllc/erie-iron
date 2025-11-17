@@ -355,6 +355,7 @@ class LlmVerbosity(ErieEnum):
 
 
 class LlmModel(ErieEnum):
+    OPENAI_GPT_5_1 = "gpt-5.1"
     OPENAI_GPT_5 = "gpt-5"
     OPENAI_GPT_5_MINI = "gpt-5-mini"
     OPENAI_GPT_5_NANO = "gpt-5-nano"
@@ -380,6 +381,7 @@ class LlmModel(ErieEnum):
     GEMINI_2_5_PRO = "gemini-2.5-pro-preview-03-25"
     GEMINI_2_0_FLASH = "gemini-2.0-flash"
     
+    CLAUDE_4_5 = "claude-sonnet-4-5-20250929"
     CLAUDE_3_7 = "claude-3-7-sonnet-20250219"
     CLAUDE_3_5 = "claude-3-5-sonnet-20240620"
     CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE = "claude-3-opus-20240229"

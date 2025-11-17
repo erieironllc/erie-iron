@@ -129,7 +129,7 @@ def agent_chat(
     messages += common.ensure_list(user_messages)
     
     if not model:
-        model = LlmModel.OPENAI_GPT_5
+        model = LlmModel.OPENAI_GPT_5_1
     
     resp = llm_chat(
         description,
@@ -152,7 +152,7 @@ def llm_chat(
         description: str,
         messages: list[LlmMessage],
         tag_entity,
-        model: LlmModel = LlmModel.OPENAI_GPT_5,
+        model: LlmModel = LlmModel.OPENAI_GPT_5_1,
         output_schema: Path = None,
         reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.LOW,
         verbosity: LlmVerbosity = LlmVerbosity.LOW,

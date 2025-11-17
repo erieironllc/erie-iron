@@ -384,7 +384,7 @@ class DomainManager:
                     "Please suggest domain name candidates"
                 ],
                 output_schema="domain_finder.md.schema.json",
-                model=LlmModel.OPENAI_GPT_5,
+                model=LlmModel.OPENAI_GPT_5_1,
                 tag_entity=business,
                 reasoning_effort=LlmReasoningEffort.HIGH,
                 verbosity=LlmVerbosity.LOW

@@ -4,7 +4,7 @@ from erieiron_common.enums import LlmModel
 from erieiron_common.llm_apis import openai_chat_api, gemini_chat_api, claude_chat_api, deepseek_chat_api
 
 SYSTEM_AGENT_MODELS_IN_ORDER = [
-    LlmModel.OPENAI_GPT_5
+    LlmModel.OPENAI_GPT_5_1
 ]
 
 # want these to be cheap and fast- only need to parse a simple prompt and return json
@@ -16,6 +16,7 @@ PARSE_MODELS_IN_ORDER = [
 
 
 MODEL_TO_IMPL = {
+    LlmModel.OPENAI_GPT_5_1: openai_chat_api,
     LlmModel.OPENAI_GPT_5: openai_chat_api,
     LlmModel.OPENAI_GPT_5_MINI: openai_chat_api,
     LlmModel.OPENAI_GPT_5_NANO: openai_chat_api,
@@ -41,6 +42,7 @@ MODEL_TO_IMPL = {
     LlmModel.GEMINI_2_0_FLASH: gemini_chat_api,
 
     LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE: claude_chat_api,
+    LlmModel.CLAUDE_4_5: claude_chat_api,
     LlmModel.CLAUDE_3_7: claude_chat_api,
     LlmModel.CLAUDE_3_5: claude_chat_api,
 
@@ -49,9 +51,10 @@ MODEL_TO_IMPL = {
 }
 
 MODEL_BACKUPS = {
-    LlmModel.OPENAI_GPT_5: LlmModel.CLAUDE_3_7,
-    LlmModel.OPENAI_GPT_5_MINI: LlmModel.CLAUDE_3_7,
-    LlmModel.OPENAI_GPT_5_NANO: LlmModel.CLAUDE_3_5,
+    LlmModel.OPENAI_GPT_5_1: LlmModel.CLAUDE_4_5,
+    LlmModel.OPENAI_GPT_5: LlmModel.CLAUDE_4_5,
+    LlmModel.OPENAI_GPT_5_MINI: LlmModel.CLAUDE_4_5,
+    LlmModel.OPENAI_GPT_5_NANO: LlmModel.CLAUDE_4_5,
     
     # GPT family fallbacks
     LlmModel.OPENAI_GPT_3_5_TURBO: LlmModel.CLAUDE_3_5,
@@ -74,6 +77,7 @@ MODEL_BACKUPS = {
     LlmModel.OPENAI_O4_MINI: LlmModel.CLAUDE_3_7,
 
     # Claude and Gemini fallbacks
+    LlmModel.CLAUDE_4_5: LlmModel.OPENAI_GPT_5_1,
     LlmModel.CLAUDE_3_7: LlmModel.OPENAI_GPT_4o,
     LlmModel.CLAUDE_3_5: LlmModel.OPENAI_GPT_4_1,
     LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE: LlmModel.OPENAI_GPT_4o,
@@ -86,6 +90,7 @@ MODEL_BACKUPS = {
 }
 
 MODEL_TO_MAX_TOKENS = {
+    LlmModel.OPENAI_GPT_5_1: 400_000,
     LlmModel.OPENAI_GPT_5: 400_000,
     LlmModel.OPENAI_GPT_5_MINI: 400_000,
     LlmModel.OPENAI_GPT_5_NANO: 400_000,
@@ -109,6 +114,7 @@ MODEL_TO_MAX_TOKENS = {
     LlmModel.GEMINI_2_5_PRO: 200_000,
     LlmModel.GEMINI_2_0_FLASH: 200_000,
 
+    LlmModel.CLAUDE_4_5: 200_000,  # should be 128k, but they rate limit us
     LlmModel.CLAUDE_3_7: 20_000,  # should be 128k, but they rate limit us
     LlmModel.CLAUDE_3_5: 40_000,
     LlmModel.CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE: 128_000,
@@ -118,6 +124,10 @@ MODEL_TO_MAX_TOKENS = {
 }
 
 MODEL_PRICE_USD_PER_MILLION_TOKENS = {
+    LlmModel.OPENAI_GPT_5_1: {
+        "input": 1.25,
+        "output": 10.00,
+    },
     LlmModel.OPENAI_GPT_5: {
         "input": 1.25,
         "output": 10.00,
@@ -206,6 +216,10 @@ MODEL_PRICE_USD_PER_MILLION_TOKENS = {
     LlmModel.GEMINI_2_0_FLASH: {
         "input": 0.10,
         "output": 0.40,
+    },
+    LlmModel.CLAUDE_4_5: {
+        "input": 3.00,
+        "output": 15.00,
     },
     LlmModel.CLAUDE_3_7: {
         "input": 3.00,

@@ -105,7 +105,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         "Package Artifacts",
         messages,
         config.current_iteration,
-        config.model_code_planning,
+        config.get_code_planning_model(),
         code_response=True
     ).json()
     
@@ -144,7 +144,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
         "Writeup Summary",
         messages,
         config.current_iteration,
-        config.model_code_planning
+        config.get_code_planning_model()
     )
     
     planning_model = best_iteration.planning_model

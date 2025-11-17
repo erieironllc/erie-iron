@@ -3711,7 +3711,7 @@ def action_add_initiative_from_brief(request, business_id):
         ],
         output_schema="initiative--parse_brief.md.schema.json",
         tag_entity=business,
-        model=LlmModel.OPENAI_GPT_5,
+        model=LlmModel.OPENAI_GPT_5_1,
         verbosity=LlmVerbosity.MEDIUM
     ).json()
     
@@ -5027,7 +5027,7 @@ def view_llm_request(request, llm_request_id):
     
     model_choices = []
     for m in LlmModel:
-        if m == LlmModel.OPENAI_GPT_5:
+        if m == LlmModel.OPENAI_GPT_5_1:
             for verbosity in LlmVerbosity:
                 for reasoning_effort in LlmReasoningEffort:
                     model_choices.append({

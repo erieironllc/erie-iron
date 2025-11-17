@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import time
 import traceback
 import weakref
@@ -79,7 +80,6 @@ class CodingAgentConfig:
         self.log_f = None
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
-        self.model_code_planning = LlmModel.OPENAI_GPT_5
         
         if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
             self.env_type = EnvironmentType.PRODUCTION
@@ -215,6 +215,13 @@ class CodingAgentConfig:
             ...
         if self.stop_tailing:
             self.stop_tailing.set()
+    
+    def get_code_planning_model(self) -> LlmModel:
+        return random.choices(
+            [LlmModel.OPENAI_GPT_5_1, LlmModel.CLAUDE_4_5],
+            weights=[0.8, 0.2],
+            k=1
+        )[0]
     
     def cleanup_iteration(self):
         self.close_log()

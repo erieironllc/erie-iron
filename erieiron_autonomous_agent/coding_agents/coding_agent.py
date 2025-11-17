@@ -199,7 +199,7 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
         config
         .self_driving_task
         .selfdrivingtaskiteration_set
-        .filter(planning_json__isnull=False)
+        # .filter(planning_json__isnull=False)
         .order_by("-timestamp")
         .first()
     )
@@ -588,7 +588,7 @@ def codex_exec(config: CodingAgentConfig, planning_data: dict):
                 business=business,
                 initiative=initiative,
                 task_iteration=config.current_iteration,
-                llm_model=LlmModel.OPENAI_GPT_5,
+                llm_model=LlmModel.OPENAI_GPT_5_1,
                 token_count=total_tokens,
                 price=total_cost_usd,
                 response=codex_result.stdout,
@@ -1104,7 +1104,7 @@ def _estimate_codex_cost(metrics: dict, config: CodingAgentConfig) -> float | No
         return None
     
     # Default to the planner's configured model; fall back to the primary system planning model.
-    pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.OPENAI_GPT_5)
+    pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.OPENAI_GPT_5_1)
     if not pricing:
         return None
     
@@ -2193,7 +2193,7 @@ def deploy_iteration(
     config.stack_manager.validate_stack()
     
     db_migrations_applied = False
-    if False: # config.stack_manager.get_db_is_running():
+    if config.stack_manager.get_db_is_running():
         try:
             # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
             add_rds_vals_to_env(config)
@@ -2213,8 +2213,7 @@ def deploy_iteration(
     app_outputs = deploy_opentofu_stack(
         config=config,
         container_image_tag=container_image_tag,
-        lambda_datas=lambda_datas,
-        previous_stack_outputs=None  # No foundation stack outputs needed
+        lambda_datas=lambda_datas
     )
     
     if not db_migrations_applied:
@@ -3170,7 +3169,7 @@ def implement_code_changes(
                         code_file_data=cfi,
                         requirements_txt=requirements_txt,
                         blocking_issues=blocking_issues,
-                        code_writing_model=LlmModel.valid_or(cfi.get("code_writing_model"), LlmModel.OPENAI_GPT_5),
+                        code_writing_model=LlmModel.valid_or(cfi.get("code_writing_model"), LlmModel.OPENAI_GPT_5_1),
                         roll_back_reason=roll_back_reason,
                         previous_exception=previous_exception
                     )
@@ -3577,6 +3576,7 @@ def plan_aws_provisioning_code_changes(config: CodingAgentConfig):
         InfrastructureStackType.APPLICATION.get_template_name()
     ]
     
+    planning_model = config.get_code_planning_model()
     planning_data = llm_chat(
         "Plan aws provisioning code changes",
         [
@@ -3636,13 +3636,14 @@ def plan_aws_provisioning_code_changes(config: CodingAgentConfig):
             get_tasktype_specific_instructions(config),
             "Please produce a development plan that addresses this issue"
         ],
+        model=planning_model,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=config.model_code_planning
+            planning_model=planning_model
         )
         current_iteration.refresh_from_db(fields=["planning_model"])
     
@@ -3671,6 +3672,7 @@ def plan_direct_fix_code_changes(config: CodingAgentConfig):
     iteration_to_modify = config.iteration_to_modify
     routing_json = current_iteration.routing_json
     
+    planning_model = config.get_code_planning_model()
     planning_data = llm_chat(
         "Plan quick fix code changes",
         [
@@ -3728,13 +3730,14 @@ def plan_direct_fix_code_changes(config: CodingAgentConfig):
             ) if config.iteration_to_modify.strategic_unblocking_json else None,
             "Please produce a development plan that addresses this issue"
         ],
+        model=planning_model,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=config.model_code_planning
+            planning_model=planning_model
         )
         current_iteration.refresh_from_db(fields=["planning_model"])
     
@@ -3837,17 +3840,18 @@ def plan_test_fixing_code_changes(config: CodingAgentConfig):
     
     ]
     
+    planning_model = config.get_code_planning_model()
     planning_data = llm_chat(
         "Plan code changes",
         messages,
-        model=config.model_code_planning,
+        model=planning_model,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=config.model_code_planning,
+            planning_model=planning_model,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
         )
@@ -3968,17 +3972,18 @@ def plan_full_code_changes(config: CodingAgentConfig):
     
     ]
     
+    planning_model = config.get_code_planning_model()
     planning_data = llm_chat(
         "Plan code changes",
         messages,
-        model=config.model_code_planning,
+        model=planning_model,
         tag_entity=config.current_iteration,
         output_schema="codeplanner.schema.json"
     ).json()
     
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=config.model_code_planning,
+            planning_model=planning_model,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
         )
