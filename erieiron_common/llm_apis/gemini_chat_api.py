@@ -15,7 +15,7 @@ def get_api_key():
 
 def chat(
         messages: List[dict],
-        model: LlmModel = LlmModel.GEMINI_2_5_PRO,
+        model: LlmModel = LlmModel.GEMINI_3_0_PRO,
         code_response=False,
         reasoning_effort: LlmReasoningEffort = None,
         verbosity: LlmVerbosity = None,

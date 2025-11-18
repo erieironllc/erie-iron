@@ -359,10 +359,6 @@ class LlmModel(ErieEnum):
     OPENAI_GPT_5 = "gpt-5"
     OPENAI_GPT_5_MINI = "gpt-5-mini"
     OPENAI_GPT_5_NANO = "gpt-5-nano"
-    
-    # OPENAI_GPT_4_5 = "gpt-4.5"
-    # OPENAI_GPT_45_DO_NOT_USE_VERY_VERY_EXPENSIVE = "gpt-4.5-preview-2025-02-27"
-    
     OPENAI_GPT_3_5_TURBO = "gpt-3.5-turbo"
     OPENAI_GPT_4_1 = "gpt-4.1"
     OPENAI_GPT_4_1_MINI = "gpt-4.1-mini"
@@ -378,13 +374,15 @@ class LlmModel(ErieEnum):
     OPENAI_O4 = "o4"
     OPENAI_O4_MINI = "o4-mini"
     
+    GEMINI_3_0_PRO = "gemini-3-pro-preview"
+    GEMINI_3_0_FLASH = "gemini-3-flash-preview"
     GEMINI_2_5_PRO = "gemini-2.5-pro-preview-03-25"
     GEMINI_2_0_FLASH = "gemini-2.0-flash"
     
     CLAUDE_4_5 = "claude-sonnet-4-5-20250929"
     CLAUDE_3_7 = "claude-3-7-sonnet-20250219"
     CLAUDE_3_5 = "claude-3-5-sonnet-20240620"
-    CLAUDE_3_OPUS_DO_NOT_USE_VERY_EXPENSIVE = "claude-3-opus-20240229"
+    CLAUDE_3_OPUS= "claude-3-opus-20240229"
     
     DEEPSEEK_CODER = "deepseek-coder"
     DEEPSEEK_CHAT = "deepseek-chat"

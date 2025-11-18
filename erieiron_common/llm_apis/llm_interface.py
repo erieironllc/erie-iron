@@ -134,7 +134,7 @@ class LlmMessage:
         model = LlmModel(model)
         
         role_str = self.message_type.value
-        if model in [LlmModel.GEMINI_2_5_PRO, LlmModel.GEMINI_2_0_FLASH]:
+        if model in [LlmModel.GEMINI_3_0_PRO, LlmModel.GEMINI_3_0_FLASH, LlmModel.GEMINI_2_5_PRO, LlmModel.GEMINI_2_0_FLASH]:
             if LlmMessageType.SYSTEM.eq(self.message_type):
                 role_str = "user"
             elif LlmMessageType.ASSISTANT.eq(self.message_type):

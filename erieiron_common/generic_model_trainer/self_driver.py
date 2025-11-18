@@ -812,7 +812,7 @@ RESPOND ONLY WITH IMMEDIATELY PARSEABLE JSON IN THE EXAMPLE RESPONSE FORMAT
 
     llm_response = llm_interface.chat(
         messages,
-        LlmModel.GEMINI_2_5_PRO,
+        LlmModel.GEMINI_3_0_PRO,
         code_response=True
     )
     record_spend(config, llm_response.price_total)
@@ -855,7 +855,7 @@ Policies that must be followed:
     - the audience for this is a mid-level ML research scientist.  If there are things you'd like to teach to a mid-level ML research scientist, please add this content as well
     - DO NOT include the string "```markdown" anywhere in the response
 """,
-        LlmModel.GEMINI_2_5_PRO
+        LlmModel.GEMINI_3_0_PRO
     )
     record_spend(config, arch_llm_response.price_total)
 

@@ -218,8 +218,8 @@ class CodingAgentConfig:
     
     def get_code_planning_model(self) -> LlmModel:
         return random.choices(
-            [LlmModel.OPENAI_GPT_5_1, LlmModel.CLAUDE_4_5],
-            weights=[0.8, 0.2],
+            [LlmModel.OPENAI_GPT_5_1, LlmModel.OPENAI_GPT_5_1, LlmModel.CLAUDE_4_5],
+            weights=[0.6, 0.25, 0.15],
             k=1
         )[0]
     
