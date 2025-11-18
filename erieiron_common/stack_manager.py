@@ -14,6 +14,7 @@ import time
 from datetime import timedelta, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from enum import Enum
 
 import hcl2
 
@@ -24,8 +25,52 @@ from erieiron_common import aws_utils
 from erieiron_common import common, opentofu_log_utils
 from erieiron_common.date_utils import to_utc
 from erieiron_common.enums import InfrastructureStackType, EnvironmentType
-from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandError, OpenTofuException
+from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandError, OpenTofuException, MissingStackPerms
 from erieiron_common.opentofu_log_utils import OpenTofuRunResult
+
+DEFAULT_TOFU_STATE_BUCKET = "erieiron-opentofu-state"
+
+
+class ApplyErrorType(Enum):
+    """Classification of apply command errors for handling strategy."""
+    SUCCESS = "success"
+    DUPLICATE_IDEMPOTENT = "duplicate_idempotent"
+    HARD_ERROR_WITH_DUPLICATE = "hard_error_with_duplicate"
+    MISSING_PERMISSIONS = "missing_permissions"
+    TRANSIENT_ERROR = "transient_error"
+    PERMANENT_ERROR = "permanent_error"
+
+
+# Known duplicate/idempotent error messages that can be treated as success
+KNOWN_DUPLICATE_MSGS = [
+    "InvalidPermission.Duplicate",
+    "InvalidChangeBatch", 
+    "AlreadyExists",
+]
+
+# Error indicators that should never be treated as idempotent success
+HARD_ERROR_INDICATORS = [
+    "AccessDenied",
+    "UnauthorizedOperation",
+    "Forbidden",
+    "is not authorized to perform",
+    "does not have permission to perform",
+    "StatusCode: 403",
+    "Error: creating",
+    "Error: updating",
+]
+
+# Permissions-related error patterns that indicate missing AWS permissions
+PERMISSIONS_ERROR_PATTERNS = [
+    "AccessDenied",
+    "UnauthorizedOperation", 
+    "Forbidden",
+    "StatusCode: 403",
+    "is not authorized to perform",
+    "User: arn:aws:sts::",
+    "does not have permission to perform",
+    "InsufficientCapabilitiesException",
+]
 
 
 class StackManager:
@@ -262,7 +307,7 @@ class StackManager:
         key_value = f"{self.stack.stack_namespace_token}/stack.tfstate"
         
         # Generate bucket name following same pattern as apply_target_account_bootstrap.sh
-        terraform_state_bucket = self._get_terraform_state_bucket_name()
+        terraform_state_bucket = DEFAULT_TOFU_STATE_BUCKET  # self._get_terraform_state_bucket_name()
         
         storage_key_args = [
             f"-backend-config=bucket={terraform_state_bucket}",
@@ -336,93 +381,205 @@ class StackManager:
             if temp_dir:
                 temp_dir.cleanup()
     
-    def apply(
-            self,
-            *,
-            timeout: int | None = None,
-            auto_approve: bool = True,
-            retries: int = 0,
-            retry_backoff_seconds: float = 5.0,
+    def _classify_apply_error(self, error: OpenTofuCommandError) -> ApplyErrorType:
+        """Classify an apply command error for appropriate handling strategy."""
+        stderr = error.result.stderr or ""
+        stdout = error.result.stdout or ""
+        combined = f"{stderr}\n{stdout}"
+
+        # Check for permissions-related errors
+        if any(pattern in combined for pattern in PERMISSIONS_ERROR_PATTERNS):
+            return ApplyErrorType.MISSING_PERMISSIONS
+
+        # Check for known duplicate/idempotent errors
+        duplicate_token: str | None = None
+        for msg in KNOWN_DUPLICATE_MSGS:
+            if msg in combined:
+                duplicate_token = msg
+                break
+
+        if duplicate_token is not None:
+            # Pure duplicate?
+            if "InvalidPermission.Duplicate" in combined:
+                return ApplyErrorType.DUPLICATE_IDEMPOTENT
+
+            # Otherwise check for real hard errors
+            if any(indicator in combined for indicator in HARD_ERROR_INDICATORS):
+                return ApplyErrorType.HARD_ERROR_WITH_DUPLICATE
+
+            return ApplyErrorType.DUPLICATE_IDEMPOTENT
+
+        return ApplyErrorType.TRANSIENT_ERROR
+    
+    def _extract_missing_permissions(self, error: OpenTofuCommandError) -> list[str]:
+        """Extract specific missing permissions from OpenTofu error output."""
+        stderr = error.result.stderr or ""
+        stdout = error.result.stdout or ""
+        combined = f"{stderr}\n{stdout}"
+        
+        missing_permissions = []
+        
+        # Common patterns for AWS permission errors
+        import re
+        
+        # Pattern 1: "is not authorized to perform: <action>"
+        pattern1 = re.findall(r'is not authorized to perform[:\s]+([a-zA-Z0-9:*_-]+)', combined, re.IGNORECASE)
+        missing_permissions.extend(pattern1)
+        
+        # Pattern 2: "does not have permission to perform: <action>"
+        pattern2 = re.findall(r'does not have permission to perform[:\s]+([a-zA-Z0-9:*_-]+)', combined, re.IGNORECASE)
+        missing_permissions.extend(pattern2)
+        
+        # Pattern 3: Direct action mentions in access denied errors
+        access_denied_lines = [line for line in combined.split('\n') if 'AccessDenied' in line or 'UnauthorizedOperation' in line]
+        for line in access_denied_lines:
+            # Extract AWS actions from context (common AWS API patterns)
+            aws_actions = re.findall(r'([a-z][a-zA-Z0-9]*:[a-zA-Z][a-zA-Z0-9]*(?:\*)?)', line)
+            missing_permissions.extend(aws_actions)
+        
+        # Pattern 4: CloudFormation capability errors
+        if 'InsufficientCapabilitiesException' in combined:
+            missing_permissions.append('iam:CreateRole')
+            missing_permissions.append('iam:AttachRolePolicy')
+            missing_permissions.append('iam:DetachRolePolicy')
+            missing_permissions.append('iam:DeleteRole')
+        
+        # Remove duplicates while preserving order
+        unique_permissions = []
+        seen = set()
+        for perm in missing_permissions:
+            if perm and perm not in seen:
+                unique_permissions.append(perm)
+                seen.add(perm)
+        
+        unique_permissions = [
+            p for p in unique_permissions if str(p.split(":")[1][0]).isupper()
+        ]
+        
+        return unique_permissions
+    
+    def _create_synthetic_success_result(
+        self, 
+        original_error: OpenTofuCommandError, 
+        outputs: dict[str, Any],
+        duplicate_token: str
     ) -> OpenTofuCommandResult:
+        """Create a synthetic success result for handled duplicate errors."""
+        synthetic_result = OpenTofuCommandResult(
+            command=original_error.result.command,
+            cwd=original_error.result.cwd,
+            started_at=original_error.result.started_at,
+            completed_at=original_error.result.completed_at,
+            returncode=0,
+            stdout=original_error.result.stdout or "",
+            stderr="",
+            extra=dict(
+                error_handled="duplicate/exists",
+                summary=f"Handled known duplicate/exists error in apply: {duplicate_token}",
+            ),
+        )
+        synthetic_result.extra["handled_duplicate_message"] = True
+        synthetic_result.extra["handled_duplicate_detail"] = (
+            f"Handled known duplicate/exists error: {duplicate_token} found in output"
+        )
+        synthetic_result.extra["outputs"] = outputs
+        return synthetic_result
+    
+    def _should_retry_apply(self, error: OpenTofuCommandError, attempt: int, max_attempts: int) -> bool:
+        """Determine if an apply error should be retried."""
+        if attempt >= max_attempts:
+            logging.error(
+                "OpenTofu apply failed and no retries remain",
+                extra={
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "command": " ".join(shlex.quote(part) for part in error.result.command),
+                    "workspace": self.get_workspace_name(),
+                    "stderr": error.result.stderr,
+                },
+            )
+            return False
+        
+        logging.warning(
+            "OpenTofu apply failed; retrying",
+            extra={
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "command": " ".join(shlex.quote(part) for part in error.result.command),
+                "workspace": self.get_workspace_name(),
+                "stderr": error.result.stderr,
+            },
+        )
+        return True
+    
+    def _collect_apply_outputs(self, timeout: int | None) -> dict[str, Any]:
+        """Collect outputs after successful apply."""
+        return self.get_outputs(timeout=timeout)
+    
+    def _build_apply_args(self, auto_approve: bool) -> list[str]:
+        """Build command arguments for apply operation."""
         args = ["apply", "-input=false", "-no-color"]
         if auto_approve:
             args.append("-auto-approve")
         args.append(str(self.plan_output_path))
+        return args
+    
+    def _execute_apply_command(self, args: list[str], timeout: int | None) -> OpenTofuCommandResult:
+        """Execute the apply command and validate success."""
+        result = self.run_tofu_command("apply", args, timeout=timeout)
         
-        attempt = 0
-        exc: OpenTofuCommandError | None = None
-        known_duplicate_msgs = [
-            "InvalidPermission.Duplicate",
-            "InvalidChangeBatch",
-            "AlreadyExists"
-        ]
-        msg = ""
-        while attempt <= max(retries, 0):
-            try:
-                result = self.run_tofu_command(
-                    "apply",
-                    args,
-                    timeout=timeout
-                )
-                
-                # After successful apply, collect outputs reliably
-                result.extra["outputs"] = self.get_outputs(timeout=timeout)
-                
-                return result
-            except OpenTofuCommandError as error:
-                # Enhanced error handling for "already exists"/duplicate conditions
-                stderr = error.result.stderr or ""
-                duplicate_found = False
-                for msg in known_duplicate_msgs:
-                    if msg in stderr:
-                        duplicate_found = True
-                        break
-                if duplicate_found:
-                    logging.debug(
-                        "OpenTofu apply encountered known duplicate/exists error; treating as successful",
-                        extra={
-                            "attempt": attempt + 1,
-                            "error_message": stderr,
-                            "command": " ".join(shlex.quote(part) for part in args),
-                            "workspace": self.get_workspace_name(),
-                        },
-                    )
-                    # Synthesize a successful OpenTofuCommandResult, mark the stage, and return
-                    synthetic_result = OpenTofuCommandResult(
-                        command=[settings.TOFU_BIN, *args],
-                        cwd=self.workspace_dir,
-                        started_at=error.result.started_at,
-                        completed_at=error.result.completed_at,
-                        returncode=0,
-                        stdout=error.result.stdout or "",
-                        stderr="",
-                        extra=dict(error_handled="duplicate/exists", summary="Handled known duplicate/exists error in apply"),
-                    )
-                    self.record("apply", synthetic_result)
-                    synthetic_result.extra["handled_duplicate_message"] = True
-                    synthetic_result.extra["handled_duplicate_detail"] = f"Handled known duplicate/exists error: {msg} found in stderr"
-                    
-                    # Reliably collect outputs even for synthetic results
-                    synthetic_result.extra["outputs"] = self.get_outputs(timeout=timeout)
-                    
-                    return synthetic_result
-                exc = error
-                attempt += 1
-                if attempt > max(retries, 0):
-                    break
-                logging.warning(
-                    "OpenTofu apply failed; retrying",
-                    extra={
-                        "attempt": attempt,
-                        "retries": retries,
-                        "command": " ".join(shlex.quote(part) for part in args),
-                        "workspace": self.get_workspace_name(),
-                    },
-                )
-                time.sleep(retry_backoff_seconds * attempt)
-        if exc:
-            raise exc
-        raise OpenTofuCommandError(
+        # Defensive: for apply, ONLY exit code 0 is success
+        if result.returncode != 0:
+            raise OpenTofuCommandError(
+                f"OpenTofu apply returned non-zero exit code {result.returncode}",
+                result,
+            )
+        
+        return result
+    
+    def _handle_duplicate_success(self, error: OpenTofuCommandError, timeout: int | None) -> OpenTofuCommandResult:
+        """Handle duplicate error as idempotent success."""
+        stderr = error.result.stderr or ""
+        stdout = error.result.stdout or ""
+        combined = f"{stderr}\n{stdout}"
+        
+        # Find the duplicate token for logging
+        duplicate_token = next(
+            (msg for msg in KNOWN_DUPLICATE_MSGS if msg in combined), 
+            "unknown"
+        )
+        
+        logging.debug(
+            "OpenTofu apply encountered known duplicate/exists error; "
+            "attempting to treat as idempotent success if state is healthy",
+            extra={
+                "duplicate_token": duplicate_token,
+                "command": " ".join(shlex.quote(part) for part in error.result.command),
+                "workspace": self.get_workspace_name(),
+            },
+        )
+        
+        # Try to read outputs from state. If this succeeds, treat as success
+        try:
+            outputs = self.get_outputs(timeout=timeout)
+        except OpenTofuCommandError as outputs_exc:
+            logging.warning(
+                "Duplicate/exists apply error encountered, but failed to read "
+                "outputs from state; treating as failure",
+                extra={
+                    "duplicate_token": duplicate_token,
+                    "outputs_error": str(outputs_exc),
+                },
+            )
+            raise error
+        
+        synthetic_result = self._create_synthetic_success_result(error, outputs, duplicate_token)
+        self.record("apply", synthetic_result)
+        return synthetic_result
+    
+    def _create_fallback_error(self, args: list[str]) -> OpenTofuCommandError:
+        """Create fallback error when apply fails without raising an exception."""
+        return OpenTofuCommandError(
             "OpenTofu apply failed without raising an exception",
             OpenTofuCommandResult(
                 command=[settings.TOFU_BIN, *args],
@@ -434,6 +591,87 @@ class StackManager:
                 stderr="apply aborted without execution",
             ),
         )
+    
+    def apply(
+            self,
+            *,
+            timeout: int | None = None,
+            auto_approve: bool = True,
+            retries: int = 0,
+            retry_backoff_seconds: float = 5.0,
+    ) -> OpenTofuCommandResult:
+        """
+        Run `tofu apply` with:
+          - strict success detection (only exit code 0 is success),
+          - optional retries for transient failures, and
+          - special handling for "already exists"/duplicate style errors.
+
+        On success (real or handled-duplicate), this returns an OpenTofuCommandResult
+        with `extra["outputs"]` populated via `get_outputs()`.
+        """
+        args = self._build_apply_args(auto_approve)
+        max_attempts = max(1, retries + 1)
+        last_exc: OpenTofuCommandError | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = self._execute_apply_command(args, timeout)
+                result.extra["outputs"] = self._collect_apply_outputs(timeout)
+                return result
+
+            except OpenTofuCommandError as error:
+                last_exc = error
+                error_type = self._classify_apply_error(error)
+
+                if error_type == ApplyErrorType.HARD_ERROR_WITH_DUPLICATE:
+                    stderr = error.result.stderr or ""
+                    stdout = error.result.stdout or ""
+                    logging.error(
+                        "Duplicate error detected alongside real AWS failures; treating as hard failure.",
+                        extra={
+                            "stderr": stderr,
+                            "stdout": stdout,
+                        },
+                    )
+                    raise error
+
+                if error_type == ApplyErrorType.MISSING_PERMISSIONS:
+                    missing_permissions = self._extract_missing_permissions(error)
+                    stderr = error.result.stderr or ""
+                    stdout = error.result.stdout or ""
+                    
+                    permission_summary = f"Missing {len(missing_permissions)} permissions" if missing_permissions else "Missing permissions (specific permissions could not be determined)"
+                    
+                    logging.error(
+                        f"OpenTofu apply failed due to insufficient permissions: {permission_summary}",
+                        extra={
+                            "missing_permissions": missing_permissions,
+                            "stderr": stderr,
+                            "stdout": stdout,
+                        },
+                    )
+                    
+                    # Raise specific MissingStackPerms exception with detailed permission info
+                    raise MissingStackPerms(
+                        f"OpenTofu apply failed due to insufficient AWS permissions. {permission_summary}. "
+                        f"Required permissions: {', '.join(missing_permissions) if missing_permissions else 'Could not determine specific permissions from error output'}",
+                        missing_permissions,
+                        error.result
+                    )
+
+                if error_type == ApplyErrorType.DUPLICATE_IDEMPOTENT:
+                    return self._handle_duplicate_success(error, timeout)
+
+                if not self._should_retry_apply(error, attempt, max_attempts):
+                    raise error
+
+                time.sleep(retry_backoff_seconds * attempt)
+
+        # If we somehow exit the loop without returning or raising, surface a clear error.
+        if last_exc is not None:
+            raise last_exc
+
+        raise self._create_fallback_error(args)
     
     def get_outputs(
             self,

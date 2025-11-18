@@ -8,7 +8,7 @@ export ERIEIRON_ENV=production
 export ERIEIRON_DB_HOST="kfqxw-db.cfmokeqce4va.us-west-2.rds.amazonaws.com"
 export ERIEIRON_DB_NAME="appdb"
 export AWS_PROFILE=erie-iron
-export RDS_SECRET_ARN=arn:aws:secretsmanager:us-west-2:782005355493:secret:rds!db-2b88e9c3-dde5-470b-9b89-87422dd09b6d-bT0oU1
+export RDS_SECRET_ARN=arn:aws:secretsmanager:us-west-2:782005355493:secret:rds!db-ae150e73-c5a4-4572-a26d-bf3b1d191f91-JTuYuO
 export AWS_DEFAULT_REGION=us-west-2
 export MESSAGE_TYPES="-DESIGN_WORK_REQUESTED,-CODING_WORK_REQUESTED"
 

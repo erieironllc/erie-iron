@@ -26,6 +26,15 @@ class OpenTofuStackObsolete(OpenTofuException):
     """Raised when a stack must be rotated before continuing."""
 
 
+class MissingStackPerms(OpenTofuException):
+    """Raised when OpenTofu operations fail due to missing AWS permissions."""
+    
+    def __init__(self, message: str, missing_permissions: list[str], result: "OpenTofuCommandResult"):
+        super().__init__(message)
+        self.missing_permissions = missing_permissions
+        self.result = result
+
+
 
 @dataclass(frozen=True)
 class OpenTofuVariable:

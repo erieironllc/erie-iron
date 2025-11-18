@@ -82,54 +82,6 @@ def get_secret_key(config):
         return 'django-insecure-5xxn9-j8i06-ejwaw3^k!ld8@kvvuoa773_6+3+)f6sy3j4_g$'
 
 
-def get_databases(config):
-    try:
-        DATABASES_AWS_SECRET = config('DATABASES_AWS_SECRET', None)
-        if DATABASES_AWS_SECRET is not None:
-            from erieiron_common import aws_utils
-            db_credentials = get_secret(DATABASES_AWS_SECRET)
-            print(f"db is {db_credentials['dbInstanceIdentifier']} ")
-            
-            if not default_str(os.getenv('ERIEIRON_ENV')).startswith("prod") and db_credentials['dbInstanceIdentifier'] == 'erieiron-db':
-                print("""
-
-!! DANGER DANGER: NON-PROD CODE CONNECTING TO THE PRODUCTION RDS DATABASE !!  
-If this is intentional, be very very careful. if unintentional, please connect to the dev db by changing 
-the DATABASES_AWS_SECRET value in your .env.dev file to DATABASES_AWS_SECRET = "erieiron-db-dev-credentials"
-
-                """)
-            
-            return {
-                'default': {
-                    'ENGINE': 'django.db.backends.postgresql',
-                    'NAME': 'postgres',
-                    'USER': db_credentials['username'],
-                    'PASSWORD': db_credentials['password'],
-                    'HOST': db_credentials['host'],
-                    'PORT': db_credentials['port'],
-                }
-            }
-        else:
-            return {
-                'default': {
-                    'ENGINE': config('DATABASE_ENGINE'),
-                    'NAME': config('DATABASE_NAME'),
-                    'USER': config('DATABASE_USER', None),
-                    'PASSWORD': config('DATABASE_PASSWORD', None),
-                    'HOST': config('DATABASE_HOST', None),
-                    'PORT': config('DATABASE_PORT', default=5432, cast=int)
-                }
-            }
-    except Exception as e:
-        logging.exception(e)
-        return {
-            'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': ':memory:',
-            }
-        }
-
-
 def get_secret(secret_name: str):
     # Create a Secrets Manager client
     session = boto3.session.Session()

@@ -24,7 +24,7 @@ from botocore.exceptions import ClientError
 import settings
 from erieiron_common import common
 from erieiron_common.aws_s3_local_cache import S3LocalCache
-from erieiron_common.enums import ContainerPlatform
+from erieiron_common.enums import ContainerPlatform, PublicPrivate
 
 logging.getLogger("botocore.credentials").setLevel(logging.ERROR)
 
@@ -954,8 +954,8 @@ BODY:
                 " security_groups.rds_security_group_id"
             )
         
-        public_subnet_ids = self._extract_subnet_ids(vpc_config["public_subnets"])
-        private_subnet_ids = self._extract_subnet_ids(vpc_config["private_subnets"])
+        public_subnet_ids = self._extract_subnet_ids(vpc_config, PublicPrivate.PUBLIC)
+        private_subnet_ids = self._extract_subnet_ids(vpc_config, PublicPrivate.PRIVATE)
         
         # Extract NAT gateway configuration
         nat_config = vpc_config.get("nat_gateway_config", {})
@@ -984,16 +984,16 @@ BODY:
         vpc_config = self.cloud_account.get_vpc_config()
         
         # Extract NAT gateway configuration
-        nat_config = vpc_config.get("nat_gateway_config", {})
-        private_subnet_ids = self._extract_subnet_ids(vpc_config["private_subnets"])
+        private_subnet_ids = self._extract_subnet_ids(vpc_config, PublicPrivate.PRIVATE)
         if not private_subnet_ids:
+            # private_subnet_ids = self.get_private_subnet_ids(vpc_config)
             raise Exception(
                 f"Cannot cofigure NAT routing  "
                 "Account has no private subnets"
                 "❌ System will have major problems related to networking ❌"
             )
         
-        nat_gateway_id = common.first(nat_config.get("nat_gateway_ids", []))
+        nat_gateway_id = self._extract_nat_gateway_id(vpc_config)
         if not nat_gateway_id:
             raise Exception(
                 f"Cannot cofigure NAT routing  "
@@ -1001,7 +1001,7 @@ BODY:
                 "❌ System will have major problems related to networking ❌"
             )
         
-        private_route_table_ids = nat_config.get("private_route_table_ids", [])
+        private_route_table_ids = self._extract_private_route_table_ids(vpc_config)
         if not private_route_table_ids:
             raise Exception(
                 f"Cannot cofigure NAT routing  "
@@ -1121,14 +1121,68 @@ BODY:
                     f"✅ Successfully associated subnet {subnet_id} with route table {desired_rt_id}"
                 )
     
-    def _extract_subnet_ids(self, subnets: list[dict]) -> list[str]:
-        subnet_ids = [subnet.get("subnet_id") for subnet in subnets]
-        missing = [idx for idx, subnet_id in enumerate(subnet_ids) if not subnet_id]
-        if missing:
-            raise RuntimeError(
-                f"CloudAccount {self.cloud_account.id} is missing subnet IDs for indexes {missing}"
+    def _extract_private_route_table_ids(self, vpc_config) -> list[str]:
+        nat_config = vpc_config.get("nat_gateway_config", {})
+        private_route_table_ids = nat_config.get("private_route_table_ids", [])
+        if private_route_table_ids:
+            return private_route_table_ids
+        
+        # Discover private route table IDs by scanning route tables in this VPC
+        ec2 = self.client("ec2")
+        discovered = []
+        
+        rtbs = ec2.describe_route_tables(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_config["vpc_id"]]}]
+        ).get("RouteTables", [])
+        
+        for rt in rtbs:
+            # A private route table is one whose default route (0.0.0.0/0)
+            # targets a NAT gateway instead of an IGW.
+            for route in rt.get("Routes", []):
+                if route.get("DestinationCidrBlock") == "0.0.0.0/0":
+                    if route.get("NatGatewayId"):
+                        discovered.append(rt.get("RouteTableId"))
+                    break
+        
+        return discovered
+    
+    def _extract_nat_gateway_id(self, vpc_config) -> list[str]:
+        nat_config = vpc_config.get("nat_gateway_config", {})
+        nat_gateway_id = common.first(nat_config.get("nat_gateway_ids", []))
+        
+        if nat_gateway_id:
+            return nat_gateway_id
+        
+        ec2 = self.client("ec2")
+        resp = ec2.describe_nat_gateways(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_config["vpc_id"]]}]
+        )
+        for ngw in resp.get("NatGateways", []):
+            if ngw.get("State") in ("available", "pending"):
+                gw_id = ngw.get("NatGatewayId")
+                if gw_id:
+                    return gw_id
+        
+        return None
+    
+    def _extract_subnet_ids(self, vpc_config, public_private: PublicPrivate) -> list[str]:
+        subnet_ids = [
+            subnet_data['subnet_id']
+            for subnet_data in common.get_list(
+                vpc_config, 
+                "public_subnets" if PublicPrivate.PUBLIC.eq(public_private) else "private_subnets"
             )
-        return subnet_ids
+        ]
+        if subnet_ids:
+            return subnet_ids
+        
+        return [
+            subnet_data['subnet_id']
+            for subnet_data in self._describe_vpc_subnets(
+                self.client("ec2"),
+                vpc_config["vpc_id"]
+            ) if subnet_data['public_private'] == public_private
+        ]
     
     def _hydrate_subnet_metadata(self, vpc_config: dict) -> None:
         collections = ["public_subnets", "private_subnets"]
@@ -1178,8 +1232,11 @@ BODY:
                 for tag in subnet.get("Tags", [])
                 if tag.get("Key")
             }
+            public_subnet = self.is_public_subnet(subnet, ec2_client)
             discovered.append(
                 {
+                    "public": public_subnet,
+                    "public_private": PublicPrivate.from_is_public(public_subnet),
                     "subnet_id": subnet.get("SubnetId"),
                     "cidr_block": subnet.get("CidrBlock"),
                     "availability_zone": subnet.get("AvailabilityZone"),
@@ -1187,6 +1244,28 @@ BODY:
                 }
             )
         return discovered
+    
+    def is_public_subnet(self, subnet, ec2_client=None):
+        if not ec2_client:
+            ec2_client = self.client("ec2")
+        
+        # Step 1: quick check
+        if subnet.get("MapPublicIpOnLaunch"):
+            return True
+        
+        # Step 2: authoritative check via route table
+        rtbs = ec2_client.describe_route_tables(
+            Filters=[{"Name": "association.subnet-id", "Values": [subnet["SubnetId"]]}]
+        ).get("RouteTables", [])
+        
+        for rt in rtbs:
+            for route in rt.get("Routes", []):
+                if route.get("DestinationCidrBlock") == "0.0.0.0/0":
+                    if route.get("GatewayId", "").startswith("igw-"):
+                        return True
+                    if route.get("NatGatewayId", "").startswith("nat-"):
+                        return False
+        return False
     
     def _populate_subnet_details(
             self,

@@ -27,9 +27,10 @@ pytest tests/ui     # Test specific module
 pytest --maxfail=1  # Stop on first failure
 
 # Code Quality
-black .             # Format Python code (120 char line length)
 ruff check .        # Lint Python code
 ```
+
+**never** run the `black` code formatter (or any code formatter) over unmodified lines of code unless explicitly instructed to do so 
 
 ### Package Management
 ```bash

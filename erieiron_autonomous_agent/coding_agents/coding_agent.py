@@ -56,7 +56,7 @@ from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExe
 from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError
+from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError, MissingStackPerms
 from erieiron_common.stack_manager import StackManager
 
 
@@ -4718,7 +4718,7 @@ def deploy_opentofu_stack(
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stack = config.stack
-    opentofu_stack_manager = config.stack_manager
+    stack_manager = config.stack_manager
     
     web_container_image = config.aws_interface.get_full_image_uri(
         config.ecr_repo_name,
@@ -4752,21 +4752,21 @@ def deploy_opentofu_stack(
     try:
         # Construct the correct composite security group rule import ID
         
-        opentofu_stack_manager.import_external_resources([
+        stack_manager.import_external_resources([
             ("aws_security_group_rule.rds_ingress_client", config.aws_interface.get_rds_ingress_securitygroup_rule_id()),
             ("aws_security_group_rule.rds_ingress_vpc", config.aws_interface.get_rds_ingress_vpc_rule_id())
         ])
         
-        plan_result = opentofu_stack_manager.plan()
+        plan_result = stack_manager.plan()
         plan_summary = plan_result.extra.get("plan_change_summary")
         
-        logging.info(f"applying tofu as {opentofu_stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()}")
+        logging.info(f"applying tofu as {stack_manager.cloud_account.get_service_client('sts').get_caller_identity()}")
         
-        apply_result = opentofu_stack_manager.apply()
+        apply_result = stack_manager.apply()
         outputs = apply_result.extra["outputs"]
         add_rds_vals_to_env(config, outputs)
         
-        if opentofu_stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
+        if stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
             ses_manager.manage_ses_domain_settings(
                 config.cloud_account,
                 str(tfvars_payload.get("DomainName") or "").strip()
@@ -4774,19 +4774,22 @@ def deploy_opentofu_stack(
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
             plan_summary=plan_summary,
-            results=[result.to_dict() for result in opentofu_stack_manager.run_results],
+            results=[result.to_dict() for result in stack_manager.run_results],
             tfvars=tfvars_payload,
         )
         
         config.add_deployment_log(log_payload)
         
-        stack.resources = opentofu_stack_manager.get_resources()
+        stack.resources = stack_manager.get_resources()
         stack.save()
         
         return outputs
+    except MissingStackPerms as exc:
+        logging.exception(exc)
+        raise exc
     except OpenTofuCommandError as exc:
         # Enhanced error logging and context
-        logging.error(f"[DEPLOY_DEBUG] OpenTofu command failed during {opentofu_stack_manager.stage} stage")
+        logging.error(f"[DEPLOY_DEBUG] OpenTofu command failed during {stack_manager.stage} stage")
         logging.error(f"[DEPLOY_DEBUG] Command: {' '.join(exc.result.command)}")
         logging.error(f"[DEPLOY_DEBUG] Exit code: {exc.result.returncode}")
         logging.error(f"[DEPLOY_DEBUG] Stdout: {exc.result.stdout}")
@@ -4794,7 +4797,7 @@ def deploy_opentofu_stack(
         
         # Debug: Re-verify AWS credentials during error to help diagnose permission issues
         try:
-            caller_identity = opentofu_stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()
+            caller_identity = stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()
             logging.error(f"[DEPLOY_DEBUG] AWS credentials at time of error: {caller_identity}")
         except Exception as cred_error:
             logging.error(f"[DEPLOY_DEBUG] Failed to verify AWS credentials during error: {cred_error}")
@@ -4860,7 +4863,7 @@ def deploy_opentofu_stack(
             "stderr": exc.result.stderr,
             "stdout": exc.result.stdout,
             "command": " ".join(exc.result.command),
-            "stage": opentofu_stack_manager.stage,
+            "stage": stack_manager.stage,
             "troubleshooting_hints": troubleshooting_hints,
         }
         
@@ -4868,14 +4871,14 @@ def deploy_opentofu_stack(
         if troubleshooting_hints:
             logging.error(f"[DEPLOY_DEBUG] Troubleshooting hints: {troubleshooting_hints}")
         
-        opentofu_stack_manager.record(
-            opentofu_stack_manager.stage,
+        stack_manager.record(
+            stack_manager.stage,
             exc.result
         )
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
             plan_summary=plan_summary,
-            results=[result.to_dict() for result in opentofu_stack_manager.run_results],
+            results=[result.to_dict() for result in stack_manager.run_results],
             tfvars=tfvars_payload,
             error=error_payload,
         )

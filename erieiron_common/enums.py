@@ -568,6 +568,11 @@ class BuildStep(ErieEnum):
     CONTAINERS = auto()
 
 
+class PublicPrivate(ErieEnum):
+    PUBLIC = auto()
+    PRIVATE = auto()
+
+
 class SdaPhase(ErieEnum):
     INIT = auto()
     PLANNING = auto()
