@@ -9,7 +9,7 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
-def find_new_business_opportunity(payload):
+def find_new_business_opportunity(payload, niche_type=None, user_guidance=None):
     placehold_business_id = payload.get("placehold_business_id")
     erieiron_business = Business.get_erie_iron_business()
     
@@ -38,21 +38,30 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
         "existing_business"
     )
     
-    messages.append(
-        f"""
-            Please find a new business idea that roughly fits this capacity.  
-            It's ok to pitch a stretch idea - if we decide we can't take it on, 
-            we'll remember it for the future, but if you have a really great idea that
-            fits within the capacity, bias towards that.
+    capacity_message = f"""
+        Please find a new business idea that roughly fits this capacity.  
+        It's ok to pitch a stretch idea - if we decide we can't take it on, 
+        we'll remember it for the future, but if you have a really great idea that
+        fits within the capacity, bias towards that.
 
-            ## Erie Iron's current financial position minus reserves
-            {json.dumps(erieiron_business.get_new_business_budget_capacity(), indent=4)}
+        ## Erie Iron's current financial position minus reserves
+        {json.dumps(erieiron_business.get_new_business_budget_capacity(), indent=4)}
 
-            ## Erie Iron Capacity summary
-            {common.model_to_dict_s(erieiron_business.get_latest_capacity())}
-            """
-    )
+        ## Erie Iron Capacity summary
+        {common.model_to_dict_s(erieiron_business.get_latest_capacity())}
+        """
     
+    # Add niche focus if provided
+    if niche_type:
+        capacity_message += f"\n\nNICHE FOCUS: {niche_type}"
+        
+    # Add user guidance if provided
+    if user_guidance:
+        capacity_message += f"\n\nUSER GUIDANCE: {user_guidance}"
+    
+    messages.append(capacity_message)
+    
+    # Use base business finder prompt (niche prompts will be added in future phase)
     business_idea = board_level_chat(
         "Business Finder",
         "corporate_development--business_finder.md",
@@ -76,6 +85,7 @@ def submit_business_opportunity(payload):
     summary = payload.get("summary")
     idea_content = payload.get("idea_content")
     source = payload.get("source")
+    niche_category = payload.get("niche_category")
     
     if existing_business_id:
         name = Business.objects.get(id=existing_business_id).name
@@ -93,7 +103,8 @@ def submit_business_opportunity(payload):
             "name": name,
             "service_token": token,
             "source": source,
-            "raw_idea": idea_content
+            "raw_idea": idea_content,
+            "niche_category": niche_category
         }
     )
     
@@ -129,3 +140,47 @@ def submit_business_opportunity(payload):
     )
     
     return business.id
+
+
+def find_niche_business_ideas(payload):
+    """
+    Generate niche-specific business ideas based on user input.
+    
+    Expected payload:
+    {
+        "niche": "local_service_arbitrage", 
+        "user_input": "user provided text",
+        "requested_count": 10
+    }
+    """
+    niche = payload.get('niche')
+    user_input = payload.get('user_input', '')
+    requested_count = payload.get('requested_count', 10)
+    
+    # Generate multiple business ideas for the niche
+    for i in range(requested_count):
+        # Create placeholder business for idea generation
+        placeholder_business = Business.objects.create(
+            name=f"{Constants.NEW_BUSINESS_NAME_PREFIX} Generating...",
+            source=BusinessIdeaSource.BUSINESS_FINDER_AGENT,
+            niche_category=niche
+        )
+        
+        business_idea = find_new_business_opportunity(
+            {"placehold_business_id": placeholder_business.id},
+            niche_type=niche,
+            user_guidance=user_input
+        )
+        
+        # Publish each idea as a separate BUSINESS_IDEA_SUBMITTED message
+        if business_idea:
+            enhanced_payload = {
+                **business_idea,
+                'niche_category': niche,
+                'user_input': user_input
+            }
+            
+            PubSubManager.publish(
+                PubSubMessageType.BUSINESS_IDEA_SUBMITTED,
+                payload=enhanced_payload
+            )

@@ -32,6 +32,10 @@ def board_workflow(pubsub_manager: PubSubManager):
         T.BUSINESS_IDEA_SUBMITTED,
         corporate_development_agent.submit_business_opportunity,
         T.ANALYSIS_REQUESTED
+    ).on(
+        T.FIND_NICHE_BUSINESS_IDEAS,
+        corporate_development_agent.find_niche_business_ideas,
+        None  # No completion message needed
     )
     
     # Board Analyst

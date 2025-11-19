@@ -70,6 +70,11 @@ class Business(BaseErieIronModel):
     value_prop = models.TextField(null=True)
     revenue_model = models.TextField(null=True)
     audience = models.TextField(null=True)
+    niche_category = models.TextField(
+        null=True, 
+        blank=True,
+        help_text="Niche category used to generate this business idea (e.g., local_service_arbitrage)"
+    )
     required_credentials = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     core_functions = models.JSONField(default=list)
     execution_dependencies = models.JSONField(default=list)
