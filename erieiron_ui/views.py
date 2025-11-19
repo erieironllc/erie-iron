@@ -24,7 +24,7 @@ from django.utils import timezone, formats
 from django.utils.html import escape
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 
 import settings
 from erieiron_autonomous_agent import system_agent_llm_interface
