@@ -78,6 +78,7 @@ urlpatterns = [
     path("stack/<uuid:stack_id>/destroy", views.action_destroy_stack, name="action_destroy_stack"),
     path("stack/<uuid:stack_id>", views.view_stack, name="view_stack"),
     path("api/codefile/<uuid:codefile_id>/content", views.api_codefile_content, name="api_codefile_content"),
+    path("api/pubsub/publish/", views.api_pubsub_publish, name="api_pubsub_publish"),
     path(
         "api/business/<uuid:business_id>/cloud-accounts",
         views.api_business_cloud_accounts,

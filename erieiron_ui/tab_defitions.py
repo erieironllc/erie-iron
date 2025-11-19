@@ -97,6 +97,12 @@ PORTFOLIO_TAB_DEFINITIONS = [
         "template": "portfolio/tabs/portfolio.html",
         "context_fn": views._portfolio_tab_context_portfolio,
     },
+    {
+        "slug": "niche-ideas",
+        "label": "Niche Ideas",
+        "template": "portfolio/tabs/niche_ideas.html",
+        "context_fn": views._portfolio_tab_context_niche_ideas,
+    },
     TAB_DIVIDER,
     {
         "slug": "llm-spend",

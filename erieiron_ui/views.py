@@ -928,6 +928,52 @@ def _portfolio_tab_context_llm_spend(_: Business, request=None) -> dict:
     return _build_llm_spend_context(request=request)
 
 
+def _portfolio_tab_context_niche_ideas(erieiron_business: Business, request=None) -> dict:
+    """
+    Provide context for niche ideas tab.
+    """
+    from erieiron_autonomous_agent.models import Business
+    from erieiron_autonomous_agent.enums import BusinessStatus
+    
+    # Get all available niches (hardcoded for now, could be dynamic later)
+    available_niches = [
+        {
+            'key': 'local_service_arbitrage',
+            'name': 'Local Service Arbitrage',
+            'description': 'Appointment booking, delivery coordination, maintenance scheduling'
+        },
+        {
+            'key': 'b2b_process_automation', 
+            'name': 'B2B Process Automation',
+            'description': 'Business workflow automation and integration services'
+        },
+        {
+            'key': 'ecommerce_automation',
+            'name': 'E-commerce Automation', 
+            'description': 'Online store management and fulfillment automation'
+        },
+        {
+            'key': 'professional_services',
+            'name': 'Professional Services',
+            'description': 'Consulting, legal, financial, and creative services'
+        }
+    ]
+    
+    # Get business ideas by niche for the selected niche
+    selected_niche = request.GET.get('niche', 'local_service_arbitrage') if request else 'local_service_arbitrage'
+    business_ideas = Business.objects.filter(
+        niche_category=selected_niche,
+        status__in=[BusinessStatus.IDEA, BusinessStatus.ACTIVE]
+    ).order_by('-created_at')
+    
+    return {
+        'available_niches': available_niches,
+        'selected_niche': selected_niche,
+        'business_ideas': business_ideas,
+        'can_generate_ideas': True  # Permission check could go here
+    }
+
+
 def _tab_available_llm_spend(business: Business) -> bool:
     return business.llmrequest_set.exists()
 
@@ -5219,3 +5265,52 @@ def action_retry_pubsub_message(request, message_id):
         return HttpResponseRedirect(next_url)
     
     return HttpResponseRedirect(reverse('view_pubsub_message_details', args=[message_id]))
+
+
+@require_http_methods(["POST"])
+def api_pubsub_publish(request):
+    """
+    API endpoint for publishing PubSub messages from the UI.
+    """
+    try:
+        data = json.loads(request.body)
+        message_type = data.get('message_type')
+        payload = data.get('payload', {})
+        
+        # Validate message type
+        if not message_type:
+            return JsonResponse({'error': 'message_type is required'}, status=400)
+        
+        # Validate message type is allowed
+        allowed_message_types = [
+            'FIND_NICHE_BUSINESS_IDEAS',
+        ]
+        
+        if message_type not in allowed_message_types:
+            return JsonResponse({'error': f'Message type {message_type} not allowed'}, status=400)
+        
+        # Convert string to enum
+        try:
+            from erieiron_common.enums import PubSubMessageType
+            message_type_enum = getattr(PubSubMessageType, message_type)
+        except AttributeError:
+            return JsonResponse({'error': f'Invalid message type: {message_type}'}, status=400)
+        
+        # Publish message
+        from erieiron_common.message_queue.pubsub_manager import PubSubManager
+        
+        PubSubManager.publish(
+            message_type_enum,
+            payload=payload
+        )
+        
+        return JsonResponse({
+            'success': True,
+            'message': f'Message {message_type} published successfully'
+        })
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON payload'}, status=400)
+    except Exception as e:
+        logger.exception(f"Error publishing PubSub message: {e}")
+        return JsonResponse({'error': 'Internal server error'}, status=500)

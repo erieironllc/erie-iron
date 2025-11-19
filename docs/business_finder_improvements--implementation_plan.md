@@ -340,34 +340,50 @@ def _portfolio_tab_context_niche_ideas(request):
 ```
 
 #### 3.4 JavaScript Functionality
-**File**: `/Users/jjschultz/src/erieiron/erieiron_ui/templates/portfolio/tabs/niche_ideas.html` (script section)
+**File**: `/Users/jjschultz/src/erieiron/erieiron_ui/js/view-niche-ideas.js`
 
-**JavaScript Implementation:**
-```html
-<script>
-$(document).ready(function() {
-    // Handle niche selection change
-    $('#niche-select').on('change', function() {
-        const selectedNiche = $(this).val();
+**Backbone.js View Implementation:**
+```javascript
+NicheIdeasView = ErieView.extend({
+    el: 'body',
+
+    events: {
+        'change #niche-select': 'niche_select_change',
+        'click #find-ideas-btn': 'find_ideas_btn_click'
+    },
+
+    init_view: function (options) {
+        this.setupNicheDescriptions();
+    },
+
+    setupNicheDescriptions: function() {
+        // Store niche descriptions from template data
+        this.nicheDescriptions = {};
+        $('#niche-select option').each((index, option) => {
+            const key = $(option).val();
+            const description = $(option).data('description') || '';
+            if (key) {
+                this.nicheDescriptions[key] = description;
+            }
+        });
+    },
+
+    niche_select_change: function(ev) {
+        const selectedNiche = $(ev.target).val();
+        
+        // Update description text
+        const description = this.nicheDescriptions[selectedNiche] || '';
+        $('#niche-description').text(description);
+        
         // Reload page with new niche parameter
         const url = new URL(window.location);
         url.searchParams.set('niche', selectedNiche);
         window.location.href = url.toString();
-    });
-    
-    // Update description when niche changes
-    $('#niche-select').on('change', function() {
-        const selectedValue = $(this).val();
-        const descriptions = {
-            {% for niche in available_niches %}
-            '{{ niche.key }}': '{{ niche.description }}',
-            {% endfor %}
-        };
-        $('#niche-description').text(descriptions[selectedValue] || '');
-    });
-    
-    // Handle find ideas button click
-    $('#find-ideas-btn').on('click', function() {
+    },
+
+    find_ideas_btn_click: function(ev) {
+        ev.preventDefault();
+        
         const niche = $('#niche-select').val();
         const userInput = $('#user-guidance').val().trim();
         
@@ -378,9 +394,21 @@ $(document).ready(function() {
         }
         
         // Show loading modal
-        $('#generating-ideas-modal').modal('show');
+        this.showLoadingModal();
         
         // Publish PubSub message via AJAX
+        this.publishNicheBusinessIdeasMessage(niche, userInput);
+    },
+
+    showLoadingModal: function() {
+        $('#generating-ideas-modal').modal('show');
+    },
+
+    hideLoadingModal: function() {
+        $('#generating-ideas-modal').modal('hide');
+    },
+
+    publishNicheBusinessIdeasMessage: function(niche, userInput) {
         $.ajax({
             url: '/api/pubsub/publish/',
             method: 'POST',
@@ -396,33 +424,65 @@ $(document).ready(function() {
                     requested_count: 10
                 }
             }),
-            success: function(response) {
-                $('#generating-ideas-modal').modal('hide');
-                
-                // Show success message
-                const alert = $('<div class="alert alert-success alert-dismissible fade show" role="alert">')
-                    .html('<i class="fas fa-check-circle"></i> Business idea generation started! Ideas will appear below as they are generated. <button type="button" class="btn-close" data-bs-dismiss="alert"></button>');
-                $('.niche-ideas-container').prepend(alert);
-                
-                // Auto-refresh page after delay to show new ideas
-                setTimeout(function() {
-                    window.location.reload();
-                }, 5000);
+            success: (response) => {
+                this.handlePublishSuccess(response);
             },
-            error: function(xhr, status, error) {
-                $('#generating-ideas-modal').modal('hide');
-                
-                // Show error message
-                const alert = $('<div class="alert alert-danger alert-dismissible fade show" role="alert">')
-                    .html('<i class="fas fa-exclamation-triangle"></i> Failed to start idea generation. Please try again. <button type="button" class="btn-close" data-bs-dismiss="alert"></button>');
-                $('.niche-ideas-container').prepend(alert);
-                
-                console.error('Error publishing message:', error);
+            error: (xhr, status, error) => {
+                this.handlePublishError(xhr, status, error);
             }
         });
-    });
+    },
+
+    handlePublishSuccess: function(response) {
+        this.hideLoadingModal();
+        
+        // Show success message
+        const alert = $('<div class="alert alert-success alert-dismissible fade show" role="alert">')
+            .html('<i class="fas fa-check-circle"></i> Business idea generation started! Ideas will appear below as they are generated. <button type="button" class="btn-close" data-bs-dismiss="alert"></button>');
+        $('.niche-ideas-container').prepend(alert);
+        
+        // Auto-refresh page after delay to show new ideas
+        setTimeout(() => {
+            window.location.reload();
+        }, 5000);
+    },
+
+    handlePublishError: function(xhr, status, error) {
+        this.hideLoadingModal();
+        
+        // Show error message
+        const alert = $('<div class="alert alert-danger alert-dismissible fade show" role="alert">')
+            .html('<i class="fas fa-exclamation-triangle"></i> Failed to start idea generation. Please try again. <button type="button" class="btn-close" data-bs-dismiss="alert"></button>');
+        $('.niche-ideas-container').prepend(alert);
+        
+        console.error('Error publishing message:', error);
+    }
+});
+```
+
+**Template Script Section Update:**
+Replace the inline JavaScript in the niche ideas template with:
+```html
+<script src="/static/js/view-niche-ideas.js"></script>
+<script>
+$(document).ready(function() {
+    new NicheIdeasView();
 });
 </script>
+```
+
+**Template Data Attributes Update:**
+Update the niche select options to include data attributes for descriptions:
+```html
+<select class="form-select" id="niche-select" name="niche">
+    {% for niche in available_niches %}
+    <option value="{{ niche.key }}" 
+            data-description="{{ niche.description }}"
+            {% if niche.key == selected_niche %}selected{% endif %}>
+        {{ niche.name }}
+    </option>
+    {% endfor %}
+</select>
 ```
 
 ### PHASE 4: API Endpoint for PubSub Publishing (Priority: HIGH)

@@ -1,0 +1,122 @@
+{% load csrf_util %}
+<div class="niche-ideas-container">
+    <!-- Niche Selection Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-lightbulb"></i> Generate Niche Business Ideas</h5>
+                </div>
+                <div class="card-body">
+                    <!-- Niche Selector -->
+                    <div class="mb-3">
+                        <label for="niche-select" class="form-label">Select Niche Category</label>
+                        <select class="form-select" id="niche-select" name="niche">
+                            {% for niche in available_niches %}
+                            <option value="{{ niche.key }}" 
+                                    data-description="{{ niche.description }}"
+                                    {% if niche.key == selected_niche %}selected{% endif %}>
+                                {{ niche.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text" id="niche-description">
+                            {% for niche in available_niches %}
+                                {% if niche.key == selected_niche %}{{ niche.description }}{% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                    
+                    <!-- User Input -->
+                    <div class="mb-3">
+                        <label for="user-guidance" class="form-label">Additional Guidance (Optional)</label>
+                        <textarea class="form-control" id="user-guidance" rows="3" 
+                                  placeholder="Provide specific guidance for idea generation..."></textarea>
+                        <div class="form-text">
+                            Describe any specific requirements, target markets, or preferences for the business ideas.
+                        </div>
+                    </div>
+                    
+                    <!-- Generate Button -->
+                    <button type="button" class="btn btn-primary" id="find-ideas-btn">
+                        <i class="fas fa-search"></i> Find Business Ideas
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Business Ideas Display Section -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5><i class="fas fa-list"></i> Business Ideas for {{ selected_niche|title }}</h5>
+                    <span class="badge bg-secondary">{{ business_ideas|length }} ideas</span>
+                </div>
+                <div class="card-body">
+                    {% if business_ideas %}
+                        <div class="row">
+                            {% for idea in business_ideas %}
+                            <div class="col-md-6 col-lg-4 mb-3">
+                                <div class="card h-100">
+                                    <div class="card-header">
+                                        <h6 class="mb-0">{{ idea.name }}</h6>
+                                        <small class="text-muted">{{ idea.created_at|date:"M j, Y" }}</small>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="card-text">{{ idea.summary|truncatechars:150 }}</p>
+                                        {% if idea.value_prop %}
+                                        <p class="text-muted small"><strong>Value Prop:</strong> {{ idea.value_prop|truncatechars:100 }}</p>
+                                        {% endif %}
+                                    </div>
+                                    <div class="card-footer">
+                                        <span class="badge bg-{% if idea.status == 'ACTIVE' %}success{% elif idea.status == 'IDEA' %}info{% else %}secondary{% endif %}">
+                                            {{ idea.status|title }}
+                                        </span>
+                                        <a href="/business/{{ idea.id }}/" class="btn btn-sm btn-outline-primary float-end">
+                                            View Details
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="text-center text-muted">
+                            <i class="fas fa-lightbulb fa-3x mb-3"></i>
+                            <p>No business ideas found for this niche yet.</p>
+                            <p>Use the "Find Business Ideas" button above to generate new ideas.</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading Modal -->
+<div class="modal fade" id="generating-ideas-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body text-center">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <h5>Generating Business Ideas...</h5>
+                <p class="text-muted">This may take a few minutes. Please wait while our AI agents research and generate new business ideas for your selected niche.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include Backbone.js View -->
+<script src="{% static 'js/view-niche-ideas.js' %}"></script>
+<script>
+$(document).ready(function() {
+    new NicheIdeasView();
+});
+</script>
+
+<!-- CSRF Token for AJAX requests -->
+{% csrf_token %}
