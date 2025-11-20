@@ -21,6 +21,9 @@ def board_workflow(pubsub_manager: PubSubManager):
     ).on(
         T.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
         board_chair.on_portfolio_reduce_businesses_requested
+    ).on(
+        T.PORTFOLIO_PICK_NEW_BUSINESS,
+        board_chair.on_portfolio_pick_new_business
     )
     
     # Board Business Development

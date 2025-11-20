@@ -24,7 +24,7 @@ from django.utils import timezone
 from erieiron_common import common
 import settings
 from erieiron_common.common import get_now, get_methods_with_decorator
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, PubSubHandlerInstanceStatus, PubSubMessagePriority, ComputeDevice
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, PubSubHandlerInstanceStatus, PubSubMessagePriority, ComputeDevice, PubSubWorkerResponse
 from erieiron_common.enums import SystemCapacity
 from erieiron_common.models import PubSubMessage, PubSubHanderInstance, PubSubHanderInstanceProcess, PubSubEnvironment
 
@@ -658,7 +658,7 @@ class PubSubManager:
                         self.handler_instance_id
                     )
 
-                    if completed_message_type:
+                    if PubSubWorkerResponse.STOP.neq(ret_val) and completed_message_type:
                         if common.is_list_like(ret_val):
                             for rt in common.ensure_list(ret_val):
                                 PubSubManager.publish(

@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import traceback
 from pathlib import Path
 
@@ -18,41 +19,50 @@ PROMPTS_DIR = BOARD_LEVEL_BASE_PATH = BUSINESS_LEVEL_BASE_PATH = BASE_PROMPTS_PA
 
 def board_level_chat(
         description,
-        system_prompt: str,
+        system_prompts: list[str],
         user_messages: list[LlmMessage],
         text_output=False,
         model: LlmModel = None,
         business: Business = None,
+        reasoning_effort=LlmReasoningEffort.MEDIUM,
+        verbosity=LlmVerbosity.MEDIUM,
         debug=False
 ):
-    system_prompt = assert_exists(BOARD_LEVEL_BASE_PATH / system_prompt)
+    output_schema = None
+    system_prompt_paths = []
+    for system_prompt in common.ensure_list(system_prompts):
+        system_prompt_path = BOARD_LEVEL_BASE_PATH / system_prompt
+        system_prompt_paths.append(
+            assert_exists(system_prompt_path)
+        )
+        
+        schema = BOARD_LEVEL_BASE_PATH / f"{system_prompt_path.name}.schema.json"
+        if not output_schema and schema.exists():
+            output_schema = schema
     
     if business and BusinessOperationType.is_manual(business.operation_type):
-        base_prompt = "_base_prompt--board_level--manual.md"
-    else:
-        base_prompt = "_base_prompt--board_level.md"
-    
-    system_prompts = [
-        system_prompt,
-        BOARD_LEVEL_BASE_PATH / base_prompt
-    ]
-    if business:
-        system_prompts.append(
-            f"The business operation type is `{'Third-Party' if BusinessOperationType.is_thirdparty(business.operation_type) else 'Erie Iron Portfolio' }` ({business.operation_type})"
+        system_prompt_paths.append(
+            BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level--manual.md"
         )
-
-    output_schema = BOARD_LEVEL_BASE_PATH / f"{system_prompt.name}.schema.json"
+    else:
+        system_prompt_paths.append(
+            BOARD_LEVEL_BASE_PATH / "_base_prompt--board_level.md"
+        )
     
-    if not output_schema.exists():
-        output_schema = None
+    if business:
+        system_prompt_paths.append(
+            f"The business operation type is `{'Third-Party' if BusinessOperationType.is_thirdparty(business.operation_type) else 'Erie Iron Portfolio'}` ({business.operation_type})"
+        )
     
     return agent_chat(
         description=description,
         tag_entity=Business.get_erie_iron_business(),
-        system_prompts=system_prompts,
+        system_prompts=system_prompt_paths,
         user_messages=user_messages,
         output_schema=output_schema,
         text_output=text_output,
+        reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
         model=model,
         debug=debug
     )
@@ -110,26 +120,29 @@ def agent_chat(
         text_output=False,
         model: LlmModel = None,
         debug=False,
-        reasoning_effort=LlmReasoningEffort.MEDIUM
+        reasoning_effort=LlmReasoningEffort.MEDIUM,
+        verbosity=LlmVerbosity.MEDIUM
 ):
     system_prompts = common.ensure_list(system_prompts)
     system_prompts.append(BASE_PROMPTS_PATH / "_base_prompt--output.md")
     
-    messages = []
+    system_prompt_message_texts = []
     for sp in system_prompts:
         if isinstance(sp, LlmMessage):
-            messages.append(sp)
+            system_prompt_message_texts.append(sp.text)
         elif isinstance(sp, Path):
-            messages.append(LlmMessage.sys(assert_exists(sp)))
+            system_prompt_message_texts.append(assert_exists(sp).read_text())
         elif isinstance(sp, str):
-            messages.append(LlmMessage.sys(sp))
+            system_prompt_message_texts.append(sp)
         else:
             raise Exception(f"unhandled prompt type {sp}")
     
-    messages += common.ensure_list(user_messages)
+    messages = [
+                   LlmMessage.sys("\n\n".join(system_prompt_message_texts))
+               ] + common.ensure_list(user_messages)
     
     if not model:
-        model = LlmModel.OPENAI_GPT_5_1
+        model = get_reasoning_model()
     
     resp = llm_chat(
         description,
@@ -139,7 +152,7 @@ def agent_chat(
         output_schema=output_schema,
         code_response=not text_output,
         reasoning_effort=reasoning_effort,
-        verbosity=LlmVerbosity.MEDIUM
+        verbosity=verbosity
     )
     
     if text_output:
@@ -277,3 +290,12 @@ def get_sys_prompt(
         messages.append(msg)
     
     return LlmMessage.sys("\n\n-------\n\n".join(messages))
+
+
+def get_reasoning_model() -> LlmModel:
+    return random.choices(
+        [LlmModel.OPENAI_GPT_5_1, LlmModel.GEMINI_3_0_PRO, LlmModel.CLAUDE_4_5],
+        # weights=[0.6, 0.25, 0.15],
+        weights=[0.6, 0, 0.15],
+        k=1
+    )[0]

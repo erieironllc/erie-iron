@@ -10,7 +10,7 @@
                 <div class="card-body">
                     <!-- Niche Selector -->
                     <div class="mb-3">
-                        <label for="niche-select" class="form-label">Select Niche Category</label>
+                        <label for="niche-select" class="form-label">Select Category</label>
                         <select class="form-select" id="niche-select" name="niche">
                             {% for niche in available_niches %}
                             <option value="{{ niche.key }}" 
@@ -74,7 +74,7 @@
                                         <span class="badge bg-{% if idea.status == 'ACTIVE' %}success{% elif idea.status == 'IDEA' %}info{% else %}secondary{% endif %}">
                                             {{ idea.status|title }}
                                         </span>
-                                        <a href="/business/{{ idea.id }}/" class="btn btn-sm btn-outline-primary float-end">
+                                        <a href="{% url 'view_business' idea.id %}" class="btn btn-sm btn-outline-primary float-end">
                                             View Details
                                         </a>
                                     </div>

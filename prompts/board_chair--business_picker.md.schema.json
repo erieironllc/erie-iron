@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "required": ["top_three_businesses", "overall_reasoning"],
+  "properties": {
+    "top_three_businesses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["rank", "selected_business", "justification", "risk_assessment"],
+        "properties": {
+          "rank": {"type": "integer", "minimum": 1, "maximum": 3},
+          "selected_business": {
+            "type": "object",
+            "properties": {
+              "business_id": {"type": "string"},
+              "business_name": {"type": "string"},
+              "confidence_score": {"type": "number", "minimum": 0, "maximum": 10}
+            },
+            "required": ["business_id", "business_name", "confidence_score"]
+          },
+          "justification": {
+            "type": "object", 
+            "properties": {
+              "financial_potential": {"type": "string"},
+              "alignment_with_guidance": {"type": "string"},
+              "resource_requirements": {"type": "string"},
+              "competitive_advantages": {"type": "string"}
+            },
+            "required": ["financial_potential", "alignment_with_guidance", "resource_requirements"]
+          },
+          "risk_assessment": {
+            "type": "object",
+            "properties": {
+              "risk_level": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
+              "primary_risks": {"type": "array", "items": {"type": "string"}},
+              "mitigation_strategies": {"type": "array", "items": {"type": "string"}},
+              "cash_flow_timeline": {"type": "string"}
+            },
+            "required": ["risk_level", "primary_risks", "mitigation_strategies"]
+          }
+        }
+      }
+    },
+    "overall_reasoning": {"type": "string"}
+  }
+}

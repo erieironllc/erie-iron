@@ -212,6 +212,9 @@ class ClientMessage(ErieEnum):
     INTERACTION_RESPONSE_UPDATED = auto()
 
 
+class PubSubWorkerResponse(ErieEnum):
+    STOP = auto()
+    
 class PubSubMessageType(ErieEnum):
     EVERY_MINUTE = auto()
     EVERY_HOUR = auto()
@@ -236,6 +239,7 @@ class PubSubMessageType(ErieEnum):
     
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
+    PORTFOLIO_PICK_NEW_BUSINESS = auto()
     RESOURCE_PLANNING_REQUESTED = auto()
     TASK_ASSIGNED = auto()
     TASK_UPDATED = auto()
@@ -383,7 +387,7 @@ class LlmModel(ErieEnum):
     CLAUDE_4_5 = "claude-sonnet-4-5-20250929"
     CLAUDE_3_7 = "claude-3-7-sonnet-20250219"
     CLAUDE_3_5 = "claude-3-5-sonnet-20240620"
-    CLAUDE_3_OPUS= "claude-3-opus-20240229"
+    CLAUDE_3_OPUS = "claude-3-opus-20240229"
     
     DEEPSEEK_CODER = "deepseek-coder"
     DEEPSEEK_CHAT = "deepseek-chat"
@@ -580,3 +584,16 @@ class SdaPhase(ErieEnum):
     DEPLOY = auto()
     EXECUTION = auto()
     EVALUATE = auto()
+
+
+class BusinessNiche(ErieEnum):
+    API_INTEGRATION_SERVICES = auto()
+    B2B_PROCESS_AUTOMATION = auto()
+    ECOMMERCE_AUTOMATION = auto()
+    LEAD_QUALIFICATION_AUTOMATION = auto()
+    LOCAL_SERVICE_ARBITRAGE = auto()
+    PROFESSIONAL_SERVICES = auto()
+    SUBSCRIPTION_MANAGEMENT_AUTOMATION = auto()
+    
+    def get_prompt_filename(self) -> str:
+        return f"niche_finders/{str(self.value).lower()}.md"

@@ -1,15 +1,18 @@
 import json
+import uuid
 from pathlib import Path
 
 from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
-from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType
+from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType, BusinessNiche, LlmModel
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
 def find_new_business_opportunity(payload, niche_type=None, user_guidance=None):
+    niche_type = BusinessNiche.valid_or(niche_type)
+    
     placehold_business_id = payload.get("placehold_business_id")
     erieiron_business = Business.get_erie_iron_business()
     
@@ -31,9 +34,9 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
         [
             {
                 "name": b.name,
-                "summary": b.summary
+                "summary": b.summary or b.raw_idea or "not yet defined"
             }
-            for b in Business.objects.exclude(id=erieiron_business.id).exclude(summary__isnull=True)
+            for b in Business.objects.exclude(id=erieiron_business.id)
         ],
         "existing_business"
     )
@@ -51,10 +54,9 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
         {common.model_to_dict_s(erieiron_business.get_latest_capacity())}
         """
     
-    # Add niche focus if provided
     if niche_type:
         capacity_message += f"\n\nNICHE FOCUS: {niche_type}"
-        
+    
     # Add user guidance if provided
     if user_guidance:
         capacity_message += f"\n\nUSER GUIDANCE: {user_guidance}"
@@ -64,8 +66,12 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
     # Use base business finder prompt (niche prompts will be added in future phase)
     business_idea = board_level_chat(
         "Business Finder",
-        "corporate_development--business_finder.md",
-        messages
+        [
+            "corporate_development--business_finder.md",
+            niche_type.get_prompt_filename()
+        ],
+        messages,
+        model=LlmModel.CLAUDE_4_5
     )
     
     Business.objects.filter(id=placehold_business_id).update(
@@ -119,7 +125,8 @@ def submit_business_opportunity(payload):
             {summary}
             
             {idea_content}
-        """
+        """,
+        model=LlmModel.OPENAI_GPT_5_MINI
     )
     
     if business.name.startswith(Constants.NEW_BUSINESS_NAME_PREFIX.value) and business_structure.get("business_name"):
@@ -161,7 +168,7 @@ def find_niche_business_ideas(payload):
     for i in range(requested_count):
         # Create placeholder business for idea generation
         placeholder_business = Business.objects.create(
-            name=f"{Constants.NEW_BUSINESS_NAME_PREFIX} Generating...",
+            name=f"{Constants.NEW_BUSINESS_NAME_PREFIX} {uuid.uuid4()}...",
             source=BusinessIdeaSource.BUSINESS_FINDER_AGENT,
             niche_category=niche
         )

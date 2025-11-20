@@ -12,6 +12,7 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
+from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
@@ -217,11 +218,7 @@ class CodingAgentConfig:
             self.stop_tailing.set()
     
     def get_code_planning_model(self) -> LlmModel:
-        return random.choices(
-            [LlmModel.OPENAI_GPT_5_1, LlmModel.OPENAI_GPT_5_1, LlmModel.CLAUDE_4_5],
-            weights=[0.6, 0.25, 0.15],
-            k=1
-        )[0]
+        return system_agent_llm_interface.get_reasoning_model()
     
     def cleanup_iteration(self):
         self.close_log()

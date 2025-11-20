@@ -45,7 +45,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -938,29 +938,13 @@ def _portfolio_tab_context_niche_ideas(erieiron_business: Business, request=None
     # Get all available niches (hardcoded for now, could be dynamic later)
     available_niches = [
         {
-            'key': 'local_service_arbitrage',
-            'name': 'Local Service Arbitrage',
-            'description': 'Appointment booking, delivery coordination, maintenance scheduling'
-        },
-        {
-            'key': 'b2b_process_automation', 
-            'name': 'B2B Process Automation',
-            'description': 'Business workflow automation and integration services'
-        },
-        {
-            'key': 'ecommerce_automation',
-            'name': 'E-commerce Automation', 
-            'description': 'Online store management and fulfillment automation'
-        },
-        {
-            'key': 'professional_services',
-            'name': 'Professional Services',
-            'description': 'Consulting, legal, financial, and creative services'
+            'key': niche.value,
+            'name': niche.label()
         }
+        for niche in BusinessNiche
     ]
     
-    # Get business ideas by niche for the selected niche
-    selected_niche = request.GET.get('niche', 'local_service_arbitrage') if request else 'local_service_arbitrage'
+    selected_niche = BusinessNiche.valid_or(rget(request, 'niche'), BusinessNiche.LOCAL_SERVICE_ARBITRAGE)
     business_ideas = Business.objects.filter(
         niche_category=selected_niche,
         status__in=[BusinessStatus.IDEA, BusinessStatus.ACTIVE]
@@ -5290,17 +5274,12 @@ def api_pubsub_publish(request):
             return JsonResponse({'error': f'Message type {message_type} not allowed'}, status=400)
         
         # Convert string to enum
-        try:
-            from erieiron_common.enums import PubSubMessageType
-            message_type_enum = getattr(PubSubMessageType, message_type)
-        except AttributeError:
-            return JsonResponse({'error': f'Invalid message type: {message_type}'}, status=400)
         
         # Publish message
         from erieiron_common.message_queue.pubsub_manager import PubSubManager
         
         PubSubManager.publish(
-            message_type_enum,
+            PubSubMessageType(message_type),
             payload=payload
         )
         

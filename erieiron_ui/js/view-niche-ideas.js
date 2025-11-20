@@ -75,7 +75,7 @@ NicheIdeasView = ErieView.extend({
                 payload: {
                     niche: niche,
                     user_input: userInput,
-                    requested_count: 10
+                    requested_count: 5
                 }
             }),
             success: (response) => {

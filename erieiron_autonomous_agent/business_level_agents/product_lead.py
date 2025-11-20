@@ -1,14 +1,17 @@
 from django.db import transaction
 
+from erieiron_autonomous_agent.enums import BusinessStatus
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat
 from erieiron_autonomous_agent.models import Business
 from erieiron_autonomous_agent.models import BusinessCapacityAnalysis, BusinessKPI, BusinessGoal, BusinessCeoDirective, Initiative, ProductRequirement
-from erieiron_common.enums import PubSubMessageType
+from erieiron_common.enums import PubSubMessageType, Status, PubSubWorkerResponse
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
 
 def define_initiatives(business_id):
     business = Business.objects.get(id=business_id)
+    if BusinessStatus.ACTIVE.neq( business.status):
+        return PubSubWorkerResponse.STOP
 
     chat_data = build_chat_data(business)
 

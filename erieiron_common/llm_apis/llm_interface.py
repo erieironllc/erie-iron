@@ -133,10 +133,20 @@ class LlmMessage:
     def get_message_json(self, model: LlmModel) -> dict:
         model = LlmModel(model)
         
+        # define your lists once to ensure consistency
+        gemini_models = [
+            LlmModel.GEMINI_3_0_PRO,
+            LlmModel.GEMINI_3_0_FLASH,
+            LlmModel.GEMINI_2_5_PRO,
+            LlmModel.GEMINI_2_0_FLASH
+        ]
+        
         role_str = self.message_type.value
-        if model in [LlmModel.GEMINI_3_0_PRO, LlmModel.GEMINI_3_0_FLASH, LlmModel.GEMINI_2_5_PRO, LlmModel.GEMINI_2_0_FLASH]:
+        
+        # Logic for Role Names
+        if model in gemini_models:
             if LlmMessageType.SYSTEM.eq(self.message_type):
-                role_str = "user"
+                role_str = "system"  # Or handle via system_instruction argument in client
             elif LlmMessageType.ASSISTANT.eq(self.message_type):
                 role_str = "model"
         elif model in [LlmModel.CLAUDE_4_5, LlmModel.CLAUDE_3_7, LlmModel.CLAUDE_3_5]:
@@ -144,10 +154,13 @@ class LlmMessage:
                 role_str = "user"
         
         sanitized_text = sanitize_prompt(self.text)
-        if model in [LlmModel.GEMINI_2_5_PRO, LlmModel.GEMINI_2_0_FLASH]:
+        
+        # Logic for Dictionary Structure
+        # FIX: Ensure the same list of models is used here
+        if model in gemini_models:
             d = {
                 "role": role_str,
-                "parts": [sanitized_text]
+                "parts": [sanitized_text]  # Gemini SDK requires 'parts' as a list
             }
         else:
             d = {
@@ -314,7 +327,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
         e = common.get_stack_trace_as_string(e)
     else:
         e = str(e)
-        
+    
     messages = [
         LlmMessage.sys(
             f"""
