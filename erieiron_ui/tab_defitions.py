@@ -382,6 +382,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_analysis,
     },
     {
+        "slug": "second-opinions",
+        "label": "Second Opinions",
+        "template": "business/tabs/second_opinions.html",
+        "availability_fn": views._tab_available_second_opinions,
+        "context_fn": views._tab_context_second_opinions,
+    },
+    {
         "slug": "architecture",
         "label": "Architecture",
         "template": "business/tabs/architecture.html",

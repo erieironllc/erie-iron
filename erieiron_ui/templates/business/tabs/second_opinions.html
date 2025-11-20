@@ -1,0 +1,19 @@
+{% load erieiron_common_tags %}
+{% load humanize %}
+<div class="tab-pane-content">
+    {% if second_opinions %}
+        {% for second_opinion in second_opinions %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <small class="text-muted">{{ second_opinion.timestamp }}</small>
+                    <small class="text-muted">| Model: {{ second_opinion.llm_model }}</small>
+                </div>
+                <div class="card-body ms-3 me-3">
+                    {{ second_opinion.evaluation|json_to_div:"Overall Verdict, Summary Judgement, Strengths, Weaknesses, *" }}
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No second opinion evaluations available.</em>
+    {% endif %}
+</div>

@@ -1,11 +1,15 @@
 import json
+import textwrap
 import uuid
 from pathlib import Path
 
-from erieiron_autonomous_agent.models import Business
-from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
+from tqdm import tqdm
+
+from erieiron_autonomous_agent.enums import BusinessStatus
+from erieiron_autonomous_agent.models import Business, BusinessSecondOpinionEvaluation
+from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat, get_reasoning_model
 from erieiron_common import common
-from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType, BusinessNiche, LlmModel
+from erieiron_common.enums import Constants, BusinessIdeaSource, PubSubMessageType, BusinessNiche, LlmModel, LlmReasoningEffort, LlmVerbosity
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
@@ -68,9 +72,10 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
         "Business Finder",
         [
             "corporate_development--business_finder.md",
-            niche_type.get_prompt_filename()
+            niche_type.get_prompt_filename() if niche_type else None
         ],
         messages,
+        business=Business.objects.get(id=placehold_business_id),
         model=LlmModel.CLAUDE_4_5
     )
     
@@ -82,6 +87,7 @@ GitHub list of both startup and engineering postmortems. Less indie-focused but 
         "existing_business_id": placehold_business_id,
         "summary": business_idea.get("summary"),
         "idea_content": business_idea.get("detailed_pitch"),
+        "full_output": business_idea,
         "source": BusinessIdeaSource.BUSINESS_FINDER_AGENT,
     }
 
@@ -92,6 +98,7 @@ def submit_business_opportunity(payload):
     idea_content = payload.get("idea_content")
     source = payload.get("source")
     niche_category = payload.get("niche_category")
+    full_output = payload.get("full_output")
     
     if existing_business_id:
         name = Business.objects.get(id=existing_business_id).name
@@ -108,6 +115,7 @@ def submit_business_opportunity(payload):
         defaults={
             "name": name,
             "service_token": token,
+            "business_finder_output": full_output,
             "source": source,
             "raw_idea": idea_content,
             "niche_category": niche_category
@@ -147,6 +155,45 @@ def submit_business_opportunity(payload):
     )
     
     return business.id
+
+
+def perform_second_opinion_evaluation(business_id):
+    erieiron_business = Business.get_erie_iron_business()
+    business = Business.objects.get(id=business_id)
+    business_analysis, legal_analysis = business.get_latest_analysist()
+    
+    existing_eval = business.businesssecondopinionevaluation_set.all().order_by("-timestamp").first()
+    if existing_eval:
+        if LlmModel.CLAUDE_4_5.eq(existing_eval.llm_model):
+            llm_model = LlmModel.OPENAI_GPT_5_1
+        else:
+            llm_model = LlmModel.CLAUDE_4_5
+    else:
+        llm_model = get_reasoning_model()
+    
+    evaluation = board_level_chat(
+        "Business Second Opinion Evaluation",
+        "business--second_opinion_evaluator.md",
+        LlmMessage.user_from_data("Please evaluate this business", {
+            "business_id": business.id,
+            "niche_category": business.niche_category,
+            "summary": business.summary,
+            "revenue_model": business.revenue_model,
+            "audience": business.audience,
+            'business_analysis': common.get_dict(business_analysis),
+            'legal_analysis': common.get_dict(legal_analysis)
+        }),
+        business=business,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmReasoningEffort.MEDIUM,
+        model=llm_model
+    )
+    
+    BusinessSecondOpinionEvaluation.objects.create(
+        business=business,
+        llm_model=llm_model,
+        evaluation=evaluation
+    )
 
 
 def find_niche_business_ideas(payload):
@@ -191,3 +238,83 @@ def find_niche_business_ideas(payload):
                 PubSubMessageType.BUSINESS_IDEA_SUBMITTED,
                 payload=enhanced_payload
             )
+
+
+def on_portfolio_pick_new_business(payload):
+    """
+    Evaluate all business ideas and select the top 3 best ones
+    based on provided guidance and Erie Iron constraints.
+
+    Returns:
+        dict: Structured response with top 3 ranked businesses and analysis
+    """
+    # Get all idea-stage businesses
+    guidance = payload.get("guidance")
+    filtered_idea_business = get_filtered_idea_businesses(guidance)
+    
+    print(textwrap.dedent(f"""
+    
+    Qualified Businesses:
+    {[b.id for b in filtered_idea_business]}
+    
+    
+    """))
+    
+    # Prepare comprehensive business context
+    business_context = []
+    for business in filtered_idea_business:
+        business_analysis, legal_analysis = business.get_latest_analysist()
+        business_context.append({
+            "business_id": business.id,
+            "niche_category": business.niche_category,
+            "summary": business.summary,
+            "revenue_model": business.revenue_model,
+            "audience": business.audience,
+            "critical_evaluations": common.get_dict(business.businesssecondopinionevaluation_set.all().order_by("-timestamp")),
+            'business_analysis': common.get_dict(business_analysis),
+            'legal_analysis': common.get_dict(legal_analysis)
+        })
+    
+    user_messages = [
+        LlmMessage.user_from_data("Business Ideas to Evaluate", business_context, "business"),
+        textwrap.dedent(f"""
+        ## GUIDANCE FOR BUSINESS SELECTION
+        {guidance or 'Pick a winner'}
+        """)
+    ]
+    
+    response = board_level_chat(
+        "Board Chair Business Picker",
+        "board_chair--business_picker.md",
+        user_messages,
+        reasoning_effort=LlmReasoningEffort.HIGH,
+        verbosity=LlmVerbosity.LOW,
+        model=LlmModel.CLAUDE_4_5
+    )
+    
+    return response
+
+
+def get_filtered_idea_businesses(guidance) -> list[Business]:
+    return Business.objects.filter(id__in=['4f7a81b5-2208-4266-a6b7-04bed943b006', '7074d6f5-2c88-4a17-9914-bcab92df988b', '135df621-3511-437a-a6dd-091c9aafa679', '9e2ba564-5c9c-4715-8b66-0c27d7cccf51', 'dd3468b2-e82f-4ef3-b3b5-1082962fdeeb', 'd1923488-bf2f-434e-8f46-7f361193ed99', 'ddc11ef6-322e-47ad-8868-61a8e09c1a41', '2bf1279c-6efe-401f-96d3-d027ee0099e6', 'b4732bc1-4d56-4eaa-bc29-c08805746b25', '06099fbc-d79a-41f8-ba37-37a59ef7a3c5', 'ec1b802d-3744-4c2d-8303-1734212a3c2c', 'bb660974-47b2-4c68-9b6f-dc576b7cdee2', '6f137e3d-0067-4dc5-b002-af0dc0b40f58', '370912dd-ddf4-459c-b0a7-0b2aac73d209', 'e8d011a5-7a4f-4519-ba4b-fbd6a0c58f77', 'bc427f49-5ee1-4b37-978e-5c306a2a34eb', 'dd65d4ad-07e9-4121-82ac-f4b10dc25474', '02ff14e3-9bba-4e5f-972e-0957d3b1a58d', '00193907-d889-4bc9-a237-47a8904f490e'])
+    idea_businesses = Business.objects.filter(
+        niche_category__isnull=False
+    ).exclude(
+        status=BusinessStatus.ACTIVE
+    )
+    
+    filtered_idea_business = []
+    for business in tqdm(idea_businesses):
+        resp = board_level_chat(
+            "Business Picker Filterer",
+            "board_chair--business_picker_filterer.md",
+            [
+                LlmMessage.user_from_data("Business to eval", business.get_llm_data()),
+                f"uses this guidance: {guidance}" if guidance else None,
+            ],
+            model=LlmModel.OPENAI_GPT_5_NANO
+        )
+        if resp.get("qualifies"):
+            filtered_idea_business.append(business)
+    
+    return filtered_idea_business

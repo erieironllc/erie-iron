@@ -25,7 +25,17 @@
                        data-bs-toggle="list"
                        aria-controls="response"
                     >
-                        Response
+                        Raw Response
+                    </a>
+                    
+                    <a id="responsepretty-tab"
+                       href="#responsepretty"
+                       class="list-group-item list-group-item-action"
+                       role="tab"
+                       data-bs-toggle="list"
+                       aria-controls="response"
+                    >
+                        Pretty Response
                     </a>
                 {% endif %}
 
@@ -195,6 +205,12 @@
                 <div class="tab-pane " id="response" role="tabpanel" aria-labelledby="response-tab">
                     {% if llm_request.response %}
                         {{ llm_request.response|dynamic_format }}
+                    {% endif %}
+                </div>
+
+                <div class="tab-pane " id="responsepretty" role="tabpanel" aria-labelledby="responsepretty-tab">
+                    {% if llm_request.response %}
+                        {{ llm_request.response|json_to_div }}
                     {% endif %}
                 </div>
 

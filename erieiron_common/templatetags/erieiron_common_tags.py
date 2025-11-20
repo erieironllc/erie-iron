@@ -140,7 +140,7 @@ def dynamic_format(content):
     if isinstance(content, dict):
         return mark_safe(f"<div class='pre'>{pprint_json(content)}</div>")
     else:
-        return mark_safe(markdown.markdown(content))
+        return mark_safe(markdown.markdown(str(content)))
 
 
 @register.filter(name='json_to_md')
@@ -154,10 +154,11 @@ def json_to_pre(json_content, filter_def=None, use_default_wrapper=True, make_pr
 
 
 @register.filter(name='json_to_div')
-def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pre=False, apply_md=False):
-    if not json_content:
+def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pre=False, apply_md=False, _depth=1):
+    if json_content is None:
         return ""
-    
+
+    # Parse filter definition
     only_fields = []
     exclude_fields = []
     keys = []
@@ -165,103 +166,89 @@ def json_to_div(json_content, filter_def=None, use_default_wrapper=True, make_pr
     for filter_def_item in filter_def_items:
         if filter_def_item.startswith("-"):
             exclude_fields.append(filter_def_item[1:])
-        else:
+        elif "*" not in filter_def_item:
             only_fields.append(filter_def_item)
             keys.append(filter_def_item)
-    
-    try:
-        if not isinstance(json_content, dict):
-            try:
-                json_content = json.loads(json_content)
-            except:
-                if apply_md:
-                    json_content = markdown.markdown(json_content)
-                
-                if use_default_wrapper:
-                    return mark_safe(f"""
-                <div class="json_to_div--container {'pre' if make_pre else ''}">{json_content}</div>
-                """)
-                else:
-                    return mark_safe(f"""
-                        <li>{json_content}</li>
-                    """)
-        
-        if common.is_list_like(json_content):
-            return mark_safe("\n".join([
-                json_to_pre(j, use_default_wrapper=False, make_pre=make_pre, apply_md=apply_md) for j in json_content
-            ]))
-        
-        parts = []
-        keys = keys or json_content.keys()
-        for k in keys:
-            if only_fields and k not in only_fields:
-                continue
-            
-            if k in exclude_fields:
-                continue
-            
-            display_label = k.replace("_", " ").title()
-            
-            v = json_content.get(k)
-            if common.is_list_like(v):
-                pres = []
-                for v1 in v:
-                    if isinstance(v1, dict):
-                        v1 = json.dumps(v1, indent=4, cls=ErieIronJSONEncoder)
-                    
-                    if apply_md:
-                        v1 = markdown.markdown(v1)
-                    
-                    pres.append(f"<div class=' {'pre' if make_pre else ''}'>{v1}</div>")
-                
-                pres = "<br>".join(pres)
-                if use_default_wrapper:
-                    parts.append(f"""
-                    <div class="json_to_div--container">
-                        <label>{display_label}</label>
-                        {pres}
-                    </div>
-                    """)
-                else:
-                    parts.append(f"""
-                    <li>
-                        <label>{display_label}</label>
-                        {pres}
-                    </li>
-                    """)
+
+    if filter_def and "*" in filter_def:
+        keys = [
+            *keys,
+            *[k for k in json_content.keys() if k not in only_fields] 
+        ]
+
+    # Try to JSON-parse when appropriate
+    if not isinstance(json_content, (dict, list)):
+        try:
+            json_content = json.loads(json_content)
+        except Exception:
+            # Fallback non-JSON content
+            if apply_md:
+                json_content = markdown.markdown(str(json_content))
+            wrapper = "div" if use_default_wrapper else "li"
+            return mark_safe(f"<{wrapper} class='json_to_div--container {'pre' if make_pre else ''}'>{json_content}</{wrapper}>")
+
+    # Handle lists
+    if isinstance(json_content, list):
+        rendered = []
+        for item in json_content:
+            rendered.append(
+                json_to_div(
+                    item,
+                    filter_def=filter_def,
+                    use_default_wrapper=False,
+                    make_pre=make_pre,
+                    apply_md=apply_md,
+                    _depth=_depth
+                )
+            )
+        return mark_safe("\n".join(rendered))
+
+    # Handle dicts
+    parts = []
+    keys_to_render = keys or json_content.keys()
+    heading_level = min(_depth + 3, 6)  # h2 at root, smaller as depth increases
+
+    for k in keys_to_render:
+        if k in exclude_fields:
+            continue
+
+        display_label = k.replace("_", " ").title()
+        v = json_content.get(k)
+
+        # Render value recursively
+        if isinstance(v, (dict, list)):
+            sub_html = json_to_div(
+                v,
+                filter_def=None,
+                use_default_wrapper=True,
+                make_pre=make_pre,
+                apply_md=apply_md,
+                _depth=_depth + 1
+            )
+            parts.append(f"""
+                <div class="json_to_div--section depth-{_depth}" style="margin-left: {(_depth-1)*20}px">
+                    <h{heading_level}>{display_label}</h{heading_level}>
+                    {sub_html}
+                </div>
+            """)
+        else:
+            if isinstance(v, dict):
+                # Shouldn't hit here due to the recursive branch above, but safe fallback
+                v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
+
+            if apply_md:
+                v = markdown.markdown(str(v))
             else:
-                if isinstance(v, dict):
-                    v = json.dumps(v, indent=4, cls=ErieIronJSONEncoder)
-                    if apply_md:
-                        v = markdown.markdown(v)
-                    parts.append(f"""
-                    <div class="json_to_div--container">
-                        <label>{display_label}</label>
-                        <div class=' {'pre' if make_pre else ''}'>{v}</div>
-                    </div>
-                    """)
-                elif use_default_wrapper:
-                    if apply_md:
-                        v = markdown.markdown(str(v))
-                    parts.append(f"""
-                    <div class="json_to_div--container">
-                        <label>{display_label}</label>
-                        <div class=' {'pre' if make_pre else ''}'>{v}</div>
-                    </div>
-                    """)
-                else:
-                    if apply_md:
-                        v = markdown.markdown(str(v))
-                    parts.append(f"""
-                <li>
-                    <label>{display_label}</label>
-                    <div class=' {'pre' if make_pre else ''}'>{v}</div>
-                </li>
-                """)
-        
-        return mark_safe("".join(parts))
-    except Exception as e:
-        raise e
+                v = str(v)
+
+            parts.append(f"""
+                <div class="json_to_div--container depth-{_depth}" style="margin-left: {(_depth-1)*20}px">
+                    <h{heading_level}>{display_label}</h{heading_level}>
+                    <div class="{'pre' if make_pre else ''}">{v}</div>
+                </div>
+            """)
+
+    return mark_safe("".join(parts))
 
 
 @register.filter(name='token_count')

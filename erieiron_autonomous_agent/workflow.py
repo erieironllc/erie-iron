@@ -21,9 +21,6 @@ def board_workflow(pubsub_manager: PubSubManager):
     ).on(
         T.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
         board_chair.on_portfolio_reduce_businesses_requested
-    ).on(
-        T.PORTFOLIO_PICK_NEW_BUSINESS,
-        board_chair.on_portfolio_pick_new_business
     )
     
     # Board Business Development
@@ -36,9 +33,14 @@ def board_workflow(pubsub_manager: PubSubManager):
         corporate_development_agent.submit_business_opportunity,
         T.ANALYSIS_REQUESTED
     ).on(
+        [T.ANALYSIS_ADDED, T.BUSINESS_SECOND_OPINION_EVALUATION_REQUESTED],
+        corporate_development_agent.perform_second_opinion_evaluation
+    ).on(
         T.FIND_NICHE_BUSINESS_IDEAS,
-        corporate_development_agent.find_niche_business_ideas,
-        None  # No completion message needed
+        corporate_development_agent.find_niche_business_ideas
+    ).on(
+        T.PORTFOLIO_PICK_NEW_BUSINESS,
+        corporate_development_agent.on_portfolio_pick_new_business
     )
     
     # Board Analyst

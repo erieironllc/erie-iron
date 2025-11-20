@@ -13,21 +13,9 @@ npm install  # One-time frontend setup
 
 ### Development Workflow
 ```bash
-# Database and Django
-python manage.py migrate
-python manage.py runserver  # Serves on localhost:8000
-
 # Frontend Assets
 npm run compile-ui  # Build Backbone.js/Bootstrap bundle
 npm run watch       # Auto-rebuild on file changes
-
-# Testing
-pytest              # Run all Python tests
-pytest tests/ui     # Test specific module
-pytest --maxfail=1  # Stop on first failure
-
-# Code Quality
-ruff check .        # Lint Python code
 ```
 
 **never** run the `black` code formatter (or any code formatter) over unmodified lines of code unless explicitly instructed to do so 

@@ -30,7 +30,7 @@ def board_level_chat(
 ):
     output_schema = None
     system_prompt_paths = []
-    for system_prompt in common.ensure_list(system_prompts):
+    for system_prompt in common.filter_none(common.ensure_list(system_prompts)):
         system_prompt_path = BOARD_LEVEL_BASE_PATH / system_prompt
         system_prompt_paths.append(
             assert_exists(system_prompt_path)
@@ -56,7 +56,7 @@ def board_level_chat(
     
     return agent_chat(
         description=description,
-        tag_entity=Business.get_erie_iron_business(),
+        tag_entity=business or Business.get_erie_iron_business(),
         system_prompts=system_prompt_paths,
         user_messages=user_messages,
         output_schema=output_schema,
@@ -94,6 +94,9 @@ def business_level_chat(
             msg = msg.replace(look_for_str, replace_with_str)
         
         system_prompts.append(LlmMessage.sys(msg))
+    
+    if not text_output:
+        system_prompts.append("**you must** respond with well pure json and nothing else.  no headers, no ```json, etc.  must be immediately parsable json")
     
     if not output_schema.exists():
         output_schema = None
@@ -296,6 +299,6 @@ def get_reasoning_model() -> LlmModel:
     return random.choices(
         [LlmModel.OPENAI_GPT_5_1, LlmModel.GEMINI_3_0_PRO, LlmModel.CLAUDE_4_5],
         # weights=[0.6, 0.25, 0.15],
-        weights=[0.6, 0, 0.15],
+        weights=[0.6, 0, 0.6],
         k=1
     )[0]

@@ -42,7 +42,7 @@ from erieiron_common.enums import (
     InfrastructureStackType,
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
-    CloudProvider, CredentialService,
+    CloudProvider, CredentialService, LlmModel,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -71,13 +71,14 @@ class Business(BaseErieIronModel):
     revenue_model = models.TextField(null=True)
     audience = models.TextField(null=True)
     niche_category = models.TextField(
-        null=True, 
+        null=True,
         blank=True,
         help_text="Niche category used to generate this business idea (e.g., local_service_arbitrage)"
     )
     required_credentials = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     core_functions = models.JSONField(default=list)
     execution_dependencies = models.JSONField(default=list)
+    business_finder_output = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     growth_channels = models.JSONField(default=list)
     personalization_options = models.JSONField(default=list)
     allow_autonomous_shutdown = models.BooleanField(default=True)
@@ -92,6 +93,19 @@ class Business(BaseErieIronModel):
     github_repo_url = models.TextField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    def get_llm_data(self):
+        business_analysis, legal_analysis = self.get_latest_analysist()
+        return {
+            "business_id": self.id,
+            "niche_category": self.niche_category,
+            "summary": self.summary,
+            "revenue_model": self.revenue_model,
+            "audience": self.audience,
+            "critical_evaluations": common.get_dict(self.businesssecondopinionevaluation_set.all().order_by("-timestamp")),
+            'business_analysis': common.get_dict(business_analysis),
+            'legal_analysis': common.get_dict(legal_analysis)
+        }
     
     def get_domain_manager(self, cloud_account=None):
         from erieiron_common.domain_manager import DomainManager
@@ -140,6 +154,9 @@ class Business(BaseErieIronModel):
             .order_by("created_timestamp")
             .last()
         )
+    
+    def get_latest_second_opinion(self, ) -> "BusinessSecondOpinionEvaluation":
+        return BusinessSecondOpinionEvaluation.objects.filter(business=self).order_by("timestamp").last()
     
     def get_latest_analysist(
             self,
@@ -701,6 +718,13 @@ class CloudAccount(BaseErieIronModel):
             self.metadata["vpc"] = {}
         self.metadata["vpc"] = vpc_data
         self.save(update_fields=["metadata"])
+
+
+class BusinessSecondOpinionEvaluation(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    llm_model = models.TextField(choices=LlmModel.choices())
+    evaluation = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
+    timestamp = models.DateTimeField(auto_now_add=True)
 
 
 class BusinessAnalysis(BaseErieIronModel):

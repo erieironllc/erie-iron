@@ -1342,6 +1342,19 @@ def _tab_context_analysis(business: Business) -> dict:
     }
 
 
+def _tab_available_second_opinions(business: Business) -> bool:
+    return business.businesssecondopinionevaluation_set.exists()
+
+
+def _tab_context_second_opinions(business: Business) -> dict:
+    second_opinions = list(
+        business.businesssecondopinionevaluation_set.all().order_by("-timestamp")
+    )
+    return {
+        "second_opinions": second_opinions,
+    }
+
+
 def _tab_available_llmrequests(business: Business) -> bool:
     return business.llmrequest_set.exists()
 

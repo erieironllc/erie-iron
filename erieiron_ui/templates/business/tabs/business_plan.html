@@ -50,4 +50,10 @@
             </div>
         </section>
     {% endif %}
+
+    {% if business.business_finder_output %}
+        <div>
+        {{ business.business_finder_output|json_to_div }}
+        </div>
+    {% endif %}
 </div>

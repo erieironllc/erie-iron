@@ -5,18 +5,57 @@
   "required": [
     "name",
     "summary",
-    "detailed_pitch"
+    "detailed_pitch",
+    "competitive_category",
+    "competitive_crowdedness",
+    "known_competitor_patterns",
+    "differentiation_wedge",
+    "competition_risk",
+    "go_no_go_competition"
   ],
   "properties": {
     "name": {
       "type": "string",
-      "description": "Name of the business"
+      "description": "Short, catchy name of the business"
     },
     "summary": {
-      "type": "string"
+      "type": "string",
+      "description": "Single sentence summary of the business"
     },
     "detailed_pitch": {
-      "type": "string"
+      "type": "string",
+      "description": "Very detailed multi-paragraph pitch for the business idea"
+    },
+    "competitive_category": {
+      "type": "string",
+      "description": "Short description of the market/category (e.g. 'Shopify bundling app for DTC brands')"
+    },
+    "competitive_crowdedness": {
+      "type": "string",
+      "enum": ["low", "moderate", "high"],
+      "description": "Overall crowdedness of the competitive space"
+    },
+    "known_competitor_patterns": {
+      "type": "array",
+      "description": "Short list of existing solution types or incumbent patterns in this space",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "differentiation_wedge": {
+      "type": "string",
+      "description": "2-4 sentences explaining how this business can realistically differentiate and win an initial niche"
+    },
+    "competition_risk": {
+      "type": "string",
+      "enum": ["low", "moderate", "high"],
+      "description": "Competition risk level with brief justification"
+    },
+    "go_no_go_competition": {
+      "type": "string",
+      "enum": ["go", "revise_niche"],
+      "description": "Final decision from a competition perspective: proceed as-is or revise the niche"
     }
   },
   "additionalProperties": false
