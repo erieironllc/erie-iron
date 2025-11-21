@@ -1,0 +1,26 @@
+{% load erieiron_common_tags %}
+{% load humanize %}
+<div class="tab-pane-content">
+    {% if human_jobs %}
+        <div class="card my-4">
+            <div class="card-header">
+                <h6 class="mb-0">Human Work Summary</h6>
+                <small class="text-muted">Total: {{ total_hours_per_week }} hours per week</small>
+            </div>
+        </div>
+        
+        {% for job in human_jobs %}
+            <div class="card my-4">
+                <div class="card-header">
+                    <h6 class="mb-0">Job Description</h6>
+                    <small class="text-muted">{{ job.estimated_hours_per_week }} hours per week</small>
+                </div>
+                <div class="card-body ms-3 me-3">
+                    {{ job.job_description|linebreaks }}
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <em class="text-muted">No human job descriptions available.</em>
+    {% endif %}
+</div>

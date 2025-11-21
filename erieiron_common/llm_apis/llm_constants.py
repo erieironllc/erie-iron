@@ -80,7 +80,7 @@ MODEL_BACKUPS = {
     LlmModel.CLAUDE_3_5: LlmModel.GEMINI_3_0_PRO,
     LlmModel.CLAUDE_3_OPUS: LlmModel.GEMINI_3_0_PRO,
     
-    LlmModel.GEMINI_3_0_PRO: LlmModel.OPENAI_GPT_5_1,
+    LlmModel.GEMINI_3_0_PRO: None,
     LlmModel.GEMINI_3_0_FLASH: LlmModel.OPENAI_GPT_5_MINI,
     LlmModel.GEMINI_2_5_PRO: LlmModel.OPENAI_GPT_5_1,
     LlmModel.GEMINI_2_0_FLASH: LlmModel.OPENAI_GPT_5_MINI,

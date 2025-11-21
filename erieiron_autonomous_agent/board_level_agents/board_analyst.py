@@ -1,13 +1,45 @@
-from erieiron_autonomous_agent.models import Business
-from erieiron_autonomous_agent.models import BusinessAnalysis, BusinessLegalAnalysis
+from erieiron_autonomous_agent.models import Business, BusinessSecondOpinionEvaluation
+from erieiron_autonomous_agent.models import BusinessAnalysis, BusinessLegalAnalysis, BusinessHumanJobDescription
 from erieiron_autonomous_agent.system_agent_llm_interface import board_level_chat
 from erieiron_common import common
+from erieiron_common.enums import LlmModel, LlmReasoningEffort
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 
 def on_analysis_requested(business_id):
     business = Business.objects.get(id=business_id)
     business_analysis = execute_business_analysis(business)
     execute_legal_analysis(business, business_analysis)
+    define_human_job_descriptions(business_id)
+    perform_second_opinion_evaluation(business_id)
+
+
+def perform_second_opinion_evaluation(business_id):
+    erieiron_business = Business.get_erie_iron_business()
+    business = Business.objects.get(id=business_id)
+    business_analysis, legal_analysis = business.get_latest_analysist()
+    business_data = business.get_llm_data()
+    business_data.pop("critical_evaluations", None)
+    
+    for llm_model in [LlmModel.CLAUDE_4_5, LlmModel.OPENAI_GPT_5_1]:
+        evaluation = board_level_chat(
+            "Business Second Opinion Evaluation",
+            "business--second_opinion_evaluator.md",
+            LlmMessage.user_from_data(
+                "Please evaluate this business",
+                business_data
+            ),
+            business=business,
+            reasoning_effort=LlmReasoningEffort.HIGH,
+            verbosity=LlmReasoningEffort.MEDIUM,
+            model=llm_model
+        )
+        
+        BusinessSecondOpinionEvaluation.objects.create(
+            business=business,
+            llm_model=llm_model,
+            evaluation=evaluation
+        )
 
 
 def execute_business_analysis(business) -> BusinessAnalysis:
@@ -75,3 +107,43 @@ def execute_legal_analysis(
         recommended_entity_structure=legal_analysis.get("recommended_entity_structure"),
         entity_structure_justification=legal_analysis.get("entity_structure_justification")
     )
+
+
+def define_human_job_descriptions(business_id):
+    """
+    Define human job descriptions for a business based on available human capacity.
+    
+    Args:
+        business_id: Business ID to analyze
+    """
+    business = Business.objects.get(id=business_id)
+    
+    # Clear existing job descriptions for this business
+    BusinessHumanJobDescription.objects.filter(business=business).delete()
+    
+    job_analysis = board_level_chat(
+        "Human Job Description Analysis",
+        "board_analyst--human_job_descriptions.md",
+        [
+            LlmMessage.user_from_data("Business Definition", business.get_llm_data()),
+            "Please define human job descriptions for this business"
+        ],
+        business=business
+    )
+    
+    # Create job description records if human labor is required
+    if job_analysis.get("requires_human_labor", False):
+        for job_desc in job_analysis.get("human_job_descriptions", []):
+            BusinessHumanJobDescription.objects.create(
+                business=business,
+                estimated_hours_per_week=job_desc.get("estimated_hours_per_week", 0),
+                job_description=f"""# {job_desc.get('role_title', 'Untitled Role')}
+
+{job_desc.get('job_description', '')}
+
+## Justification
+{job_desc.get('justification', '')}
+"""
+            )
+    
+    return job_analysis

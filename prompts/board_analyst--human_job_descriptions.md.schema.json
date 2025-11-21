@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "properties": {
+    "requires_human_labor": {
+      "type": "boolean",
+      "description": "Whether this business requires human labor to operate successfully"
+    },
+    "total_human_hours_needed": {
+      "type": "integer",
+      "description": "Total weekly hours needed across all human roles",
+      "minimum": 0
+    },
+    "human_job_descriptions": {
+      "type": "array",
+      "description": "Array of human job descriptions needed for this business",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role_title": {
+            "type": "string",
+            "description": "Job title for this role"
+          },
+          "estimated_hours_per_week": {
+            "type": "integer",
+            "description": "Weekly time commitment for this role",
+            "minimum": 1
+          },
+          "job_description": {
+            "type": "string",
+            "description": "Detailed job description in markdown format including responsibilities, requirements, and KPIs"
+          },
+          "justification": {
+            "type": "string", 
+            "description": "Why this human role is necessary and cannot be automated"
+          }
+        },
+        "required": ["role_title", "estimated_hours_per_week", "job_description", "justification"]
+      }
+    },
+    "autonomous_alternative": {
+      "type": "string",
+      "description": "Optional description of how to modify business to reduce/eliminate human requirements"
+    },
+    "scalability_notes": {
+      "type": "string",
+      "description": "How human roles scale with business growth"
+    }
+  },
+  "required": ["requires_human_labor", "total_human_hours_needed", "human_job_descriptions"]
+}

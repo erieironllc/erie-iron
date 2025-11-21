@@ -13,7 +13,7 @@ from typing import Tuple, Optional, Any
 
 import boto3
 from django.db import models, transaction
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, QuerySet
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -94,14 +94,22 @@ class Business(BaseErieIronModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    @staticmethod
+    def get_portfolio_business()->QuerySet['Business']:
+        return Business.objects.exclude(id=Business.get_erie_iron_business().id)
+    
     def get_llm_data(self):
         business_analysis, legal_analysis = self.get_latest_analysist()
         return {
             "business_id": self.id,
             "niche_category": self.niche_category,
             "summary": self.summary,
+            "business_plan": self.business_plan,
+            "value_prop": self.value_prop,
+            "core_functions": self.core_functions,
             "revenue_model": self.revenue_model,
             "audience": self.audience,
+            "human_work": common.get_dict(self.businesshumanjobdescription_set.all()),
             "critical_evaluations": common.get_dict(self.businesssecondopinionevaluation_set.all().order_by("-timestamp")),
             'business_analysis': common.get_dict(business_analysis),
             'legal_analysis': common.get_dict(legal_analysis)
@@ -718,6 +726,12 @@ class CloudAccount(BaseErieIronModel):
             self.metadata["vpc"] = {}
         self.metadata["vpc"] = vpc_data
         self.save(update_fields=["metadata"])
+
+
+class BusinessHumanJobDescription(BaseErieIronModel):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    estimated_hours_per_week = models.IntegerField()
+    job_description = models.TextField()
 
 
 class BusinessSecondOpinionEvaluation(BaseErieIronModel):

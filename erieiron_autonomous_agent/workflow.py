@@ -1,4 +1,4 @@
-from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner, board_chair
+from erieiron_autonomous_agent.board_level_agents import corporate_development_agent, board_analyst, portfolio_resource_planner
 from erieiron_autonomous_agent.business_level_agents import eng_lead, product_lead, ceo, worker_design, worker_coder, task_manager, worker_human
 from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_common.enums import PubSubMessageType as T
@@ -8,20 +8,20 @@ from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSub
 @pubsub_workflow
 def board_workflow(pubsub_manager: PubSubManager):
     # Board Chair
-    pubsub_manager.on(
-        # T.EVERY_WEEK,
-        # board_chair.exec_board_chair_tasks
-        # ).on(
-        #     T.EVERY_DAY,
-        #     board_chair.exec_business_analysis
-        # ).on(
-        [T.ANALYSIS_ADDED, T.BOARD_GUIDANCE_REQUESTED],
-        board_chair.on_board_guidance_requested,
-        T.BOARD_GUIDANCE_UPDATED
-    ).on(
-        T.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
-        board_chair.on_portfolio_reduce_businesses_requested
-    )
+    # pubsub_manager.on(
+    # T.EVERY_WEEK,
+    # board_chair.exec_board_chair_tasks
+    # ).on(
+    #     T.EVERY_DAY,
+    #     board_chair.exec_business_analysis
+    # ).on(
+    # [T.ANALYSIS_ADDED, T.BOARD_GUIDANCE_REQUESTED],
+    # board_chair.on_board_guidance_requested,
+    # T.BOARD_GUIDANCE_UPDATED
+    # ).on(
+    #     T.PORTFOLIO_REDUCE_BUSINESSES_REQUESTED,
+    #     board_chair.on_portfolio_reduce_businesses_requested
+    # )
     
     # Board Business Development
     pubsub_manager.on(
@@ -32,9 +32,6 @@ def board_workflow(pubsub_manager: PubSubManager):
         T.BUSINESS_IDEA_SUBMITTED,
         corporate_development_agent.submit_business_opportunity,
         T.ANALYSIS_REQUESTED
-    ).on(
-        [T.ANALYSIS_ADDED, T.BUSINESS_SECOND_OPINION_EVALUATION_REQUESTED],
-        corporate_development_agent.perform_second_opinion_evaluation
     ).on(
         T.FIND_NICHE_BUSINESS_IDEAS,
         corporate_development_agent.find_niche_business_ideas
@@ -48,6 +45,12 @@ def board_workflow(pubsub_manager: PubSubManager):
         T.ANALYSIS_REQUESTED,
         board_analyst.on_analysis_requested,
         T.ANALYSIS_ADDED
+    ).on(
+        [T.BUSINESS_SECOND_OPINION_EVALUATION_REQUESTED],
+        board_analyst.perform_second_opinion_evaluation
+    ).on(
+        T.BUSINESS_JOB_DESCRIPTIONS_REQUESTED,
+        board_analyst.define_human_job_descriptions
     )
     
     # Board Resource Planner

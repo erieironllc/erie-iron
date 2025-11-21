@@ -266,7 +266,9 @@ def llm_chat(
             if i == 1:
                 raise e
             else:
-                model = MODEL_BACKUPS[model]
+                model = MODEL_BACKUPS.get(model)
+                if not model:
+                    raise e
     
     if output_schema:
         logging.info(f"llm chat complete: {description} ({output_schema}); {llm_request_url}")

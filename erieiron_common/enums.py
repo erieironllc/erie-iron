@@ -225,6 +225,7 @@ class PubSubMessageType(ErieEnum):
     CHAT_CHANNEL_LLM = auto()
     
     BUSINESS_IDEA_SUBMITTED = auto()
+    BUSINESS_JOB_DESCRIPTIONS_REQUESTED = auto()
     FIND_NICHE_BUSINESS_IDEAS = auto()
     
     # Autonomous agent message types

@@ -964,6 +964,12 @@ def read_json(file_name, default=None):
         return json.load(f)
 
 
+def write_to_tempfile(txt):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=f".md", delete=False) as file:
+        file.write(txt)
+    return file
+
+
 def write_json_to_tempfile(json_data):
     with tempfile.NamedTemporaryFile(mode="w", suffix=f".json", delete=False) as file:
         json.dump(json_data, file, indent=4)

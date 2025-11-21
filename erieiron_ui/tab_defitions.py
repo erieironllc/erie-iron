@@ -389,6 +389,13 @@ BUSINESS_TAB_DEFINITIONS = [
         "context_fn": views._tab_context_second_opinions,
     },
     {
+        "slug": "human-work",
+        "label": "Human Work",
+        "template": "business/tabs/human_work.html",
+        "availability_fn": views._tab_available_human_work,
+        "context_fn": views._tab_context_human_work,
+    },
+    {
         "slug": "architecture",
         "label": "Architecture",
         "template": "business/tabs/architecture.html",

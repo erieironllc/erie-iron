@@ -1355,6 +1355,21 @@ def _tab_context_second_opinions(business: Business) -> dict:
     }
 
 
+def _tab_available_human_work(business: Business) -> bool:
+    return business.businesshumanjobdescription_set.exists()
+
+
+def _tab_context_human_work(business: Business) -> dict:
+    human_jobs = list(
+        business.businesshumanjobdescription_set.all().order_by("estimated_hours_per_week")
+    )
+    total_hours = sum(job.estimated_hours_per_week for job in human_jobs)
+    return {
+        "human_jobs": human_jobs,
+        "total_hours_per_week": total_hours,
+    }
+
+
 def _tab_available_llmrequests(business: Business) -> bool:
     return business.llmrequest_set.exists()
 
