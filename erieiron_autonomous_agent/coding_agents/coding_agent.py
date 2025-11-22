@@ -369,13 +369,13 @@ def on_reset_task_test(task_id):
 def codex_exec(config: CodingAgentConfig, planning_data: dict):
     config.current_iteration.codeversion_set.all().delete()
     
-    """Execute the plan using the Codex CLI pipeline."""
     config.log("Starting Codex CLI planning/execution pipeline")
     
     plan_path = config.artifacts_dir / f"{config.current_iteration.id}_plan.json"
     prompt_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_prompt.txt"
     stdout_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_stdout.log"
     stderr_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_stderr.log"
+    session_path = config.artifacts_dir / f"{config.current_iteration.id}_claude_session.json"
     last_message_path = config.artifacts_dir / f"{config.current_iteration.id}_codex_last_message.txt"
     
     try:
@@ -454,6 +454,12 @@ def codex_exec(config: CodingAgentConfig, planning_data: dict):
             ### User Documentation
             {initiative.user_documentation}
             """))
+            
+        if business.ui_design_spec:
+            prompt_parts.append(textwrap.dedent(f"""
+            ### UI Design Spec.  If you are writing UI code, the UI code you write **must** comport to this design spec
+            {business.ui_design_spec}
+            """))
         
         prompt_parts.append(textwrap.dedent(f"""
         ### Lessons Learned - do not repeat these errors 
@@ -520,6 +526,20 @@ def codex_exec(config: CodingAgentConfig, planning_data: dict):
                 planning_json=augmented_plan
             )
         config.current_iteration.refresh_from_db(fields=["planning_json"])
+        
+        # Claude Code command - adjust flags based on your version
+        claude_code_cmd = [
+            "claude-code",
+            "--headless",
+            "--auto-approve",
+            "--working-directory",
+            str(config.sandbox_root_dir),
+            "--output-format",
+            "json",
+            "--session-file",
+            str(session_path),
+            str(prompt_path)  # or use stdin with "-" if preferred
+        ]
         
         codex_cmd = [
             "codex",
