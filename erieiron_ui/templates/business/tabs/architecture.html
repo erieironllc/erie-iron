@@ -14,11 +14,9 @@
         <div class="alert alert-info" role="alert">
             No architecture has been defined yet. Use the Define Architecture button to provide a description.
         </div>
+    {% else %}
+        <div class="markdown-container pre">{{ business.architecture}}</div>
     {% endif %}
-
-    <div class="markdown-container">
-        {{ business.architecture|default:""|markdown }}
-    </div>
 </div>
 
 <div class="modal fade" id="defineArchitectureModal" tabindex="-1" aria-labelledby="defineArchitectureModalLabel" aria-hidden="true">

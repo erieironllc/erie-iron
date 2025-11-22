@@ -9,8 +9,6 @@
         Regenerate Architecture
     </button>
 </form>
-<div class="markdown-container">
-    {% if initiative.architecture %}
-    {{ initiative.architecture|markdown }}
-    {%  endif %}
-</div>
+{% if initiative.architecture %}
+<div class="markdown-container pre">{{ initiative.architecture}}</div>
+{%  endif %}

@@ -16,7 +16,7 @@
                     <small class="text-muted">{{ job.estimated_hours_per_week }} hours per week</small>
                 </div>
                 <div class="card-body ms-3 me-3">
-                    {{ job.job_description|linebreaks }}
+                    {{ job.job_description|markdown|linebreaksbr }}
                 </div>
             </div>
         {% endfor %}

@@ -1,4 +1,5 @@
 import json
+import random
 import textwrap
 import uuid
 from collections import defaultdict
@@ -225,61 +226,78 @@ def on_portfolio_pick_new_business(payload):
     """
     # Get all idea-stage businesses
     guidance = payload.get("guidance")
-    top_business_count = payload.get("top_business_count", 4)
-    filtered_idea_business = get_filtered_idea_businesses(guidance)
     
-    print(textwrap.dedent(f"""
-    
-    Qualified Businesses:
-    {[b.id for b in filtered_idea_business]}
-    
-    
-    """))
-    
-    # Prepare comprehensive business context
-    business_context = []
-    for business in filtered_idea_business:
-        business_analysis, legal_analysis = business.get_latest_analysist()
-        business_context.append({
-            "business_id": business.id,
-            "niche_category": business.niche_category,
-            "summary": business.summary,
-            "revenue_model": business.revenue_model,
-            "audience": business.audience,
-            "critical_evaluations": common.get_dict(business.businesssecondopinionevaluation_set.all().order_by("-timestamp")),
-            'business_analysis': common.get_dict(business_analysis),
-            'legal_analysis': common.get_dict(legal_analysis)
-        })
-    
-    user_messages = [
-        LlmMessage.user_from_data("Business Ideas to Evaluate", business_context, "business"),
-        textwrap.dedent(f"""
-        Select the {top_business_count} best businesses 
+    cache_file = Path("/var/folders/fm/58h_5c2978z6qtvscgt0lpkm0000gn/T/tmpytqqrgp3.json")
+    if cache_file.exists():
+        selected_business_datas = common.read_json(cache_file)
+    else:
+        enriched_filtered_idea_business = []
+        for business in get_filtered_idea_businesses(guidance):
+            business_analysis, legal_analysis = business.get_latest_analysist()
+            enriched_filtered_idea_business.append({
+                "business_id": business.id,
+                "niche_category": business.niche_category,
+                "summary": business.summary,
+                "revenue_model": business.revenue_model,
+                "audience": business.audience,
+                "critical_evaluations": common.get_dict(business.businesssecondopinionevaluation_set.all().order_by("-timestamp")),
+                'business_analysis': common.get_dict(business_analysis),
+                'legal_analysis': common.get_dict(legal_analysis)
+            })
         
-        ## GUIDANCE FOR BUSINESS RANKING
-        {guidance or 'Pick winners'}
-        """)
-    ]
+        top_business_count = payload.get("top_business_count", 4)
+        selected_business_datas = select_businesses(
+            enriched_filtered_idea_business,
+            guidance,
+            top_business_count
+        )
+        print("cache file", common.write_json_to_tempfile(selected_business_datas).name)
     
+    return build_business_finder_report(
+        guidance,
+        selected_business_datas
+    )
+
+
+def select_businesses(enriched_filtered_idea_business, guidance, top_business_count):
     business_choices = defaultdict(list)
     business_datas = defaultdict(list)
     
     for model in [LlmModel.CLAUDE_4_5, LlmModel.OPENAI_GPT_5_1, LlmModel.GEMINI_3_0_PRO]:
-        response = board_level_chat(
-            "Board Chair Business Picker",
-            "board_chair--business_picker.md",
-            user_messages,
-            reasoning_effort=LlmReasoningEffort.HIGH,
-            verbosity=LlmVerbosity.LOW,
-            model=model
-        )
-        
-        for business_data in response['top_ranked_businesses']:
-            business_id = business_data["business_id"]
-            confidence_score = business_data["confidence_score"]
-            business_datas[business_id].append(business_data)
-            business_choices[business_id].append(confidence_score)
-            print(model, business_id, confidence_score)
+        page_size = 7
+        random.shuffle(enriched_filtered_idea_business)
+        for i in range(0, len(enriched_filtered_idea_business), page_size):
+            filtered_idea_business_page = enriched_filtered_idea_business[i:(i + page_size)]
+            
+            response = board_level_chat(
+                "Board Chair Business Picker",
+                "board_chair--business_picker.md",
+                [
+                    LlmMessage.user_from_data(
+                        "Business Ideas to Evaluate",
+                        filtered_idea_business_page,
+                        "business"
+                    ),
+                    textwrap.dedent(
+                        f"""
+                        Select the {top_business_count} best businesses 
+
+                        ## GUIDANCE FOR BUSINESS RANKING
+                        {guidance or 'Pick winners'}
+                        """
+                    )
+                ],
+                reasoning_effort=LlmReasoningEffort.HIGH,
+                verbosity=LlmVerbosity.LOW,
+                model=model
+            )
+            
+            for business_data in response['top_ranked_businesses']:
+                business_id = business_data["business_id"]
+                confidence_score = business_data["confidence_score"]
+                business_datas[business_id].append(business_data)
+                business_choices[business_id].append(confidence_score)
+                print(model, business_id, confidence_score)
     
     business_choices = sorted([
         (sum(scores), business_id)
@@ -292,15 +310,25 @@ def on_portfolio_pick_new_business(payload):
         if not business:
             print("error business not found", business_id)
             continue
-            
+        
         selected_business_datas.append({
             **business.get_llm_data(),
             "overall_score": score,
             "business_picker_reasonings": business_datas[business_id]
         })
         print(business_id, score)
-    
-    print("cache file", common.write_json_to_tempfile(selected_business_datas).name)
+    return selected_business_datas
+
+
+def build_business_finder_report(guidance, selected_business_datas):
+    from erieiron_autonomous_agent.board_level_agents import board_analyst
+    selected_business_datas:list[dict] = selected_business_datas[0:3]
+    # for bd in selected_business_datas:
+    #     business = Business.objects.get(id=bd.get("business_id"))
+    #     business_analysis = board_analyst.execute_business_analysis(business)
+    #     business_analysis = board_analyst.define_human_job_descriptions(business.id)
+    #     business.refresh_from_db()
+    #     bd.update(business.get_llm_data())
     
     for model in [LlmModel.CLAUDE_4_5, LlmModel.OPENAI_GPT_5_1, LlmModel.GEMINI_3_0_PRO]:
         response = board_level_chat(

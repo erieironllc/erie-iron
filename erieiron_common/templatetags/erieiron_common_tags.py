@@ -303,7 +303,7 @@ def markdown_format(text):
     elif isinstance(text, list):
         text = json.dumps(text, indent=4)
     
-    return mark_safe(markdown.markdown(text))
+    return mark_safe(markdown.markdown(text, tab_length=4))
 
 
 @register.filter(name='llm_msg_cost')

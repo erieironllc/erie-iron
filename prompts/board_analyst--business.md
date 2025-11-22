@@ -213,17 +213,11 @@ Use research-adjusted numbers, not original claims:
 - State confidence level
 
 ### 3.2 Time-to-Profit Estimate
-
-**Apply research-based adjustments:**
-- If competitors exist: Add 2-3 months for differentiation/positioning
-- If technical workarounds needed: Add 1-2 months to build time
-- If "3 hours/week" claim seems unrealistic: Adjust to 8-10 hours/week
-- If market is saturated: Add 3-6 months for customer acquisition
-- Default MVP build time: 2-3 months for multi-platform integrations
+- **Do not** consider build or deploy time when calculating time to profit.  Time to profit should purely the time after the first initiative is built and deployed to profit
 
 **Formula:**
 ```
-Time to Profit = Build Time + Beta Testing + Customer Acquisition to Breakeven
+Time to Profit = Date Customer Acquisition to Breakeven minus Date First Initiative Deployed
 ```
 
 ### 3.3 Operating Expenses Calculation
@@ -534,7 +528,7 @@ This is rare - be extra skeptical:
 
 ## FINAL PRINCIPLE
 
-**Your job is to save Erie Iron from wasting 3-6 months on ideas with false premises.**
+**Your job is to save Erie Iron from wasting months on ideas with false premises.**
 
 A thorough research-based rejection is more valuable than an optimistic approval that leads to failure. When research reveals competition, API limits, or unverified claims, **report it clearly** even if the pitch is well-written.
 

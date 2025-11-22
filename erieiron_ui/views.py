@@ -1069,6 +1069,7 @@ def _tab_available_overview(business: Business) -> bool:
 
 def _tab_context_overview(business: Business) -> dict:
     return {
+        "business_kpis": business.businesskpi_set.all().order_by("name"),
         "show_green_light_button": BusinessStatus.IDEA.eq(business.status),
     }
 
