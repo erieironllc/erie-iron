@@ -4253,7 +4253,7 @@ def action_add_initiative_from_brief(request, business_id):
     business_kpis = list(business.businesskpi_set.all())
     
     existing_kpis = [k.name for k in business_kpis if k.name]
-    parsed_payload = system_agent_llm_interface.llm_chat(
+    resp = system_agent_llm_interface.llm_chat(
         description=f"Extract initiative details for {business.name}",
         messages=[
             get_sys_prompt("initiative--parse_brief.md"),
@@ -4267,6 +4267,7 @@ def action_add_initiative_from_brief(request, business_id):
             LlmMessage.user_from_data("Initiative Brief", brief)
         ],
         output_schema="initiative--parse_brief.md.schema.json",
+        code_response=True,
         tag_entity=business,
         model=LlmModel.OPENAI_GPT_5_1,
         verbosity=LlmVerbosity.MEDIUM
@@ -4286,71 +4287,74 @@ def action_add_initiative_from_brief(request, business_id):
         normalized = '_'.join(segment for segment in candidate.split('_') if segment)
         return normalized[:200]
     
-    title = (parsed_payload.get('title') or 'New Initiative').strip()
-    description = (parsed_payload.get('description') or brief).strip()
-    desired_identifier = _normalize_identifier(parsed_payload.get('initiative_id', ''))
-    fallback_identifier = _normalize_identifier(title) or _normalize_identifier(business.name)
-    if not fallback_identifier:
-        fallback_identifier = _normalize_identifier(f"initiative_{common.gen_random_token(6)}")
-    
-    initiative_identifier = desired_identifier or fallback_identifier
-    initiative_identifier = initiative_identifier.rstrip('_')[:200]
-    if not initiative_identifier:
-        initiative_identifier = fallback_identifier
-    
-    base_identifier = initiative_identifier
-    suffix = 1
-    while Initiative.objects.filter(id=initiative_identifier).exists():
-        suffix_str = f"_{suffix}"
-        trimmed_base = base_identifier[: max(1, 200 - len(suffix_str))].rstrip('_')
-        if not trimmed_base:
-            trimmed_base = fallback_identifier[: max(1, 200 - len(suffix_str))]
-            trimmed_base = trimmed_base.rstrip('_') or f"initiative"
-        initiative_identifier = f"{trimmed_base}_{suffix}"
-        suffix += 1
-    
-    kpi_entries = [str(k).strip() for k in common.ensure_list(parsed_payload.get('kpis')) if str(k).strip()]
-    
-    expected_kpi_lift = {kpi: 0.0 for kpi in kpi_entries}
-    
-    initiative = Initiative.objects.create(
-        id=initiative_identifier,
-        business=business,
-        title=title,
-        description=description,
-        initiative_type=InitiativeType.PRODUCT,
-        priority=Level.MEDIUM,
-        requires_unit_tests=True,
-        expected_kpi_lift=expected_kpi_lift
-    )
-    
-    if kpi_entries and business_kpis:
-        kpi_lookup: dict[str, BusinessKPI] = {}
-        for kpi in business_kpis:
-            name_key = (kpi.name or '').strip().lower()
-            if name_key:
-                kpi_lookup.setdefault(name_key, kpi)
-            id_key = (getattr(kpi, 'kpi_id', '') or '').strip().lower()
-            if id_key:
-                kpi_lookup.setdefault(id_key, kpi)
+    for initiative_data in resp.get("initiatives"):
+        title = (initiative_data.get('title') or 'New Initiative').strip()
+        description = (initiative_data.get('description') or brief).strip()
+        details = (initiative_data.get('details') or brief).strip()
+        desired_identifier = _normalize_identifier(initiative_data.get('initiative_id', ''))
+        fallback_identifier = _normalize_identifier(title) or _normalize_identifier(business.name)
+        if not fallback_identifier:
+            fallback_identifier = _normalize_identifier(f"initiative_{common.gen_random_token(6)}")
         
-        matched_kpis = []
-        for kpi_name in kpi_entries:
-            key = kpi_name.lower()
-            kpi_obj = kpi_lookup.get(key)
-            if kpi_obj:
-                matched_kpis.append(kpi_obj)
+        initiative_identifier = desired_identifier or fallback_identifier
+        initiative_identifier = initiative_identifier.rstrip('_')[:200]
+        if not initiative_identifier:
+            initiative_identifier = fallback_identifier
         
-        if matched_kpis:
-            initiative.linked_kpis.set(matched_kpis)
-    
-    PubSubManager.publish_id(
-        PubSubMessageType.INITIATIVE_DEFINITION_REQUESTED,
-        initiative.id
-    )
-    
-    messages.success(request, f'Initiative "{initiative.title}" created successfully!')
-    return redirect(reverse('view_initiative', args=[initiative.id]))
+        base_identifier = initiative_identifier
+        suffix = 1
+        while Initiative.objects.filter(id=initiative_identifier).exists():
+            suffix_str = f"_{suffix}"
+            trimmed_base = base_identifier[: max(1, 200 - len(suffix_str))].rstrip('_')
+            if not trimmed_base:
+                trimmed_base = fallback_identifier[: max(1, 200 - len(suffix_str))]
+                trimmed_base = trimmed_base.rstrip('_') or f"initiative"
+            initiative_identifier = f"{trimmed_base}_{suffix}"
+            suffix += 1
+        
+        kpi_entries = [str(k).strip() for k in common.ensure_list(initiative_data.get('kpis')) if str(k).strip()]
+        
+        expected_kpi_lift = {kpi: 0.0 for kpi in kpi_entries}
+        
+        initiative = Initiative.objects.create(
+            id=initiative_identifier,
+            business=business,
+            title=title,
+            description=description,
+            details=details,
+            initiative_type=InitiativeType.PRODUCT,
+            priority=Level.MEDIUM,
+            requires_unit_tests=True,
+            expected_kpi_lift=expected_kpi_lift
+        )
+        
+        if kpi_entries and business_kpis:
+            kpi_lookup: dict[str, BusinessKPI] = {}
+            for kpi in business_kpis:
+                name_key = (kpi.name or '').strip().lower()
+                if name_key:
+                    kpi_lookup.setdefault(name_key, kpi)
+                id_key = (getattr(kpi, 'kpi_id', '') or '').strip().lower()
+                if id_key:
+                    kpi_lookup.setdefault(id_key, kpi)
+            
+            matched_kpis = []
+            for kpi_name in kpi_entries:
+                key = kpi_name.lower()
+                kpi_obj = kpi_lookup.get(key)
+                if kpi_obj:
+                    matched_kpis.append(kpi_obj)
+            
+            if matched_kpis:
+                initiative.linked_kpis.set(matched_kpis)
+        
+        PubSubManager.publish_id(
+            PubSubMessageType.INITIATIVE_DEFINITION_REQUESTED,
+            initiative.id
+        )
+        
+        messages.success(request, f'Initiative "{initiative.title}" created successfully!')
+    return redirect(reverse('view_business_tab', args=['product-initiatives', business_id]))
 
 
 @require_POST
@@ -4482,7 +4486,7 @@ def action_delete_initiative(request, initiative_id):
         logging.exception(e)
         messages.error(request, f'Error deleting initiative: {str(e)}')
     
-    return redirect(reverse('view_business_tab', args=['initiatives', initiative.business_id]))
+    return redirect(reverse('view_business_tab', args=['product-initiatives', initiative.business_id]))
 
 
 def action_find_business(request):

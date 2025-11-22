@@ -39,6 +39,8 @@ def define_single_initiative(initiative_id):
 {initiative.title} ({initiative.initiative_type} initiative)
 
 {initiative.description}
+
+{initiative.details}
         """
     )
 

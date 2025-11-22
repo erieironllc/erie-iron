@@ -17,6 +17,7 @@
                 </div>
 
                 <div class="initiative-overview__summary">{{ initiative.description|linebreaksbr }}</div>
+            
             </div>
         </div>
     </header>
@@ -61,6 +62,17 @@
                         <li><strong>{{ kpi_lift|label }}</strong>: {{ value }}</li>
                     {% endfor %}
                 </ul>
+            </div>
+        </section>
+    {% endif %}
+
+    {% if initiative.expected_kpi_lift %}
+        <section class="initiative-overview__section">
+            <div class="initiative-overview__section-header">
+                <h5 class="initiative-overview__section-title">Implementation Details</h5>
+            </div>
+            <div class="initiative-overview__section-body">
+                <div class="initiative-overview__summary pre">{{ initiative.details }}</div>
             </div>
         </section>
     {% endif %}

@@ -893,6 +893,7 @@ class Initiative(BaseErieIronModel):
     created_timestamp = models.DateTimeField(auto_now_add=True)
     title = models.TextField()
     description = models.TextField()
+    details = models.TextField(null=True)
     priority = models.TextField(choices=Level.choices())
     linked_kpis = models.ManyToManyField(
         "BusinessKPI", related_name="initiatives", blank=True
