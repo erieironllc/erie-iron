@@ -67,6 +67,7 @@ class Business(BaseErieIronModel):
     bank_account_id = models.TextField(null=True)
     business_plan = models.TextField(null=True)
     architecture = models.TextField(null=True)
+    ui_design_spec = models.TextField(null=True)
     value_prop = models.TextField(null=True)
     revenue_model = models.TextField(null=True)
     audience = models.TextField(null=True)
@@ -95,13 +96,14 @@ class Business(BaseErieIronModel):
     updated_at = models.DateTimeField(auto_now=True)
     
     @staticmethod
-    def get_portfolio_business()->QuerySet['Business']:
+    def get_portfolio_business() -> QuerySet['Business']:
         return Business.objects.exclude(id=Business.get_erie_iron_business().id)
     
     def get_llm_data(self):
         business_analysis, legal_analysis = self.get_latest_analysist()
         return {
             "business_id": self.id,
+            "name": self.name,
             "niche_category": self.niche_category,
             "summary": self.summary,
             "business_plan": self.business_plan,
@@ -1416,13 +1418,6 @@ class Task(BaseErieIronModel):
         return root_str.replace("_", " ").replace("-", " ").capitalize()
 
 
-# Design system and handoff models
-class DesignComponent(BaseErieIronModel):
-    id = models.TextField(primary_key=True)
-    name = models.TextField()
-    description = models.TextField(null=True)
-
-
 class TaskExecution(BaseErieIronModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE)
     iteration = models.ForeignKey(
@@ -1448,16 +1443,6 @@ class TaskExecution(BaseErieIronModel):
         
         self.refresh_from_db()
         return self
-
-
-class TaskDesignRequirements(BaseErieIronModel):
-    task = models.OneToOneField(
-        "Task", on_delete=models.CASCADE, related_name="design_handoff"
-    )
-    component_ids = models.ManyToManyField(DesignComponent, blank=True)
-    layout = models.JSONField(default=dict, null=True)
-    component_tree = models.JSONField(default=dict, null=True)
-    notes = models.TextField(null=True)
 
 
 class SelfDrivingTask(BaseErieIronModel):
