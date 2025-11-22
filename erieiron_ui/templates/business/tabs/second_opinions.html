@@ -9,7 +9,7 @@
                     <small class="text-muted">| Model: {{ second_opinion.llm_model }}</small>
                 </div>
                 <div class="card-body ms-3 me-3">
-                    {{ second_opinion.evaluation|json_to_div:"Overall Verdict, Summary Judgement, Strengths, Weaknesses, *" }}
+                    {{ second_opinion.evaluation|json_to_div:"overall_verdict, summary_judgment, strengths, weaknesses, *" }}
                 </div>
             </div>
         {% endfor %}

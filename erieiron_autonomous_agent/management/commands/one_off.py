@@ -25,8 +25,8 @@ class Command(BaseCommand):
             'top_business_count': 5,
             'guidance': textwrap.dedent("""
             Prioritize for 
-            1) simplicty to build 
-            2) zero to 5 hours per week to operate
+            1) fastest to first dollar
+            2) zero to 15 hours per week to operate
             3) most confident in having near term profit'
             4) lowest legal risk
             """)

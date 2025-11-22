@@ -329,22 +329,22 @@ def on_portfolio_pick_new_business(payload):
 
 
 def get_filtered_idea_businesses(guidance) -> list[Business]:
-    return Business.objects.filter(id__in=[
-        'ca8083ce-39ff-4307-8bdc-ec0ae8c2032b',
-        'd49942b6-4d85-416e-a165-f410c7b0385f',
-        'bb07f861-fff4-4696-a4b9-d6d74407d5c7',
-        'd971367c-c471-4567-bc46-9dcd110289b8',
-        '52a52d63-d699-4fbf-988f-6315c77c6404',
-        'acab75fe-b665-41c0-8e89-72994c2a5779',
-        '866198e6-62c9-4219-8cfc-88a4cafd0d54',
-        '4bba3cbb-3457-4686-9cbe-9f022d5de892',
-        '1f3dfc3f-59c7-4318-aa14-b28fc2546458',
-        'a71b58b5-9261-49c5-a382-5a1e771ece58',
-        'a3fa0a2f-f31d-4e69-bf4f-7c0bbb14fab2',
-        '44009135-8b71-4bb7-a829-8f29f826b432',
-        '3be0c2a5-e179-4800-af2c-0feb5c99fff5'
-    ]
-    )
+    # return Business.objects.filter(id__in=[
+    #     'ca8083ce-39ff-4307-8bdc-ec0ae8c2032b',
+    #     'd49942b6-4d85-416e-a165-f410c7b0385f',
+    #     'bb07f861-fff4-4696-a4b9-d6d74407d5c7',
+    #     'd971367c-c471-4567-bc46-9dcd110289b8',
+    #     '52a52d63-d699-4fbf-988f-6315c77c6404',
+    #     'acab75fe-b665-41c0-8e89-72994c2a5779',
+    #     '866198e6-62c9-4219-8cfc-88a4cafd0d54',
+    #     '4bba3cbb-3457-4686-9cbe-9f022d5de892',
+    #     '1f3dfc3f-59c7-4318-aa14-b28fc2546458',
+    #     'a71b58b5-9261-49c5-a382-5a1e771ece58',
+    #     'a3fa0a2f-f31d-4e69-bf4f-7c0bbb14fab2',
+    #     '44009135-8b71-4bb7-a829-8f29f826b432',
+    #     '3be0c2a5-e179-4800-af2c-0feb5c99fff5'
+    # ]
+    # )
     
     idea_businesses = Business.objects.filter(
         niche_category__isnull=False
