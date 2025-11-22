@@ -36,6 +36,8 @@ def main():
     
     argv = [a for a in argv if "erieiron-env" not in a]
     
+    print('connecting to database', settings.DATABASES["default"]["HOST"])
+    
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

@@ -620,11 +620,16 @@ class CloudAccount(BaseErieIronModel):
         
         aws_credentials = self.get_aws_credentials()
         
-        from erieiron_common.aws_utils import get_aws_region
+        from erieiron_common.aws_utils import get_aws_region, REGION_LOCKED_US_EAST_1_SERVICES
+        if service_name in REGION_LOCKED_US_EAST_1_SERVICES:
+            region = "us-east-1"
+        else:
+            region = get_aws_region()
+            
         return boto3.client(
             service_name,
             endpoint_url=endpoint_url,
-            region_name=get_aws_region(),
+            region_name=region,
             aws_session_token=aws_credentials.session_token,
             aws_secret_access_key=aws_credentials.secret_access_key,
             aws_access_key_id=aws_credentials.access_key_id,

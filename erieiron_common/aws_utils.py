@@ -28,6 +28,44 @@ from erieiron_common.enums import ContainerPlatform, PublicPrivate
 
 logging.getLogger("botocore.credentials").setLevel(logging.ERROR)
 
+REGION_LOCKED_US_EAST_1_SERVICES = [
+    # Route53 family (global)
+    "route53",
+    "route53domains",
+    "route53-recovery-cluster",
+    "route53-recovery-control-config",
+    "route53-recovery-readiness",
+    
+    # CloudFront (global)
+    "cloudfront",
+    
+    # IAM (global)
+    "iam",
+    
+    # AWS Organizations (global)
+    "organizations",
+    
+    # AWS SSO / IAM Identity Center (global)
+    "sso",
+    "sso-admin",
+    "identitystore",
+    
+    # Support / Trusted Advisor (global)
+    "support",
+    "trustedadvisor",
+    
+    # AWS Account service (global)
+    "account",
+    
+    # WAF Classic (global control plane)
+    "waf",
+    "waf-regional",
+    
+    # ACM for CloudFront certs must be in us-east-1
+    # Normal ACM is regional, so include but you'll conditionally scope it
+    "acm",
+]
+
 
 @dataclass(slots=True)
 class SharedVpcContext:
