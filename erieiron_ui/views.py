@@ -1122,6 +1122,10 @@ def _tab_context_architecture(business: Business) -> dict:
     return {}
 
 
+def _tab_context_design_spec(business: Business) -> dict:
+    return {}
+
+
 def _tab_available_architecture_diagram(_: Business) -> bool:
     return True
 
@@ -3460,6 +3464,23 @@ def action_business_define_architecture(request, business_id):
     )
     
     return redirect(reverse('view_business_tab', args=['architecture', business.id]))
+
+
+def action_business_define_ui_design_spec(request, business_id):
+    business = get_object_or_404(Business, pk=business_id)
+    
+    business.ui_design_spec = "UI design specification generation in progress"
+    business.save()
+    
+    PubSubManager.publish(
+        PubSubMessageType.DESIGN_WORK_REQUESTED,
+        payload={
+            "business_id": business_id,
+            "user_input": rget(request, "ui_design_spec_definition")
+        }
+    )
+    
+    return redirect(reverse('view_business_tab', args=['design-spec', business.id]))
 
 
 def action_business_regenerate_architecture(request, business_id):

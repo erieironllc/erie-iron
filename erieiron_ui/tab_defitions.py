@@ -401,6 +401,12 @@ BUSINESS_TAB_DEFINITIONS = [
         "template": "business/tabs/architecture.html",
         "context_fn": views._tab_context_architecture,
     },
+    {
+        "slug": "design-spec",
+        "label": "Design Spec",
+        "template": "business/tabs/design_spec.html",
+        "context_fn": views._tab_context_design_spec,
+    },
     # {
     #     "slug": "infra-diagram",
     #     "label": "Infra Diagram",

@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import textwrap
 import time
 from pathlib import Path
 from typing import List
@@ -232,7 +233,7 @@ class LlmMessage:
     def assistant(cls, txt, file=None) -> 'LlmMessage':
         return LlmMessage(
             message_type=LlmMessageType.ASSISTANT,
-            text=txt,
+            text=textwrap.dedent(txt),
             file=file
         )
     
@@ -240,7 +241,7 @@ class LlmMessage:
     def user(cls, txt, file=None) -> 'LlmMessage':
         return LlmMessage(
             message_type=LlmMessageType.USER,
-            text=txt,
+            text=textwrap.dedent(txt),
             file=file
         )
     
@@ -257,7 +258,7 @@ class LlmMessage:
     def sys(cls, txt, file=None) -> 'LlmMessage':
         return LlmMessage(
             message_type=LlmMessageType.SYSTEM,
-            text=txt,
+            text=textwrap.dedent(txt),
             file=file
         
         )

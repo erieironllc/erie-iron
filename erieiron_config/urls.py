@@ -19,6 +19,7 @@ urlpatterns = [
     path("_business/newdomain/<uuid:business_id>", views.action_business_new_domain, name="action_business_new_domain"),
     path("_business/define_architecture/<uuid:business_id>", views.action_business_define_architecture, name="action_business_define_architecture"),
     path("_business/regenerate_architecture/<uuid:business_id>", views.action_business_regenerate_architecture, name="action_business_regenerate_architecture"),
+    path("_business/define_ui_design_spec/<uuid:business_id>", views.action_business_define_ui_design_spec, name="action_business_define_ui_design_spec"),
     path("_business/product-initiatives/add/<uuid:business_id>", views.action_add_initiative_from_brief, name="action_add_initiative_from_brief"),
     path("_business/production_push/<uuid:business_id>", views.action_business_production_push, name="action_business_production_push"),
     path("_business/delete/<uuid:business_id>", views.action_delete_business, name="action_delete_business"),

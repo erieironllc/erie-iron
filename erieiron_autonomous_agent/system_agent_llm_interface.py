@@ -129,6 +129,17 @@ def agent_chat(
     system_prompts = common.ensure_list(system_prompts)
     system_prompts.append(BASE_PROMPTS_PATH / "_base_prompt--output.md")
     
+    if text_output:
+        system_prompts.append(LlmMessage.sys("""
+        # OUTPUT FORMAT (Required Rule)
+        **you must** format the output in markdown syntax.  **Do not** return a json datastructure
+        """))
+    else:
+        system_prompts.append(LlmMessage.sys("""
+        # OUTPUT FORMAT (Required Rule)
+        **you must** format the as pure JSON with no header or footer content.  The output **must** be immediately parsable as JSON
+        """))
+    
     system_prompt_message_texts = []
     for sp in system_prompts:
         if isinstance(sp, LlmMessage):

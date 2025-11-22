@@ -1,0 +1,49 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content">
+    <div class="d-flex justify-content-end gap-2 mb-3">
+        <button type="button"
+                class="btn btn-sm btn-primary"
+                data-bs-toggle="modal"
+                data-bs-target="#defineDesignSpecModal">
+            Define Design Spec
+        </button>
+    </div>
+
+    {% if not business.ui_design_spec %}
+        <div class="alert alert-info" role="alert">
+            No UI design specification has been defined yet. Use the Define Design Spec button to provide a description.
+        </div>
+    {% else %}
+        <div class="markdown-container">{{ business.ui_design_spec|markdown }}</div>
+    {% endif %}
+</div>
+
+<div class="modal fade" id="defineDesignSpecModal" tabindex="-1" aria-labelledby="defineDesignSpecModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="post" action="{% url 'action_business_define_ui_design_spec' business.id %}">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title" id="defineDesignSpecModalLabel">Define UI Design Specification</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="designSpecDefinition" class="form-label">Design Specification Details</label>
+                        <textarea id="designSpecDefinition"
+                                  name="ui_design_spec_definition"
+                                  class="form-control"
+                                  rows="12"
+                                  placeholder="Describe the UI design specification, visual guidelines, component structures, and user experience requirements."
+                                  required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer d-flex justify-content-end gap-3">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Submit</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
