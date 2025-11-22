@@ -972,7 +972,7 @@ def write_to_tempfile(txt):
 
 def write_json_to_tempfile(json_data):
     with tempfile.NamedTemporaryFile(mode="w", suffix=f".json", delete=False) as file:
-        json.dump(json_data, file, indent=4)
+        json.dump(json_data, file, indent=4, cls=ErieIronJSONEncoder)
     return file
 
 

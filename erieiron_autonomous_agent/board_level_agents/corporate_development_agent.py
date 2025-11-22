@@ -288,13 +288,19 @@ def on_portfolio_pick_new_business(payload):
     
     selected_business_datas = []
     for score, business_id in business_choices:
-        business = Business.objects.get(id=business_id)
+        business = Business.objects.filter(id=business_id).first()
+        if not business:
+            print("error business not found", business_id)
+            continue
+            
         selected_business_datas.append({
             **business.get_llm_data(),
             "overall_score": score,
             "business_picker_reasonings": business_datas[business_id]
         })
         print(business_id, score)
+    
+    print("cache file", common.write_json_to_tempfile(selected_business_datas).name)
     
     for model in [LlmModel.CLAUDE_4_5, LlmModel.OPENAI_GPT_5_1, LlmModel.GEMINI_3_0_PRO]:
         response = board_level_chat(
@@ -315,7 +321,7 @@ def on_portfolio_pick_new_business(payload):
             verbosity=LlmVerbosity.HIGH,
             model=model
         )
-    
+        
         file = common.write_to_tempfile(response)
         print("file", Path(file.name).absolute())
     
