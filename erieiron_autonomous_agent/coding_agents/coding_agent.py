@@ -32,6 +32,7 @@ from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
     SdaInitialAction,
     CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB,
 )
+from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
@@ -219,7 +220,7 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
     if SdaInitialAction.WRITE_INITIATIVE_TEST.eq(one_off_action):
         write_initiative_tdd_test(config)
     elif SdaInitialAction.CODE.eq(one_off_action):
-        codex_exec(
+        write_code(
             config,
             config.current_iteration.planning_json
         )
@@ -252,7 +253,7 @@ def plan_and_implement_code_changes(config):
         config.set_phase(SdaPhase.CODING)
         
         if USE_CODEX:
-            codex_exec(config, planning_data)
+            write_code(config, planning_data)
         else:
             do_coding(config, planning_data)
 
