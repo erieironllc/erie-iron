@@ -1519,6 +1519,74 @@ def _tab_context_codefiles(business: Business) -> dict:
     return {"code_file_tree": ordered_tree["children"]}
 
 
+def _tab_available_business_plan_consolidated(business: Business) -> bool:
+    return (
+        _tab_available_business_plan(business) or
+        _tab_available_analysis(business) or
+        _tab_available_second_opinions(business) or
+        _tab_available_human_work(business)
+    )
+
+
+def _tab_context_business_plan_consolidated(business: Business, active_sub_tab=None) -> dict:
+    context = {
+        "sub_tabs": {}
+    }
+    
+    sub_tabs_config = [
+        ("business-plan", "business_plan", _tab_available_business_plan, _tab_context_business_plan),
+        ("analysis", "analysis", _tab_available_analysis, _tab_context_analysis),
+        ("second-opinions", "second_opinions", _tab_available_second_opinions, _tab_context_second_opinions),
+        ("human-work", "human_work", _tab_available_human_work, _tab_context_human_work),
+    ]
+    
+    for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
+        context["sub_tabs"][sub_tab_key] = {
+            "available": availability_fn(business)
+        }
+        
+        if active_sub_tab == sub_tab_slug:
+            context.update(context_fn(business))
+    
+    context["active_sub_tab"] = active_sub_tab or "business-plan"
+    return context
+
+
+def _tab_available_implementation_consolidated(business: Business) -> bool:
+    return (
+        _tab_available_architecture(business) or
+        True or  # design-spec is always available
+        _tab_available_infrastructure_stacks(business) or
+        _tab_available_cloud_accounts(business) or
+        _tab_available_codefiles(business)
+    )
+
+
+def _tab_context_implementation_consolidated(business: Business, active_sub_tab=None) -> dict:
+    context = {
+        "sub_tabs": {}
+    }
+    
+    sub_tabs_config = [
+        ("architecture", "architecture", _tab_available_architecture, _tab_context_architecture),
+        ("design-spec", "design_spec", lambda b: True, _tab_context_design_spec),
+        ("infrastructure-stacks", "infrastructure_stacks", _tab_available_infrastructure_stacks, _tab_context_infrastructure_stacks),
+        ("cloud-accounts", "cloud_accounts", _tab_available_cloud_accounts, _tab_context_cloud_accounts),
+        ("codefiles", "codefiles", _tab_available_codefiles, _tab_context_codefiles),
+    ]
+    
+    for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
+        context["sub_tabs"][sub_tab_key] = {
+            "available": availability_fn(business)
+        }
+        
+        if active_sub_tab == sub_tab_slug:
+            context.update(context_fn(business))
+    
+    context["active_sub_tab"] = active_sub_tab or "architecture"
+    return context
+
+
 def _build_business_tabs(business: Business) -> list[dict]:
     from erieiron_ui import tab_defitions
     
@@ -1584,6 +1652,62 @@ def view_business(request, business_id, tab='overview'):
     ]
     if tab != 'overview':
         breadcrumbs.append((reverse('view_business_tab', args=[tab, business.id]), tab_definition["label"]))
+    
+    return send_response(
+        request,
+        "business/business_base.html",
+        context,
+        breadcrumbs=breadcrumbs
+    )
+
+
+def view_business_with_sub_tab(request, business_id, tab, sub_tab):
+    from erieiron_ui import tab_defitions
+    
+    business = get_object_or_404(Business, pk=business_id)
+    tab = (tab or 'overview').lower()
+    sub_tab = (sub_tab or '').lower()
+    
+    if tab not in tab_defitions.BUSINESS_TAB_MAP:
+        raise Http404
+    
+    tab_definition = tab_defitions.BUSINESS_TAB_MAP[tab]
+    
+    if "sub_tabs" not in tab_definition:
+        raise Http404
+    
+    sub_tab_found = None
+    for st in tab_definition["sub_tabs"]:
+        if st["slug"] == sub_tab:
+            sub_tab_found = st
+            break
+    
+    if not sub_tab_found:
+        raise Http404
+    
+    tabs = _build_business_tabs(business)
+    
+    is_available = next((t for t in tabs if t['slug'] == tab), None)
+    if not is_available or not is_available['available']:
+        raise Http404
+    
+    context = {
+        "business": business,
+        "tabs": tabs,
+        "active_tab": tab,
+        "active_sub_tab": sub_tab,
+        "tab_template": tab_definition["template"],
+    }
+    
+    if "context_fn" in tab_definition:
+        context.update(tab_definition["context_fn"](business, sub_tab))
+    
+    breadcrumbs = [
+        (reverse(view_portfolio), "Portfolio"),
+        (reverse('view_business', args=[business.id]), business.name),
+        (reverse('view_business_tab', args=[tab, business.id]), tab_definition["label"]),
+        (reverse('view_business_tab_sub', args=[tab, sub_tab, business.id]), sub_tab_found["label"])
+    ]
     
     return send_response(
         request,

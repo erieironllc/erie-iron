@@ -1,0 +1,84 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content business-overview">
+    <div class="horizontal-tabs-container">
+        <div class="horizontal-tabs-header">
+            <h5 class="business-overview__section-title d-flex align-items-center gap-2">
+                <i class="bi bi-gear" aria-hidden="true"></i>
+                Implementation
+            </h5>
+            <nav class="nav nav-tabs horizontal-tabs" id="implementationTabs" role="tablist">
+                <a class="nav-link{% if active_sub_tab == 'architecture' or not active_sub_tab %} active{% endif %}" 
+                   id="architecture-tab" 
+                   href="{% url 'view_business_tab_sub' 'implementation' 'architecture' business.id %}"
+                   role="tab" 
+                   aria-controls="architecture" 
+                   aria-selected="{% if active_sub_tab == 'architecture' or not active_sub_tab %}true{% else %}false{% endif %}">
+                    Architecture
+                </a>
+                <a class="nav-link{% if active_sub_tab == 'design-spec' %} active{% endif %}" 
+                   id="design-spec-tab" 
+                   href="{% url 'view_business_tab_sub' 'implementation' 'design-spec' business.id %}"
+                   role="tab" 
+                   aria-controls="design-spec" 
+                   aria-selected="{% if active_sub_tab == 'design-spec' %}true{% else %}false{% endif %}">
+                    Design Spec
+                </a>
+                {% if sub_tabs.infrastructure_stacks.available %}
+                <a class="nav-link{% if active_sub_tab == 'infrastructure-stacks' %} active{% endif %}" 
+                   id="infrastructure-stacks-tab" 
+                   href="{% url 'view_business_tab_sub' 'implementation' 'infrastructure-stacks' business.id %}"
+                   role="tab" 
+                   aria-controls="infrastructure-stacks" 
+                   aria-selected="{% if active_sub_tab == 'infrastructure-stacks' %}true{% else %}false{% endif %}">
+                    Infrastructure
+                </a>
+                {% endif %}
+                {% if sub_tabs.cloud_accounts.available %}
+                <a class="nav-link{% if active_sub_tab == 'cloud-accounts' %} active{% endif %}" 
+                   id="cloud-accounts-tab" 
+                   href="{% url 'view_business_tab_sub' 'implementation' 'cloud-accounts' business.id %}"
+                   role="tab" 
+                   aria-controls="cloud-accounts" 
+                   aria-selected="{% if active_sub_tab == 'cloud-accounts' %}true{% else %}false{% endif %}">
+                    Cloud Accounts
+                </a>
+                {% endif %}
+                {% if sub_tabs.codefiles.available %}
+                <a class="nav-link{% if active_sub_tab == 'codefiles' %} active{% endif %}" 
+                   id="codefiles-tab" 
+                   href="{% url 'view_business_tab_sub' 'implementation' 'codefiles' business.id %}"
+                   role="tab" 
+                   aria-controls="codefiles" 
+                   aria-selected="{% if active_sub_tab == 'codefiles' %}true{% else %}false{% endif %}">
+                    Code Files
+                </a>
+                {% endif %}
+            </nav>
+        </div>
+        
+        <div class="tab-content horizontal-tabs-content" id="implementationTabContent">
+            {% if active_sub_tab == 'architecture' or not active_sub_tab %}
+                <div class="tab-pane fade show active" id="architecture" role="tabpanel" aria-labelledby="architecture-tab">
+                    {% include "business/tabs/architecture.html" %}
+                </div>
+            {% elif active_sub_tab == 'design-spec' %}
+                <div class="tab-pane fade show active" id="design-spec" role="tabpanel" aria-labelledby="design-spec-tab">
+                    {% include "business/tabs/design_spec.html" %}
+                </div>
+            {% elif active_sub_tab == 'infrastructure-stacks' %}
+                <div class="tab-pane fade show active" id="infrastructure-stacks" role="tabpanel" aria-labelledby="infrastructure-stacks-tab">
+                    {% include "business/tabs/infrastructure_stacks.html" %}
+                </div>
+            {% elif active_sub_tab == 'cloud-accounts' %}
+                <div class="tab-pane fade show active" id="cloud-accounts" role="tabpanel" aria-labelledby="cloud-accounts-tab">
+                    {% include "business/tabs/cloud_accounts.html" %}
+                </div>
+            {% elif active_sub_tab == 'codefiles' %}
+                <div class="tab-pane fade show active" id="codefiles" role="tabpanel" aria-labelledby="codefiles-tab">
+                    {% include "business/tabs/codefiles.html" %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

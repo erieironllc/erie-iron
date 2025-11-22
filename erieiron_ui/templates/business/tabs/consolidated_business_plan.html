@@ -1,0 +1,72 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content business-overview">
+    <div class="horizontal-tabs-container">
+        <div class="horizontal-tabs-header">
+            <h5 class="business-overview__section-title d-flex align-items-center gap-2">
+                <i class="bi bi-journal-text" aria-hidden="true"></i>
+                Business Plan
+            </h5>
+            <nav class="nav nav-tabs horizontal-tabs" id="businessPlanTabs" role="tablist">
+                <a class="nav-link{% if active_sub_tab == 'business-plan' or not active_sub_tab %} active{% endif %}" 
+                   id="business-plan-tab" 
+                   href="{% url 'view_business_tab_sub' 'business-plan' 'business-plan' business.id %}"
+                   role="tab" 
+                   aria-controls="business-plan" 
+                   aria-selected="{% if active_sub_tab == 'business-plan' or not active_sub_tab %}true{% else %}false{% endif %}">
+                    Business Plan
+                </a>
+                {% if sub_tabs.analysis.available %}
+                <a class="nav-link{% if active_sub_tab == 'analysis' %} active{% endif %}" 
+                   id="analysis-tab" 
+                   href="{% url 'view_business_tab_sub' 'business-plan' 'analysis' business.id %}"
+                   role="tab" 
+                   aria-controls="analysis" 
+                   aria-selected="{% if active_sub_tab == 'analysis' %}true{% else %}false{% endif %}">
+                    Analysis
+                </a>
+                {% endif %}
+                {% if sub_tabs.second_opinions.available %}
+                <a class="nav-link{% if active_sub_tab == 'second-opinions' %} active{% endif %}" 
+                   id="second-opinions-tab" 
+                   href="{% url 'view_business_tab_sub' 'business-plan' 'second-opinions' business.id %}"
+                   role="tab" 
+                   aria-controls="second-opinions" 
+                   aria-selected="{% if active_sub_tab == 'second-opinions' %}true{% else %}false{% endif %}">
+                    Second Opinions
+                </a>
+                {% endif %}
+                {% if sub_tabs.human_work.available %}
+                <a class="nav-link{% if active_sub_tab == 'human-work' %} active{% endif %}" 
+                   id="human-work-tab" 
+                   href="{% url 'view_business_tab_sub' 'business-plan' 'human-work' business.id %}"
+                   role="tab" 
+                   aria-controls="human-work" 
+                   aria-selected="{% if active_sub_tab == 'human-work' %}true{% else %}false{% endif %}">
+                    Human Work
+                </a>
+                {% endif %}
+            </nav>
+        </div>
+        
+        <div class="tab-content horizontal-tabs-content" id="businessPlanTabContent">
+            {% if active_sub_tab == 'business-plan' or not active_sub_tab %}
+                <div class="tab-pane fade show active" id="business-plan" role="tabpanel" aria-labelledby="business-plan-tab">
+                    {% include "business/tabs/business_plan.html" %}
+                </div>
+            {% elif active_sub_tab == 'analysis' %}
+                <div class="tab-pane fade show active" id="analysis" role="tabpanel" aria-labelledby="analysis-tab">
+                    {% include "business/tabs/analysis.html" %}
+                </div>
+            {% elif active_sub_tab == 'second-opinions' %}
+                <div class="tab-pane fade show active" id="second-opinions" role="tabpanel" aria-labelledby="second-opinions-tab">
+                    {% include "business/tabs/second_opinions.html" %}
+                </div>
+            {% elif active_sub_tab == 'human-work' %}
+                <div class="tab-pane fade show active" id="human-work" role="tabpanel" aria-labelledby="human-work-tab">
+                    {% include "business/tabs/human_work.html" %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

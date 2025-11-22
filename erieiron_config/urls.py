@@ -28,6 +28,7 @@ urlpatterns = [
     path("_initiative/submit_task/<str:initiative_id>", views.action_submit_initiative_task, name="action_submit_initiative_task"),
     path("business/<uuid:business_id>", views.view_business, name="view_business"),
     path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
+    path("business/<slug:tab>/<slug:sub_tab>/<uuid:business_id>", views.view_business_with_sub_tab, name="view_business_tab_sub"),
     
     path("initiative/<str:initiative_id>", views.view_initiative, name="view_initiative"),
     path("initiative/<slug:tab>/<str:initiative_id>", views.view_initiative, name="view_initiative_tab"),
