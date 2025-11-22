@@ -4,36 +4,48 @@
   "title": "Initiative Brief Parser Response",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "initiative_id",
-    "title",
-    "description",
-    "kpis"
-  ],
+  "required": ["initiatives"],
   "properties": {
-    "initiative_id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 200,
-      "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$",
-      "description": "Lowercase snake_case identifier summarizing the initiative."
-    },
-    "title": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Action-oriented initiative title."
-    },
-    "description": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Narrative capturing value, users, and desired outcome."
-    },
-    "kpis": {
+    "initiatives": {
       "type": "array",
-      "description": "Relevant KPI identifiers or names inferred from the brief.",
+      "minItems": 1,
       "items": {
-        "type": "string",
-        "minLength": 1
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["initiative_id", "title", "description", "kpis"],
+        "properties": {
+          "initiative_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$",
+            "description": "Lowercase snake_case identifier summarizing the initiative."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Concise initiative title."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "2-4 sentence narrative explaining the initiative."
+          },
+          "details": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Include all details from the input text that might be missing from the description.  Goal is for an LLM to be able to read this and define tasks which implement the initiative. format in markdown"
+          },
+          "kpis": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Relevant KPI identifiers or names inferred from the brief.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
       }
     }
   }
