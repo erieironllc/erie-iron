@@ -252,10 +252,7 @@ def plan_and_implement_code_changes(config):
         planning_data = plan_code_changes(config)
         config.set_phase(SdaPhase.CODING)
         
-        if USE_CODEX:
-            write_code(config, planning_data)
-        else:
-            do_coding(config, planning_data)
+        write_code(config, planning_data)
 
 
 def handle_agent_blocked(task_id, agent_blocked):
