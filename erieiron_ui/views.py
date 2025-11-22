@@ -1063,6 +1063,65 @@ def view_portfolio(request, tab: str = 'portfolio'):
     )
 
 
+def view_portfolio_with_sub_tab(request, tab, sub_tab):
+    from erieiron_ui import tab_defitions
+
+    erieiron_business = Business.get_erie_iron_business()
+    tab = (tab or 'portfolio').lower()
+    sub_tab = (sub_tab or '').lower()
+    
+    if tab not in tab_defitions.PORTFOLIO_TAB_MAP:
+        raise Http404
+    
+    tab_definition = tab_defitions.PORTFOLIO_TAB_MAP[tab]
+    
+    if "sub_tabs" not in tab_definition:
+        raise Http404
+    
+    sub_tab_found = None
+    for st in tab_definition["sub_tabs"]:
+        if st["slug"] == sub_tab:
+            sub_tab_found = st
+            break
+    
+    if not sub_tab_found:
+        raise Http404
+    
+    tabs = _build_portfolio_tabs(erieiron_business)
+    
+    is_available = next((t for t in tabs if t['slug'] == tab), None)
+    if not is_available or not is_available['available']:
+        raise Http404
+    
+    context = {
+        "tabs": tabs,
+        "active_tab": tab,
+        "active_sub_tab": sub_tab,
+        "tab_template": tab_definition["template"],
+    }
+    
+    if "context_fn" in tab_definition:
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(None, sub_tab, request=request))
+        else:
+            context.update(context_fn(None, sub_tab))
+    
+    breadcrumbs = [
+        (reverse(view_portfolio), "Portfolio"),
+        (reverse('view_portfolio_tab', args=[tab]), tab_definition["label"]),
+        (reverse('view_portfolio_tab_sub', args=[tab, sub_tab]), sub_tab_found["label"])
+    ]
+    
+    return send_response(
+        request,
+        "portfolio/portfolio_base.html",
+        context,
+        breadcrumbs=breadcrumbs
+    )
+
+
 def _tab_available_overview(business: Business) -> bool:
     return True
 
@@ -1587,6 +1646,162 @@ def _tab_context_implementation_consolidated(business: Business, active_sub_tab=
     return context
 
 
+def _tab_available_llmrequests_consolidated(business: Business) -> bool:
+    return (
+        _tab_available_llmrequests(business) or
+        _tab_available_llm_spend(business)
+    )
+
+
+def _tab_context_llmrequests_consolidated(business: Business, active_sub_tab=None, request=None) -> dict:
+    context = {
+        "sub_tabs": {}
+    }
+    
+    sub_tabs_config = [
+        ("llmrequests", "llmrequests", _tab_available_llmrequests, _tab_context_llmrequests),
+        ("llm-spend", "llm_spend", _tab_available_llm_spend, _tab_context_llm_spend),
+    ]
+    
+    for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
+        context["sub_tabs"][sub_tab_key] = {
+            "available": availability_fn(business)
+        }
+        
+        if active_sub_tab == sub_tab_slug:
+            if sub_tab_slug == "llm-spend":
+                # Special handling for LLM spend which requires request parameter
+                context.update(context_fn(business, request=request))
+            else:
+                context.update(context_fn(business))
+    
+    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+    return context
+
+
+def _initiative_tab_available_llmrequests_consolidated(initiative) -> bool:
+    return (
+        _initiative_tab_available_llmrequests(initiative) or
+        _initiative_tab_available_llm_spend(initiative)
+    )
+
+
+def _initiative_tab_context_llmrequests_consolidated(initiative, active_sub_tab=None, request=None) -> dict:
+    context = {
+        "sub_tabs": {}
+    }
+    
+    sub_tabs_config = [
+        ("llmrequests", "llmrequests", _initiative_tab_available_llmrequests, _initiative_tab_context_llmrequests),
+        ("llm-spend", "llm_spend", _initiative_tab_available_llm_spend, _initiative_tab_context_llm_spend),
+    ]
+    
+    for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
+        context["sub_tabs"][sub_tab_key] = {
+            "available": availability_fn(initiative)
+        }
+        
+        if active_sub_tab == sub_tab_slug:
+            if sub_tab_slug == "llm-spend":
+                # Special handling for LLM spend which requires request parameter
+                context.update(context_fn(initiative, request=request))
+            else:
+                context.update(context_fn(initiative))
+    
+    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+    return context
+
+
+def _task_tab_available_llmrequests_consolidated(task) -> bool:
+    return (
+        _task_tab_available_llmrequests(task) or
+        _task_tab_available_llm_spend(task)
+    )
+
+
+def _task_tab_context_llmrequests_consolidated(task, active_sub_tab=None, request=None) -> dict:
+    context = {
+        "sub_tabs": {}
+    }
+    
+    sub_tabs_config = [
+        ("llmrequests", "llmrequests", _task_tab_available_llmrequests, _task_tab_context_llmrequests),
+        ("llm-spend", "llm_spend", _task_tab_available_llm_spend, _task_tab_context_llm_spend),
+    ]
+    
+    for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
+        context["sub_tabs"][sub_tab_key] = {
+            "available": availability_fn(task)
+        }
+        
+        if active_sub_tab == sub_tab_slug:
+            if sub_tab_slug == "llm-spend":
+                # Special handling for LLM spend which requires request parameter
+                context.update(context_fn(task, request=request))
+            else:
+                context.update(context_fn(task))
+    
+    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+    return context
+
+
+def _portfolio_tab_available_llmrequests(portfolio=None) -> bool:
+    from erieiron_autonomous_agent.models import LlmRequest, Business
+    business = Business.get_erie_iron_business()
+    return business.llmrequest_set.exists()
+
+
+def _portfolio_tab_context_llmrequests(portfolio=None) -> dict:
+    from erieiron_autonomous_agent.models import LlmRequest, Business
+    business = Business.get_erie_iron_business()
+    llmrequests = business.llmrequest_set.all().order_by('-timestamp')[:100]
+    return {"llmrequests": llmrequests}
+
+
+def _portfolio_tab_available_llmrequests_consolidated(portfolio=None) -> bool:
+    from erieiron_autonomous_agent.models import Business
+    business = Business.get_erie_iron_business()
+    return (
+        _portfolio_tab_available_llmrequests(portfolio) or
+        _portfolio_tab_available_llm_spend(business)
+    )
+
+
+def _portfolio_tab_context_llmrequests_consolidated(portfolio=None, active_sub_tab=None, request=None) -> dict:
+    context = {
+        "sub_tabs": {}
+    }
+    
+    from erieiron_autonomous_agent.models import Business
+    business = Business.get_erie_iron_business()
+    
+    sub_tabs_config = [
+        ("llmrequests", "llmrequests", _portfolio_tab_available_llmrequests, _portfolio_tab_context_llmrequests),
+        ("llm-spend", "llm_spend", _portfolio_tab_available_llm_spend, _portfolio_tab_context_llm_spend),
+    ]
+    
+    for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
+        if sub_tab_slug == "llm-spend":
+            # For llm-spend, pass business instead of portfolio
+            context["sub_tabs"][sub_tab_key] = {
+                "available": availability_fn(business)
+            }
+        else:
+            context["sub_tabs"][sub_tab_key] = {
+                "available": availability_fn(portfolio)
+            }
+        
+        if active_sub_tab == sub_tab_slug:
+            if sub_tab_slug == "llm-spend":
+                # Portfolio llm-spend context function takes business and request parameter
+                context.update(context_fn(business, request=request))
+            else:
+                context.update(context_fn(portfolio))
+    
+    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+    return context
+
+
 def _build_business_tabs(business: Business) -> list[dict]:
     from erieiron_ui import tab_defitions
     
@@ -1644,7 +1859,12 @@ def view_business(request, business_id, tab='overview'):
     if tab == 'llm-spend':
         context.update(_tab_context_llm_spend(business, request=request))
     elif "context_fn" in tab_definition:
-        context.update(tab_definition["context_fn"](business))
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(business, request=request))
+        else:
+            context.update(context_fn(business))
     
     breadcrumbs = [
         (reverse(view_portfolio), "Portfolio"),
@@ -1700,7 +1920,12 @@ def view_business_with_sub_tab(request, business_id, tab, sub_tab):
     }
     
     if "context_fn" in tab_definition:
-        context.update(tab_definition["context_fn"](business, sub_tab))
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(business, sub_tab, request=request))
+        else:
+            context.update(context_fn(business, sub_tab))
     
     breadcrumbs = [
         (reverse(view_portfolio), "Portfolio"),
@@ -2592,7 +2817,12 @@ def view_initiative(request, initiative_id, tab='overview'):
     if tab_slug == 'llm-spend':
         context.update(_initiative_tab_context_llm_spend(initiative, request=request))
     else:
-        context.update(tab_definition["context_fn"](initiative))
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(initiative, request=request))
+        else:
+            context.update(context_fn(initiative))
     
     breadcrumbs = [
         (reverse(view_portfolio), "Portfolio"),
@@ -2601,6 +2831,67 @@ def view_initiative(request, initiative_id, tab='overview'):
     ]
     if tab_slug != 'overview':
         breadcrumbs.append((reverse('view_initiative_tab', args=[tab_slug, initiative.id]), tab_definition["label"]))
+    
+    return send_response(
+        request,
+        "initiative/initiative_base.html",
+        context,
+        breadcrumbs=breadcrumbs
+    )
+
+
+def view_initiative_with_sub_tab(request, initiative_id, tab, sub_tab):
+    from erieiron_ui import tab_defitions
+    
+    initiative = get_object_or_404(Initiative, pk=initiative_id)
+    tab = (tab or 'overview').lower()
+    sub_tab = (sub_tab or '').lower()
+    
+    if tab not in tab_defitions.INITIATIVE_TAB_MAP:
+        raise Http404
+    
+    tab_definition = tab_defitions.INITIATIVE_TAB_MAP[tab]
+    
+    if "sub_tabs" not in tab_definition:
+        raise Http404
+    
+    sub_tab_found = None
+    for st in tab_definition["sub_tabs"]:
+        if st["slug"] == sub_tab:
+            sub_tab_found = st
+            break
+    
+    if not sub_tab_found:
+        raise Http404
+    
+    tabs = _build_initiative_tabs(initiative)
+    
+    is_available = next((t for t in tabs if t['slug'] == tab), None)
+    if not is_available or not is_available['available']:
+        raise Http404
+    
+    context = {
+        "initiative": initiative,
+        "tabs": tabs,
+        "active_tab": tab,
+        "active_sub_tab": sub_tab,
+        "tab_template": tab_definition["template"],
+    }
+    
+    if "context_fn" in tab_definition:
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(initiative, sub_tab, request=request))
+        else:
+            context.update(context_fn(initiative, sub_tab))
+    
+    breadcrumbs = [
+        (reverse(view_portfolio), "Portfolio"),
+        (reverse('view_initiative', args=[initiative.id]), initiative.title),
+        (reverse('view_initiative_tab', args=[tab, initiative.id]), tab_definition["label"]),
+        (reverse('view_initiative_tab_sub', args=[tab, sub_tab, initiative.id]), sub_tab_found["label"])
+    ]
     
     return send_response(
         request,
@@ -3220,6 +3511,68 @@ def view_task(request, task_id, tab='overview'):
     ]
     if tab_slug != 'overview':
         breadcrumbs.append((reverse('view_task_tab', args=[tab_slug, task.id]), tab_definition["label"]))
+    
+    return send_response(
+        request,
+        "task/task_base.html",
+        context,
+        breadcrumbs=breadcrumbs
+    )
+
+
+def view_task_with_sub_tab(request, task_id, tab, sub_tab):
+    from erieiron_ui import tab_defitions
+    
+    task = get_object_or_404(Task, pk=task_id)
+    tab = (tab or 'overview').lower()
+    sub_tab = (sub_tab or '').lower()
+    
+    if tab not in tab_defitions.TASK_TAB_MAP:
+        raise Http404
+    
+    tab_definition = tab_defitions.TASK_TAB_MAP[tab]
+    
+    if "sub_tabs" not in tab_definition:
+        raise Http404
+    
+    sub_tab_found = None
+    for st in tab_definition["sub_tabs"]:
+        if st["slug"] == sub_tab:
+            sub_tab_found = st
+            break
+    
+    if not sub_tab_found:
+        raise Http404
+    
+    tabs = _build_task_tabs(task)
+    
+    is_available = next((t for t in tabs if t['slug'] == tab), None)
+    if not is_available or not is_available['available']:
+        raise Http404
+    
+    context = {
+        "task": task,
+        "tabs": tabs,
+        "active_tab": tab,
+        "active_sub_tab": sub_tab,
+        "tab_template": tab_definition["template"],
+    }
+    
+    if "context_fn" in tab_definition:
+        context_fn = tab_definition["context_fn"]
+        fn_params = inspect.signature(context_fn).parameters
+        if "request" in fn_params:
+            context.update(context_fn(task, sub_tab, request=request))
+        else:
+            context.update(context_fn(task, sub_tab))
+    
+    breadcrumbs = [
+        (reverse(view_portfolio), "Portfolio"),
+        (reverse('view_initiative', args=[task.initiative.id]), task.initiative.title),
+        (reverse('view_task', args=[task.id]), task.title),
+        (reverse('view_task_tab', args=[tab, task.id]), tab_definition["label"]),
+        (reverse('view_task_tab_sub', args=[tab, sub_tab, task.id]), sub_tab_found["label"])
+    ]
     
     return send_response(
         request,

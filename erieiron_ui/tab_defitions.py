@@ -64,16 +64,25 @@ INITIATIVE_TAB_DEFINITIONS = [
     {
         "slug": "llmrequests",
         "label": "LLM Requests",
-        "template": "initiative/tabs/llmrequests.html",
-        "availability_fn": views._initiative_tab_available_llmrequests,
-        "context_fn": views._initiative_tab_context_llmrequests,
-    },
-    {
-        "slug": "llm-spend",
-        "label": "LLM Spend",
-        "template": "initiative/tabs/llm_spend.html",
-        "availability_fn": views._initiative_tab_available_llm_spend,
-        "context_fn": views._initiative_tab_context_llm_spend,
+        "template": "initiative/tabs/consolidated_llm_requests.html",
+        "availability_fn": views._initiative_tab_available_llmrequests_consolidated,
+        "context_fn": views._initiative_tab_context_llmrequests_consolidated,
+        "sub_tabs": [
+            {
+                "slug": "llmrequests",
+                "label": "LLM Requests",
+                "template": "initiative/tabs/llmrequests.html",
+                "availability_fn": views._initiative_tab_available_llmrequests,
+                "context_fn": views._initiative_tab_context_llmrequests,
+            },
+            {
+                "slug": "llm-spend",
+                "label": "LLM Spend",
+                "template": "initiative/tabs/llm_spend.html",
+                "availability_fn": views._initiative_tab_available_llm_spend,
+                "context_fn": views._initiative_tab_context_llm_spend,
+            },
+        ]
     },
     {
         "slug": "edit",
@@ -105,11 +114,27 @@ PORTFOLIO_TAB_DEFINITIONS = [
     },
     TAB_DIVIDER,
     {
-        "slug": "llm-spend",
-        "label": "LLM Spend",
-        "template": "portfolio/tabs/llm_spend.html",
-        "availability_fn": views._portfolio_tab_available_llm_spend,
-        "context_fn": views._portfolio_tab_context_llm_spend,
+        "slug": "llmrequests",
+        "label": "LLM Requests",
+        "template": "portfolio/tabs/consolidated_llm_requests.html",
+        "availability_fn": views._portfolio_tab_available_llmrequests_consolidated,
+        "context_fn": views._portfolio_tab_context_llmrequests_consolidated,
+        "sub_tabs": [
+            {
+                "slug": "llmrequests",
+                "label": "LLM Requests",
+                "template": "portfolio/tabs/llmrequests.html",
+                "availability_fn": views._portfolio_tab_available_llmrequests,
+                "context_fn": views._portfolio_tab_context_llmrequests,
+            },
+            {
+                "slug": "llm-spend",
+                "label": "LLM Spend",
+                "template": "portfolio/tabs/llm_spend.html",
+                "availability_fn": views._portfolio_tab_available_llm_spend,
+                "context_fn": views._portfolio_tab_context_llm_spend,
+            },
+        ]
     },
     {
         "slug": "capacity",
@@ -259,16 +284,25 @@ TASK_TAB_DEFINITIONS = [
     {
         "slug": "llmrequests",
         "label": "LLM Requests",
-        "template": "task/tabs/llmrequests.html",
-        "availability_fn": views._task_tab_available_llmrequests,
-        "context_fn": views._task_tab_context_llmrequests,
-    },
-    {
-        "slug": "llm-spend",
-        "label": "LLM Spend",
-        "template": "task/tabs/llm_spend.html",
-        "availability_fn": views._task_tab_available_llm_spend,
-        "context_fn": views._task_tab_context_llm_spend,
+        "template": "task/tabs/consolidated_llm_requests.html",
+        "availability_fn": views._task_tab_available_llmrequests_consolidated,
+        "context_fn": views._task_tab_context_llmrequests_consolidated,
+        "sub_tabs": [
+            {
+                "slug": "llmrequests",
+                "label": "LLM Requests",
+                "template": "task/tabs/llmrequests.html",
+                "availability_fn": views._task_tab_available_llmrequests,
+                "context_fn": views._task_tab_context_llmrequests,
+            },
+            {
+                "slug": "llm-spend",
+                "label": "LLM Spend",
+                "template": "task/tabs/llm_spend.html",
+                "availability_fn": views._task_tab_available_llm_spend,
+                "context_fn": views._task_tab_context_llm_spend,
+            },
+        ]
     },
     {
         "slug": "edit",
@@ -458,16 +492,25 @@ BUSINESS_TAB_DEFINITIONS = [
     {
         "slug": "llmrequests",
         "label": "LLM Requests",
-        "template": "business/tabs/llmrequests.html",
-        "availability_fn": views._tab_available_llmrequests,
-        "context_fn": views._tab_context_llmrequests,
-    },
-    {
-        "slug": "llm-spend",
-        "label": "LLM Spend",
-        "template": "business/tabs/llm_spend.html",
-        "availability_fn": views._tab_available_llm_spend,
-        "context_fn": views._tab_context_llm_spend,
+        "template": "business/tabs/consolidated_llm_requests.html",
+        "availability_fn": views._tab_available_llmrequests_consolidated,
+        "context_fn": views._tab_context_llmrequests_consolidated,
+        "sub_tabs": [
+            {
+                "slug": "llmrequests",
+                "label": "LLM Requests",
+                "template": "business/tabs/llmrequests.html",
+                "availability_fn": views._tab_available_llmrequests,
+                "context_fn": views._tab_context_llmrequests,
+            },
+            {
+                "slug": "llm-spend",
+                "label": "LLM Spend",
+                "template": "business/tabs/llm_spend.html",
+                "availability_fn": views._tab_available_llm_spend,
+                "context_fn": views._tab_context_llm_spend,
+            },
+        ]
     },
     {
         "slug": "edit",

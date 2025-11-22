@@ -1,0 +1,44 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content business-overview">
+    <div class="horizontal-tabs-container">
+        <div class="horizontal-tabs-header">
+            <h5 class="business-overview__section-title d-flex align-items-center gap-2">
+                <i class="bi bi-cpu" aria-hidden="true"></i>
+                LLM Requests
+            </h5>
+            <nav class="nav nav-tabs horizontal-tabs" id="llmRequestsTabs" role="tablist">
+                {% if sub_tabs.llm_spend.available %}
+                <a class="nav-link{% if active_sub_tab == 'llm-spend' or not active_sub_tab %} active{% endif %}" 
+                   id="llm-spend-tab" 
+                   href="{% url 'view_task_tab_sub' 'llmrequests' 'llm-spend' task.id %}"
+                   role="tab" 
+                   aria-controls="llm-spend" 
+                   aria-selected="{% if active_sub_tab == 'llm-spend' or not active_sub_tab %}true{% else %}false{% endif %}">
+                    LLM Spend
+                </a>
+                {% endif %}
+                <a class="nav-link{% if active_sub_tab == 'llmrequests' %} active{% endif %}" 
+                   id="llmrequests-tab" 
+                   href="{% url 'view_task_tab_sub' 'llmrequests' 'llmrequests' task.id %}"
+                   role="tab" 
+                   aria-controls="llmrequests" 
+                   aria-selected="{% if active_sub_tab == 'llmrequests' %}true{% else %}false{% endif %}">
+                    LLM Requests
+                </a>
+            </nav>
+        </div>
+        
+        <div class="tab-content horizontal-tabs-content" id="llmRequestsTabContent">
+            {% if active_sub_tab == 'llm-spend' or not active_sub_tab %}
+                <div class="tab-pane fade show active" id="llm-spend" role="tabpanel" aria-labelledby="llm-spend-tab">
+                    {% include "task/tabs/llm_spend.html" %}
+                </div>
+            {% elif active_sub_tab == 'llmrequests' %}
+                <div class="tab-pane fade show active" id="llmrequests" role="tabpanel" aria-labelledby="llmrequests-tab">
+                    {% include "task/tabs/llmrequests.html" %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

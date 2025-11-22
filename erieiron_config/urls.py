@@ -10,6 +10,7 @@ urlpatterns = [
     
     path("portfolio/", views.view_portfolio, name="view_portfolio"),
     path("portfolio/<slug:tab>/", views.view_portfolio, name="view_portfolio_tab"),
+    path("portfolio/<slug:tab>/<slug:sub_tab>/", views.view_portfolio_with_sub_tab, name="view_portfolio_tab_sub"),
     
     path("_business/add", views.action_add_business, name="action_add_business"),
     path("_business/find", views.action_find_business, name="action_find_business"),
@@ -32,6 +33,7 @@ urlpatterns = [
     
     path("initiative/<str:initiative_id>", views.view_initiative, name="view_initiative"),
     path("initiative/<slug:tab>/<str:initiative_id>", views.view_initiative, name="view_initiative_tab"),
+    path("initiative/<slug:tab>/<slug:sub_tab>/<str:initiative_id>", views.view_initiative_with_sub_tab, name="view_initiative_tab_sub"),
     path("_initiative/add", views.action_add_initiative, name="action_add_initiative"),
     path("_initiative/update/<str:initiative_id>", views.action_update_initiative, name="action_update_initiative"),
     path("_initiative/delete/<str:initiative_id>", views.action_delete_initiative, name="action_delete_initiative"),
@@ -54,6 +56,7 @@ urlpatterns = [
     path("_process/kill/<uuid:process_id>", views.action_kill_process, name="action_kill_process"),
     path("task/<str:task_id>", views.view_task, name="view_task"),
     path("task/<slug:tab>/<str:task_id>", views.view_task, name="view_task_tab"),
+    path("task/<slug:tab>/<slug:sub_tab>/<str:task_id>", views.view_task_with_sub_tab, name="view_task_tab_sub"),
     
     path("llm/debug/<uuid:llm_request_id>", views.view_llm_request, name="view_llm_request"),
     path("llm/ask/<uuid:llm_request_id>", views.action_llm_debug_ask, name="action_llm_debug_ask"),
