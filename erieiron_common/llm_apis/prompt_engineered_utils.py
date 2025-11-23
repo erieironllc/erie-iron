@@ -2,6 +2,7 @@ import logging
 from typing import Tuple
 
 from erieiron_common import common
+from erieiron_common.enums import LlmCreativity
 from erieiron_common.llm_apis import llm_interface
 from erieiron_common.llm_apis.llm_constants import PARSE_MODELS_IN_ORDER
 from erieiron_common.llm_apis.llm_interface import LlmResponse, LlmMessage
@@ -144,7 +145,8 @@ Respond only with the json in the above format, with no other text or markup.
             resp = llm_interface.chat(
                 prompt_messages,
                 model=model,
-                code_response=True
+                code_response=True,
+                creativity=LlmCreativity.LOW
             )
 
             # make sure it's parseable as json

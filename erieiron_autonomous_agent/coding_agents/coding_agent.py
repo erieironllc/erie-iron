@@ -22,7 +22,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
-from erieiron_autonomous_agent.coding_agents.coding_agent_config import TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
@@ -32,7 +32,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError, MissingStackPerms
@@ -352,7 +352,9 @@ def plan_code_changes(config):
     planning_data = None
     
     config.log(f"PHASE - plan_code_changes: {config.current_iteration.id}")
-    if not config.self_driving_task.initial_tests_pass:
+    if USE_CODEX:
+        planning_data = plan_code_changes_for_codex(config)
+    elif not config.self_driving_task.initial_tests_pass:
         # ok the tests for exists tasks pass, but we don't have a test for this task.  write it now
         SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
             routing_json={
@@ -561,7 +563,6 @@ def ensure_lb_alias_record(
 
          """
     ))
-    
     
     # Wait for ECS service to be stable
     aws_interface.wait_for_ecs_service_stable(
@@ -2156,7 +2157,8 @@ def get_lessons_msg(
             all_lessons,
             exclude_invalid,
             skip
-        )
+        ),
+        item_name="lesson"
     )
 
 
@@ -2224,13 +2226,13 @@ def get_lessons(
                 unique_indices.append(i)
         
         lessons = [lessons[i] for i in unique_indices]
-    return {
-        "important_quote": "Those who don't learn from history are doomed to repeat it",
-        "lessons": [
-            f"{a.lesson} - otherwise you'll see problems like this: {a.pattern} ({a.trigger})"
-            for a in lessons
-        ]
-    }
+        
+    return [
+        {
+            "lesson_id": a.id, "lesson_value": f"{a.lesson} - otherwise you'll see problems like this: {a.pattern} ({a.trigger})"
+        }
+        for a in lessons
+    ]
 
 
 def extract_lessons(
@@ -2752,7 +2754,7 @@ def plan_aws_provisioning_code_changes(config: CodingAgentConfig):
     
     context_files = routing_json.get("context_files", []) + [
         "Dockerfile",
-        InfrastructureStackType.APPLICATION.get_template_name()
+        InfrastructureStackType.APPLICATION.get_opentofu_config()
     ]
     
     planning_model = config.get_code_planning_model()
@@ -3057,6 +3059,88 @@ def get_tasktype_specific_instructions(config: CodingAgentConfig) -> str:
         return None
 
 
+def plan_code_changes_for_codex(config: CodingAgentConfig):
+    current_iteration = config.current_iteration
+    previous_iteration = config.previous_iteration
+    iteration_to_modify = config.iteration_to_modify
+    
+    relevant_code_files = get_relevant_code_files(config)
+    
+    business = config.self_driving_task.business
+    
+    task = config.self_driving_task.task
+    task_type = TaskType(task.task_type)
+    
+    messages = [
+        get_sys_prompt("codeplanner--codewriter_audience.md"),
+        get_architecture_docs(
+            config.initiative
+        ),
+        config.business.get_existing_required_credentials_llmm(),
+        get_budget_message(
+            config
+        ),
+        build_opentofu_plan_context_messages(
+            config
+        ),
+        get_tombstone_message(
+            config
+        ),
+        build_previous_iteration_context_messages(
+            config
+        ),
+        get_dependencies_msg(
+            config,
+            for_planning=True
+        ),
+        relevant_code_files,
+        get_docs_msg(
+            config
+        ),
+        get_file_structure_msg(
+            config.sandbox_root_dir
+        ) if not iteration_to_modify.has_error() else [],
+        get_guidance_msg(
+            config
+        ),
+        get_lessons_msg(
+            "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
+            config
+        ),
+        LlmMessage.user_from_data(
+            "Strategic Unblocking Guidance",
+            config.iteration_to_modify.strategic_unblocking_json
+        ) if config.iteration_to_modify.strategic_unblocking_json else None,
+        get_tasktype_specific_instructions(config),
+        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
+    
+    ]
+    
+    planning_model = config.get_code_planning_model()
+    planning_data = llm_chat(
+        "Plan code changes",
+        messages,
+        model=planning_model,
+        tag_entity=config.current_iteration,
+        creativity=LlmCreativity.NONE,
+        output_schema="codeplanner.schema.json"
+    ).json()
+    
+    with transaction.atomic():
+        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
+            planning_model=planning_model,
+            execute_module=planning_data.get('execute_module'),
+            test_module=planning_data.get('test_module')
+        )
+        current_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
+    
+    blocked_data = planning_data.get('blocked')
+    if blocked_data:
+        raise AgentBlocked(blocked_data)
+    
+    return planning_data
+
+
 def plan_full_code_changes(config: CodingAgentConfig):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
@@ -3229,7 +3313,7 @@ def write_code_file(
         )
         if not code_file_name.endswith(".md") else []
     ]
-    if code_file_name == InfrastructureStackType.APPLICATION.get_template_name():
+    if code_file_name == InfrastructureStackType.APPLICATION.get_opentofu_config():
         messages += build_opentofu_plan_context_messages(config)
     
     related_code_file_versions = []
@@ -3447,7 +3531,7 @@ def get_codewriter_system_prompt(code_file_path) -> list[str]:
         prompt = "codewriter--eml_coder.md"
     elif code_file_name_lower.endswith(".md"):
         prompt = "codewriter--documentation_writer.md"
-    elif code_file_name == InfrastructureStackType.APPLICATION.get_template_name():
+    elif code_file_name == InfrastructureStackType.APPLICATION.get_opentofu_config():
         prompt = [
             "codewriter--aws_cloudformation_coder_tofu.md",
             "common--infrastructure_rules_tofu.md"
@@ -3614,7 +3698,7 @@ def get_relevant_code_files(
     else:
         required_files = [
             config.self_driving_task.test_file_path,
-            InfrastructureStackType.APPLICATION.get_template_name(),
+            InfrastructureStackType.APPLICATION.get_opentofu_config(),
             "core/views.py",
             "core/urls.py",
             "core/models.py",

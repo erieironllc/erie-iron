@@ -9,11 +9,40 @@ import openai
 from openai.types.responses import ResponseUsage
 
 from erieiron_common import common
-from erieiron_common.enums import LlmModel, LlmVerbosity, LlmReasoningEffort
+from erieiron_common.enums import LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity
 from erieiron_common.llm_apis.llm_response import LlmResponse
 
 logging.getLogger('openai').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+CREATIVITY_TO_SAMPLING = {
+    LlmCreativity.NONE: {
+        "temperature": 0.0,
+        "top_p": 1.0,
+    },
+    LlmCreativity.LOW: {
+        "temperature": 0.2,
+        "top_p": 0.9,
+    },
+    LlmCreativity.MEDIUM: {
+        "temperature": 0.5,
+        "top_p": 0.9,
+    },
+    LlmCreativity.HIGH: {
+        "temperature": 0.9,
+        "top_p": 0.95,
+    },
+}
+
+
+REASONING_TO_VAL = {
+    LlmReasoningEffort.NONE: "none",
+    LlmReasoningEffort.MINIMAL: "low",
+    LlmReasoningEffort.LOW: "low",
+    LlmReasoningEffort.MEDIUM: "medium",
+    LlmReasoningEffort.HIGH: "high"
+}
+
 
 
 @lru_cache
@@ -27,9 +56,11 @@ def chat(
         model=LlmModel.OPENAI_GPT_4o,
         code_response=False,
         reasoning_effort: LlmReasoningEffort = None,
-        verbosity: LlmVerbosity = None
+        verbosity: LlmVerbosity = None,
+        creativity: LlmCreativity = LlmCreativity.MEDIUM
 
 ):
+    reasoning_effort = REASONING_TO_VAL.get(LlmReasoningEffort(reasoning_effort))
     start_time = time.time()
     client = openai.OpenAI(api_key=get_api_key())
     
@@ -63,10 +94,16 @@ def chat(
             "model": model_name,
             "input": messages,
         }
-        
         supports_reasoning = model_name.startswith(("gpt-5", "gpt-4o", "o"))
         if reasoning_effort and supports_reasoning:
-            kwargs["reasoning"] = {"effort": reasoning_effort.value}
+            kwargs["reasoning"] = {"effort": reasoning_effort}
+        
+        # Determine if this model supports sampling parameters (temperature, top_p)
+        sampling = CREATIVITY_TO_SAMPLING.get(creativity, CREATIVITY_TO_SAMPLING[LlmCreativity.MEDIUM])
+        supports_sampling = False #open ai does not yet support sampling
+        if supports_sampling:
+            kwargs["temperature"] = sampling["temperature"]
+            kwargs["top_p"] = sampling["top_p"]
         
         supports_verbosity = model_name.startswith(("gpt-5", "gpt-4o"))
         if verbosity and supports_verbosity:

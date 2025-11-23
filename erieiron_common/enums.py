@@ -348,7 +348,15 @@ class LlmMessageType(ErieEnum):
     SYSTEM = "system"
 
 
+class LlmCreativity(ErieEnum):
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class LlmReasoningEffort(ErieEnum):
+    NONE = "none"
     MINIMAL = "minimal"
     LOW = "low"
     MEDIUM = "medium"
@@ -555,13 +563,6 @@ class InfrastructureStackType(ErieEnum):
         else:
             raise Exception(f"unhandled stack type {self}")
     
-    def get_template_name(self) -> str:
-        if InfrastructureStackType.FOUNDATION.eq(self):
-            return "infrastructure.yaml"
-        elif InfrastructureStackType.APPLICATION.eq(self):
-            return "infrastructure-application.yaml"
-        else:
-            raise Exception(f"unhandled stack type {self}")
 
 
 class InitiativeNames(ErieEnum):

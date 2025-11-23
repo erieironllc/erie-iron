@@ -17,7 +17,7 @@
                     Messages
                 </a>
 
-                {%  if llm_request.response %}
+                {% if llm_request.response %}
                     <a id="response-tab"
                        href="#response"
                        class="list-group-item list-group-item-action"
@@ -27,7 +27,7 @@
                     >
                         Raw Response
                     </a>
-                    
+
                     <a id="responsepretty-tab"
                        href="#responsepretty"
                        class="list-group-item list-group-item-action"
@@ -152,7 +152,8 @@
                                     </div>
                                     <div class="card-body collapse" id="llmrequest-{{ forloop.counter }}">
                                         <dl class="row">
-                                            <pre class="llmrequest_msg" id="llmrequest-content-{{ forloop.counter }}">{{ inp_msg.content }}</pre>
+                                            <pre class="llmrequest_msg"
+                                                 id="llmrequest-content-{{ forloop.counter }}">{{ inp_msg.content }}</pre>
                                         </dl>
                                     </div>
                                 </div>
@@ -224,7 +225,7 @@
                                       name="prompt"
                                       rows="3"
                                       placeholder="What behavior do you want to change?"></textarea>
-                            <div class="mt-1 d-flex justify-content-end">
+                            <div class="mt-1 d-flex justify-content-end gap-2">
                                 <select name="llm_model" class="form-select">
                                     {% for model_choice in model_choices %}
                                         <option value="{{ model_choice.value }}"
@@ -233,7 +234,32 @@
                                         </option>
                                     {% endfor %}
                                 </select>
-                                <a id="btn_ask_change" class="ms-3 btn btn-outline-primary pull-right" href="#">Ask for Change</a>
+                                <select name="reasoning_effort" class="form-select" style="width: auto;">
+                                    {% for choice in reasoning_effort_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == reasoning_effort_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Reasoning
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="verbosity" class="form-select" style="width: auto;">
+                                    {% for choice in verbosity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == verbosity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Verbosity
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="creativity" class="form-select" style="width: auto;">
+                                    {% for choice in creativity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == creativity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Creativity
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <a id="btn_ask_change" class="ms-3 btn btn-outline-primary pull-right" href="#">Ask for
+                                    Change</a>
                             </div>
                         </div>
                         <div id="txt_changes_response">
@@ -250,12 +276,36 @@
                                       name="prompt"
                                       rows="3"
                                       placeholder="Ask a question about this interaction"></textarea>
-                            <div class="mt-1 d-flex justify-content-end">
+                            <div class="mt-1 d-flex justify-content-end gap-2">
                                 <select name="llm_model" class="form-select">
                                     {% for model_choice in model_choices %}
                                         <option value="{{ model_choice.value }}"
                                                 {% if model_choice.value == model_choice_value %}selected{% endif %}>
                                             {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="reasoning_effort" class="form-select" style="width: auto;">
+                                    {% for choice in reasoning_effort_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == reasoning_effort_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Reasoning
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="verbosity" class="form-select" style="width: auto;">
+                                    {% for choice in verbosity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == verbosity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Verbosity
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="creativity" class="form-select" style="width: auto;">
+                                    {% for choice in creativity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == creativity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Creativity
                                         </option>
                                     {% endfor %}
                                 </select>
@@ -275,12 +325,36 @@
                         <input type="hidden" name="optimize" value="True"/>
                         <div class="mb-3">
                             <label class="ms-1">Optimize Using</label>
-                            <div class="mt-1 d-flex justify-content-end">
+                            <div class="mt-1 d-flex justify-content-end gap-2">
                                 <select name="llm_model" class="form-select">
                                     {% for model_choice in model_choices %}
                                         <option value="{{ model_choice.value }}"
                                                 {% if model_choice.value == model_choice_value %}selected{% endif %}>
                                             {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="reasoning_effort" class="form-select" style="width: auto;">
+                                    {% for choice in reasoning_effort_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == reasoning_effort_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Reasoning
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="verbosity" class="form-select" style="width: auto;">
+                                    {% for choice in verbosity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == verbosity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Verbosity
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="creativity" class="form-select" style="width: auto;">
+                                    {% for choice in creativity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == creativity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Creativity
                                         </option>
                                     {% endfor %}
                                 </select>
@@ -291,8 +365,8 @@
                         </div>
                     </form>
                 </div>
-            
-            
+
+
                 <div class="tab-pane " id="problems" role="tabpanel" aria-labelledby="problems-tab">
                     <form id="frm_llm_problems" action="{% url 'action_llm_debug_ask' llm_request.id %}">
                         {% csrf_token %}
@@ -301,12 +375,36 @@
                         <input type="hidden" name="problems" value="True"/>
                         <div class="mb-3">
                             <label class="ms-1">Find Problems Using</label>
-                            <div class="mt-1 d-flex justify-content-end">
+                            <div class="mt-1 d-flex justify-content-end gap-2">
                                 <select name="llm_model" class="form-select">
                                     {% for model_choice in model_choices %}
                                         <option value="{{ model_choice.value }}"
                                                 {% if model_choice.value == model_choice_value %}selected{% endif %}>
                                             {{ model_choice.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="reasoning_effort" class="form-select" style="width: auto;">
+                                    {% for choice in reasoning_effort_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == reasoning_effort_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Reasoning
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="verbosity" class="form-select" style="width: auto;">
+                                    {% for choice in verbosity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == verbosity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Verbosity
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <select name="creativity" class="form-select" style="width: auto;">
+                                    {% for choice in creativity_choices %}
+                                        <option value="{{ choice.value }}"
+                                                {% if choice.value == creativity_choice_value %}selected{% endif %}>
+                                            {{ choice.label }} Creativity
                                         </option>
                                     {% endfor %}
                                 </select>
@@ -327,15 +425,18 @@
                             <tr valign=top>
                                 <th class="pb-2">
                                     <label class="ms-1">Existing Response</label>
-                                    <div class="mt-3 d-flex justify-content-start">
-                                        Model: {{ llm_request.llm_model }};
-                                        Reasoning: {{ llm_request.reasoning_effort|default_if_none:"medium" }};
-                                        Verbosity: {{ llm_request.verbosity|default_if_none:"medium" }}
+                                    <div class="mt-3 ">
+                                        Model: {{ llm_request.llm_model }}
+                                        <ul>
+                                        <li>Reasoning: {{ llm_request.reasoning_effort|default_if_none:"medium" }}</li>
+                                        <li>Verbosity: {{ llm_request.verbosity|default_if_none:"medium" }}</li>
+                                        <li>Creativity: {{ llm_request.creativity|default_if_none:"medium" }}</li>
+                                            </ul>
                                     </div>
                                 </th>
                                 <th class="pb-2">
                                     <label class="ms-1">Compare With</label>
-                                    <div class="mt-1 d-flex justify-content-end">
+                                    <div class="mt-1 d-flex flex-wrap justify-content-between gap-2">
                                         <select name="llm_model" class="form-select">
                                             {% for model_choice in model_choices %}
                                                 <option value="{{ model_choice.value }}"
@@ -344,8 +445,33 @@
                                                 </option>
                                             {% endfor %}
                                         </select>
-                                        <a id="btn_compare" class="ms-3 btn btn-secondary pull-right"
-                                           href="#">Compare</a>
+                                        <div class="d-flex justify-content-between">
+                                            <select name="reasoning_effort" class="form-select" style="width: auto;">
+                                                {% for choice in reasoning_effort_choices %}
+                                                    <option value="{{ choice.value }}"
+                                                            {% if choice.value == reasoning_effort_choice_value %}selected{% endif %}>
+                                                        {{ choice.label }} Reasoning
+                                                    </option>
+                                                {% endfor %}
+                                            </select>
+                                            <select name="verbosity" class="form-select" style="width: auto;">
+                                                {% for choice in verbosity_choices %}
+                                                    <option value="{{ choice.value }}"
+                                                            {% if choice.value == verbosity_choice_value %}selected{% endif %}>
+                                                        {{ choice.label }} Verbosity
+                                                    </option>
+                                                {% endfor %}
+                                            </select>
+                                            <select name="creativity" class="form-select" style="width: auto;">
+                                                {% for choice in creativity_choices %}
+                                                    <option value="{{ choice.value }}"
+                                                            {% if choice.value == creativity_choice_value %}selected{% endif %}>
+                                                        {{ choice.label }} Creativity
+                                                    </option>
+                                                {% endfor %}
+                                            </select>
+                                        </div>
+                                        <a id="btn_compare" class="w-100 btn btn-secondary pull-right" href="#">Compare</a>
                                     </div>
                                 </th>
                             </tr>

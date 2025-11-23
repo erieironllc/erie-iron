@@ -2,7 +2,7 @@ import json
 import uuid
 
 from erieiron_common import common
-from erieiron_common.enums import LlmModel
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity
 
 
 class LlmResponse:
@@ -91,7 +91,10 @@ the previous attempt at parsing this content resulted in this error:  {e}
 
 resond only with parsable json.  do not include any comments, explanations, or non-json markdown
 """,
-                LlmModel.OPENAI_GPT_5_NANO,
+                model=LlmModel.OPENAI_GPT_5_NANO,
+                reasoning_effort=LlmReasoningEffort.LOW,
+                verbosity=LlmVerbosity.LOW,
+                creativity=LlmCreativity.LOW,
                 code_response=True
             )
             json_text = llm_response_reformat.text

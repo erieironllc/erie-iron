@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Code Change Instruction Generator Output",
+  "type": "object",
+  "required": [
+    "implementation_directive",
+    "required_rule_contexts",
+    "diagnostic_context",
+    "relevant_lessons"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "implementation_directive": {
+      "type": "object",
+      "required": [
+        "objective",
+        "high_level_approach",
+        "files_likely_affected",
+        "key_constraints",
+        "success_criteria"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "objective": { "type": "string" },
+        "high_level_approach": { "type": "string" },
+        "files_likely_affected": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "key_constraints": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "success_criteria": { "type": "string" }
+      }
+    },
+
+    "required_rule_contexts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "infrastructure_rules",
+          "lambda_rules",
+          "django_rules",
+          "test_rules",
+          "ui_rules",
+          "security_rules",
+          "database_rules",
+          "ses_email_rules",
+          "s3_storage_rules",
+          "sqs_queue_rules"
+        ]
+      }
+    },
+
+    "diagnostic_context": {
+      "type": "object",
+      "required": [
+        "primary_error",
+        "error_location",
+        "relevant_logs",
+        "environment_state",
+        "prior_attempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "primary_error": { "type": "string" },
+        "error_location": { "type": "string" },
+        "relevant_logs": { "type": "string" },
+
+        "environment_state": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null"]
+          }
+        },
+
+        "prior_attempts": { "type": "string" }
+      }
+    },
+
+    "relevant_lessons": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

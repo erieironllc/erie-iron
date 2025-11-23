@@ -9,7 +9,7 @@ from typing import List
 from jsonschema import validate as jsonschema_validate
 
 from erieiron_common import common
-from erieiron_common.enums import LlmModel, LlmMessageType, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import LlmModel, LlmMessageType, LlmReasoningEffort, LlmVerbosity, LlmCreativity
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_constants import MODEL_TO_IMPL, MODEL_TO_MAX_TOKENS, get_token_count
 from erieiron_common.llm_apis.llm_response import LlmResponse
@@ -22,17 +22,33 @@ def chat(
         code_response=False,
         reasoning_effort: LlmReasoningEffort = None,
         verbosity: LlmVerbosity = None,
+        creativity: LlmCreativity = LlmCreativity.MEDIUM,
         debug=False
 ) -> 'LlmResponse':
     messages = common.flatten(messages)
     
-    if messages and output_schema and output_schema.exists():
+    output_schema = common.safe_read(output_schema)
+    if output_schema:
+        try:
+            output_schema = json.loads(output_schema)
+        except Exception as e:
+            logging.exception(e)
+            logging.error(f"failed to parse output schema {output_schema}")
+    
+    if messages and output_schema:
         code_response = True
         messages = [
             messages[0],
-            *common.ensure_list(
-                LlmMessage.sys_from_data("The output json will be validated against this schema", json.loads(output_schema.read_text()))
-            ),
+            LlmMessage.sys_from_data("The output json will be validated against this schema", output_schema),
+            LlmMessage.sys("""
+                **CRITICAL** You must respond with ONLY valid JSON. 
+                Do NOT include:
+                - Markdown code blocks (no ```)
+                - Explanatory text before or after the JSON
+                - Any characters outside the JSON object
+
+                Your entire response must be parseable by JSON.parse() or json.loads().
+            """),
             *messages[1:]
         ]
     
@@ -57,7 +73,8 @@ def chat(
                 model,
                 code_response,
                 reasoning_effort,
-                verbosity
+                verbosity,
+                creativity
             )
             chat_time = (time.time() - start_time) * 1000
             
@@ -71,17 +88,13 @@ def chat(
                 )
             
             if output_schema:
-                output_schema = common.assert_exists(output_schema)
-                with open(output_schema, "r") as schema_file:
-                    schema = json.load(schema_file)
-                
                 for i in range(5):
                     try:
-                        jsonschema_validate(instance=resp.json(), schema=schema)
+                        jsonschema_validate(instance=resp.json(), schema=output_schema)
                         break
                     except Exception as e:
                         # Attempt to coerce JSON to schema using a cheaper model
-                        resp.parsed_json = coerce_json_to_schema(resp.text, schema, e)
+                        resp.parsed_json = coerce_json_to_schema(resp.text, output_schema, e)
             
             return resp
         except Exception as e:
@@ -366,6 +379,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
                 model=LlmModel.OPENAI_GPT_5_MINI,
                 verbosity=LlmVerbosity.LOW,
                 reasoning_effort=LlmVerbosity.HIGH,
+                creativity=LlmVerbosity.LOW,
                 code_response=True
             )
             
@@ -382,6 +396,7 @@ def coerce_json_to_schema(json_text: str, schema: dict, e) -> dict:
             model=LlmModel.OPENAI_GPT_5_1,
             verbosity=LlmVerbosity.LOW,
             reasoning_effort=LlmVerbosity.HIGH,
+            creativity=LlmVerbosity.LOW,
             code_response=True
         )
         return json.loads(response.text)

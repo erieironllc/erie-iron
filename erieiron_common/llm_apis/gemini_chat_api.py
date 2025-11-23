@@ -4,7 +4,7 @@ from typing import List
 
 import google.generativeai as genai
 
-from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity
 
 
 @lru_cache
@@ -19,6 +19,7 @@ def chat(
         code_response=False,
         reasoning_effort: LlmReasoningEffort = None,
         verbosity: LlmVerbosity = None,
+        creativity: LlmCreativity = LlmCreativity.MEDIUM,
         schema_file: Path = None
 ):
     genai.configure(api_key=get_api_key())

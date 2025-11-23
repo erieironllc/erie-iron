@@ -3,13 +3,14 @@ import os
 import random
 import traceback
 from pathlib import Path
+from typing import Any
 
 import settings
 from erieiron_autonomous_agent.enums import BusinessOperationType
 from erieiron_autonomous_agent.models import LlmRequest, Business, Initiative, SelfDrivingTaskIteration
 from erieiron_common import common
 from erieiron_common.common import assert_exists
-from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity
 from erieiron_common.llm_apis.llm_constants import MODEL_BACKUPS, MODEL_TO_MAX_TOKENS
 from erieiron_common.llm_apis.llm_interface import LlmMessage, chat, sanitize_prompt
 from erieiron_common.llm_apis.llm_response import LlmResponse
@@ -26,6 +27,7 @@ def board_level_chat(
         business: Business = None,
         reasoning_effort=LlmReasoningEffort.MEDIUM,
         verbosity=LlmVerbosity.MEDIUM,
+        creativity=LlmCreativity.MEDIUM,
         debug=False
 ):
     output_schema = None
@@ -61,9 +63,10 @@ def board_level_chat(
         user_messages=user_messages,
         output_schema=output_schema,
         text_output=text_output,
+        model=model,
         reasoning_effort=reasoning_effort,
         verbosity=verbosity,
-        model=model,
+        creativity=creativity,
         debug=debug
     )
 
@@ -77,8 +80,10 @@ def business_level_chat(
         output_schema: str = None,
         replacements: list[tuple[str, str]] = None,
         model: LlmModel = None,
-        debug=False,
-        reasoning_effort=LlmReasoningEffort.MEDIUM
+        reasoning_effort=LlmReasoningEffort.MEDIUM,
+        verbosity=LlmVerbosity.MEDIUM,
+        creativity=LlmCreativity.MEDIUM,
+        debug=False
 ):
     if output_schema:
         output_schema = BUSINESS_LEVEL_BASE_PATH / output_schema
@@ -109,8 +114,10 @@ def business_level_chat(
         output_schema=output_schema,
         text_output=text_output,
         model=model,
-        debug=debug,
-        reasoning_effort=reasoning_effort
+        reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
+        creativity=creativity,
+        debug=debug
     )
 
 
@@ -122,19 +129,23 @@ def agent_chat(
         output_schema: Path = None,
         text_output=False,
         model: LlmModel = None,
-        debug=False,
         reasoning_effort=LlmReasoningEffort.MEDIUM,
-        verbosity=LlmVerbosity.MEDIUM
+        verbosity=LlmVerbosity.MEDIUM,
+        creativity=None,
+        debug=False
+
 ):
     system_prompts = common.ensure_list(system_prompts)
     system_prompts.append(BASE_PROMPTS_PATH / "_base_prompt--output.md")
     
     if text_output:
+        creativity = creativity or LlmCreativity.MEDIUM
         system_prompts.append(LlmMessage.sys("""
         # OUTPUT FORMAT (Required Rule)
         **you must** format the output in markdown syntax.  **Do not** return a json datastructure
         """))
     else:
+        creativity = creativity or LlmCreativity.NONE
         system_prompts.append(LlmMessage.sys("""
         # OUTPUT FORMAT (Required Rule)
         **you must** format the as pure JSON with no header or footer content.  The output **must** be immediately parsable as JSON
@@ -166,7 +177,8 @@ def agent_chat(
         output_schema=output_schema,
         code_response=not text_output,
         reasoning_effort=reasoning_effort,
-        verbosity=verbosity
+        verbosity=verbosity,
+        creativity=creativity
     )
     
     if text_output:
@@ -180,13 +192,17 @@ def llm_chat(
         messages: list[LlmMessage],
         tag_entity,
         model: LlmModel = LlmModel.OPENAI_GPT_5_1,
-        output_schema: Path = None,
+        output_schema = None,
         reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.LOW,
         verbosity: LlmVerbosity = LlmVerbosity.LOW,
+        creativity: LlmCreativity = None,
         code_response=False
 ) -> LlmResponse:
     input_model = model
     messages = common.flatten(messages)
+    
+    if not creativity:
+        creativity = LlmCreativity.NONE if code_response else LlmCreativity.MEDIUM
     
     if isinstance(tag_entity, SelfDrivingTaskIteration):
         business = tag_entity.self_driving_task.business
@@ -220,10 +236,12 @@ def llm_chat(
             title=description,
             reasoning_effort=reasoning_effort,
             verbosity=verbosity,
+            creativity=creativity,
             business=business,
             initiative=initiative,
             task_iteration=iteration,
             llm_model=model.value,
+            output_schema=common.safe_read(output_schema),
             token_count=0,
             price=0,
             input_messages=[{
@@ -234,9 +252,9 @@ def llm_chat(
         llm_request_url = f"{settings.BASE_URL}/llm/debug/{llm_request.id}"
         
         if output_schema:
-            logging.info(f"llm chat: {description} ({output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; {llm_request_url}")
+            logging.info(f"llm chat start: {description} ({output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; Creativity: {creativity}, {llm_request_url}")
         else:
-            logging.info(f"llm chat: {description}; Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; {llm_request_url}")
+            logging.info(f"llm chat start: {description}; Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; Creativity: {creativity}; {llm_request_url}")
         
         try:
             max_tokens = MODEL_TO_MAX_TOKENS.get(model)
@@ -247,6 +265,7 @@ def llm_chat(
                 code_response=code_response,
                 reasoning_effort=reasoning_effort,
                 verbosity=verbosity,
+                creativity=creativity,
                 debug=False
             )
             llm_resp.set_llm_request_id(llm_request.id)

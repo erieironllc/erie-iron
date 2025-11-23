@@ -1515,6 +1515,19 @@ def invalid_file(parent_path: Path, file_name: str) -> bool:
     return not valid_file(parent_path / file_name)
 
 
+def safe_read(path: Path) -> str:
+    if not path:
+        return None
+    
+    if isinstance(path, str):
+        if Path(path).exists():
+            return Path(path).read_text()
+        else:
+            return path
+    else:
+        return path.read_text()
+
+
 def valid_file(path: Path) -> bool:
     try:
         assert_exists(path)
@@ -1876,7 +1889,8 @@ def gen_random_token(len) -> str:
         new_token = f"a{random_string(len - 1).lower()}"
     
     return new_token
-    
+
+
 def json_format_pretty(value):
     if value is None or value == "":
         return ""

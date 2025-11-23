@@ -24,7 +24,7 @@ from erieiron_autonomous_agent.models import (
 )
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common import common
-from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType
+from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType, LlmCreativity
 
 
 class BaseCoder(ABC):
@@ -215,8 +215,6 @@ class BaseCoder(ABC):
             plan_path: Path
     ) -> str:
         """Build the complete prompt for the coder."""
-        from erieiron_autonomous_agent.coding_agents.coding_agent import get_lessons
-        
         business = business_context["business"]
         initiative = business_context["initiative"]
         task = business_context["task"]
@@ -499,6 +497,7 @@ class BaseCoder(ABC):
             title=self.coder_name.title(),
             reasoning_effort=LlmReasoningEffort.MEDIUM,
             verbosity=LlmVerbosity.LOW,
+            creativity=LlmCreativity.NONE,
             business=business,
             initiative=initiative,
             task_iteration=self.config.current_iteration,

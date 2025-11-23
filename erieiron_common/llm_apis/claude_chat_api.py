@@ -4,7 +4,16 @@ from typing import List
 
 import anthropic
 
-from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity
+
+
+# Mapping from LlmCreativity to Anthropic sampling parameters
+CREATIVITY_TO_ANTHROPIC = {
+    LlmCreativity.NONE:   {"temperature": 0.0, "top_p": None, "top_k": 1},
+    LlmCreativity.LOW:    {"temperature": None, "top_p": 0.9, "top_k": 20},
+    LlmCreativity.MEDIUM: {"temperature": None, "top_p": 0.9, "top_k": 40},
+    LlmCreativity.HIGH:   {"temperature": 0.9, "top_p": None, "top_k": 100},
+}
 
 
 @lru_cache
@@ -20,12 +29,13 @@ def chat(
         code_response=False,
         reasoning_effort: LlmReasoningEffort = None,
         verbosity: LlmVerbosity = None,
+        creativity: LlmCreativity = LlmCreativity.MEDIUM,
         schema_file: Path = None
 ):
     client = anthropic.Anthropic(api_key=get_api_key())
 
     extra_headers = {"anthropic-beta": "output-128k-2025-02-19"}
-    
+
     # Anthropic API expects system message as a separate argument, not inside the messages list
     messages_sys = []
     messages_not_sys = []
@@ -35,13 +45,28 @@ def chat(
         else:
             messages_not_sys.append(m)
 
-    with client.messages.stream(
-        model=model.value,
-        max_tokens=4000, #128_000,
-        messages=messages_not_sys,
-        system="\n\n".join(messages_sys),
-        extra_headers=extra_headers
-    ) as stream:
+    # Select sampling parameters based on creativity
+    sampling = CREATIVITY_TO_ANTHROPIC.get(creativity, CREATIVITY_TO_ANTHROPIC[LlmCreativity.MEDIUM])
+
+    temperature = sampling["temperature"]
+    top_p = sampling["top_p"]
+    top_k = sampling["top_k"]
+
+    stream_kwargs = {
+        "model": model.value,
+        "max_tokens": 4000,
+        "messages": messages_not_sys,
+        "system": "\n\n".join(messages_sys),
+        "extra_headers": extra_headers,
+        "top_k": top_k,
+    }
+
+    if temperature is not None:
+        stream_kwargs["temperature"] = temperature
+    elif top_p is not None:
+        stream_kwargs["top_p"] = top_p
+
+    with client.messages.stream(**stream_kwargs) as stream:
         response_text = ""
         for text in stream.text_stream:
             response_text += text

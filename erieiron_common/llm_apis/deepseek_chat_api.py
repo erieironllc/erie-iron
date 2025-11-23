@@ -4,7 +4,15 @@ from typing import List
 
 import requests
 
-from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity
+
+
+CREATIVITY_TO_DEEPSEEK = {
+    LlmCreativity.NONE:   0.0,
+    LlmCreativity.LOW:    0.2,
+    LlmCreativity.MEDIUM: 0.5,
+    LlmCreativity.HIGH:   0.9,
+}
 
 
 @lru_cache
@@ -19,8 +27,10 @@ def chat(
         code_response=False,
         reasoning_effort: LlmReasoningEffort = None,
         verbosity: LlmVerbosity = None,
+        creativity: LlmCreativity = LlmCreativity.MEDIUM,
         schema_file: Path = None
 ):
+    temperature = CREATIVITY_TO_DEEPSEEK.get(creativity, 0.5)
     response = requests.post(
         "https://api.deepseek.com/v1/chat/completions",
         headers={
@@ -31,7 +41,7 @@ def chat(
             "model": model.value,
             "messages": messages,
             "max_tokens": 1024,
-            "temperature": 0.2
+            "temperature": temperature
         }
     )
 

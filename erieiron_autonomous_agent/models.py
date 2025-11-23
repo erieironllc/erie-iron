@@ -1232,7 +1232,7 @@ class InfrastructureStack(BaseErieIronModel):
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
     
     def get_template_name(self) -> str:
-        return InfrastructureStackType(self.stack_type).get_template_name()
+        return InfrastructureStackType(self.stack_type).get_opentofu_config()
     
     class Meta:
         indexes = [
@@ -1938,7 +1938,9 @@ class LlmRequest(BaseErieIronModel):
     response = models.TextField(null=True)
     reasoning_effort = models.TextField(null=True)
     verbosity = models.TextField(null=True)
-    
+    creativity = models.TextField(null=True)
+    output_schema = models.TextField(null=True)
+
     def get_llm_data(self):
         return {
             "model": self.llm_model,

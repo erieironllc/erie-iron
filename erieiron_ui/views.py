@@ -36,7 +36,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -1703,7 +1703,7 @@ def _initiative_tab_context_llmrequests_consolidated(initiative, active_sub_tab=
     return context
 
 
-def _task_tab_available_llmrequests_consolidated(task) -> bool:
+def _task_tab_available_llmrequests_consolidated(task, business, self_driving_task) -> bool:
     return (
             _task_tab_available_llmrequests(task, task.initiative.business) or
             _task_tab_available_llm_spend(task, task.initiative.business, task.selfdrivingtask)
@@ -5448,13 +5448,15 @@ def _generate_diff_html(old_version, new_version):
 
 @json_endpoint
 def action_llm_debug_compare(request, llm_request_id):
-    llm_model_unparsed = rget(request, "llm_model")
-    llm_model, verbosity, reasoning_effort = llm_model_unparsed.split(";")
-    
+    llm_model = rget(request, "llm_model")
+    verbosity = rget(request, "verbosity")
+    reasoning_effort = rget(request, "reasoning_effort")
+    creativity = rget(request, "creativity")
+
     orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
-    
+
     resp = system_agent_llm_interface.llm_chat(
-        description=f"Compare {orig_llm_request.title} response using {llm_model_unparsed}",
+        description=f"Compare {orig_llm_request.title} response using {llm_model}",
         messages=orig_llm_request.input_messages,
         model=LlmModel(llm_model),
         tag_entity=(
@@ -5463,8 +5465,10 @@ def action_llm_debug_compare(request, llm_request_id):
                 or orig_llm_request.business
                 or Business.get_erie_iron_business()
         ),
+        output_schema=orig_llm_request.output_schema,
         reasoning_effort=LlmReasoningEffort(reasoning_effort),
-        verbosity=LlmVerbosity(verbosity)
+        verbosity=LlmVerbosity(verbosity),
+        creativity=LlmCreativity(creativity)
     )
     
     diff_lines = difflib.unified_diff(
@@ -5489,14 +5493,17 @@ def action_llm_debug_ask(request, llm_request_id):
     optimize = rget_bool(request, "optimize")
     change_prompt = rget_bool(request, "change_prompt")
     prompt = rget(request, "prompt")
-    llm_model, verbosity, reasoning_effort = rget(request, "llm_model").split(";")
-    
+    llm_model = rget(request, "llm_model")
+    verbosity = rget(request, "verbosity")
+    reasoning_effort = rget(request, "reasoning_effort")
+    creativity = rget(request, "creativity")
+
     orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
-    
+
     if optimize:
         title = "Optimize"
         system_prompt = "chat_response_interpreter.md"
-        schema = None
+        schema=orig_llm_request.output_schema
     elif change_prompt:
         title = "Change"
         system_prompt = "llm_prompt_changer.md"
@@ -5504,8 +5511,8 @@ def action_llm_debug_ask(request, llm_request_id):
     else:
         title = "Debug"
         system_prompt = "chat_evaluator.md"
-        schema = None
-    
+        schema=orig_llm_request.output_schema
+
     resp = system_agent_llm_interface.llm_chat(
         description=f"{title} {orig_llm_request.title}",
         messages=[
@@ -5525,7 +5532,8 @@ def action_llm_debug_ask(request, llm_request_id):
                 or Business.get_erie_iron_business()
         ),
         reasoning_effort=LlmReasoningEffort(reasoning_effort),
-        verbosity=LlmVerbosity(verbosity)
+        verbosity=LlmVerbosity(verbosity),
+        creativity=LlmCreativity(creativity)
     )
     
     if change_prompt:
@@ -5577,20 +5585,10 @@ def view_llm_request(request, llm_request_id):
                     )
                 )
     
-    model_choices = []
-    for m in LlmModel:
-        if m == LlmModel.OPENAI_GPT_5_1:
-            for verbosity in LlmVerbosity:
-                for reasoning_effort in LlmReasoningEffort:
-                    model_choices.append({
-                        "label": f"{m.label()} - {verbosity.label()} Verbosity, {reasoning_effort.label()} Reasoning",
-                        "value": f"{m.value};{verbosity.value};{reasoning_effort.value}"
-                    })
-        else:
-            model_choices.append({
-                "label": m.label(),
-                "value": f"{m.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
-            })
+    model_choices = [{"label": m.label(), "value": m.value} for m in LlmModel]
+    verbosity_choices = [{"label": v.label(), "value": v.value} for v in LlmVerbosity]
+    reasoning_effort_choices = [{"label": r.label(), "value": r.value} for r in LlmReasoningEffort]
+    creativity_choices = [{"label": c.label(), "value": c.value} for c in LlmCreativity]
     
     llm_requests = list(iteration.llmrequest_set.order_by("-timestamp")) if iteration else []
     
@@ -5605,7 +5603,13 @@ def view_llm_request(request, llm_request_id):
             "tabs": _build_iteration_tabs(iteration, task, previous_iteration, next_iteration, None, None, llm_requests),
             "llm_request": llm_request,
             "model_choices": model_choices,
-            "model_choice_value": f"{LlmModel.OPENAI_GPT_5_MINI.value};{LlmVerbosity.MEDIUM};{LlmReasoningEffort.MEDIUM}"
+            "model_choice_value": LlmModel.OPENAI_GPT_5_MINI.value,
+            "verbosity_choices": verbosity_choices,
+            "verbosity_choice_value": LlmVerbosity.MEDIUM.value,
+            "reasoning_effort_choices": reasoning_effort_choices,
+            "reasoning_effort_choice_value": LlmReasoningEffort.MEDIUM.value,
+            "creativity_choices": creativity_choices,
+            "creativity_choice_value": LlmCreativity.MEDIUM.value,
         },
         breadcrumbs=breadcrumbs
     )
