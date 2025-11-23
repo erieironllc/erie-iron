@@ -191,11 +191,11 @@ def llm_chat(
         description: str,
         messages: list[LlmMessage],
         tag_entity,
-        model: LlmModel = LlmModel.OPENAI_GPT_5_1,
+        model: LlmModel = LlmModel.OPENAI_GPT_5_MINI,
         output_schema = None,
         reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.LOW,
         verbosity: LlmVerbosity = LlmVerbosity.LOW,
-        creativity: LlmCreativity = None,
+        creativity: LlmCreativity = LlmCreativity.NONE,
         code_response=False
 ) -> LlmResponse:
     input_model = model

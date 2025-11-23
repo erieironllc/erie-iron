@@ -4416,7 +4416,9 @@ def action_add_initiative_from_brief(request, business_id):
         output_schema="initiative--parse_brief.md.schema.json",
         code_response=True,
         tag_entity=business,
-        model=LlmModel.OPENAI_GPT_5_1,
+        model=LlmModel.CLAUDE_4_5,
+        reasoning_effort=LlmReasoningEffort.MEDIUM,
+        creativity=LlmReasoningEffort.NONE,
         verbosity=LlmVerbosity.MEDIUM
     ).json()
     

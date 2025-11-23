@@ -25,7 +25,6 @@ Return a JSON object with four top-level keys:
   "implementation_directive": {
     "objective": "One clear sentence describing what needs to be achieved",
     "high_level_approach": "2-4 sentence strategy for how to accomplish it",
-    "files_likely_affected": ["list", "of", "probable", "file", "paths"],
     "key_constraints": ["constraint1", "constraint2"],
     "success_criteria": "How you'll know it worked"
   },
@@ -117,9 +116,6 @@ The `diagnostic_context` should:
   "implementation_directive": {
     "objective": "Fix SESv2 identity verification test that fails due to missing paginator support in current boto3 version",
     "high_level_approach": "Modify the test to detect paginator capability using can_paginate() and fall back to manual NextToken pagination when the paginator is unavailable. Preserve all existing test assertions and coverage.",
-    "files_likely_affected": [
-      "core/tests/test_task_bug_report_articleparsernew_t57y4lei.py"
-    ],
     "key_constraints": [
       "Do not change test assertions or expected behavior",
       "Must work across boto3/botocore versions",

@@ -16,7 +16,6 @@
       "required": [
         "objective",
         "high_level_approach",
-        "files_likely_affected",
         "key_constraints",
         "success_criteria"
       ],
@@ -24,10 +23,6 @@
       "properties": {
         "objective": { "type": "string" },
         "high_level_approach": { "type": "string" },
-        "files_likely_affected": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
         "key_constraints": {
           "type": "array",
           "items": { "type": "string" }
