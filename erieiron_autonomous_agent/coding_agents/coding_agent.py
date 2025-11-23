@@ -562,6 +562,7 @@ def ensure_lb_alias_record(
          """
     ))
     
+    
     # Wait for ECS service to be stable
     aws_interface.wait_for_ecs_service_stable(
         cluster_name,
@@ -1402,10 +1403,11 @@ def deploy_iteration(
             container_image_tag
         )
     
-    ensure_lb_alias_record(
-        config,
-        app_outputs
-    )
+    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
+        ensure_lb_alias_record(
+            config,
+            app_outputs
+        )
 
 
 def add_rds_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):
