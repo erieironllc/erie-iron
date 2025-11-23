@@ -3,12 +3,14 @@ import os
 import re
 import subprocess
 import textwrap
+import time
+import types
 from pathlib import Path
 from typing import Dict, List
 
-from erieiron_common.enums import LlmModel
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException
+from erieiron_common.enums import LlmModel
 from .base_coder import BaseCoder
 
 
@@ -31,9 +33,9 @@ class GeminiCoder(BaseCoder):
     
     @property
     def default_llm_model(self):
-        return LlmModel.GOOGLE_GEMINI_1_5_PRO
+        return LlmModel.GEMINI_3_0_PRO
     
-    def build_command(self, config: CodingAgentConfig, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
+    def build_command(self, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
         """Build the Gemini CLI command."""
         return [
             "gemini",
@@ -43,18 +45,47 @@ class GeminiCoder(BaseCoder):
             "--include-directories", "."
         ]
     
-    def execute_command(self, command: List[str], config: CodingAgentConfig, prompt_text: str) -> subprocess.CompletedProcess:
-        """Execute the Gemini CLI command."""
-        # Since gemini command uses shell substitution $(cat ...), we need to run it in shell mode
+    def execute_command(self, command: List[str], prompt_text: str) -> subprocess.CompletedProcess:
+        """Execute the Gemini CLI command with real-time streaming."""
+        start_time = time.time()
+        
         gemini_cmd_str = " ".join(command)
-        return subprocess.run(
+        process = subprocess.Popen(
             gemini_cmd_str,
             shell=True,  # Required for $(cat ...) substitution
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            capture_output=True,
-            cwd=str(config.sandbox_root_dir),
-            env=os.environ.copy()
+            cwd=str(self.config.sandbox_root_dir),
+            env=os.environ.copy(),
+            bufsize=1
         )
+
+        # Get stdout path for incremental writing
+        iteration_id = self.config.current_iteration.id
+        stdout_path = self.config.artifacts_dir / f"{iteration_id}_{self.coder_name}_stdout.log"
+        
+        streamed_stdout = []
+        for line in process.stdout:
+            clean = line.rstrip()
+            streamed_stdout.append(clean)
+            self.config.log(f"[gemini-stream] {clean}")
+            
+            # Append streamed output to stdout_path incrementally
+            with stdout_path.open("a", encoding="utf-8") as fp:
+                fp.write(clean + "\n")
+
+        return_code = process.wait()
+        
+        # Build a structure mimicking CompletedProcess output so downstream code still works
+        result = types.SimpleNamespace(
+            stdout="\n".join(streamed_stdout),
+            stderr="",
+            returncode=return_code,
+            args=command
+        )
+        
+        return result
     
     def check_for_api_errors(self, result: subprocess.CompletedProcess) -> None:
         """Check for Gemini-specific API errors."""
@@ -64,21 +95,23 @@ class GeminiCoder(BaseCoder):
             
             # Check for quota/rate limiting errors
             quota_indicators = [
-                "quota", "rate limit", "too many requests", 
+                "quota", "rate limit", "too many requests",
                 "exceeded", "429", "usage limit", "resource exhausted"
             ]
-            if any(indicator.lower() in stderr_content.lower() or 
-                  indicator.lower() in stdout_content.lower() 
-                  for indicator in quota_indicators):
+            if any(
+                    indicator.lower() in stderr_content.lower()
+                    or indicator.lower() in stdout_content.lower()
+                    for indicator in quota_indicators
+            ):
                 raise GeminiQuotaExceededException(
                     f"Gemini CLI hit quota/rate limit: {stderr_content}"
                 )
             
             # Check for other API errors
             api_indicators = ["api error", "authentication", "unauthorized", "forbidden", "invalid api key"]
-            if any(indicator.lower() in stderr_content.lower() or 
-                  indicator.lower() in stdout_content.lower() 
-                  for indicator in api_indicators):
+            if any(indicator.lower() in stderr_content.lower() or
+                   indicator.lower() in stdout_content.lower()
+                   for indicator in api_indicators):
                 raise GeminiApiException(
                     f"Gemini CLI API error: {stderr_content}"
                 )
@@ -86,34 +119,7 @@ class GeminiCoder(BaseCoder):
             raise ExecutionException(
                 f"Gemini CLI exited with code {result.returncode}. Check stdout and stderr for details."
             )
-    
-    def _get_coder_intro(self, config: CodingAgentConfig, plan_path: Path) -> str:
-        """Get Gemini-specific introduction text."""
-        return textwrap.dedent(f"""
-        You are assisting Erie Iron's self-driving coding workflow using Gemini.
-        Work within the repository at {config.sandbox_root_dir}.
-        Follow the approved development plan summarized below and saved at {plan_path}.
-        Consult the relevant engineering standards from the reference prompts.
-        Do not commit or push changes; the orchestrator handles git commits.
-        """)
-    
-    def _get_final_prompt_sections(self, planning_data: dict, plan_path: Path) -> List[str]:
-        """Get Gemini-specific final prompt sections."""
-        return [
-            textwrap.dedent(f"""
-
-            ## Development Plan
-            {json.dumps(planning_data, indent=2)}
-
-            ## Execution Checklist
-            1. Read and understand the full development plan above
-            2. Apply all Erie Iron engineering standards from the reference prompts
-            3. Implement code changes that satisfy the plan and address prior failures
-            4. Scope modifications to planned files unless dependencies require changes
-            5. Never modify read-only paths
-            6. Leave repository with changes ready for review; do not commit
-            """)
-        ]
+   
     
     def extract_usage_stats(self, stdout: str, stderr: str, metadata: dict) -> Dict:
         """Extract token/cost metrics from Gemini CLI output."""
@@ -134,7 +140,7 @@ class GeminiCoder(BaseCoder):
             metrics["total_cost_usd"] = self._estimate_gemini_cost(metrics, config)
         
         return metrics
-
+    
     def _extract_gemini_usage_from_text(self, text: str) -> dict:
         """Extract usage information from Gemini text output."""
         metrics = {}
@@ -166,7 +172,7 @@ class GeminiCoder(BaseCoder):
             metrics.setdefault("total_tokens", metrics["prompt_tokens"] + metrics["completion_tokens"])
         
         return metrics
-
+    
     def _estimate_gemini_cost(self, metrics: dict, config: CodingAgentConfig) -> float | None:
         """Estimate cost from token usage for Gemini."""
         total_tokens = metrics.get("total_tokens")
@@ -175,7 +181,7 @@ class GeminiCoder(BaseCoder):
         
         # Use Gemini 1.5 Pro pricing as default
         from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
-        pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.GOOGLE_GEMINI_1_5_PRO)
+        pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.GEMINI_3_0_PRO)
         if not pricing:
             return None
         

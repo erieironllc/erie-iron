@@ -1,15 +1,14 @@
 import json
-import os
 import re
 import subprocess
 import textwrap
 from pathlib import Path
 from typing import Dict, List
 
-from erieiron_common.enums import LlmModel
-from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException
+from erieiron_common.enums import LlmModel
+from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
 from .base_coder import BaseCoder
 
 
@@ -24,7 +23,7 @@ class CodexCoder(BaseCoder):
     def default_llm_model(self):
         return LlmModel.OPENAI_GPT_5_1
     
-    def build_command(self, config: CodingAgentConfig, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
+    def build_command(self, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
         """Build the Codex CLI command."""
         return [
             "codex",
@@ -32,22 +31,11 @@ class CodexCoder(BaseCoder):
             "--full-auto",
             "--json",
             "--cd",
-            str(config.sandbox_root_dir),
+            str(self.config.sandbox_root_dir),
             "--output-last-message",
             str(artifact_paths["last_message"]),
             "-"
         ]
-    
-    def execute_command(self, command: List[str], config: CodingAgentConfig, prompt_text: str) -> subprocess.CompletedProcess:
-        """Execute the Codex CLI command."""
-        return subprocess.run(
-            command,
-            input=prompt_text,
-            text=True,
-            capture_output=True,
-            cwd=str(config.sandbox_root_dir),
-            env=os.environ.copy()
-        )
     
     def check_for_api_errors(self, result: subprocess.CompletedProcess) -> None:
         """Check for Codex-specific API errors."""
@@ -55,31 +43,6 @@ class CodexCoder(BaseCoder):
             raise ExecutionException(
                 f"Codex CLI exited with code {result.returncode}. Check stdout and stderr for details."
             )
-    
-    def _get_coder_intro(self, config: CodingAgentConfig, plan_path: Path) -> str:
-        """Get Codex-specific introduction text."""
-        return textwrap.dedent(f"""
-        You are the Codex CLI agent assisting Erie Iron's self-driving coding workflow.
-        Operate strictly within the sandboxed repository at {config.sandbox_root_dir}.
-        Follow the approved development plan saved at {plan_path} and summarised below.
-        Before editing a file, consult the relevant engineering standards from the prompts
-        directory (see the Reference Prompts section).
-        Do not commit or push changes; the orchestrator handles git commits.
-        """)
-    
-    def _get_final_prompt_sections(self, planning_data: dict, plan_path: Path) -> List[str]:
-        """Get Codex-specific final prompt sections."""
-        return [
-            textwrap.dedent(f"""
-
-            ## Execution Checklist
-            1. Read the full development plan at {plan_path}.
-            2. Adhere to all Erie Iron prompts listed above; load additional file-specific prompts (e.g. YAML, Python, SQL) as needed.
-            3. Implement code changes that satisfy the plan and address prior failures. Keep modifications scoped to the planned files unless you uncover a necessary dependency.
-            4. No read-only files modified
-            5. Leave the repository with changes ready for review; do not commit.
-            """)
-        ]
     
     def extract_usage_stats(self, stdout: str, stderr: str, metadata: dict) -> Dict:
         """Extract token/cost metrics from Codex execution output."""
@@ -126,7 +89,7 @@ class CodexCoder(BaseCoder):
             metrics["total_cost_usd"] = self._estimate_codex_cost(metrics, config)
         
         return metrics
-
+    
     def _extract_codex_usage_from_text(self, text: str) -> tuple[dict, dict]:
         """Extract usage metrics from text output."""
         metrics: dict[str, float | int | None] = {}
@@ -144,9 +107,10 @@ class CodexCoder(BaseCoder):
         regex_metrics = self._extract_codex_usage_with_regex(text)
         metrics.update({k: v for k, v in regex_metrics.items() if v is not None})
         return metrics, token_info
-
+    
     def _extract_codex_usage_from_json(self, text: str) -> dict:
         """Extract usage from JSON output."""
+        
         def try_parse_json(candidate: str):
             candidate = candidate.strip()
             if not candidate:
@@ -181,7 +145,7 @@ class CodexCoder(BaseCoder):
                 candidates.append(stripped)
             elif stripped.startswith("{"):
                 json_block = [stripped]
-                for j in range(i+1, len(lines)):
+                for j in range(i + 1, len(lines)):
                     json_block.append(lines[j])
                     if lines[j].strip().endswith("}"):
                         candidates.append("\n".join(json_block))
@@ -191,7 +155,7 @@ class CodexCoder(BaseCoder):
             parsed = try_parse_json(candidate)
             if not parsed:
                 continue
-                
+            
             usage = find_usage(parsed)
             if not usage:
                 continue
@@ -221,7 +185,7 @@ class CodexCoder(BaseCoder):
                 break
         
         return metrics
-
+    
     def _extract_codex_usage_with_regex(self, text: str) -> dict:
         """Extract usage with regex patterns."""
         metrics: dict[str, float | int | None] = {}
@@ -254,7 +218,7 @@ class CodexCoder(BaseCoder):
                 pass
         
         return metrics
-
+    
     def _estimate_codex_cost(self, metrics: dict, config: CodingAgentConfig) -> float | None:
         """Estimate cost from token usage."""
         total_tokens = metrics.get("total_tokens")

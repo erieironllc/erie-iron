@@ -1,29 +1,34 @@
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
-from collections import defaultdict
 
-from erieiron_common.enums import LlmModel
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
-    CodingAgentConfig, 
+    CodingAgentConfig,
     TASK_DESC_CODE_WRITING
 )
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import (
-    BadPlan, 
+    BadPlan,
     CodeReviewException
 )
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration
+from erieiron_common.enums import LlmModel
 
 
 class IndividualFileCoder:
     """File-by-file coding implementation that works through planning data."""
     
+    def __init__(self, config: CodingAgentConfig, planning_data: dict):
+        super().__init__()
+        self.config = config
+        self.planning_data = planning_data
+    
     @property
     def coder_name(self) -> str:
         return "individual"
     
-    def execute_coding(self, config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Path], Dict]:
+    def execute_coding(self) -> Tuple[List[Path], Dict]:
         """Execute file-by-file coding and return (changed_paths, execution_metadata)."""
-        config.current_iteration.codeversion_set.all().delete()
+        self.config.current_iteration.codeversion_set.all().delete()
         
         cr_exception = None
         failed_code_reviews = []
@@ -39,24 +44,24 @@ class IndividualFileCoder:
             
             try:
                 # Implement code changes file by file
-                self._implement_code_changes(config, planning_data, cr_exception)
+                self._implement_code_changes(cr_exception)
                 
                 # Collect changed files
-                changed_paths = self._collect_changed_files(config, planning_data)
+                changed_paths = self._collect_changed_files()
                 metadata["files_processed"] = len(changed_paths)
                 
                 # Perform code review if no previous errors
-                if not config.previous_iteration.has_error():
-                    self._perform_code_review(config, planning_data)
+                if not self.config.previous_iteration.has_error():
+                    self._perform_code_review()
                 
                 # If we get here, both implementation and review succeeded
                 break
-                
+            
             except CodeReviewException as code_review_exception:
                 from erieiron_autonomous_agent.coding_agents.coding_agent import extract_lessons
                 
                 extract_lessons(
-                    config,
+                    self.config,
                     TASK_DESC_CODE_WRITING,
                     code_review_exception.review_data
                 )
@@ -80,10 +85,8 @@ class IndividualFileCoder:
         return changed_paths, metadata
     
     def _implement_code_changes(
-        self, 
-        config: CodingAgentConfig,
-        planning_data: dict,
-        code_review_exception: CodeReviewException
+            self,
+            code_review_exception: CodeReviewException
     ) -> SelfDrivingTaskIteration:
         """Implement code changes file by file based on planning data."""
         from erieiron_autonomous_agent.coding_agents.coding_agent import (
@@ -95,13 +98,13 @@ class IndividualFileCoder:
         import traceback
         import json
         
-        current_iteration = config.current_iteration
-        previous_iteration = config.previous_iteration
-        iteration_to_modify = config.iteration_to_modify
-        code_file_instructions = planning_data.get("code_files", [])
+        current_iteration = self.config.current_iteration
+        previous_iteration = self.config.previous_iteration
+        iteration_to_modify = self.config.iteration_to_modify
+        code_file_instructions = self.planning_data.get("code_files", [])
         
         if not code_file_instructions:
-            raise BadPlan("no code files found", planning_data)
+            raise BadPlan("no code files found", self.planning_data)
         
         if code_review_exception:
             code_review_file_blockers, code_review_file_warnings = code_review_exception.get_issue_dicts()
@@ -110,25 +113,25 @@ class IndividualFileCoder:
         
         # Process requirements.txt first
         code_file_instructions = (
-            [cfi for cfi in code_file_instructions if cfi.get("code_file_path") == "requirements.txt"]
-            +
-            [cfi for cfi in code_file_instructions if cfi.get("code_file_path") != "requirements.txt"]
+                [cfi for cfi in code_file_instructions if cfi.get("code_file_path") == "requirements.txt"]
+                +
+                [cfi for cfi in code_file_instructions if cfi.get("code_file_path") != "requirements.txt"]
         )
         
         if previous_iteration and (previous_iteration != iteration_to_modify):
-            roll_back_reason = planning_data.get("rollback_reason")
+            roll_back_reason = self.planning_data.get("rollback_reason")
         else:
             roll_back_reason = None
         
-        requirements_txt = CodeFile.get(config.business, "requirements.txt").get_latest_version().code
+        requirements_txt = CodeFile.get(self.config.business, "requirements.txt").get_latest_version().code
         
         for cfi in code_file_instructions:
             code_file_path_str: str = cfi.get("code_file_path")
             if code_file_path_str.startswith("/"):
-                raise BadPlan(f"invalid file path: {code_file_path_str} - code file paths are forbidden from starting with a slash", planning_data)
+                raise BadPlan(f"invalid file path: {code_file_path_str} - code file paths are forbidden from starting with a slash", self.planning_data)
             
-            if code_file_path_str.startswith(str(config.sandbox_root_dir)):
-                code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
+            if code_file_path_str.startswith(str(self.config.sandbox_root_dir)):
+                code_file_path_str = code_file_path_str[len(str(self.config.sandbox_root_dir)) + 1:]
             
             blocking_issues = code_review_file_blockers[code_file_path_str]
             if code_review_exception and not blocking_issues:
@@ -137,9 +140,9 @@ class IndividualFileCoder:
             
             non_blocking_issues = code_review_file_warnings[code_file_path_str]
             
-            code_file_path: Path = config.sandbox_root_dir / code_file_path_str
+            code_file_path: Path = self.config.sandbox_root_dir / code_file_path_str
             if not code_file_path:
-                raise BadPlan(f"missing code file name: {json.dumps(cfi)}", planning_data)
+                raise BadPlan(f"missing code file name: {json.dumps(cfi)}", self.planning_data)
             
             if not code_file_path.exists():
                 code_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +155,7 @@ class IndividualFileCoder:
             dsl_instructions = cfi.get("dsl_instructions", [])
             
             if not (instructions or dsl_instructions):
-                config.log(f"no modifications for {code_file_path}")
+                self.config.log(f"no modifications for {code_file_path}")
                 code_file.update(current_iteration, code_version_to_modify.code)
             else:
                 previous_exception = None
@@ -161,7 +164,7 @@ class IndividualFileCoder:
                 for i in range(3):
                     try:
                         code_str = write_code_file(
-                            config=config,
+                            config=self.config,
                             code_version_to_modify=code_version_to_modify,
                             code_file_data=cfi,
                             requirements_txt=requirements_txt,
@@ -173,10 +176,10 @@ class IndividualFileCoder:
                         
                         previous_exception = None
                         break
-                        
+                    
                     except CodeCompilationError as e:
                         extract_lessons(
-                            config,
+                            self.config,
                             TASK_DESC_CODE_WRITING,
                             f"""
 the code written for {code_version_to_modify.code_file.file_path}:
@@ -200,7 +203,7 @@ resulted in this validation error
                 if previous_exception:
                     # Validation failed three times. Keep going, if it fails in deployment or execution 
                     # we'll have another chances at the feedback loop
-                    config.log(previous_exception)
+                    self.config.log(previous_exception)
                 
                 if code_str:
                     code_file.update(
@@ -211,10 +214,10 @@ resulted in this validation error
                     if code_file_path_str == "requirements.txt":
                         requirements_txt = code_str
         
-        config.git.add_files()
+        self.config.git.add_files()
         return current_iteration
     
-    def _perform_code_review(self, config: CodingAgentConfig, planning_data: dict) -> None:
+    def _perform_code_review(self) -> None:
         """Perform code review on the implemented changes."""
         from erieiron_autonomous_agent.coding_agents.coding_agent import (
             get_architecture_docs,
@@ -227,21 +230,21 @@ resulted in this validation error
         from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
         from erieiron_common.llm_apis.llm_interface import LlmMessage
         
-        current_iteration = config.current_iteration
-        iteration_to_modify = config.iteration_to_modify
-        task = config.task
+        current_iteration = self.config.current_iteration
+        iteration_to_modify = self.config.iteration_to_modify
+        task = self.config.task
         
         messages = [
             get_sys_prompt([
                 "codereviewer.md",
                 "common--credentials_architecture_tofu.md"
             ]),
-            get_architecture_docs(config.initiative),
-            get_tombstone_message(config),
-            get_file_structure_msg(config.sandbox_root_dir) if not iteration_to_modify.has_error() else [],
-            get_previous_iteration_summaries_msg(config),
-            get_lessons_msg("Relevant past lessons", config),
-            get_guidance_msg(config),
+            get_architecture_docs(self.config.initiative),
+            get_tombstone_message(self.config),
+            get_file_structure_msg(self.config.sandbox_root_dir) if not iteration_to_modify.has_error() else [],
+            get_previous_iteration_summaries_msg(self.config),
+            get_lessons_msg("Relevant past lessons", self.config),
+            get_guidance_msg(self.config),
             LlmMessage.user_from_data(
                 "Code Review Input: Proposed Code Changes for Current Iteration",
                 [
@@ -266,11 +269,11 @@ resulted in this validation error
         code_review_data = llm_chat(
             "Perform Code Review",
             messages,
-            tag_entity=config.current_iteration,
+            tag_entity=self.config.current_iteration,
             output_schema="codereviewer.md.schema.json"
         ).json()
         
-        config.log(code_review_data)
+        self.config.log(code_review_data)
         
         blocking_issues = code_review_data.get("blocking_issues", [])
         non_blocking_warnings = code_review_data.get("non_blocking_warnings", [])
@@ -278,19 +281,19 @@ resulted in this validation error
         if blocking_issues:
             raise CodeReviewException(code_review_data)
         elif non_blocking_warnings:
-            config.log(non_blocking_warnings)
+            self.config.log(non_blocking_warnings)
     
-    def _collect_changed_files(self, config: CodingAgentConfig, planning_data: dict) -> List[Path]:
+    def _collect_changed_files(self) -> List[Path]:
         """Collect the list of files that were changed during this iteration."""
-        code_file_instructions = planning_data.get("code_files", [])
+        code_file_instructions = self.planning_data.get("code_files", [])
         changed_paths = []
         
         for cfi in code_file_instructions:
             code_file_path_str = cfi.get("code_file_path")
-            if code_file_path_str.startswith(str(config.sandbox_root_dir)):
-                code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
+            if code_file_path_str.startswith(str(self.config.sandbox_root_dir)):
+                code_file_path_str = code_file_path_str[len(str(self.config.sandbox_root_dir)) + 1:]
             
-            code_file_path = config.sandbox_root_dir / code_file_path_str
+            code_file_path = self.config.sandbox_root_dir / code_file_path_str
             if code_file_path.exists():
                 changed_paths.append(code_file_path)
         

@@ -1,13 +1,11 @@
 import json
-import os
 import subprocess
-import textwrap
 from pathlib import Path
 from typing import Dict, List
 
-from erieiron_common.enums import LlmModel
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException
+from erieiron_common.enums import LlmModel
 from .base_coder import BaseCoder
 
 
@@ -30,32 +28,18 @@ class ClaudeCoder(BaseCoder):
     
     @property
     def default_llm_model(self):
-        return LlmModel.CLAUDE_SONNET_3_5
+        return LlmModel.CLAUDE_4_5
     
-    def build_command(self, config: CodingAgentConfig, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
+    def build_command(self, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
         """Build the Claude Code CLI command."""
         return [
             "claude",
-            "--headless",
-            "--auto-approve",
-            "--working-directory",
-            str(config.sandbox_root_dir),
+            "-p",
+            "--verbose",
+            "--dangerously-skip-permissions",
             "--output-format",
-            "json",
-            "--session-file",
-            str(artifact_paths["session"]),
-            str(prompt_path)
+            "stream-json"
         ]
-    
-    def execute_command(self, command: List[str], config: CodingAgentConfig, prompt_text: str) -> subprocess.CompletedProcess:
-        """Execute the Claude Code CLI command."""
-        return subprocess.run(
-            command,
-            text=True,
-            capture_output=True,
-            cwd=str(config.sandbox_root_dir),
-            env=os.environ.copy()
-        )
     
     def check_for_api_errors(self, result: subprocess.CompletedProcess) -> None:
         """Check for Claude-specific API errors."""
@@ -65,21 +49,23 @@ class ClaudeCoder(BaseCoder):
             
             # Check for quota/rate limiting errors
             quota_indicators = [
-                "quota", "rate limit", "too many requests", 
+                "quota", "rate limit", "too many requests",
                 "exceeded", "429", "usage limit"
             ]
-            if any(indicator.lower() in stderr_content.lower() or 
-                  indicator.lower() in stdout_content.lower() 
-                  for indicator in quota_indicators):
+            if any(
+                    indicator.lower() in stderr_content.lower()
+                    or indicator.lower() in stdout_content.lower()
+                    for indicator in quota_indicators
+            ):
                 raise QuotaExceededException(
                     f"Claude Code CLI hit quota/rate limit: {stderr_content}"
                 )
             
             # Check for other API errors
             api_indicators = ["api error", "authentication", "unauthorized", "forbidden"]
-            if any(indicator.lower() in stderr_content.lower() or 
-                  indicator.lower() in stdout_content.lower() 
-                  for indicator in api_indicators):
+            if any(indicator.lower() in stderr_content.lower() or
+                   indicator.lower() in stdout_content.lower()
+                   for indicator in api_indicators):
                 raise ClaudeApiException(
                     f"Claude Code CLI API error: {stderr_content}"
                 )
@@ -87,34 +73,6 @@ class ClaudeCoder(BaseCoder):
             raise ExecutionException(
                 f"Claude Code CLI exited with code {result.returncode}. Check stdout and stderr for details."
             )
-    
-    def _get_coder_intro(self, config: CodingAgentConfig, plan_path: Path) -> str:
-        """Get Claude-specific introduction text."""
-        return textwrap.dedent(f"""
-        You are assisting Erie Iron's self-driving coding workflow using Claude Code.
-        Work within the repository at {config.sandbox_root_dir}.
-        Follow the approved development plan summarized below and saved at {plan_path}.
-        Consult the relevant engineering standards from the reference prompts.
-        Do not commit or push changes; the orchestrator handles git commits.
-        """)
-    
-    def _get_final_prompt_sections(self, planning_data: dict, plan_path: Path) -> List[str]:
-        """Get Claude-specific final prompt sections."""
-        return [
-            textwrap.dedent(f"""
-
-            ## Development Plan
-            {json.dumps(planning_data, indent=2)}
-
-            ## Execution Checklist
-            1. Read and understand the full development plan above
-            2. Apply all Erie Iron engineering standards from the reference prompts
-            3. Implement code changes that satisfy the plan and address prior failures
-            4. Scope modifications to planned files unless dependencies require changes
-            5. Never modify read-only paths
-            6. Leave repository with changes ready for review; do not commit
-            """)
-        ]
     
     def extract_usage_stats(self, stdout: str, stderr: str, metadata: dict) -> Dict:
         """Extract token/cost metrics from Claude Code CLI output."""
@@ -150,7 +108,7 @@ class ClaudeCoder(BaseCoder):
             metrics["total_cost_usd"] = self._estimate_claude_cost(metrics, config)
         
         return metrics
-
+    
     def _parse_claude_usage(self, usage: dict) -> dict:
         """Parse usage data from Claude session JSON."""
         metrics = {}
@@ -178,7 +136,7 @@ class ClaudeCoder(BaseCoder):
             metrics["total_cost_usd"] = usage["total_cost"]
         
         return metrics
-
+    
     def _extract_claude_usage_from_text(self, text: str) -> dict:
         """Extract usage information from Claude text output."""
         import re
@@ -242,7 +200,7 @@ class ClaudeCoder(BaseCoder):
                 metrics.setdefault("total_tokens", metrics["prompt_tokens"] + metrics["completion_tokens"])
         
         return metrics
-
+    
     def _estimate_claude_cost(self, metrics: dict, config: CodingAgentConfig) -> float | None:
         """Estimate cost from token usage for Claude."""
         total_tokens = metrics.get("total_tokens")
@@ -251,7 +209,7 @@ class ClaudeCoder(BaseCoder):
         
         # Use Claude Sonnet 3.5 pricing as default
         from erieiron_common.llm_apis.llm_constants import MODEL_PRICE_USD_PER_MILLION_TOKENS
-        pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.CLAUDE_SONNET_3_5)
+        pricing = MODEL_PRICE_USD_PER_MILLION_TOKENS.get(LlmModel.CLAUDE_4_5)
         if not pricing:
             return None
         

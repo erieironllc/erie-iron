@@ -31,16 +31,7 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
-from erieiron_autonomous_agent.models import (
-    Business,
-    BusinessKPI,
-    LlmRequest,
-    AgentLesson,
-    CodeFile,
-    CodeVersion,
-    InfrastructureStack,
-    CloudAccount,
-)
+from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder
@@ -1065,7 +1056,7 @@ def view_portfolio(request, tab: str = 'portfolio'):
 
 def view_portfolio_with_sub_tab(request, tab, sub_tab):
     from erieiron_ui import tab_defitions
-
+    
     erieiron_business = Business.get_erie_iron_business()
     tab = (tab or 'portfolio').lower()
     sub_tab = (sub_tab or '').lower()
@@ -1580,10 +1571,10 @@ def _tab_context_codefiles(business: Business) -> dict:
 
 def _tab_available_business_plan_consolidated(business: Business) -> bool:
     return (
-        _tab_available_business_plan(business) or
-        _tab_available_analysis(business) or
-        _tab_available_second_opinions(business) or
-        _tab_available_human_work(business)
+            _tab_available_business_plan(business) or
+            _tab_available_analysis(business) or
+            _tab_available_second_opinions(business) or
+            _tab_available_human_work(business)
     )
 
 
@@ -1613,11 +1604,11 @@ def _tab_context_business_plan_consolidated(business: Business, active_sub_tab=N
 
 def _tab_available_implementation_consolidated(business: Business) -> bool:
     return (
-        _tab_available_architecture(business) or
-        True or  # design-spec is always available
-        _tab_available_infrastructure_stacks(business) or
-        _tab_available_cloud_accounts(business) or
-        _tab_available_codefiles(business)
+            _tab_available_architecture(business) or
+            True or  # design-spec is always available
+            _tab_available_infrastructure_stacks(business) or
+            _tab_available_cloud_accounts(business) or
+            _tab_available_codefiles(business)
     )
 
 
@@ -1648,8 +1639,8 @@ def _tab_context_implementation_consolidated(business: Business, active_sub_tab=
 
 def _tab_available_llmrequests_consolidated(business: Business) -> bool:
     return (
-        _tab_available_llmrequests(business) or
-        _tab_available_llm_spend(business)
+            _tab_available_llmrequests(business) or
+            _tab_available_llm_spend(business)
     )
 
 
@@ -1681,8 +1672,8 @@ def _tab_context_llmrequests_consolidated(business: Business, active_sub_tab=Non
 
 def _initiative_tab_available_llmrequests_consolidated(initiative) -> bool:
     return (
-        _initiative_tab_available_llmrequests(initiative) or
-        _initiative_tab_available_llm_spend(initiative)
+            _initiative_tab_available_llmrequests(initiative) or
+            _initiative_tab_available_llm_spend(initiative)
     )
 
 
@@ -1714,8 +1705,8 @@ def _initiative_tab_context_llmrequests_consolidated(initiative, active_sub_tab=
 
 def _task_tab_available_llmrequests_consolidated(task) -> bool:
     return (
-        _task_tab_available_llmrequests(task) or
-        _task_tab_available_llm_spend(task)
+            _task_tab_available_llmrequests(task, task.initiative.business) or
+            _task_tab_available_llm_spend(task, task.initiative.business, task.selfdrivingtask)
     )
 
 
@@ -1746,13 +1737,13 @@ def _task_tab_context_llmrequests_consolidated(task, active_sub_tab=None, reques
 
 
 def _portfolio_tab_available_llmrequests(portfolio=None) -> bool:
-    from erieiron_autonomous_agent.models import LlmRequest, Business
+    from erieiron_autonomous_agent.models import Business
     business = Business.get_erie_iron_business()
     return business.llmrequest_set.exists()
 
 
 def _portfolio_tab_context_llmrequests(portfolio=None) -> dict:
-    from erieiron_autonomous_agent.models import LlmRequest, Business
+    from erieiron_autonomous_agent.models import Business
     business = Business.get_erie_iron_business()
     llmrequests = business.llmrequest_set.all().order_by('-timestamp')[:100]
     return {"llmrequests": llmrequests}
@@ -1762,8 +1753,8 @@ def _portfolio_tab_available_llmrequests_consolidated(portfolio=None) -> bool:
     from erieiron_autonomous_agent.models import Business
     business = Business.get_erie_iron_business()
     return (
-        _portfolio_tab_available_llmrequests(portfolio) or
-        _portfolio_tab_available_llm_spend(business)
+            _portfolio_tab_available_llmrequests(portfolio) or
+            _portfolio_tab_available_llm_spend(business)
     )
 
 
@@ -3099,7 +3090,7 @@ def _task_tab_context_processes(task, business, self_driving_task) -> dict:
     return {"running_processes": running_processes}
 
 
-def _task_tab_available_llmrequests(task, business, self_driving_task) -> bool:
+def _task_tab_available_llmrequests(task, business=None, self_driving_task=None) -> bool:
     return LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).exists()
 
 
@@ -3544,7 +3535,7 @@ def view_task_with_sub_tab(request, task_id, tab, sub_tab):
     if not sub_tab_found:
         raise Http404
     
-    tabs = _build_task_tabs(task)
+    tabs = _build_task_tabs(task, task.initiative.business, task.selfdrivingtask)
     
     is_available = next((t for t in tabs if t['slug'] == tab), None)
     if not is_available or not is_available['available']:
@@ -3569,7 +3560,7 @@ def view_task_with_sub_tab(request, task_id, tab, sub_tab):
     breadcrumbs = [
         (reverse(view_portfolio), "Portfolio"),
         (reverse('view_initiative', args=[task.initiative.id]), task.initiative.title),
-        (reverse('view_task', args=[task.id]), task.title),
+        (reverse('view_task', args=[task.id]), task.get_name()),
         (reverse('view_task_tab', args=[tab, task.id]), tab_definition["label"]),
         (reverse('view_task_tab_sub', args=[tab, sub_tab, task.id]), sub_tab_found["label"])
     ]
@@ -5818,7 +5809,7 @@ def api_pubsub_publish(request):
             'success': True,
             'message': f'Message {message_type} published successfully'
         })
-        
+    
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON payload'}, status=400)
     except Exception as e:

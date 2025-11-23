@@ -1,27 +1,39 @@
 import copy
 import json
+import logging
+import os
+import subprocess
 import textwrap
 import time
+import types
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple, List, Optional
 from pathlib import Path
+from subprocess import CompletedProcess
+from typing import Dict, Tuple, List
 
 from django.db import transaction
 
-from erieiron_common import common
-from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
-    CodingAgentConfig, 
+    CodingAgentConfig,
     TASK_DESC_CODE_WRITING
 )
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
 from erieiron_autonomous_agent.models import (
     LlmRequest,
-    SelfDrivingTaskIteration,
+    SelfDrivingTaskIteration, CodeFile,
 )
+from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
+from erieiron_common import common
+from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType
 
 
 class BaseCoder(ABC):
     """Abstract base class for coding implementations with common functionality."""
+    
+    def __init__(self, config: CodingAgentConfig, planning_data):
+        super().__init__()
+        self.config = config
+        self.planning_data = planning_data
     
     @property
     @abstractmethod
@@ -30,23 +42,43 @@ class BaseCoder(ABC):
         pass
     
     @property
+    def input_as_process_input(self):
+        return False
+
+    @property
     @abstractmethod
     def default_llm_model(self):
         """Return the default LLM model for this coder."""
         pass
     
     @abstractmethod
-    def build_command(self, config: CodingAgentConfig, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
+    def build_command(self, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
         """Build the CLI command for this coder."""
         pass
     
-    @abstractmethod
-    def execute_command(self, command: List[str], config: CodingAgentConfig, prompt_text: str) -> 'subprocess.CompletedProcess':
-        """Execute the CLI command and return the result."""
-        pass
+    def execute_command(self, command: List[str], prompt_text: str) -> 'CompletedProcess':
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(self.config.sandbox_root_dir),
+            env=os.environ.copy(),
+            bufsize=1,
+            text=True
+        )
+        stdout, stderr = proc.communicate(input=prompt_text)
+        
+        return types.SimpleNamespace(
+            stdout=stdout,
+            stderr=stderr,
+            returncode=proc.returncode,
+            args=command
+        )
+        
     
     @abstractmethod
-    def check_for_api_errors(self, result: 'subprocess.CompletedProcess') -> None:
+    def check_for_api_errors(self, result: 'CompletedProcess') -> None:
         """Check for API-specific errors and raise appropriate exceptions."""
         pass
     
@@ -55,69 +87,67 @@ class BaseCoder(ABC):
         """Extract token/cost metrics from execution output."""
         pass
     
-    def execute_coding(self, config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Path], Dict]:
+    def execute_coding(self) -> Tuple[List[Path], Dict]:
         """Execute coding and return (changed_paths, execution_metadata)."""
-        from erieiron_autonomous_agent.coding_agents.coding_agent import (
-            get_file_checksum_map,
-            _collect_repo_changed_files, 
-            _persist_codex_code_versions,
-            validate_all_changed_files,
-            _normalize_relative_path,
-            get_lessons,
-            extract_lessons
-        )
-        
-        config.current_iteration.codeversion_set.all().delete()
-        config.log(f"Starting {self.coder_name.title()} CLI planning/execution pipeline")
+        self.config.current_iteration.codeversion_set.all().delete()
+        self.config.log(f"Starting {self.coder_name.title()} CLI planning/execution pipeline")
         
         # Set up artifact paths
-        artifact_paths = self._setup_artifact_paths(config)
+        artifact_paths = self._setup_artifact_paths()
         
         try:
             # Build common data structures
-            readonly_entries, readonly_lines = self._build_readonly_entries(config)
-            code_file_paths, code_file_summary_lines = self._build_code_file_entries(planning_data)
-            business_context = self._extract_business_context(config)
+            readonly_entries, readonly_lines = self._build_readonly_entries()
+            code_file_paths, code_file_summary_lines = self._build_code_file_entries()
+            business_context = self._extract_business_context()
             
             # Save plan
-            self._save_plan(artifact_paths["plan"], planning_data)
+            self._save_plan(artifact_paths["plan"])
             
             # Build prompt
-            prompt_text = self._build_prompt(config, planning_data, business_context, readonly_lines, code_file_summary_lines, artifact_paths["plan"])
+            prompt_text = self._build_prompt(
+                business_context,
+                readonly_lines,
+                code_file_summary_lines,
+                artifact_paths["plan"]
+            )
             artifact_paths["prompt"].write_text(prompt_text, encoding="utf-8")
             
             # Update planning metadata
-            augmented_plan = self._create_augmented_plan(planning_data, artifact_paths, code_file_paths)
-            self._update_planning_json(config, augmented_plan)
+            augmented_plan = self._create_augmented_plan(artifact_paths, code_file_paths)
+            self._update_planning_json(augmented_plan)
             
             # Build command
-            command = self.build_command(config, artifact_paths["prompt"], artifact_paths)
+            command = self.build_command(artifact_paths["prompt"], artifact_paths)
             
             # Execute with validation loop
             changed_paths, metadata = self._execute_with_validation_loop(
-                config, planning_data, command, prompt_text, artifact_paths, 
-                readonly_entries, business_context
+                command,
+                prompt_text,
+                artifact_paths,
+                readonly_entries,
+                business_context
             )
             
             # Persist code versions
-            persisted_code_files = _persist_codex_code_versions(config, changed_paths, planning_data)
+            persisted_code_files = self._persist_codex_code_versions(changed_paths)
             
             # Update final metadata
             metadata["persisted_code_files"] = persisted_code_files
-            self._update_final_metadata(config, metadata)
+            self._update_final_metadata(metadata)
             
-            config.log(f"Stored code versions for {self.coder_name.title()}-modified files", persisted_code_files)
-            config.git.add_files()
+            self.config.log(f"Stored code versions for {self.coder_name.title()}-modified files", persisted_code_files)
+            self.config.git.add_files()
             
             return changed_paths, metadata
-            
+        
         finally:
             self._cleanup_artifacts(artifact_paths)
     
-    def _setup_artifact_paths(self, config: CodingAgentConfig) -> Dict[str, Path]:
+    def _setup_artifact_paths(self) -> Dict[str, Path]:
         """Set up artifact file paths."""
-        iteration_id = config.current_iteration.id
-        artifacts_dir = config.artifacts_dir
+        iteration_id = self.config.current_iteration.id
+        artifacts_dir = self.config.artifacts_dir
         
         paths = {
             "plan": artifacts_dir / f"{iteration_id}_plan.json",
@@ -134,9 +164,9 @@ class BaseCoder(ABC):
         
         return paths
     
-    def _build_readonly_entries(self, config: CodingAgentConfig) -> Tuple[List[Dict], List[str]]:
+    def _build_readonly_entries(self) -> Tuple[List[Dict], List[str]]:
         """Build read-only entries and formatted lines."""
-        readonly_entries = config.self_driving_task.get_readonly_files()
+        readonly_entries = self.config.self_driving_task.get_readonly_files()
         readonly_lines = []
         
         for entry in readonly_entries:
@@ -154,9 +184,9 @@ class BaseCoder(ABC):
         
         return readonly_entries, readonly_lines
     
-    def _build_code_file_entries(self, planning_data: dict) -> Tuple[List[str], List[str]]:
+    def _build_code_file_entries(self) -> Tuple[List[str], List[str]]:
         """Build code file entries and summary lines."""
-        code_file_entries = common.ensure_list(planning_data.get("code_files"))
+        code_file_entries = common.ensure_list(self.planning_data.get("code_files"))
         code_file_paths = [
             entry.get("code_file_path")
             for entry in code_file_entries
@@ -165,20 +195,25 @@ class BaseCoder(ABC):
         code_file_summary_lines = [f"- {path}" for path in code_file_paths]
         return code_file_paths, code_file_summary_lines
     
-    def _extract_business_context(self, config: CodingAgentConfig) -> Dict:
+    def _extract_business_context(self) -> Dict:
         """Extract business, initiative, and task context."""
         return {
-            "business": config.business,
-            "initiative": config.initiative,
-            "task": config.task
+            "business": self.config.business,
+            "initiative": self.config.initiative,
+            "task": self.config.task
         }
     
-    def _save_plan(self, plan_path: Path, planning_data: dict) -> None:
+    def _save_plan(self, plan_path: Path) -> None:
         """Save planning data to JSON file."""
-        plan_path.write_text(json.dumps(planning_data, indent=2, default=str), encoding="utf-8")
+        plan_path.write_text(json.dumps(self.planning_data, indent=2, default=str), encoding="utf-8")
     
-    def _build_prompt(self, config: CodingAgentConfig, planning_data: dict, business_context: Dict, 
-                     readonly_lines: List[str], code_file_summary_lines: List[str], plan_path: Path) -> str:
+    def _build_prompt(
+            self,
+            business_context: Dict,
+            readonly_lines: List[str],
+            code_file_summary_lines: List[str],
+            plan_path: Path
+    ) -> str:
         """Build the complete prompt for the coder."""
         from erieiron_autonomous_agent.coding_agents.coding_agent import get_lessons
         
@@ -187,21 +222,32 @@ class BaseCoder(ABC):
         task = business_context["task"]
         
         # Reference prompts (common across all coders)
-        reference_prompts = [
+        reference_prompts = {
             "prompts/common--general_coding_rules.md",
-            "prompts/common--agent_provided_functionality_tofu.md",
-            "prompts/common--infrastructure_rules_tofu.md",
-            "prompts/common--credentials_architecture_tofu.md",
-            "prompts/codewriter--common.md",
-            "prompts/codewriter--python_coder.md",
-            "prompts/codewriter--lambda_coder.md",
-            "prompts/codewriter--aws_cloudformation_coder_tofu.md",
-            "prompts/codewriter--requirements.txt.md",
-        ]
+            "prompts/codewriter--common.md"
+        }
+        
+        has_frontend = False
+        for f in self.planning_data.get("code_files"):
+            f.pop("code_writing_model", None)
+            p = str(f.get("code_file_path") )
+            if p.endswith(".py"):
+                reference_prompts.add("prompts/codewriter--python_coder.md")
+            if "lambda" in p:
+                reference_prompts.add("prompts/codewriter--lambda_coder.md")
+            if "requirements.txt" in p:
+                reference_prompts.add("prompts/codewriter--requirements.txt.md")
+            if p.endswith(".tf"):
+                reference_prompts.add("prompts/common--agent_provided_functionality_tofu.md")
+                reference_prompts.add("prompts/common--infrastructure_rules_tofu.md")
+                reference_prompts.add("prompts/common--credentials_architecture_tofu.md")
+                reference_prompts.add("prompts/codewriter--aws_cloudformation_coder_tofu.md")
+            if any(p.endswith(s) for s in [".html", ".htm", ".css", ".js", ".scss"]):
+                has_frontend = True
         
         # Build prompt parts
         prompt_parts = [
-            self._get_coder_intro(config, plan_path),
+            self._get_coder_intro(plan_path),
             textwrap.dedent(f"""
             ### Risk Notes
             {task.risk_notes or 'None provided.'}
@@ -214,35 +260,35 @@ class BaseCoder(ABC):
         ]
         
         # Add optional sections
-        if initiative.architecture:
-            prompt_parts.append(textwrap.dedent(f"""
-            ### Initiative Architecture
-            {initiative.architecture}
-            """))
+        # if initiative.architecture:
+        #     prompt_parts.append(textwrap.dedent(f"""
+            ## Initiative Architecture
+            # {initiative.architecture}
+            # """))
         
-        if initiative.user_documentation:
-            prompt_parts.append(textwrap.dedent(f"""
-            ### User Documentation
-            {initiative.user_documentation}
-            """))
-            
-        if business.ui_design_spec:
+        # if initiative.user_documentation:
+        #     prompt_parts.append(textwrap.dedent(f"""
+            ## User Documentation
+            # {initiative.user_documentation}
+            # """))
+        
+        if has_frontend and business.ui_design_spec:
             prompt_parts.append(textwrap.dedent(f"""
             ### UI Design Spec - UI code must conform to this specification
             {business.ui_design_spec}
             """))
         
         # Lessons learned
-        prompt_parts.append(textwrap.dedent(f"""
-        ### Lessons Learned - avoid repeating these errors
-        {json.dumps(get_lessons(config, TASK_DESC_CODE_WRITING), indent=4)}
-        """))
+        # prompt_parts.append(textwrap.dedent(f"""
+        ## Lessons Learned - avoid repeating these errors
+        # {json.dumps(get_lessons(TASK_DESC_CODE_WRITING), indent=4)}
+        # """))
         
         # Additional guidance
-        if config.guidance:
+        if self.config.guidance:
             prompt_parts.append(textwrap.dedent(f"""
             ## Important Additional Guidance
-            {config.guidance}
+            {self.config.guidance}
             """))
         
         # Read-only paths
@@ -268,66 +314,64 @@ class BaseCoder(ABC):
                 {content}
                 """))
             except FileNotFoundError:
-                config.log(f"Warning: Reference prompt not found: {path}")
-        
-        # Route53 guardrail
-        guardrail_marker = "Route53 Root Alias Guardrail"
-        if not any(guardrail_marker in part for part in prompt_parts):
-            prompt_parts.append(textwrap.dedent("""
-
-            ### Route53 Root Alias Guardrail
-            - Domain DNS must be published with Route53 `AWS::Route53::RecordSet` alias records. Create `Type: A` (and `AAAA` when IPv6 is required) entries that target the Application Load Balancer via `AliasTarget.DNSName` and `AliasTarget.HostedZoneId`.
-            - Do **not** create a `CNAME` for `!Ref DomainName`, even when it contains subdomains; apex-style aliases keep Route53 compliant with DNS standards.
-            - Continue using CNAMEs only for tokenized SES sub-records such as DKIM keys.
-            """))
+                self.config.log(f"Warning: Reference prompt not found: {path}")
         
         # Add development plan and execution checklist
-        prompt_parts.extend(self._get_final_prompt_sections(planning_data, plan_path))
+        prompt_parts.extend(self._get_final_prompt_sections(plan_path))
         
         return "\n\n".join(part.strip() for part in prompt_parts if part)
     
-    @abstractmethod
-    def _get_coder_intro(self, config: CodingAgentConfig, plan_path: Path) -> str:
-        """Get coder-specific introduction text."""
-        pass
+    def _get_coder_intro(self, plan_path: Path) -> str:
+        return textwrap.dedent(f"""
+        You are assisting Erie Iron's self-driving coding workflow using Gemini.
+        Work within the repository at `{self.config.sandbox_root_dir}`
+        Follow the approved development plan saved at `{plan_path}`
+        Consult the relevant engineering standards from the reference prompts.
+        Do not commit or push changes; the orchestrator handles git commits.
+        """)
     
-    @abstractmethod
-    def _get_final_prompt_sections(self, planning_data: dict, plan_path: Path) -> List[str]:
-        """Get coder-specific final prompt sections (plan, checklist, etc.)."""
-        pass
+    def _get_final_prompt_sections(self, plan_path: Path) -> List[str]:
+        return [
+            textwrap.dedent(f"""
+            ## Execution Checklist
+            1. Read and understand the full development plan at `{plan_path}`
+            2. Apply all Erie Iron engineering standards from the reference prompts
+            3. Implement code changes that satisfy the plan and address prior failures
+            4. Scope modifications to planned files unless dependencies require changes
+            5. Never modify read-only paths
+            6. Leave repository with changes ready for review; do not commit
+            """)
+        ]
     
-    def _create_augmented_plan(self, planning_data: dict, artifact_paths: Dict[str, Path], code_file_paths: List[str]) -> dict:
+    def _create_augmented_plan(self, artifact_paths: Dict[str, Path], code_file_paths: List[str]) -> dict:
         """Create augmented plan with metadata."""
-        augmented_plan = copy.deepcopy(planning_data)
-        metadata_key = f"{self.coder_name}_metadata"
-        augmented_plan[metadata_key] = {
+        augmented_plan = copy.deepcopy(self.planning_data)
+        augmented_plan["paths"] = {
             "plan_path": str(artifact_paths["plan"]),
             "prompt_path": str(artifact_paths["prompt"]),
             "code_file_paths": code_file_paths,
         }
         return augmented_plan
     
-    def _update_planning_json(self, config: CodingAgentConfig, planning_data: dict) -> None:
+    def _update_planning_json(self, new_planning_data: dict) -> None:
+        self.planning_data = new_planning_data
         """Update the planning JSON in the database."""
         with transaction.atomic():
-            SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                planning_json=planning_data
+            SelfDrivingTaskIteration.objects.filter(id=self.config.current_iteration.id).update(
+                planning_json=self.planning_data
             )
-        config.current_iteration.refresh_from_db(fields=["planning_json"])
+        self.config.current_iteration.refresh_from_db(fields=["planning_json"])
     
-    def _execute_with_validation_loop(self, config: CodingAgentConfig, planning_data: dict, 
-                                     command: List[str], prompt_text: str, artifact_paths: Dict[str, Path],
-                                     readonly_entries: List[Dict], business_context: Dict) -> Tuple[List[Path], Dict]:
+    def _execute_with_validation_loop(
+            self,
+            command: List[str],
+            prompt_text: str,
+            artifact_paths: Dict[str, Path],
+            readonly_entries: List[Dict],
+            business_context: Dict
+    ) -> Tuple[List[Path], Dict]:
         """Execute command with validation feedback loop."""
-        from erieiron_autonomous_agent.coding_agents.coding_agent import (
-            get_file_checksum_map,
-            _collect_repo_changed_files,
-            validate_all_changed_files,
-            _normalize_relative_path,
-            extract_lessons
-        )
-        
-        prior_file_checksum_map = get_file_checksum_map(config.sandbox_root_dir)
+        prior_file_checksum_map = self.get_file_checksum_map(self.config.sandbox_root_dir)
         feedback_sections: list[str] = []
         max_validation_attempts = 2
         attempt = 0
@@ -343,14 +387,18 @@ class BaseCoder(ABC):
                 prompt_with_feedback = prompt_with_feedback + "\n\n" + "\n\n".join(feedback_sections)
             artifact_paths["prompt"].write_text(prompt_with_feedback, encoding="utf-8")
             
-            config.log(
+            self.config.log(
                 f"Running {self.coder_name.title()} CLI (attempt {attempt})",
                 " ".join(command) if isinstance(command, list) else str(command),
                 f"Prompt saved to {artifact_paths['prompt']}"
             )
             
             start_time = time.time()
-            result = self.execute_command(command, config, prompt_with_feedback)
+            
+            result = self.execute_command(
+                command, 
+                prompt_with_feedback
+            )
             
             # Save output
             artifact_paths["stdout"].write_text(result.stdout or "", encoding="utf-8")
@@ -363,16 +411,21 @@ class BaseCoder(ABC):
             usage_metrics = self.extract_usage_stats(
                 result.stdout,
                 result.stderr,
-                {"config": config, **{k: v for k, v in artifact_paths.items() if k in ["last_message", "session"]}}
+                {"config": self.config, **{k: v for k, v in artifact_paths.items() if k in ["last_message", "session"]}}
             )
             
             # Update metadata and create LLM request
             metadata = self._create_execution_metadata(
-                config, planning_data, artifact_paths, start_time, result, attempt, 
-                feedback_sections, usage_metrics, business_context
+                artifact_paths,
+                start_time,
+                result,
+                attempt,
+                feedback_sections,
+                usage_metrics,
+                business_context
             )
             
-            config.log(
+            self.config.log(
                 f"{self.coder_name.title()} CLI completed successfully",
                 {
                     "stdout_path": str(artifact_paths["stdout"]),
@@ -382,15 +435,15 @@ class BaseCoder(ABC):
             )
             
             # Collect changed files
-            changed_paths = _collect_repo_changed_files(config, prior_file_checksum_map, readonly_entries)
+            changed_paths = self._collect_repo_changed_files(prior_file_checksum_map, readonly_entries)
             
             if not changed_paths:
                 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
                 raise BadPlan(f"{self.coder_name.title()} CLI produced no persistable file changes")
             
             # Validate changes
-            normalized_changed = {_normalize_relative_path(p) for p in changed_paths}
-            validation_error = validate_all_changed_files(config, normalized_changed, planning_data)
+            normalized_changed = {self._normalize_relative_path(p) for p in changed_paths}
+            validation_error = self.validate_all_changed_files(normalized_changed)
             
             if validation_error is None:
                 break
@@ -399,7 +452,8 @@ class BaseCoder(ABC):
                 raise validation_error
             
             # Extract lessons and add feedback
-            extract_lessons(config, TASK_DESC_CODE_WRITING, validation_error)
+            from erieiron_autonomous_agent.coding_agents.coding_agent import extract_lessons
+            extract_lessons(self.config, TASK_DESC_CODE_WRITING, validation_error)
             feedback_sections.append(
                 textwrap.dedent(
                     f"""
@@ -410,7 +464,7 @@ class BaseCoder(ABC):
                     """
                 ).strip()
             )
-            config.log(
+            self.config.log(
                 f"OpenTofu validation failed after {self.coder_name.title()} execution; retrying with feedback",
                 str(validation_error)
             )
@@ -422,11 +476,16 @@ class BaseCoder(ABC):
         
         return changed_paths, metadata
     
-    def _create_execution_metadata(self, config: CodingAgentConfig, planning_data: dict, 
-                                  artifact_paths: Dict[str, Path], start_time: float,
-                                  result: 'subprocess.CompletedProcess', attempt: int,
-                                  feedback_sections: List[str], usage_metrics: Dict,
-                                  business_context: Dict) -> Dict:
+    def _create_execution_metadata(
+            self,
+            artifact_paths: Dict[str, Path],
+            start_time: float,
+            result: 'CompletedProcess',
+            attempt: int,
+            feedback_sections: List[str],
+            usage_metrics: Dict,
+            business_context: Dict
+    ) -> Dict:
         """Create execution metadata and LLM request."""
         business = business_context["business"]
         initiative = business_context["initiative"]
@@ -442,7 +501,7 @@ class BaseCoder(ABC):
             verbosity=LlmVerbosity.LOW,
             business=business,
             initiative=initiative,
-            task_iteration=config.current_iteration,
+            task_iteration=self.config.current_iteration,
             llm_model=self.default_llm_model,
             token_count=total_tokens,
             price=total_cost_usd,
@@ -454,14 +513,14 @@ class BaseCoder(ABC):
                 },
                 {
                     "role": LlmMessageType.USER,
-                    "content": json.dumps(planning_data, indent=4)
+                    "content": json.dumps(self.planning_data, indent=4)
                 }
             ]
         )
         
         # Build metadata
         metadata_key = f"{self.coder_name}_metadata"
-        planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
+        planning_record = copy.deepcopy(self.config.current_iteration.planning_json or {})
         metadata = planning_record.get(metadata_key, {})
         
         if usage_metrics:
@@ -486,23 +545,204 @@ class BaseCoder(ABC):
             metadata["opentofu_feedback"] = feedback_sections.copy()
         
         planning_record[metadata_key] = metadata
-        self._update_planning_json(config, planning_record)
+        self._update_planning_json(planning_record)
         
         return metadata
     
-    def _update_final_metadata(self, config: CodingAgentConfig, metadata: Dict) -> None:
+    def _update_final_metadata(self, metadata: Dict) -> None:
         """Update final metadata with persisted code files."""
-        metadata_key = f"{self.coder_name}_metadata"
-        planning_record = copy.deepcopy(config.current_iteration.planning_json or {})
+        planning_record = copy.deepcopy(self.config.current_iteration.planning_json or {})
         if not isinstance(planning_record, dict):
             planning_record = {}
         
+        metadata_key = f"codefiles_metadata"
         coder_metadata = planning_record.get(metadata_key, {})
         coder_metadata.update(metadata)
         planning_record[metadata_key] = coder_metadata
         
-        self._update_planning_json(config, planning_record)
+        self._update_planning_json(planning_record)
     
     def _cleanup_artifacts(self, artifact_paths: Dict[str, Path]) -> None:
         """Clean up artifact files."""
         common.quietly_delete(list(artifact_paths.values()))
+    
+    def _persist_codex_code_versions(
+            self,
+            changed_paths: list
+    ) -> list[str]:
+        if not changed_paths:
+            return []
+        
+        instruction_lookup = self._build_instruction_lookup()
+        sandbox_root = self.config.sandbox_root_dir
+        
+        persisted = []
+        skipped_non_text = []
+        
+        for rel_path in changed_paths:
+            if self._should_skip_code_version(rel_path):
+                continue
+            
+            normalized_path = self._normalize_relative_path(rel_path)
+            absolute_path = sandbox_root / normalized_path
+            
+            if not absolute_path.exists() or absolute_path.is_dir():
+                continue
+            
+            try:
+                common.assert_in_sandbox(
+                    sandbox_root,
+                    absolute_path
+                )
+            except ValueError as ve:
+                self.config.log(
+                    f"Skipping file outside sandbox when persisting code version: {rel_path}",
+                    ve
+                )
+                continue
+            
+            try:
+                CodeFile.update_from_path(
+                    self.config.current_iteration,
+                    absolute_path,
+                    code_instructions=instruction_lookup.get(normalized_path)
+                )
+                persisted.append(normalized_path)
+            except UnicodeDecodeError:
+                skipped_non_text.append(normalized_path)
+                self.config.log(
+                    f"Skipping non-text file while persisting code version: {normalized_path}"
+                )
+            except Exception as err:
+                self.config.log(
+                    f"Failed to persist code version for {normalized_path}",
+                    err
+                )
+                raise
+        
+        if skipped_non_text:
+            self.config.log("Codex change tracking skipped non-text files", skipped_non_text)
+        
+        return persisted
+    
+    def _collect_repo_changed_files(
+            self,
+            prior_file_checksum_map: dict[Path, int],
+            readonly_entries: list
+    ) -> list[Path]:
+        current_file_mtime_map = self.get_file_checksum_map(self.config.sandbox_root_dir)
+        
+        read_only_files = [
+            self.config.sandbox_root_dir / e['path']
+            for e in readonly_entries
+        ]
+        
+        files = [
+            f
+            for f, checksum in current_file_mtime_map.items()
+            if checksum != prior_file_checksum_map.get(f)
+        ]
+        
+        for f in files:
+            if (self.config.sandbox_root_dir / f) in read_only_files:
+                raise BadPlan(f"Codeplanner / writer modified the readonly file '{f}")
+        
+        return files
+    
+    def get_file_checksum_map(self, dir_name: Path) -> dict[Path, int]:
+        return {
+            f: common.get_checksum(dir_name / f)
+            for f in common.iterate_files_deep(dir_name) if not self._should_skip_code_version(f)
+        }
+    
+    def validate_all_changed_files(self, normalized_changed):
+        from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
+        
+        """Validate all changed files using appropriate validators"""
+        validation_errors = []
+        
+        try:
+            self.config.stack_manager.validate_stack()
+        except Exception as e:
+            logging.exception(e)
+            validation_errors.append(e)
+        
+        # Build a lookup from file paths to their validator information
+        validator_lookup = {}
+        if self.planning_data:
+            for code_file_entry in self.planning_data.get("code_files", []):
+                file_path = code_file_entry.get("code_file_path")
+                validator = code_file_entry.get("validator")
+                if file_path and validator:
+                    validator_lookup[self._normalize_relative_path(file_path)] = validator
+        
+        for file_path in normalized_changed:
+            full_path = self.config.sandbox_root_dir / file_path
+            validator = validator_lookup.get(file_path)
+            
+            # Skip if file doesn't exist or is not a regular file
+            if not full_path.exists() or not full_path.is_file():
+                continue
+            
+            try:
+                file_content = full_path.read_text(encoding="utf-8")
+                validate_code(
+                    self.config,
+                    full_path,
+                    file_content,
+                    validator
+                )
+            except FileNotFoundError:
+                validation_errors.append(BadPlan(f"`{file_path}` is missing after Codex execution; restore the file."))
+            except OSError as read_exc:
+                validation_errors.append(BadPlan(f"Unable to read `{file_path}` after Codex execution: {read_exc}"))
+            except CodeCompilationError as compile_exc:
+                validation_errors.append(BadPlan(f"Validation failed for `{file_path}`: {compile_exc}"))
+            except Exception as exc:
+                validation_errors.append(BadPlan(f"Unexpected validation error for `{file_path}`: {exc}"))
+        
+        # Return the first validation error, or None if all files are valid
+        return common.safe_join(validation_errors, "\n") if validation_errors else None
+    
+    def _normalize_relative_path(self, path: str | None) -> str:
+        if not path:
+            return ""
+        
+        normalized = str(path).strip().replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized
+    
+    def _should_skip_code_version(self, relative_path: str) -> bool:
+        if not relative_path:
+            return True
+        
+        relative_path = str(relative_path)
+        lowered = relative_path.lower()
+        if relative_path.split("/", 1)[0] == "artifacts":
+            return True
+        
+        if lowered.endswith(".ds_store"):
+            return True
+        
+        return False
+    
+    def _build_instruction_lookup(self) -> dict[str, list | dict]:
+        lookup: dict[str, list | dict] = {}
+        if not self.planning_data:
+            return lookup
+        
+        for entry in common.ensure_list(self.planning_data.get("code_files")):
+            path = self._normalize_relative_path(entry.get("code_file_path"))
+            if not path:
+                continue
+            
+            instructions = entry.get("instructions")
+            dsl_instructions = entry.get("dsl_instructions")
+            
+            if instructions:
+                lookup[path] = copy.deepcopy(instructions)
+            elif dsl_instructions:
+                lookup[path] = copy.deepcopy(dsl_instructions)
+        
+        return lookup
