@@ -60,7 +60,11 @@ def chat(
         creativity: LlmCreativity = LlmCreativity.MEDIUM
 
 ):
-    reasoning_effort = REASONING_TO_VAL.get(LlmReasoningEffort(reasoning_effort))
+    if not reasoning_effort or LlmReasoningEffort.NONE.eq(reasoning_effort):
+        reasoning_effort = None
+    else:
+        reasoning_effort = REASONING_TO_VAL.get(LlmReasoningEffort(reasoning_effort), LlmReasoningEffort.LOW)
+        
     start_time = time.time()
     client = openai.OpenAI(api_key=get_api_key())
     

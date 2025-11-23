@@ -32,7 +32,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError, MissingStackPerms
@@ -3064,8 +3064,6 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
     
-    relevant_code_files = get_relevant_code_files(config)
-    
     business = config.self_driving_task.business
     
     task = config.self_driving_task.task
@@ -3093,10 +3091,6 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
             config,
             for_planning=True
         ),
-        relevant_code_files,
-        get_docs_msg(
-            config
-        ),
         get_file_structure_msg(
             config.sandbox_root_dir
         ) if not iteration_to_modify.has_error() else [],
@@ -3113,17 +3107,17 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
         ) if config.iteration_to_modify.strategic_unblocking_json else None,
         get_tasktype_specific_instructions(config),
         get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
-    
     ]
     
-    planning_model = config.get_code_planning_model()
+    planning_model = LlmModel.OPENAI_GPT_5_MINI
     planning_data = llm_chat(
         "Plan code changes",
         messages,
         model=planning_model,
         tag_entity=config.current_iteration,
-        creativity=LlmCreativity.NONE,
-        output_schema="codeplanner.schema.json"
+        reasoning_effort=LlmReasoningEffort.NONE,
+        verbosity=LlmVerbosity.LOW,
+        creativity=LlmCreativity.NONE
     ).json()
     
     with transaction.atomic():

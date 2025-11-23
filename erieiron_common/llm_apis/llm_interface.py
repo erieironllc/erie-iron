@@ -52,6 +52,7 @@ def chat(
             *messages[1:]
         ]
     
+    messages = common.flatten(messages)
     if not model:
         models = [LlmModel.OPENAI_GPT_5_1]
     else:

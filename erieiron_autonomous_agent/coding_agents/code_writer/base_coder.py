@@ -20,11 +20,11 @@ from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
 from erieiron_autonomous_agent.models import (
     LlmRequest,
-    SelfDrivingTaskIteration, CodeFile,
+    SelfDrivingTaskIteration, CodeFile, AgentLesson,
 )
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common import common
-from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType, LlmCreativity
+from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType, LlmCreativity, EnvironmentType
 
 
 class BaseCoder(ABC):
@@ -44,7 +44,7 @@ class BaseCoder(ABC):
     @property
     def input_as_process_input(self):
         return False
-
+    
     @property
     @abstractmethod
     def default_llm_model(self):
@@ -75,7 +75,6 @@ class BaseCoder(ABC):
             returncode=proc.returncode,
             args=command
         )
-        
     
     @abstractmethod
     def check_for_api_errors(self, result: 'CompletedProcess') -> None:
@@ -89,6 +88,8 @@ class BaseCoder(ABC):
     
     def execute_coding(self) -> Tuple[List[Path], Dict]:
         """Execute coding and return (changed_paths, execution_metadata)."""
+        initiative = self.config.initiative
+        business = initiative.business
         self.config.current_iteration.codeversion_set.all().delete()
         self.config.log(f"Starting {self.coder_name.title()} CLI planning/execution pipeline")
         
@@ -101,15 +102,24 @@ class BaseCoder(ABC):
             code_file_paths, code_file_summary_lines = self._build_code_file_entries()
             business_context = self._extract_business_context()
             
-            # Save plan
-            self._save_plan(artifact_paths["plan"])
+            self.write_plan(artifact_paths)
+            
+            artifact_paths["architecture"].write_text(textwrap.dedent(f"""
+                {business.architecture}
+                
+                #Initiative Specific Architecture Notes:
+                {initiative.architecture or 'none'}
+            """))
+            
+            if business.ui_design_spec:
+                artifact_paths["design_spec"].write_text(business.ui_design_spec)
             
             # Build prompt
             prompt_text = self._build_prompt(
                 business_context,
                 readonly_lines,
                 code_file_summary_lines,
-                artifact_paths["plan"]
+                artifact_paths
             )
             artifact_paths["prompt"].write_text(prompt_text, encoding="utf-8")
             
@@ -151,6 +161,8 @@ class BaseCoder(ABC):
         
         paths = {
             "plan": artifacts_dir / f"{iteration_id}_plan.json",
+            "architecture": artifacts_dir / f"{iteration_id}_architecture.md",
+            "design_spec": artifacts_dir / f"{iteration_id}_design_spec.md",
             "prompt": artifacts_dir / f"{iteration_id}_{self.coder_name}_prompt.txt",
             "stdout": artifacts_dir / f"{iteration_id}_{self.coder_name}_stdout.log",
             "stderr": artifacts_dir / f"{iteration_id}_{self.coder_name}_stderr.log",
@@ -203,16 +215,12 @@ class BaseCoder(ABC):
             "task": self.config.task
         }
     
-    def _save_plan(self, plan_path: Path) -> None:
-        """Save planning data to JSON file."""
-        plan_path.write_text(json.dumps(self.planning_data, indent=2, default=str), encoding="utf-8")
-    
     def _build_prompt(
             self,
             business_context: Dict,
             readonly_lines: List[str],
             code_file_summary_lines: List[str],
-            plan_path: Path
+            artifact_paths: dict[str, Path]
     ) -> str:
         """Build the complete prompt for the coder."""
         business = business_context["business"]
@@ -225,27 +233,44 @@ class BaseCoder(ABC):
             "prompts/codewriter--common.md"
         }
         
-        has_frontend = False
-        for f in self.planning_data.get("code_files"):
-            f.pop("code_writing_model", None)
-            p = str(f.get("code_file_path") )
-            if p.endswith(".py"):
-                reference_prompts.add("prompts/codewriter--python_coder.md")
-            if "lambda" in p:
-                reference_prompts.add("prompts/codewriter--lambda_coder.md")
-            if "requirements.txt" in p:
-                reference_prompts.add("prompts/codewriter--requirements.txt.md")
-            if p.endswith(".tf"):
+        for rule_context in self.planning_data.get("required_rule_contexts"):
+            if rule_context == "infrastructure_rules":
                 reference_prompts.add("prompts/common--agent_provided_functionality_tofu.md")
                 reference_prompts.add("prompts/common--infrastructure_rules_tofu.md")
                 reference_prompts.add("prompts/common--credentials_architecture_tofu.md")
                 reference_prompts.add("prompts/codewriter--aws_cloudformation_coder_tofu.md")
-            if any(p.endswith(s) for s in [".html", ".htm", ".css", ".js", ".scss"]):
-                has_frontend = True
+            elif rule_context == "lambda_rules":
+                reference_prompts.add("prompts/codewriter--lambda_coder.md")
+            elif rule_context == "python_rules":
+                reference_prompts.add("prompts/codewriter--python_rules.md")
+            elif rule_context == "javascript_rules":
+                reference_prompts.add("prompts/codewriter--javascript_coder.md")
+            elif rule_context == "sql_rules":
+                reference_prompts.add("prompts/codewriter--sql_coder.md")
+            elif rule_context == "django_rules":
+                reference_prompts.add("prompts/codewriter--django_rules.md")
+            elif rule_context == "test_rules":
+                reference_prompts.add("prompts/codewriter--python_tdd_task.md")
+            elif rule_context == "ui_rules":
+                reference_prompts.add("prompts/codewriter--javascript_coder.md")
+                reference_prompts.add("prompts/codewriter--css_coder.md")
+            elif rule_context == "security_rules":
+                reference_prompts.add("prompts/codewriter--security_rules.md")
+            elif rule_context == "database_rules":
+                reference_prompts.add("prompts/codewriter--database_rules.md")
+            elif rule_context == "ses_email_rules":
+                reference_prompts.add("prompts/codewriter--ses_rules.md")
+            elif rule_context == "s3_storage_rules":
+                reference_prompts.add("prompts/codewriter--s3_rules.md")
+            elif rule_context == "sqs_queue_rules":
+                reference_prompts.add("prompts/codewriter--sqs_rules.md")
+            else:
+                self.config.log(f"ERROR:  unhandled required_rule_contexts value {rule_context}")
         
         # Build prompt parts
+        domain_name = self.config.business.domain if EnvironmentType.PRODUCTION.eq(self.config.env_type) else self.config.initiative.domain
         prompt_parts = [
-            self._get_coder_intro(plan_path),
+            self._get_coder_intro(artifact_paths),
             textwrap.dedent(f"""
             ### Risk Notes
             {task.risk_notes or 'None provided.'}
@@ -253,34 +278,10 @@ class BaseCoder(ABC):
             textwrap.dedent(f"""
             ## Business & Architecture Context
             Business Service Token: {business.service_token}
+            Doman Name: {domain_name}
             Initiative ID: {initiative.id}
             """),
         ]
-        
-        # Add optional sections
-        # if initiative.architecture:
-        #     prompt_parts.append(textwrap.dedent(f"""
-            ## Initiative Architecture
-            # {initiative.architecture}
-            # """))
-        
-        # if initiative.user_documentation:
-        #     prompt_parts.append(textwrap.dedent(f"""
-            ## User Documentation
-            # {initiative.user_documentation}
-            # """))
-        
-        if has_frontend and business.ui_design_spec:
-            prompt_parts.append(textwrap.dedent(f"""
-            ### UI Design Spec - UI code must conform to this specification
-            {business.ui_design_spec}
-            """))
-        
-        # Lessons learned
-        # prompt_parts.append(textwrap.dedent(f"""
-        ## Lessons Learned - avoid repeating these errors
-        # {json.dumps(get_lessons(TASK_DESC_CODE_WRITING), indent=4)}
-        # """))
         
         # Additional guidance
         if self.config.guidance:
@@ -295,13 +296,6 @@ class BaseCoder(ABC):
             ## Read-only Paths - NEVER modify these
             """ + "\n".join(readonly_lines)))
         
-        # Highlighted files
-        if code_file_summary_lines:
-            prompt_parts.append(textwrap.dedent("""
-            ## Files Highlighted by the Plan
-            Review instructions for each file in the plan JSON and modify only what is necessary:
-            """ + "\n".join(code_file_summary_lines)))
-        
         # Add reference prompts
         for path in reference_prompts:
             try:
@@ -310,34 +304,41 @@ class BaseCoder(ABC):
                 
                 ### Reference: {path}
                 {content}
+                
+                
+                
                 """))
             except FileNotFoundError:
                 self.config.log(f"Warning: Reference prompt not found: {path}")
         
         # Add development plan and execution checklist
-        prompt_parts.extend(self._get_final_prompt_sections(plan_path))
+        prompt_parts.extend(self._get_final_prompt_sections(artifact_paths))
         
         return "\n\n".join(part.strip() for part in prompt_parts if part)
     
-    def _get_coder_intro(self, plan_path: Path) -> str:
+    def _get_coder_intro(self, artifact_paths: dict[str, Path]) -> str:
         return textwrap.dedent(f"""
         You are assisting Erie Iron's self-driving coding workflow using Gemini.
         Work within the repository at `{self.config.sandbox_root_dir}`
-        Follow the approved development plan saved at `{plan_path}`
+        **DEVELOPMENT PLAN**:  Follow the approved development plan saved at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
+        **SYSTEM ARCHITECTURE**:  The system architecture document is located at `{artifact_paths.get("architecture")}`.  You changes **must** be aligned with this architecture
+        **UI DESIGN SPEC**:  If you make any UI changes, **you must** comport the look and feel of the changes to the UI Design Spec saved at `{artifact_paths.get("design_spec")}`
         Consult the relevant engineering standards from the reference prompts.
         Do not commit or push changes; the orchestrator handles git commits.
         """)
     
-    def _get_final_prompt_sections(self, plan_path: Path) -> List[str]:
+    def _get_final_prompt_sections(self, artifact_paths: dict[str, Path]) -> List[str]:
         return [
             textwrap.dedent(f"""
             ## Execution Checklist
-            1. Read and understand the full development plan at `{plan_path}`
-            2. Apply all Erie Iron engineering standards from the reference prompts
-            3. Implement code changes that satisfy the plan and address prior failures
-            4. Scope modifications to planned files unless dependencies require changes
-            5. Never modify read-only paths
-            6. Leave repository with changes ready for review; do not commit
+            1. Read and understand the full development plan at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
+            2. Read and understand the system architecture at `{artifact_paths.get("architecture")}`.  Validate your changes comport to the architecture
+            3. If you are making UI / look and feel changes, understand the UI Design Spec at `{artifact_paths.get("design_spec")}`.  Validate your changes comport to the design spec
+            4. Apply all Erie Iron engineering standards from the reference prompts
+            5. Implement code changes that satisfy the `implementation_directive` and address prior failures
+            6. Scope modifications to the `implementation_directive`.  **Do not** make un-related changes
+            7. Never modify read-only paths
+            8. Leave repository with changes ready for review; do not commit
             """)
         ]
     
@@ -394,7 +395,7 @@ class BaseCoder(ABC):
             start_time = time.time()
             
             result = self.execute_command(
-                command, 
+                command,
                 prompt_with_feedback
             )
             
@@ -745,3 +746,19 @@ class BaseCoder(ABC):
                 lookup[path] = copy.deepcopy(dsl_instructions)
         
         return lookup
+    
+    def write_plan(self, artifact_paths):
+        lesson_ids = common.uuids(self.planning_data.get("relevant_lessons"))
+        
+        asef = 1
+        
+        plan = {
+            "implementation_directive": self.planning_data.get("implementation_directive"),
+            "diagnostic_context": self.planning_data.get("diagnostic_context"),
+            "relevant_lessons": [
+                f"{a.pattern}. {a.trigger}. {a.lesson}"
+                for a in AgentLesson.objects.filter(id__in=lesson_ids)
+            ]
+        }
+        
+        artifact_paths["plan"].write_text(json.dumps(plan, indent=2, default=str), encoding="utf-8")

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -60,6 +61,7 @@ def write_code(config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Pat
             return changed_paths, metadata
         
         except Exception as e:
+            logging.exception(e)
             error_info = {
                 "coder": coder_name.lower(),
                 "error_type": type(e).__name__,

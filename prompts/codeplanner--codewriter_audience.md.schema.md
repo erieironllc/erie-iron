@@ -43,6 +43,9 @@
         "enum": [
           "infrastructure_rules",
           "lambda_rules",
+          "python_rules",
+          "javascript_rules",
+          "sql_rules",
           "django_rules",
           "test_rules",
           "ui_rules",

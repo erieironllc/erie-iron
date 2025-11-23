@@ -1924,3 +1924,9 @@ def mkdirs(path):
 
 def is_file1_newer(un_swizzled_module_file: Path, lock_file: Path) -> bool:
     return un_swizzled_module_file.stat().st_mtime > lock_file.stat().st_mtime
+
+
+def uuids(vals):
+    return [
+        u for u in ensure_list(vals) if is_valid_uuid(u)
+    ]
