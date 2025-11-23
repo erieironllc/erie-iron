@@ -20,7 +20,7 @@ import hcl2
 
 import settings
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
-from erieiron_autonomous_agent.models import InfrastructureStack
+from erieiron_autonomous_agent.models import InfrastructureStack, Business
 from erieiron_common import aws_utils
 from erieiron_common import common, opentofu_log_utils
 from erieiron_common.date_utils import to_utc
@@ -150,6 +150,9 @@ class StackManager:
         Follows the same pattern as apply_target_account_bootstrap.sh:
         erieiron-opentofu-state-{sanitized_business_name}-{account_id}
         """
+        if self.cloud_account.account_identifier == Business.get_erie_iron_business().get_default_cloud_account(self.stack.env_type).account_identifier:
+            return DEFAULT_TOFU_STATE_BUCKET
+        
         business_name = self.stack.business.name
         sanitized_business_name = self._sanitize_business_name(business_name)
         
@@ -307,7 +310,7 @@ class StackManager:
         key_value = f"{self.stack.stack_namespace_token}/stack.tfstate"
         
         # Generate bucket name following same pattern as apply_target_account_bootstrap.sh
-        terraform_state_bucket = DEFAULT_TOFU_STATE_BUCKET  # self._get_terraform_state_bucket_name()
+        terraform_state_bucket =   self._get_terraform_state_bucket_name()
         
         storage_key_args = [
             f"-backend-config=bucket={terraform_state_bucket}",
