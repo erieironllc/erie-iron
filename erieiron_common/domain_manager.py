@@ -785,7 +785,7 @@ class DomainManager:
         best_candidate: tuple[int, str] | None = None
         
         paginator = self.c("acm").get_paginator("list_certificates")
-        for page in paginator.paginate(CertificateStatuses=["ISSUED"]):
+        for page in paginator.paginate():
             for summary in page.get("CertificateSummaryList", []) or []:
                 match_quality = self._certificate_match_quality(domain, summary)
                 if match_quality is None:
@@ -833,6 +833,10 @@ class DomainManager:
             if normalized_domain.endswith(suffix) and normalized_domain != suffix.lstrip('.'):
                 # prefer longer suffixes for more specific wildcards
                 return 100 + len(suffix)
+            elif normalized_domain.endswith(suffix):
+                return 50 + len(suffix)
+            elif normalized_domain.endswith(normalized_cert[2:]):
+                return 25 + len(suffix)
         
         return None
     

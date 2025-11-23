@@ -59,11 +59,7 @@ REGION_LOCKED_US_EAST_1_SERVICES = [
     
     # WAF Classic (global control plane)
     "waf",
-    "waf-regional",
-    
-    # ACM for CloudFront certs must be in us-east-1
-    # Normal ACM is regional, so include but you'll conditionally scope it
-    "acm",
+    "waf-regional"
 ]
 
 

@@ -4756,7 +4756,7 @@ def action_business_new_domain(request, business_id):
     
     business = get_object_or_404(Business, pk=business_id)
     business.needs_domain = True
-    business.domain = None
+    # business.domain = None
     business.save(update_fields=["domain", "needs_domain"])
     
     business.get_domain_manager().bootstrap_domain()

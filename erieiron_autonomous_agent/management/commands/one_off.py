@@ -1,8 +1,10 @@
 from django.core.management.base import BaseCommand
+import json
 
-from erieiron_autonomous_agent.business_level_agents import worker_design
+from erieiron_autonomous_agent.models import Business
 
 
 class Command(BaseCommand):
     def handle(self, env_type=None, *args, **options):
-        worker_design.do_work("2c52e0c6-2cf9-469c-a5c0-fcb0103e856d")
+        for b in Business.get_portfolio_business().exclude(required_credentials__isnull=True):
+            print(b.name, json.dumps(b.required_credentials, indent=4))

@@ -1357,8 +1357,6 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
                 config.current_iteration,
                 include_erie_common=False
             )
-        
-        ssl_cert = config.domain_manager.ensure_wildcard_certificate(wait=True)
     
     return self_driving_task
 
@@ -5002,7 +5000,7 @@ def build_tfvars_payload(
     
     planning_required_creds = config.business.required_credentials or {}
     missing_secret_params: list[str] = []
-    for svc_spec in planning_required_creds.values():
+    for credential_service, svc_spec in planning_required_creds.items():
         variable_name = (
                 svc_spec.get("secret_arn_variable")
                 or svc_spec.get("secret_arn_cfn_parameter")
@@ -5015,7 +5013,7 @@ def build_tfvars_payload(
         arn_value = config.runtime_env.get(envvar_name) if envvar_name else None
         if arn_value:
             payload[variable_name] = arn_value
-        else:
+        elif CredentialService.RDS.neq(credential_service):
             missing_secret_params.append(variable_name)
     
     if missing_secret_params:
