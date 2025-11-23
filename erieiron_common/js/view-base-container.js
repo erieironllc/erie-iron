@@ -14,6 +14,9 @@ BaseContainerView = ErieView.extend({
         'click .erie-toggle-btn': 'toggle_btn_click',
         'click .erie-companion-click': 'btn_companion_click',
 
+        'click #btn-sidebar-toggle': 'sidebar_toggle_click',
+        'click #btn-sidebar-show': 'sidebar_show_click',
+
         'mouseenter .has_submenu': 'show_submenu',
         'mouseleave .has_submenu': 'hide_submenu',
 
@@ -66,6 +69,7 @@ BaseContainerView = ErieView.extend({
 
         this.init_page();
 
+        this.init_sidebar_state();
 
         const hash = window.location.hash;
         if (hash) {
@@ -374,6 +378,33 @@ BaseContainerView = ErieView.extend({
                 set_cookie(btn.attr("id"), is_on ? 1 : 0)
             }
 
+        }
+    },
+
+    init_sidebar_state: function () {
+        const is_collapsed = parse_bool(get_cookie("sidebar_collapsed", false));
+        if (is_collapsed) {
+            this.set_sidebar_collapsed(true);
+        }
+    },
+
+    sidebar_toggle_click: function (ev) {
+        this.set_sidebar_collapsed(true);
+        set_cookie("sidebar_collapsed", 1);
+        return last_stop(ev);
+    },
+
+    sidebar_show_click: function (ev) {
+        this.set_sidebar_collapsed(false);
+        set_cookie("sidebar_collapsed", 0);
+        return last_stop(ev);
+    },
+
+    set_sidebar_collapsed: function (collapsed) {
+        if (collapsed) {
+            $("body").addClass("sidebar-collapsed");
+        } else {
+            $("body").removeClass("sidebar-collapsed");
         }
     },
 

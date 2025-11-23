@@ -2,6 +2,9 @@
 <div class="list-group sidebar-tabs-scroll sidebar-modern shadow-lg" role="tablist">
     <div class="d-flex align-items-center justify-content-between px-3 mb-3">
         <h3 class="sidebar-modern__title mb-0">{{ sidebar_title }}</h3>
+        <button id="btn-sidebar-toggle" class="btn btn-sm btn-outline-secondary sidebar-toggle-btn" title="Hide sidebar">
+            <i class="bi bi-layout-sidebar-inset"></i>
+        </button>
     </div>
     {% for tab in tabs|dedupe_divers %}
         {% if tab.is_divider %}

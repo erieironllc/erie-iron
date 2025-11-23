@@ -469,6 +469,12 @@ BUSINESS_TAB_DEFINITIONS = [
             },
         ]
     },
+    {
+        "slug": "project-plan",
+        "label": "Project Plan",
+        "template": "business/tabs/project_plan.html",
+        "context_fn": views._tab_context_project_plan,
+    },
     TAB_DIVIDER,
     {
         "slug": "product-initiatives",

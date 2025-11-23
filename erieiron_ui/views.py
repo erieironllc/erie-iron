@@ -15,7 +15,7 @@ from urllib.parse import quote
 import jwt
 from django.contrib import messages
 from django.db import IntegrityError, transaction
-from django.db.models import Sum, Q, TextField
+from django.db.models import Sum, Q, TextField, Prefetch
 from django.db.models.functions import Cast
 from django.http import HttpResponse, Http404, JsonResponse, HttpResponseRedirect, HttpRequest
 from django.shortcuts import get_object_or_404, render
@@ -52,6 +52,20 @@ DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES = {
 }
 
 LLM_REQUESTS_PAGE_SIZE = 20
+PROJECT_PLAN_STATUS_CLASSES = {
+    TaskStatus.NOT_STARTED.value: "bg-secondary",
+    TaskStatus.IN_PROGRESS.value: "bg-primary",
+    TaskStatus.BLOCKED.value: "bg-danger",
+    TaskStatus.COMPLETE.value: "bg-success",
+    TaskStatus.FAILED.value: "bg-dark",
+}
+PROJECT_PLAN_STATUS_ORDER = [
+    TaskStatus.NOT_STARTED.value,
+    TaskStatus.IN_PROGRESS.value,
+    TaskStatus.BLOCKED.value,
+    TaskStatus.COMPLETE.value,
+    TaskStatus.FAILED.value,
+]
 
 
 def _paginate_llm_requests(queryset, page_number: int = 0, page_size: int = LLM_REQUESTS_PAGE_SIZE):
@@ -1287,6 +1301,134 @@ def _tab_context_product_initiatives(business: Business) -> dict:
     return {
         "initiatives": business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).order_by("created_timestamp"),
         "business_kpis": existing_kpis
+    }
+
+
+def _project_plan_status_label(status_value: str) -> str:
+    try:
+        return TaskStatus(status_value).label()
+    except ValueError:
+        return (status_value or "").replace("_", " ").title() or "Unknown"
+
+
+def _project_plan_status_class(status_value: str) -> str:
+    return PROJECT_PLAN_STATUS_CLASSES.get(status_value, "bg-secondary")
+
+
+def _project_plan_collect_tasks(initiative: Initiative) -> list[Task]:
+    tasks_rel = getattr(initiative, "tasks", None)
+    if tasks_rel is None:
+        return []
+    if hasattr(tasks_rel, "all"):
+        return list(tasks_rel.all())
+    return list(tasks_rel)
+
+
+def _project_plan_initiative_status(tasks: list[Task]) -> str:
+    if not tasks:
+        return TaskStatus.NOT_STARTED.value
+
+    statuses = [task.status for task in tasks if getattr(task, "status", None)]
+    if statuses and all(status == TaskStatus.COMPLETE.value for status in statuses):
+        return TaskStatus.COMPLETE.value
+    if any(status == TaskStatus.FAILED.value for status in statuses):
+        return TaskStatus.FAILED.value
+    if any(status == TaskStatus.BLOCKED.value for status in statuses):
+        return TaskStatus.BLOCKED.value
+    if any(status == TaskStatus.IN_PROGRESS.value for status in statuses):
+        return TaskStatus.IN_PROGRESS.value
+    return TaskStatus.NOT_STARTED.value
+
+
+def _build_project_plan_viewmodel(initiatives: Iterable[Initiative]) -> dict:
+    initiative_list = list(initiatives)
+    plan_rows: list[dict] = []
+    max_units = 1
+    total_tasks = 0
+    initiative_offset_units = 0
+
+    for initiative in initiative_list:
+        tasks = _project_plan_collect_tasks(initiative)
+        total_tasks += len(tasks)
+        initiative_status = _project_plan_initiative_status(tasks)
+        bar_units = max(len(tasks), 1)
+
+        plan_rows.append({
+            "type": "initiative",
+            "id": getattr(initiative, "id", None),
+            "label": getattr(initiative, "title", "Untitled Initiative") or "Untitled Initiative",
+            "status": initiative_status,
+            "status_label": _project_plan_status_label(initiative_status),
+            "color_class": _project_plan_status_class(initiative_status),
+            "bar_units": bar_units,
+            "level": 0,
+            "url": reverse('view_initiative', args=[initiative.id]) if getattr(initiative, "id", None) else None,
+            "task_count": len(tasks),
+            "offset_units": initiative_offset_units,
+        })
+
+        task_offset_units = initiative_offset_units
+        for task in tasks:
+            task_status = getattr(task, "status", TaskStatus.NOT_STARTED.value) or TaskStatus.NOT_STARTED.value
+            label = task.get_name() if hasattr(task, "get_name") else getattr(task, "description", "Task")
+            plan_rows.append({
+                "type": "task",
+                "id": getattr(task, "id", None),
+                "parent_id": getattr(initiative, "id", None),
+                "label": label,
+                "status": task_status,
+                "status_label": _project_plan_status_label(task_status),
+                "color_class": _project_plan_status_class(task_status),
+                "bar_units": 1,
+                "level": 1,
+                "url": reverse('view_task', args=[task.id]) if getattr(task, "id", None) else None,
+                "offset_units": task_offset_units,
+            })
+            task_offset_units += 1
+
+        initiative_offset_units += bar_units
+        max_units = max(max_units, initiative_offset_units)
+
+    scaling_factor = 100 / max(max_units, 1)
+    for row in plan_rows:
+        offset_units = row.get("offset_units", 0)
+        row["bar_percent"] = round(row["bar_units"] * scaling_factor, 4)
+        row["offset_percent"] = round(offset_units * scaling_factor, 4)
+
+    return {
+        "rows": plan_rows,
+        "total_units": max_units,
+        "total_initiatives": len(initiative_list),
+        "total_tasks": total_tasks,
+    }
+
+
+def _tab_context_project_plan(business: Business) -> dict:
+    tasks_qs = Task.objects.order_by("created_timestamp", "id")
+    initiatives = (
+        business.initiative_set.all()
+        .prefetch_related(Prefetch('tasks', queryset=tasks_qs))
+        .order_by("created_timestamp", "title")
+    )
+
+    viewmodel = _build_project_plan_viewmodel(initiatives)
+    status_legend = [
+        {
+            "status": status,
+            "label": _project_plan_status_label(status),
+            "color_class": _project_plan_status_class(status),
+        }
+        for status in PROJECT_PLAN_STATUS_ORDER
+    ]
+
+    return {
+        "project_plan_rows": viewmodel["rows"],
+        "project_plan_total_units": viewmodel["total_units"],
+        "project_plan_summary": {
+            "initiatives": viewmodel["total_initiatives"],
+            "tasks": viewmodel["total_tasks"],
+        },
+        "project_plan_status_legend": status_legend,
     }
 
 
