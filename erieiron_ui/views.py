@@ -1403,14 +1403,16 @@ def _build_project_plan_viewmodel(initiatives: Iterable[Initiative]) -> dict:
     }
 
 
-def _tab_context_project_plan(business: Business) -> dict:
+def _prefetch_project_plan_initiatives(queryset):
     tasks_qs = Task.objects.order_by("created_timestamp", "id")
-    initiatives = (
-        business.initiative_set.all()
+    return (
+        queryset
         .prefetch_related(Prefetch('tasks', queryset=tasks_qs))
         .order_by("created_timestamp", "title")
     )
 
+
+def _build_project_plan_context(initiatives: Iterable[Initiative]) -> dict:
     viewmodel = _build_project_plan_viewmodel(initiatives)
     status_legend = [
         {
@@ -1430,6 +1432,18 @@ def _tab_context_project_plan(business: Business) -> dict:
         },
         "project_plan_status_legend": status_legend,
     }
+
+
+def _tab_context_project_plan(business: Business) -> dict:
+    initiatives = _prefetch_project_plan_initiatives(business.initiative_set.all())
+    return _build_project_plan_context(initiatives)
+
+
+def _initiative_tab_context_project_plan(initiative: Initiative) -> dict:
+    initiatives = _prefetch_project_plan_initiatives(
+        Initiative.objects.filter(pk=initiative.id)
+    )
+    return _build_project_plan_context(initiatives)
 
 
 def _tab_available_board_guidance(business: Business) -> bool:

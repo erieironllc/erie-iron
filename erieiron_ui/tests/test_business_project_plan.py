@@ -75,3 +75,20 @@ def test_build_project_plan_viewmodel_orders_rows_and_counts_units():
     assert rows[4]["offset_units"] == 2
     assert rows[1]["bar_percent"] == pytest.approx(33.3333)
     assert rows[3]["offset_percent"] == pytest.approx(33.3333)
+
+
+def test_project_plan_context_includes_summary_and_legend():
+    init_one = _initiative_stub(
+        "init-a",
+        "Launch",
+        tasks=[
+            _TaskStub("task-x", TaskStatus.IN_PROGRESS.value, "Ship"),
+        ],
+    )
+
+    context = views._build_project_plan_context([init_one])
+
+    assert context["project_plan_summary"]["initiatives"] == 1
+    assert context["project_plan_summary"]["tasks"] == 1
+    assert len(context["project_plan_status_legend"]) == len(views.PROJECT_PLAN_STATUS_ORDER)
+    assert context["project_plan_rows"][0]["label"] == "Launch"

@@ -1,0 +1,114 @@
+<style>
+    .project-plan-card .project-plan-row {
+        display: grid;
+        grid-template-columns: 320px minmax(300px, 1fr) 140px;
+        gap: 16px;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--bs-border-color-translucent, #e9ecef);
+    }
+    .project-plan-card .project-plan-row:last-child {
+        border-bottom: none;
+    }
+    .project-plan-card .project-plan-row--task {
+        background-color: var(--bs-light-bg-subtle, #f8f9fa);
+    }
+    .project-plan-card .project-plan-label {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding-left: calc(var(--plan-level, 0) * 18px);
+    }
+    .project-plan-card .project-plan-label a {
+        text-decoration: none;
+    }
+    .project-plan-card .project-plan-chart {
+        position: relative;
+        min-height: 32px;
+        width: 100%;
+    }
+    .project-plan-card .project-plan-bar {
+        position: relative;
+        height: 16px;
+        border-radius: 999px;
+        opacity: 0.9;
+        width: var(--plan-bar-percent, 0%);
+        margin-left: var(--plan-bar-offset-percent, 0%);
+        min-width: 0;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+    }
+    .project-plan-card .project-plan-status {
+        text-align: right;
+    }
+    .project-plan-card .project-plan-grid {
+        width: 100%;
+    }
+    .project-plan-card .project-plan-legend span {
+        font-size: 0.75rem;
+    }
+</style>
+
+<div class="card project-plan-card">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+            <h5 class="mb-1">Project Plan</h5>
+            <p class="text-muted small mb-0">Roadmap view aligning initiatives and tasks.</p>
+        </div>
+        <div class="d-flex flex-wrap gap-4 align-items-center">
+            <div class="text-end">
+                <div class="text-muted small text-uppercase">Initiatives</div>
+                <div class="fs-5 fw-semibold">{{ project_plan_summary.initiatives|default:0 }}</div>
+            </div>
+            <div class="text-end">
+                <div class="text-muted small text-uppercase">Tasks</div>
+                <div class="fs-5 fw-semibold">{{ project_plan_summary.tasks|default:0 }}</div>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2 project-plan-legend">
+                {% for status in project_plan_status_legend %}
+                    <span class="badge {{ status.color_class }}">{{ status.label }}</span>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        {% if project_plan_rows %}
+            <div class="project-plan">
+                <div class="project-plan-grid">
+                    <div class="project-plan-row text-muted fw-semibold small">
+                        <div>Initiative / Task</div>
+                        <div>Timeline</div>
+                        <div class="text-end">Status</div>
+                    </div>
+                    {% for row in project_plan_rows %}
+                        <div class="project-plan-row project-plan-row--{{ row.type }}">
+                            <div class="project-plan-label" style="--plan-level: {{ row.level }};">
+                                {% if row.url %}
+                                    <a href="{{ row.url }}" class="fw-semibold">
+                                        {{ row.label }}
+                                    </a>
+                                {% else %}
+                                    <span class="fw-semibold">{{ row.label }}</span>
+                                {% endif %}
+                                {% if row.type == 'initiative' %}
+                                    <span class="text-muted small">{{ row.task_count }} task{{ row.task_count|pluralize }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="project-plan-chart">
+                                <div class="project-plan-bar {{ row.color_class }}"
+                                     style="--plan-bar-percent: {{ row.bar_percent }}%; --plan-bar-offset-percent: {{ row.offset_percent }}%;"></div>
+                            </div>
+                            <div class="project-plan-status">
+                                <span class="badge bg-light text-dark">{{ row.status_label }}</span>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% else %}
+            <div class="text-center text-muted py-5">
+                <p class="mb-1">No initiatives or tasks to display yet.</p>
+                <p class="mb-0 small">Add initiatives and tasks to populate the project plan.</p>
+            </div>
+        {% endif %}
+    </div>
+</div>
