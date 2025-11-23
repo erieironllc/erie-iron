@@ -35,7 +35,7 @@ class ClaudeCoder(BaseCoder):
     def build_command(self, config: CodingAgentConfig, prompt_path: Path, artifact_paths: Dict[str, Path]) -> List[str]:
         """Build the Claude Code CLI command."""
         return [
-            "claude-code",
+            "claude",
             "--headless",
             "--auto-approve",
             "--working-directory",
