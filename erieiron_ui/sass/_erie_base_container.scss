@@ -35,7 +35,7 @@ body {
     min-height: 0;
     height: calc(100vh - 3.75rem);
     overflow-y: auto;
-    transition: width 0.2s ease;
+    //transition: width 0.2s ease;
   }
 
   // Sidebar toggle button styles
@@ -43,7 +43,7 @@ body {
     padding: 0.25rem 0.5rem;
     font-size: 0.875rem;
     opacity: 0.7;
-    transition: opacity 0.2s ease;
+    //transition: opacity 0.2s ease;
 
     &:hover {
       opacity: 1;
@@ -53,20 +53,20 @@ body {
   .sidebar-show-btn {
     display: none;
     position: fixed;
-    top: 4.5rem;
+    top: 3.125rem;
     left: 0;
     z-index: 1000;
     padding: 0.5rem 0.35rem;
     font-size: 0.875rem;
     border-radius: 0 0.25rem 0.25rem 0;
     border-left: none;
-    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
-    background-color: $sidebar-bg;
-    border-color: rgba($primary, 0.3);
+    box-shadow: none;
+    background-color: transparent;
+    border-color: transparent;
 
     &:hover {
-      background-color: rgba($primary, 0.2);
-      border-color: rgba($primary, 0.5);
+      background-color: transparent !important;
+      border-color: transparent !important;
     }
   }
 
