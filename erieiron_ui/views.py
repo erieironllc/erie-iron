@@ -1848,7 +1848,7 @@ def _initiative_tab_context_llmrequests_consolidated(initiative, active_sub_tab=
 def _task_tab_available_llmrequests_consolidated(task, business, self_driving_task) -> bool:
     return (
             _task_tab_available_llmrequests(task, task.initiative.business) or
-            _task_tab_available_llm_spend(task, task.initiative.business, task.selfdrivingtask)
+            _task_tab_available_llm_spend(task, task.initiative.business, None)
     )
 
 

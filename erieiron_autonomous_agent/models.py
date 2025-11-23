@@ -1201,27 +1201,11 @@ class InfrastructureStack(BaseErieIronModel):
         
         return stack
     
-    @transaction.atomic
-    def tombstone(self) -> "InfrastructureStack":
-        env_type = self.env_type
-        initiative = self.initiative
-        stack_type = self.stack_type
-        
-        self.delete_resources()
-        
-        InfrastructureStack.objects.filter(id=self.id).delete()
-        
-        return InfrastructureStack.get_stack(
-            initiative=initiative,
-            stack_type=stack_type,
-            env_type=env_type,
-            assert_create=True,
-        )
-    
-    def delete_resources(self):
-        if EnvironmentType.PRODUCTION.eq(self.env_type):
-            raise Exception(f"cannot tombstone a production stack")
-        
+    def delete_resources(self, force=False):
+        if not force:
+            if EnvironmentType.PRODUCTION.eq(self.env_type):
+                raise Exception(f"cannot destroy a production stack.  needs to be done manually")
+            
         if not self.resources:
             return
         
@@ -1230,6 +1214,8 @@ class InfrastructureStack(BaseErieIronModel):
             StackManager(self, container_env=self.get_runtime_env()).destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
+            
+        return self
     
     def get_template_name(self) -> str:
         return InfrastructureStackType(self.stack_type).get_opentofu_config()
