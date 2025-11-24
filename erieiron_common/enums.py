@@ -528,10 +528,13 @@ class DevelopmentRoutingPath(ErieEnum):
 
 class CredentialService(ErieEnum):
     RDS = auto()
-    
+    COGNITO = auto()
+
     def get_desc(self):
         if CredentialService.RDS.eq(self):
             return "AWS RDS"
+        elif CredentialService.COGNITO.eq(self):
+            return "AWS Cognito User Pool"
         else:
             return self.title()
 

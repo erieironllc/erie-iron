@@ -72,6 +72,12 @@ PERMISSIONS_ERROR_PATTERNS = [
     "InsufficientCapabilitiesException",
 ]
 
+# Resources that should be retained (not destroyed) when destroying the stack.
+RESOURCES_TO_RETAIN_ON_DESTROY = [
+    "aws_security_group_rule.rds_ingress_client",
+    "aws_security_group_rule.rds_ingress_vpc",
+]
+
 
 class StackManager:
     def __init__(
@@ -826,19 +832,89 @@ class StackManager:
                 {exc.stderr or '<empty>'}
             """))
     
+    def _get_destroy_targets_respecting_retained_resources(self) -> tuple[list[str], bool]:
+        """Return (targets, has_retained_resources).
+
+        targets: list of fully-qualified resource addresses that are safe to destroy.
+        has_retained_resources: True if any resources in state match RESOURCES_TO_RETAIN_ON_DESTROY.
+        """
+        resources_to_retain = set(common.ensure_list(RESOURCES_TO_RETAIN_ON_DESTROY) + common.ensure_list(self.stack.imported_shared_resources))
+        
+        state = self.get_state_data()
+        values = state.get("values") or {}
+        root_module = values.get("root_module") or {}
+        targets: list[str] = []
+        has_retained = False
+
+        def walk_module(module: dict) -> None:
+            nonlocal has_retained
+            for res in module.get("resources", []):
+                r_type = res.get("type", "")
+                r_name = res.get("name", "")
+                base_id = f"{r_type}.{r_name}" if r_type and r_name else ""
+                if base_id in resources_to_retain:
+                    has_retained = True
+                    continue
+                address = res.get("address") or base_id
+                if address:
+                    targets.append(address)
+            for child in module.get("child_modules", []):
+                walk_module(child)
+
+        walk_module(root_module)
+        return targets, has_retained
+
     def destroy_stack(
             self,
             *,
             timeout: int | None = None,
             auto_approve: bool = True,
     ) -> OpenTofuCommandResult:
-        """Destroy all resources managed by this stack."""
+        """Destroy all resources managed by this stack, except those explicitly retained."""
         args = ["destroy", "-input=false", "-no-color"]
         if auto_approve:
             args.append("-auto-approve")
-        
+
         args.extend(["-var-file", self.get_tfvars_file()])
-        
+
+        # Compute destroy targets while respecting resources we want to retain
+        try:
+            destroy_targets, has_retained = self._get_destroy_targets_respecting_retained_resources()
+        except OpenTofuCommandError as exc:
+            logging.error(
+                "Failed to inspect state prior to destroy; aborting to avoid deleting retained resources.",
+                extra={"error": str(exc), "stack": self.stack.stack_namespace_token},
+            )
+            raise
+
+        if has_retained:
+            if not destroy_targets:
+                # Nothing to destroy besides retained resources; log and return synthetic success
+                logging.info(
+                    "Destroy requested but stack only contains resources configured to be retained; skipping destroy.",
+                    extra={"stack": self.stack.stack_namespace_token},
+                )
+                now = common.get_now()
+                synthetic_result = OpenTofuCommandResult(
+                    command=[settings.TOFU_BIN, "destroy", "(no-op-retained-resources-only)"],
+                    cwd=str(self.workspace_dir),
+                    started_at=now,
+                    completed_at=now,
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                    extra={
+                        "skipped": True,
+                        "reason": "Stack destroy skipped because only retained resources were present.",
+                    },
+                )
+                self.record("destroy", synthetic_result)
+                return synthetic_result
+
+            # Restrict destroy to non-retained resources using -target arguments
+            for addr in destroy_targets:
+                args.append(f"-target={addr}")
+
         try:
             result = self.run_tofu_command("destroy", args, timeout=timeout)
             self.record("destroy", result)
@@ -890,7 +966,10 @@ class StackManager:
         return resource_defs
     
     def import_external_resources(self, resources_to_import: list[tuple[str, str]]):
+        imported_shared_resources = self.stack.imported_shared_resources or []
+        
         for name, value in resources_to_import:
+            imported_shared_resources.append(name)
             # Skip import if the resource already exists in state
             resource_type = name.split(".")[0]
             state_resources = self.get_resources(resource_type)
@@ -911,7 +990,10 @@ class StackManager:
                     name,
                     value
                 ])
-    
+                
+        self.stack.imported_shared_resources = list(set(imported_shared_resources))
+        self.stack.save()
+
     def read_cloudwatch_stack_activity(
             self,
             env_type: EnvironmentType,

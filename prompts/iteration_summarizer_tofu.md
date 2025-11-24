@@ -57,6 +57,7 @@ You will be provided
    - AWS SDK or CloudWatch filter queries failed due to syntax or parameter issues (e.g., `InvalidParameterException`).
    - Expected logs exist but test filters did not match them (logging mismatch).
    - Stacks deployed and at least one test executed successfully, even if other errors occurred.
+   - The stack environment is missing credentials or a credential secret.  When this happens, include enough information in the context so the code planner can fix it
 
    **Rule of thumb:**  
    Mark `blocked: true` only when an orchestration or environment-level issue prevents the iteration from executing or being diagnosed at all. Otherwise, default to `blocked: false`.

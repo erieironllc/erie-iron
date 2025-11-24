@@ -48,8 +48,45 @@
           "database_rules",
           "ses_email_rules",
           "s3_storage_rules",
-          "sqs_queue_rules"
+          "sqs_queue_rules",
+          "cognito_rules"
         ]
+      }
+    },
+
+    "required_credentials": {
+      "type": "object",
+      "description": "Mapping of service names to credential specification objects required for this code change.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["secret_arn_env_var", "schema"],
+        "additionalProperties": false,
+        "properties": {
+          "secret_arn_env_var": {
+            "type": "string",
+            "description": "Name of the environment variable containing the AWS Secrets Manager secret ARN at runtime.",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "secret_arn_cfn_parameter": {
+            "type": "string",
+            "description": "Optional CloudFormation/OpenTofu parameter name for the secret ARN."
+          },
+          "schema": {
+            "type": "array",
+            "description": "Array describing each key/value pair expected inside the secret.",
+            "items": {
+              "type": "object",
+              "required": ["key", "type", "required", "description"],
+              "additionalProperties": false,
+              "properties": {
+                "key": { "type": "string", "description": "Key name inside the secret." },
+                "type": { "type": "string", "description": "Data type (string, number, boolean, object)." },
+                "required": { "type": "boolean", "description": "Whether this key is required." },
+                "description": { "type": "string", "description": "Purpose of this credential field." }
+              }
+            }
+          }
+        }
       }
     },
 

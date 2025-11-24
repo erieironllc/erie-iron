@@ -423,6 +423,7 @@ class Business(BaseErieIronModel):
     
     def get_secrets_root_key(self, env_type: EnvironmentType):
         from erieiron_common import aws_utils
+        env_type = EnvironmentType(env_type)
         
         project_name = aws_utils.sanitize_aws_name(self.service_token, max_length=64)
         return f"z/{project_name}/{env_type.value}"
@@ -996,6 +997,7 @@ class InfrastructureStack(BaseErieIronModel):
     env_type = models.TextField(choices=EnvironmentType.choices())
     stack_configuration = models.TextField(null=True)
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
+    imported_shared_resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     stack_vars = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     created_timestamp = models.DateTimeField(auto_now_add=True)
@@ -1022,6 +1024,9 @@ class InfrastructureStack(BaseErieIronModel):
         for credential_service_name, cred_def in self.business.required_credentials.items():
             if credential_service_name == CredentialService.RDS.value:
                 # OpenTofu and RDS handle the RDS secret - we update this as a special case later
+                continue
+            if credential_service_name == CredentialService.COGNITO.value:
+                # OpenTofu creates the Cognito secret in the target account alongside Cognito resources
                 continue
             
             secret_arn_env_var = cred_def.get("secret_arn_env_var")

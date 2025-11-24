@@ -25,7 +25,7 @@ from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import vali
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
+from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
@@ -232,7 +232,6 @@ def plan_and_implement_code_changes(config):
         
         write_code(config, planning_data)
 
-
 def handle_agent_blocked(task_id, agent_blocked):
     if not task_id:
         return
@@ -397,8 +396,40 @@ def plan_code_changes(config):
                 "data_json": tombstone_data
             }
         )
-    
+
+    # Merge any newly discovered required_credentials from the planner into the Business model
+    merge_planner_required_credentials(config.business, planning_data)
+
     return planning_data
+
+
+def merge_planner_required_credentials(business: Business, planning_data: dict) -> None:
+    """
+    Merge any required_credentials discovered by the planner into the Business model.
+
+    This allows the coding planner to dynamically add credential requirements (like COGNITO)
+    when it discovers they are needed during the development iteration loop.
+    """
+    planner_credentials = planning_data.get("required_credentials")
+    if not planner_credentials:
+        return
+
+    current_credentials = business.required_credentials or {}
+    merged_credentials = {
+        **current_credentials,
+        **planner_credentials
+    }
+
+    # Only update if there are actual changes
+    if merged_credentials != current_credentials:
+        logging.info(
+            f"Merging planner-discovered credentials into Business {business.service_token}: "
+            f"added {set(planner_credentials.keys()) - set(current_credentials.keys())}"
+        )
+        Business.objects.filter(id=business.id).update(
+            required_credentials=merged_credentials
+        )
+        business.refresh_from_db(fields=["required_credentials"])
 
 
 def get_strategic_unblocking_data(config):
@@ -1427,6 +1458,30 @@ def add_rds_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):
         if not output_var_value:
             raise BadPlan(f"Infrastructure stack lacks an output value for the required output named '{output_var_name}'")
         config.runtime_env[env_name] = str(output_var_value)
+
+
+def add_cognito_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):
+    """Add Cognito secret ARN to runtime environment if COGNITO is in required_credentials."""
+    business = config.business
+    if not business.required_credentials:
+        return
+
+    cognito_credential_def = business.required_credentials.get(CredentialService.COGNITO.value)
+    if not cognito_credential_def:
+        return
+
+    if not app_outputs:
+        app_outputs = config.stack_manager.get_outputs()
+
+    # CognitoSecretArn is the output name defined in codewriter--cognito_rules.md
+    cognito_secret_arn = app_outputs.get("CognitoSecretArn")
+    if not cognito_secret_arn:
+        # Cognito not yet provisioned in the stack - this is expected during initial setup
+        raise BadPlan("ERROR:  CognitoSecretArn not found in stack outputs - Cognito may not be provisioned yet.  make sure stack.tf exports CognitoSecretArn")
+
+    secret_arn_env_var = cognito_credential_def.get("secret_arn_env_var", "COGNITO_SECRET_ARN")
+    config.runtime_env[secret_arn_env_var] = cognito_secret_arn
+    config.runtime_env["COGNITO_SECRET_ARN"] = cognito_secret_arn
 
 
 def get_iteration_files_msg(current_iteration):
@@ -3912,7 +3967,8 @@ def deploy_opentofu_stack(
         apply_result = stack_manager.apply()
         outputs = apply_result.extra["outputs"]
         add_rds_vals_to_env(config, outputs)
-        
+        add_cognito_vals_to_env(config, outputs)
+
         if stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
             ses_manager.manage_ses_domain_settings(
                 config.cloud_account,
@@ -4092,7 +4148,14 @@ def build_tfvars_payload(
         payload["WebContainerMemory"] = business.web_container_memory
     if business.web_desired_count is not None:
         payload["WebDesiredCount"] = business.web_desired_count
-    
+
+    # Add Cognito configuration based on business.required_credentials
+    if bool(common.get(config.business.required_credentials, "COGNITO")):
+        payload["EnableCognito"] = True
+        mobile_scheme = getattr(business, "mobile_app_scheme", None) or business.service_token
+        if mobile_scheme:
+            payload["MobileAppScheme"] = mobile_scheme
+
     domain_name = config.business.domain if EnvironmentType.PRODUCTION.eq(config.env_type) else config.initiative.domain
     if not domain_name:
         raise AgentBlocked(

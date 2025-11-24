@@ -52,6 +52,22 @@ Follow these rules for such model edits:
 
 ---
 
+## Cognito Configuration Rules
+- Application code that requires Cognito configuration (User Pool ID, Client ID, Domain) **must** use the shared helper:
+  ```python
+  from erieiron_public import agent_tools
+
+  cognito_config = agent_tools.get_cognito_config()
+  user_pool_id = cognito_config.get("userPoolId")
+  client_id = cognito_config.get("clientId")
+  domain = cognito_config.get("domain")
+  ```
+- This helper fetches from `COGNITO_SECRET_ARN` with caching, falling back to individual env vars (`COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_DOMAIN`) for backwards compatibility.
+- Generated code may **never** read `COGNITO_SECRET_ARN` directly or implement custom secret fetching for Cognito config.
+- Use `agent_tools.get_cognito_config(force_refresh=True)` when you need to bypass the cache.
+
+---
+
 ## File and Module Naming
 - All Python application modules must live under `./core/` (or an alternative source directory described in the architecture). The build pipeline copies `./core` into the deployment `dist/` directory automatically—do **not** attempt to write artifacts directly into `dist/`.
 - All python test files **must** live in the directory "./core/tests".  **Do not** put them anywhere else

@@ -85,7 +85,10 @@ Secret Def:
         aws_secret_key.append(cloud_account.id)
     aws_secret_key.append(credential_service_name)
     
-    aws_secret_key = aws_utils.sanitize_aws_name("/".join(aws_secret_key), 512)
+    aws_secret_key = aws_utils.sanitize_aws_name(
+        common.safe_join(aws_secret_key, "/"),
+        512
+    )
     
     try:
         secret_dict = aws_utils.get_secret(aws_secret_key)
