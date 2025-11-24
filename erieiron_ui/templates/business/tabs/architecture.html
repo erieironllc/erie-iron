@@ -1,16 +1,16 @@
 {% load erieiron_common_tags %}
 
 <div class="tab-pane-content">
-    <div class="d-flex justify-content-end gap-2 mb-3">
-        <button type="button"
-                class="btn btn-sm btn-primary"
-                data-bs-toggle="modal"
-                data-bs-target="#defineArchitectureModal">
-            Define Architecture
-        </button>
-    </div>
-
     {% if not business.architecture %}
+        <div class="d-flex justify-content-end gap-2 mb-3">
+            <button type="button"
+                    class="btn btn-sm btn-primary"
+                    data-bs-toggle="modal"
+                    data-bs-target="#defineArchitectureModal">
+                Define Architecture
+            </button>
+        </div>
+
         <div class="alert alert-info" role="alert">
             No architecture has been defined yet. Use the Define Architecture button to provide a description.
         </div>

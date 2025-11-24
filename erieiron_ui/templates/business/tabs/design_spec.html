@@ -1,16 +1,16 @@
 {% load erieiron_common_tags %}
 
 <div class="tab-pane-content">
-    <div class="d-flex justify-content-end gap-2 mb-3">
-        <button type="button"
-                class="btn btn-sm btn-primary"
-                data-bs-toggle="modal"
-                data-bs-target="#defineDesignSpecModal">
-            Define Design Spec
-        </button>
-    </div>
-
     {% if not business.ui_design_spec %}
+        <div class="d-flex justify-content-end gap-2 mb-3">
+            <button type="button"
+                    class="btn btn-sm btn-primary"
+                    data-bs-toggle="modal"
+                    data-bs-target="#defineDesignSpecModal">
+                Define Design Spec
+            </button>
+        </div>
+
         <div class="alert alert-info" role="alert">
             No UI design specification has been defined yet. Use the Define Design Spec button to provide a description.
         </div>
@@ -19,7 +19,8 @@
     {% endif %}
 </div>
 
-<div class="modal fade" id="defineDesignSpecModal" tabindex="-1" aria-labelledby="defineDesignSpecModalLabel" aria-hidden="true">
+<div class="modal fade" id="defineDesignSpecModal" tabindex="-1" aria-labelledby="defineDesignSpecModalLabel"
+     aria-hidden="true">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <form method="post" action="{% url 'action_business_define_ui_design_spec' business.id %}">
