@@ -552,18 +552,6 @@ def ensure_lb_alias_record(
     )
     config.log("Security group validation passed")
     
-    print(textwrap.dedent(
-        f"""
-        CLOUDWATCH
-
-
-
-        {config.stack_manager.get_cloudwatch_content()} 
-
-
-         """
-    ))
-    
     # Wait for ECS service to be stable
     aws_interface.wait_for_ecs_service_stable(
         cluster_name,
@@ -1404,11 +1392,10 @@ def deploy_iteration(
             container_image_tag
         )
     
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
-        ensure_lb_alias_record(
-            config,
-            app_outputs
-        )
+    ensure_lb_alias_record(
+        config,
+        app_outputs
+    )
 
 
 def add_rds_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):

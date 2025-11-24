@@ -34,7 +34,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         task_id = options.get("task_id")
         if not task_id:
-            initiative_id = os.getenv("LOCAL_DEV_INITIATIVE", options.get("initiative_id"))
+            initiative_id = options.get("initiative_id") or os.getenv("LOCAL_DEV_INITIATIVE")
             if not initiative_id:
                 raise Exception(f"need a task or initiative id")
             
