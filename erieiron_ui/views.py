@@ -1190,6 +1190,30 @@ def _tab_context_design_spec(business: Business) -> dict:
     return {}
 
 
+def _tab_available_required_credentials(_: Business) -> bool:
+    return True
+
+
+def _tab_context_required_credentials(business: Business) -> dict:
+    credentials = business.required_credentials or {}
+    if not isinstance(credentials, dict):
+        credentials = {}
+
+    ordered_entries = [
+        {
+            "service": service_name,
+            "details": definition or {},
+        }
+        for service_name, definition in sorted(credentials.items())
+    ]
+
+    return {
+        "required_credentials": credentials,
+        "required_credential_services": ordered_entries,
+        "has_required_credentials": bool(ordered_entries),
+    }
+
+
 def _tab_available_architecture_diagram(_: Business) -> bool:
     return True
 
@@ -1760,11 +1784,12 @@ def _tab_context_business_plan_consolidated(business: Business, active_sub_tab=N
 
 def _tab_available_implementation_consolidated(business: Business) -> bool:
     return (
-            _tab_available_architecture(business) or
-            True or  # design-spec is always available
-            _tab_available_infrastructure_stacks(business) or
-            _tab_available_cloud_accounts(business) or
-            _tab_available_codefiles(business)
+        _tab_available_architecture(business)
+        or _tab_available_required_credentials(business)
+        or _tab_available_infrastructure_stacks(business)
+        or _tab_available_cloud_accounts(business)
+        or _tab_available_codefiles(business)
+        or True  # design-spec is always available
     )
 
 
@@ -1776,6 +1801,12 @@ def _tab_context_implementation_consolidated(business: Business, active_sub_tab=
     sub_tabs_config = [
         ("architecture", "architecture", _tab_available_architecture, _tab_context_architecture),
         ("design-spec", "design_spec", lambda b: True, _tab_context_design_spec),
+        (
+            "required-credentials",
+            "required_credentials",
+            _tab_available_required_credentials,
+            _tab_context_required_credentials,
+        ),
         ("infrastructure-stacks", "infrastructure_stacks", _tab_available_infrastructure_stacks, _tab_context_infrastructure_stacks),
         ("cloud-accounts", "cloud_accounts", _tab_available_cloud_accounts, _tab_context_cloud_accounts),
         ("codefiles", "codefiles", _tab_available_codefiles, _tab_context_codefiles),

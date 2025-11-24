@@ -460,6 +460,13 @@ BUSINESS_TAB_DEFINITIONS = [
                 "context_fn": views._tab_context_design_spec,
             },
             {
+                "slug": "required-credentials",
+                "label": "Required Credentials",
+                "template": "business/tabs/required_credentials.html",
+                "availability_fn": views._tab_available_required_credentials,
+                "context_fn": views._tab_context_required_credentials,
+            },
+            {
                 "slug": "infrastructure-stacks",
                 "label": "Infrastructure",
                 "template": "business/tabs/infrastructure_stacks.html",

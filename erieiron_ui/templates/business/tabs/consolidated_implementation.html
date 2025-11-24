@@ -24,6 +24,14 @@
                    aria-selected="{% if active_sub_tab == 'design-spec' %}true{% else %}false{% endif %}">
                     Design Spec
                 </a>
+                <a class="nav-link{% if active_sub_tab == 'required-credentials' %} active{% endif %}"
+                   id="required-credentials-tab"
+                   href="{% url 'view_business_tab_sub' 'implementation' 'required-credentials' business.id %}"
+                   role="tab"
+                   aria-controls="required-credentials"
+                   aria-selected="{% if active_sub_tab == 'required-credentials' %}true{% else %}false{% endif %}">
+                    Required Credentials
+                </a>
                 {% if sub_tabs.infrastructure_stacks.available %}
                 <a class="nav-link{% if active_sub_tab == 'infrastructure-stacks' %} active{% endif %}" 
                    id="infrastructure-stacks-tab" 
@@ -65,6 +73,10 @@
             {% elif active_sub_tab == 'design-spec' %}
                 <div class="tab-pane fade show active" id="design-spec" role="tabpanel" aria-labelledby="design-spec-tab">
                     {% include "business/tabs/design_spec.html" %}
+                </div>
+            {% elif active_sub_tab == 'required-credentials' %}
+                <div class="tab-pane fade show active" id="required-credentials" role="tabpanel" aria-labelledby="required-credentials-tab">
+                    {% include "business/tabs/required_credentials.html" %}
                 </div>
             {% elif active_sub_tab == 'infrastructure-stacks' %}
                 <div class="tab-pane fade show active" id="infrastructure-stacks" role="tabpanel" aria-labelledby="infrastructure-stacks-tab">
