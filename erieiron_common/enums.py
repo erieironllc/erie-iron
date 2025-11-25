@@ -214,7 +214,8 @@ class ClientMessage(ErieEnum):
 
 class PubSubWorkerResponse(ErieEnum):
     STOP = auto()
-    
+
+
 class PubSubMessageType(ErieEnum):
     EVERY_MINUTE = auto()
     EVERY_HOUR = auto()
@@ -238,7 +239,7 @@ class PubSubMessageType(ErieEnum):
     
     BUSINESS_BOOTSTRAP_REQUESTED = auto()
     BUSINESS_SECOND_OPINION_EVALUATION_REQUESTED = auto()
-
+    
     PORTFOLIO_ADD_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_REDUCE_BUSINESSES_REQUESTED = auto()
     PORTFOLIO_PICK_NEW_BUSINESS = auto()
@@ -529,7 +530,53 @@ class DevelopmentRoutingPath(ErieEnum):
 class CredentialService(ErieEnum):
     RDS = auto()
     COGNITO = auto()
-
+    LLM = auto()
+    DJANGO = auto()
+    STRIPE = auto()
+    HCAPTCHA = auto()
+    ONESIGNAL = auto()
+    OAUTH_APPLE = auto()
+    FIREBASE_FCM = auto()
+    OAUTH_GITHUB = auto()
+    OAUTH_GOOGLE = auto()
+    COINBASE_COMMERCE = auto()
+    
+    @staticmethod
+    def get_stack_input_credentials() -> list['CredentialService']:
+        return [
+            CredentialService.LLM,
+            CredentialService.STRIPE,
+            CredentialService.HCAPTCHA,
+            CredentialService.ONESIGNAL,
+            CredentialService.OAUTH_APPLE,
+            CredentialService.FIREBASE_FCM,
+            CredentialService.OAUTH_GITHUB,
+            CredentialService.OAUTH_GOOGLE,
+            CredentialService.COINBASE_COMMERCE
+        ]
+    
+    @staticmethod
+    def get_stack_output_credentials() -> list['CredentialService']:
+        return [
+            credential_service
+            for credential_service in CredentialService 
+            if CredentialService.get_output_var_to_env_var_mappings(credential_service)
+        ]
+    
+    @staticmethod
+    def get_output_var_to_env_var_mappings(service: 'CredentialService') -> dict[str, str]:
+        return {
+            CredentialService.RDS: {
+                "RdsSecretArn": "RDS_SECRET_ARN",
+                "RdsInstanceDBName": "ERIEIRON_DB_NAME",
+                "RdsInstancePort": "ERIEIRON_DB_PORT",
+                "RdsInstanceEndpoint": "ERIEIRON_DB_HOST",
+            },
+            CredentialService.COGNITO: {
+                "CognitoSecretArn": "COGNITO_SECRET_ARN",
+            }
+        }.get(CredentialService(service))
+    
     def get_desc(self):
         if CredentialService.RDS.eq(self):
             return "AWS RDS"
@@ -565,7 +612,6 @@ class InfrastructureStackType(ErieEnum):
             return "./opentofu/target_account_provisioning/stack.tf"
         else:
             raise Exception(f"unhandled stack type {self}")
-    
 
 
 class InitiativeNames(ErieEnum):

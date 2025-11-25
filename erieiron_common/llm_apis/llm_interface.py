@@ -25,6 +25,9 @@ def chat(
         creativity: LlmCreativity = LlmCreativity.MEDIUM,
         debug=False
 ) -> 'LlmResponse':
+    if isinstance(messages, str):
+        messages = [LlmMessage.user(messages)]
+        
     messages = common.flatten(messages)
     
     output_schema = common.safe_read(output_schema)

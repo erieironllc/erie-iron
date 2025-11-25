@@ -27,9 +27,10 @@ from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions impor
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
+from erieiron_autonomous_agent.tests.test_shared_vpc_metadata import business
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
-from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager
+from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager, ErieIronJSONEncoder
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity
@@ -232,6 +233,7 @@ def plan_and_implement_code_changes(config):
         
         write_code(config, planning_data)
 
+
 def handle_agent_blocked(task_id, agent_blocked):
     if not task_id:
         return
@@ -396,10 +398,10 @@ def plan_code_changes(config):
                 "data_json": tombstone_data
             }
         )
-
+    
     # Merge any newly discovered required_credentials from the planner into the Business model
     merge_planner_required_credentials(config.business, planning_data)
-
+    
     return planning_data
 
 
@@ -413,13 +415,13 @@ def merge_planner_required_credentials(business: Business, planning_data: dict) 
     planner_credentials = planning_data.get("required_credentials")
     if not planner_credentials:
         return
-
+    
     current_credentials = business.required_credentials or {}
     merged_credentials = {
         **current_credentials,
         **planner_credentials
     }
-
+    
     # Only update if there are actual changes
     if merged_credentials != current_credentials:
         logging.info(
@@ -1183,6 +1185,8 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.log("Execution finished")
     except NeedPlan as e:
         raise e
+    except BadPlan as e:
+        config.log(f"Bad Plan: {e}")
     except AgentBlocked as e:
         logging.exception(e)
         raise e
@@ -1391,10 +1395,13 @@ def deploy_iteration(
     config.stack_manager.validate_stack()
     
     db_migrations_applied = False
+    rds_vals_in_env = False
     if config.stack_manager.get_db_is_running():
         try:
             # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
-            add_rds_vals_to_env(config)
+            add_tofu_outputs_to_runtime_env(config)
+            rds_vals_in_env = True
+            
             manage_db(
                 config,
                 container_image_tag
@@ -1403,10 +1410,11 @@ def deploy_iteration(
         except Exception as e:
             logging.error(f"failed to apply db migrations {e} before deployment")
         
-        validate_web_container(
-            config,
-            container_image_tag
-        )
+        if rds_vals_in_env:
+            validate_web_container(
+                config,
+                container_image_tag
+            )
     
     app_outputs = deploy_opentofu_stack(
         config=config,
@@ -1429,59 +1437,28 @@ def deploy_iteration(
     )
 
 
-def add_rds_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):
-    if not app_outputs:
-        app_outputs = config.stack_manager.get_outputs()
+def add_tofu_outputs_to_runtime_env(config: CodingAgentConfig, outputs: dict | None = None):
+    """Populate runtime_env with the OpenTofu outputs required by the runtime."""
+    if outputs is None:
+        outputs = config.stack_manager.get_outputs()
     
-    rds_secret_arn = app_outputs.get("RdsMasterSecretArn")
-    if not rds_secret_arn:
-        raise BadPlan("Infrastructure stack lacks an output named RdsMasterSecretArn")
+    business = config.initiative.business
     
-    business = config.business
-    if not business.required_credentials:
-        raise BadPlan(f"Business missing required_credentials: {business.service_token}")
-    
-    rds_credential_def = business.required_credentials.get(CredentialService.RDS.value) or {}
-    secret_arn_env_var = rds_credential_def.get("secret_arn_env_var")
-    if not secret_arn_env_var:
-        raise BadPlan("Business is missing required RDS credential definition or secret_arn_env_var")
-    
-    config.runtime_env[secret_arn_env_var] = rds_secret_arn
-    
-    output_varname_to_envname = {
-        "RdsInstanceDBName": "ERIEIRON_DB_NAME",
-        "RdsInstancePort": "ERIEIRON_DB_PORT",
-        "RdsInstanceEndpoint": "ERIEIRON_DB_HOST"
-    }
-    for output_var_name, env_name in output_varname_to_envname.items():
-        output_var_value = app_outputs.get(output_var_name)
-        if not output_var_value:
-            raise BadPlan(f"Infrastructure stack lacks an output value for the required output named '{output_var_name}'")
-        config.runtime_env[env_name] = str(output_var_value)
-
-
-def add_cognito_vals_to_env(config: CodingAgentConfig, app_outputs: dict = None):
-    """Add Cognito secret ARN to runtime environment if COGNITO is in required_credentials."""
-    business = config.business
-    if not business.required_credentials:
-        return
-
-    cognito_credential_def = business.required_credentials.get(CredentialService.COGNITO.value)
-    if not cognito_credential_def:
-        return
-
-    if not app_outputs:
-        app_outputs = config.stack_manager.get_outputs()
-
-    # CognitoSecretArn is the output name defined in codewriter--cognito_rules.md
-    cognito_secret_arn = app_outputs.get("CognitoSecretArn")
-    if not cognito_secret_arn:
-        # Cognito not yet provisioned in the stack - this is expected during initial setup
-        raise BadPlan("ERROR:  CognitoSecretArn not found in stack outputs - Cognito may not be provisioned yet.  make sure stack.tf exports CognitoSecretArn")
-
-    secret_arn_env_var = cognito_credential_def.get("secret_arn_env_var", "COGNITO_SECRET_ARN")
-    config.runtime_env[secret_arn_env_var] = cognito_secret_arn
-    config.runtime_env["COGNITO_SECRET_ARN"] = cognito_secret_arn
+    for credential_service  in (business.required_credentials or {}).keys():
+        parsed_credential_service = CredentialService.valid_or(credential_service)
+        if not parsed_credential_service:
+            raise AgentBlocked(f"Business defines an usupported credential service: {credential_service}")
+        
+        output_to_envs = CredentialService.get_output_var_to_env_var_mappings(parsed_credential_service) or {}
+        for output_var_name, env_name in output_to_envs.items():
+            output_var_value = outputs.get(output_var_name)
+            
+            if not output_var_value:
+                raise BadPlan(
+                    f"Infrastructure stack lacks an output value for the required output named '{credential_service} / {output_var_name}'"
+                )
+            
+            config.runtime_env[env_name] = str(output_var_value)
 
 
 def get_iteration_files_msg(current_iteration):
@@ -2268,7 +2245,7 @@ def get_lessons(
                 unique_indices.append(i)
         
         lessons = [lessons[i] for i in unique_indices]
-        
+    
     return [
         {
             "lesson_id": a.id, "lesson_value": f"{a.lesson} - otherwise you'll see problems like this: {a.pattern} ({a.trigger})"
@@ -3966,9 +3943,8 @@ def deploy_opentofu_stack(
         
         apply_result = stack_manager.apply()
         outputs = apply_result.extra["outputs"]
-        add_rds_vals_to_env(config, outputs)
-        add_cognito_vals_to_env(config, outputs)
-
+        add_tofu_outputs_to_runtime_env(config, outputs)
+        
         if stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
             ses_manager.manage_ses_domain_settings(
                 config.cloud_account,
@@ -3987,16 +3963,16 @@ def deploy_opentofu_stack(
         stack.save()
         
         return outputs
-    except MissingStackPerms as exc:
-        logging.exception(exc)
-        raise exc
-    except OpenTofuCommandError as exc:
+    except MissingStackPerms as missing_perms_exception:
+        logging.exception(missing_perms_exception)
+        raise missing_perms_exception
+    except OpenTofuCommandError as open_tofu_exception:
         # Enhanced error logging and context
         logging.error(f"[DEPLOY_DEBUG] OpenTofu command failed during {stack_manager.stage} stage")
-        logging.error(f"[DEPLOY_DEBUG] Command: {' '.join(exc.result.command)}")
-        logging.error(f"[DEPLOY_DEBUG] Exit code: {exc.result.returncode}")
-        logging.error(f"[DEPLOY_DEBUG] Stdout: {exc.result.stdout}")
-        logging.error(f"[DEPLOY_DEBUG] Stderr: {exc.result.stderr}")
+        logging.error(f"[DEPLOY_DEBUG] Command: {' '.join(open_tofu_exception.result.command)}")
+        logging.error(f"[DEPLOY_DEBUG] Exit code: {open_tofu_exception.result.returncode}")
+        logging.error(f"[DEPLOY_DEBUG] Stdout: {open_tofu_exception.result.stdout}")
+        logging.error(f"[DEPLOY_DEBUG] Stderr: {open_tofu_exception.result.stderr}")
         
         # Debug: Re-verify AWS credentials during error to help diagnose permission issues
         try:
@@ -4007,7 +3983,7 @@ def deploy_opentofu_stack(
         
         # Parse stderr for common permission error patterns and provide troubleshooting hints
         troubleshooting_hints = []
-        stderr_lower = exc.result.stderr.lower() if exc.result.stderr else ""
+        stderr_lower = open_tofu_exception.result.stderr.lower() if open_tofu_exception.result.stderr else ""
         
         if "accessdenied" in stderr_lower or "unauthorized" in stderr_lower:
             troubleshooting_hints.append("PERMISSION_ISSUE: Check IAM role permissions in target account")
@@ -4062,10 +4038,10 @@ def deploy_opentofu_stack(
                 pass
         
         error_payload = {
-            "message": str(exc),
-            "stderr": exc.result.stderr,
-            "stdout": exc.result.stdout,
-            "command": " ".join(exc.result.command),
+            "message": str(open_tofu_exception),
+            "stderr": open_tofu_exception.result.stderr,
+            "stdout": open_tofu_exception.result.stdout,
+            "command": " ".join(open_tofu_exception.result.command),
             "stage": stack_manager.stage,
             "troubleshooting_hints": troubleshooting_hints,
         }
@@ -4076,7 +4052,7 @@ def deploy_opentofu_stack(
         
         stack_manager.record(
             stack_manager.stage,
-            exc.result
+            open_tofu_exception.result
         )
         
         log_payload = opentofu_log_utils.build_opentofu_log_payload(
@@ -4086,10 +4062,9 @@ def deploy_opentofu_stack(
             error=error_payload,
         )
         
-        raise AgentBlocked(json.dumps({
-            "description": f"OpenTofu command failed {config.stack.stack_name}",
-            **error_payload,
-        }, indent=4))
+        config.add_deployment_log(log_payload)
+        
+        raise open_tofu_exception
 
 
 def build_tfvars_payload(
@@ -4116,7 +4091,8 @@ def build_tfvars_payload(
         )
     
     env_type = config.env_type
-    secrets_key = config.business.get_secrets_root_key(env_type)
+    business = config.initiative.business
+    secrets_key = business.get_secrets_root_key(env_type)
     
     developer_cidr = common.get_ip_address()
     shared_vpc = config.aws_interface.get_shared_vpc()
@@ -4141,22 +4117,27 @@ def build_tfvars_payload(
     if web_container_image:
         payload["WebContainerImage"] = web_container_image
     
-    business = config.business
     if business.web_container_cpu is not None:
         payload["WebContainerCpu"] = business.web_container_cpu
     if business.web_container_memory is not None:
         payload["WebContainerMemory"] = business.web_container_memory
     if business.web_desired_count is not None:
         payload["WebDesiredCount"] = business.web_desired_count
-
+    
     # Add Cognito configuration based on business.required_credentials
-    if bool(common.get(config.business.required_credentials, "COGNITO")):
+    required_credentials = business.required_credentials or {}
+    
+    if CredentialService.COGNITO.value in required_credentials:
         payload["EnableCognito"] = True
         mobile_scheme = getattr(business, "mobile_app_scheme", None) or business.service_token
         if mobile_scheme:
             payload["MobileAppScheme"] = mobile_scheme
-
-    domain_name = config.business.domain if EnvironmentType.PRODUCTION.eq(config.env_type) else config.initiative.domain
+    
+    for credential_service in CredentialService.get_stack_input_credentials():
+        if CredentialService(credential_service).value in required_credentials:
+            ...
+    
+    domain_name = business.domain if EnvironmentType.PRODUCTION.eq(config.env_type) else config.initiative.domain
     if not domain_name:
         raise AgentBlocked(
             json.dumps({
@@ -4167,7 +4148,7 @@ def build_tfvars_payload(
     
     payload["DomainName"] = domain_name
     payload["DomainHostedZoneId"] = config.domain_manager.get_hosted_zone_id_by_domain(
-        config.business.domain
+        business.domain
     )
     payload["AlbCertificateArn"] = config.domain_manager.find_certificate_arn(
         business.domain,
@@ -4192,7 +4173,7 @@ def build_tfvars_payload(
         if param_name and param_value:
             payload[param_name] = param_value
     
-    planning_required_creds = config.business.required_credentials or {}
+    planning_required_creds = required_credentials or {}
     missing_secret_params: list[str] = []
     for credential_service, svc_spec in planning_required_creds.items():
         variable_name = (
@@ -4274,17 +4255,29 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
 
 
 def ecr_authenticate_for_base_image(config: CodingAgentConfig, dockerfile):
-    base_img = ""
-    try:
-        with open(dockerfile) as f:
-            pattern = r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)'
-            #   FROM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
-            #   FROM --platform=$TARGETPLATFORM 123456789012.dkr.ecr.region.amazonaws.com/repo:tag
-            for base_img in re.findall(pattern, f.read(), flags=re.IGNORECASE):
+    with open(dockerfile) as f:
+        images = re.findall(
+            r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)',
+            f.read(),
+            flags=re.IGNORECASE
+        )
+    
+    for base_img in images:
+        last_err = None
+        for attempt in range(3):
+            try:
                 ecr_login(config, base_img)
-    except Exception as e:
-        config.log(e)
-        raise AgentBlocked({"desc": f"Unable to authenticate with ecr for {base_img}", "error": str(e)})
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                config.log(f"ECR login failed for {base_img} on attempt {attempt + 1}: {e}")
+        
+        if last_err:
+            raise AgentBlocked({
+                "desc": f"Unable to authenticate with ECR for {base_img} after 3 attempts",
+                "error": str(last_err)
+            })
 
 
 def ecr_login(config: CodingAgentConfig, ecr_repo_uri):
