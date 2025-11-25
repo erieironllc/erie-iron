@@ -2380,3 +2380,100 @@ class AgentLesson(BaseErieIronModel):
             "lesson": self.lesson,
             "context_tags": self.context_tags,
         }
+
+
+class BusinessConversation(BaseErieIronModel):
+    """Tracks conversations between users and the system about a specific business"""
+    business = models.ForeignKey('Business', on_delete=models.CASCADE, related_name='conversations')
+    initiative = models.ForeignKey('Initiative', on_delete=models.SET_NULL, null=True, blank=True,
+                                   help_text="Optional: Scope conversation to a specific initiative")
+    title = models.TextField(help_text="Auto-generated summary of conversation topic")
+    status = models.TextField(default='active', choices=[
+        ('active', 'Active'),
+        ('archived', 'Archived'),
+        ('led_to_change', 'Led to Change')
+    ])
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-updated_at']
+    
+    def __str__(self):
+        return f"{self.business.name} - {self.title}"
+    
+    def get_context_snapshot(self) -> dict:
+        """Gather all relevant business context for LLM"""
+        business_data = self.business.get_llm_data()
+        
+        # Add initiative-specific context if scoped
+        if self.initiative:
+            business_data['initiative'] = {
+                'description': self.initiative.description,
+                'type': self.initiative.initiative_type,
+            }
+        
+        # Add recent active tasks
+        recent_tasks = Task.objects.filter(
+            initiative__business=self.business,
+            status__in=[TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED]
+        ).order_by('-created_timestamp')[:10]
+        business_data['active_tasks'] = [
+            {'name': t.get_name(), 'status': t.status, 'description': t.description}
+            for t in recent_tasks
+        ]
+        
+        # Add infrastructure stack info
+        stacks = InfrastructureStack.objects.filter(business=self.business)
+        business_data['infrastructure_stacks'] = [
+            {'name': s.stack_name, 'type': s.stack_type, 'status': "", 'environment': s.env_type}
+            for s in stacks
+        ]
+        
+        return business_data
+
+
+class ConversationMessage(BaseErieIronModel):
+    """Individual messages within a conversation"""
+    conversation = models.ForeignKey('BusinessConversation', on_delete=models.CASCADE, related_name='messages')
+    role = models.TextField(choices=[
+        ('user', 'User'),
+        ('assistant', 'Assistant'),
+        ('system', 'System')
+    ])
+    content = models.TextField()
+    llm_request = models.ForeignKey('LlmRequest', on_delete=models.SET_NULL, null=True, blank=True, help_text="Track API usage for this message")
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['created_at']
+    
+    def __str__(self):
+        return f"{self.role}: {self.content[:50]}..."
+
+
+class ConversationChange(BaseErieIronModel):
+    """Tracks proposed changes from conversations (Phase 2+)"""
+    conversation = models.ForeignKey('BusinessConversation', on_delete=models.CASCADE, related_name='changes')
+    message = models.ForeignKey('ConversationMessage', on_delete=models.CASCADE,
+                                help_text="The assistant message that proposed this change")
+    change_type = models.TextField(choices=[
+        ('business_plan', 'Business Plan'),
+        ('architecture', 'Architecture'),
+        ('infrastructure', 'Infrastructure'),
+        ('initiative', 'New Initiative'),
+        ('task', 'New Task')
+    ])
+    change_description = models.TextField(help_text="Human-readable description of proposed change")
+    change_details = models.JSONField(encoder=ErieIronJSONEncoder,
+                                      help_text="Structured details of what will change")
+    approved = models.BooleanField(default=False)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    applied = models.BooleanField(default=False)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    resulting_tasks = models.ManyToManyField('Task', blank=True,
+                                             help_text="Tasks created to implement this change")
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
