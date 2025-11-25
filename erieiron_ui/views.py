@@ -1683,9 +1683,19 @@ def _tab_context_bug_report(business: Business) -> dict:
         initiative_type=InitiativeType.ENGINEERING,
         title__icontains="Bug Fix"
     ).first()
-    
+
     return {
         "bug_fix_initiative": bug_fix_initiative
+    }
+
+
+def _tab_context_conversation(business: Business) -> dict:
+    from erieiron_autonomous_agent.models import BusinessConversation
+
+    conversations = business.conversations.all().order_by('-updated_at')[:20]
+
+    return {
+        "conversations": conversations
     }
 
 
@@ -6050,6 +6060,217 @@ def api_pubsub_publish(request):
     except Exception as e:
         logger.exception(f"Error publishing PubSub message: {e}")
         return JsonResponse({'error': 'Internal server error'}, status=500)
+
+
+# Business Conversation API Endpoints
+
+@require_http_methods(["POST"])
+def business_conversation_create(request, business_id):
+    """Create a new conversation for a business"""
+    from erieiron_autonomous_agent.models import BusinessConversation, Initiative
+    from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
+
+    business = get_object_or_404(Business, id=business_id)
+
+    # Optional: scope to initiative
+    initiative_id = rget(request, 'initiative_id')
+    initiative = None
+    if initiative_id:
+        initiative = get_object_or_404(Initiative, id=initiative_id)
+
+    title = rget(request, 'title', 'New Conversation')
+
+    conversation = BusinessConversationManager.create_conversation(
+        business=business,
+        initiative=initiative,
+        title=title
+    )
+
+    return JsonResponse({
+        'conversation_id': str(conversation.id),
+        'business_id': str(business.id),
+        'title': conversation.title,
+        'created_at': conversation.created_at.isoformat()
+    })
+
+
+@require_http_methods(["POST"])
+def business_conversation_message(request, conversation_id):
+    """Add a user message and get assistant response"""
+    from erieiron_autonomous_agent.models import BusinessConversation
+    from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
+
+    conversation = get_object_or_404(BusinessConversation, id=conversation_id)
+    user_message_content = rget(request, 'message')
+
+    if not user_message_content:
+        return JsonResponse({'error': 'Message content required'}, status=400)
+
+    manager = BusinessConversationManager(conversation)
+
+    # Add user message
+    user_msg = manager.add_user_message(user_message_content)
+
+    # Generate response
+    try:
+        assistant_msg, changes = manager.generate_response()
+
+        return JsonResponse({
+            'user_message': {
+                'id': str(user_msg.id),
+                'content': user_msg.content,
+                'created_at': user_msg.created_at.isoformat()
+            },
+            'assistant_message': {
+                'id': str(assistant_msg.id),
+                'content': assistant_msg.content,
+                'created_at': assistant_msg.created_at.isoformat(),
+                'changes': [
+                    {
+                        'id': str(c.id),
+                        'change_type': c.change_type,
+                        'change_description': c.change_description,
+                        'change_details': c.change_details
+                    }
+                    for c in changes
+                ]
+            }
+        })
+    except Exception as e:
+        logger.exception(e)
+        return JsonResponse({'error': f'Failed to generate response: {str(e)}'}, status=500)
+
+
+@require_http_methods(["GET"])
+def business_conversation_detail(request, conversation_id):
+    """Get full conversation history"""
+    from erieiron_autonomous_agent.models import BusinessConversation
+    from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
+
+    conversation = get_object_or_404(BusinessConversation, id=conversation_id)
+
+    manager = BusinessConversationManager(conversation)
+
+    return JsonResponse({
+        'conversation_id': str(conversation.id),
+        'business_id': str(conversation.business.id),
+        'business_name': conversation.business.name,
+        'title': conversation.title,
+        'status': conversation.status,
+        'created_at': conversation.created_at.isoformat(),
+        'updated_at': conversation.updated_at.isoformat(),
+        'messages': manager.get_full_conversation()
+    })
+
+
+@require_http_methods(["GET"])
+def business_conversations_list(request, business_id):
+    """List all conversations for a business"""
+    from erieiron_autonomous_agent.models import BusinessConversation
+
+    business = get_object_or_404(Business, id=business_id)
+    conversations = business.conversations.all()[:20]  # Latest 20
+
+    return JsonResponse({
+        'business_id': str(business.id),
+        'conversations': [
+            {
+                'id': str(c.id),
+                'title': c.title,
+                'status': c.status,
+                'message_count': c.messages.count(),
+                'created_at': c.created_at.isoformat(),
+                'updated_at': c.updated_at.isoformat()
+            }
+            for c in conversations
+        ]
+    })
+
+
+@require_http_methods(["GET"])
+def conversation_changes_list(request, conversation_id):
+    """List all change proposals for a conversation"""
+    from erieiron_autonomous_agent.models import BusinessConversation
+
+    conversation = get_object_or_404(BusinessConversation, id=conversation_id)
+    changes = conversation.changes.all()
+
+    return JsonResponse({
+        'conversation_id': str(conversation.id),
+        'changes': [
+            {
+                'id': str(c.id),
+                'change_type': c.change_type,
+                'change_description': c.change_description,
+                'change_details': c.change_details,
+                'approved': c.approved,
+                'applied': c.applied,
+                'created_at': c.created_at.isoformat()
+            }
+            for c in changes
+        ]
+    })
+
+
+@require_http_methods(["POST"])
+def conversation_change_approve(request, change_id):
+    """Approve a proposed change and apply it"""
+    from erieiron_autonomous_agent.models import ConversationChange
+
+    change = get_object_or_404(ConversationChange, id=change_id)
+
+    if change.approved:
+        return JsonResponse({'error': 'Change already approved'}, status=400)
+
+    # Mark as approved
+    change.approved = True
+    change.approved_at = timezone.now()
+    change.save()
+
+    logger.info(f"Change {change.id} approved for conversation {change.conversation.id}")
+
+    # Mark conversation as having led to change
+    change.conversation.status = 'led_to_change'
+    change.conversation.save()
+
+    # Apply the change
+    try:
+        from erieiron_autonomous_agent.change_application_engine import ChangeApplicationEngine
+        ChangeApplicationEngine.apply_approved_change(change)
+
+        return JsonResponse({
+            'change_id': str(change.id),
+            'approved': True,
+            'applied': True,
+            'approved_at': change.approved_at.isoformat(),
+            'applied_at': change.applied_at.isoformat() if change.applied_at else None
+        })
+    except Exception as e:
+        logger.exception(e)
+        return JsonResponse({
+            'error': f'Change approved but application failed: {str(e)}',
+            'change_id': str(change.id),
+            'approved': True,
+            'applied': False
+        }, status=500)
+
+
+@require_http_methods(["POST"])
+def conversation_change_decline(request, change_id):
+    """Decline a proposed change"""
+    from erieiron_autonomous_agent.models import ConversationChange
+
+    change = get_object_or_404(ConversationChange, id=change_id)
+
+    if change.approved:
+        return JsonResponse({'error': 'Change already approved'}, status=400)
+
+    # Just delete the declined change
+    change.delete()
+
+    logger.info(f"Change {change.id} declined and deleted for conversation {change.conversation.id}")
+
+    return JsonResponse({'success': True})
 
 
 def business_credentials_list(request, business_id):

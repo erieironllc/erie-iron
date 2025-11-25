@@ -500,6 +500,12 @@ BUSINESS_TAB_DEFINITIONS = [
         "label": "Report a Bug",
         "template": "business/tabs/bug_report.html"
     },
+    {
+        "slug": "conversation",
+        "label": "Conversation",
+        "template": "business/tabs/conversation.html",
+        "context_fn": views._tab_context_conversation,
+    },
     TAB_DIVIDER,
     # {
     #     "slug": "tasks",

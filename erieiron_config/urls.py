@@ -41,7 +41,7 @@ urlpatterns = [
     path("_initiative/regenerate/architecture/<str:initiative_id>", views.action_initiative_regenerate_architecture, name="action_initiative_regenerate_architecture"),
     path("_initiative/regenerate/user_documentation/<str:initiative_id>", views.action_initiative_regenerate_user_documentation, name="action_initiative_regenerate_user_documentation"),
     path("_initiative/regenerate/tasks/<str:initiative_id>", views.action_initiative_regenerate_tasks, name="action_initiative_regenerate_tasks"),
-
+    
     path("_task/resolve/<str:task_id>", views.action_resolve_task, name="action_resolve_task"),
     path("_task/retry/<str:task_id>", views.action_retry_task, name="action_retry_task"),
     path("_task/regen_test/<str:task_id>", views.action_task_regenerate_test, name="action_task_regenerate_test"),
@@ -104,12 +104,23 @@ urlpatterns = [
         views.api_business_cloud_account_delete,
         name="api_business_cloud_account_delete",
     ),
+    
+    # Business Conversations
+    path('api/business/<uuid:business_id>/conversations/', views.business_conversations_list, name='business_conversations_list'),
+    path('api/business/<uuid:business_id>/conversations/create/', views.business_conversation_create, name='business_conversation_create'),
+    path('api/conversation/<uuid:conversation_id>/', views.business_conversation_detail, name='business_conversation_detail'),
+    path('api/conversation/<uuid:conversation_id>/message/', views.business_conversation_message, name='business_conversation_message'),
+    path('api/conversation/<uuid:conversation_id>/changes/', views.conversation_changes_list, name='conversation_changes_list'),
+    path('api/conversation/change/<uuid:change_id>/approve/', views.conversation_change_approve, name='conversation_change_approve'),
+    path('api/conversation/change/<uuid:change_id>/decline/', views.conversation_change_decline, name='conversation_change_decline'),
+    
     # Business credential management
     path('business/<uuid:business_id>/credentials/', views.business_credentials_list, name='business_credentials_list'),
     path('business/<uuid:business_id>/credentials/<str:credential_service_name>/secret/', views.business_credential_secret_get, name='business_credential_secret_get'),
     path('business/<uuid:business_id>/credentials/<str:credential_service_name>/secret/update/', views.business_credential_secret_update, name='business_credential_secret_update'),
     path('business/<uuid:business_id>/credentials/update/', views.business_credentials_update, name='business_credentials_update'),
     path('business/<uuid:business_id>/credentials/delete/', views.business_credentials_delete, name='business_credentials_delete'),
+    
     # Stack credential management
     path('stack/<uuid:stack_id>/credentials/', views.stack_credentials_list, name='stack_credentials_list'),
     path('stack/<uuid:stack_id>/credentials/<str:credential_service_name>/secret/', views.stack_credential_secret_get, name='stack_credential_secret_get'),

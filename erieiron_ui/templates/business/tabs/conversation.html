@@ -1,0 +1,92 @@
+{% load humanize %}
+<div class="tab-pane-content">
+    <div id="business-conversations-root"
+         class="business-conversations"
+         data-business-id="{{ business.id }}">
+
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <h2 class="h4 mb-0">Business Conversation</h2>
+                <p class="text-muted small mb-0">Discuss your business with AI - ask questions, propose changes, and
+                    evolve your plan.</p>
+            </div>
+            <button type="button"
+                    class="btn btn-outline-primary btn-sm"
+                    data-action="new-conversation">
+                <i class="bi bi-plus-circle"></i> New Conversation
+            </button>
+        </div>
+
+        <div class="alert d-none" data-role="status"></div>
+
+        <div class="conversation-layout">
+            <div class="conversation-sidebar" data-role="conversation-sidebar">
+                <div class="sidebar-header">
+                    <h6 class="mb-0">Conversations</h6>
+                </div>
+                <div class="conversation-list" data-role="conversation-list">
+                    {% if conversations %}
+                        {% for conv in conversations %}
+                            <div class="conversation-item" data-conversation-id="{{ conv.id }}">
+                                <div class="conversation-title">{{ conv.title|default:"Untitled Conversation" }}</div>
+                                <div class="conversation-meta">
+                                    <span class="message-count">
+                                        <i class="bi bi-chat"></i> {{ conv.messages.count }}
+                                    </span>
+                                    <span class="timestamp">{{ conv.updated_at|timesince }} ago</span>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-muted text-center py-3 small">
+                            <p>No conversations yet.</p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="conversation-container">
+                <div class="messages-wrapper">
+                    <div class="messages-container" data-role="messages-container">
+                        <div class="text-muted text-center py-4">
+                            <p>Starting a new conversation...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="message-input-wrapper">
+                    <div class="input-group">
+                        <input
+                                type="text"
+                                class="form-control"
+                                data-role="message-input"
+                                placeholder="Ask a question about your business, or propose a change..."
+                                disabled>
+                        <button
+                                class="btn btn-primary"
+                                type="button"
+                                data-action="send-message"
+                                disabled>
+                            <i class="bi bi-send"></i> Send
+                        </button>
+                    </div>
+                    <small class="text-muted d-block mt-1">
+                        <i class="bi bi-info-circle"></i>
+                        Ask about your business plan, architecture, or current tasks.
+                        The AI can propose changes that you can approve.
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    $(document).ready(function () {
+        if (!window.conversation_view) {
+            window.conversation_view = new BusinessConversationsView();
+        } else {
+            window.conversation_view.initialize();
+        }
+    });
+</script>
