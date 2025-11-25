@@ -164,3 +164,13 @@ The system is designed to manage multiple autonomous businesses simultaneously:
 - Shared infrastructure for monitoring, logging, and agent coordination
 - Portfolio-level resource planning and optimization
 - Board-level oversight with strategic guidance and intervention capabilities
+
+---
+
+# Front end rules
+- All front-end javascript must be in a backbone style view.  template from view-codefile.js
+- **never** use "$.ajax(" to communicate with the server.  Use "erie_server().exec_server_post()" instead
+- Strongly favor painting all html on page load view HTML returned from the server.  Do not unnecessarily dynamically render javascript using dom manipulation. 
+
+# AWS interactions
+- Use aws_utils.py for all aws interactions

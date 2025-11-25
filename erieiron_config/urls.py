@@ -104,4 +104,16 @@ urlpatterns = [
         views.api_business_cloud_account_delete,
         name="api_business_cloud_account_delete",
     ),
+    # Business credential management
+    path('business/<uuid:business_id>/credentials/', views.business_credentials_list, name='business_credentials_list'),
+    path('business/<uuid:business_id>/credentials/<str:credential_service_name>/secret/', views.business_credential_secret_get, name='business_credential_secret_get'),
+    path('business/<uuid:business_id>/credentials/<str:credential_service_name>/secret/update/', views.business_credential_secret_update, name='business_credential_secret_update'),
+    path('business/<uuid:business_id>/credentials/update/', views.business_credentials_update, name='business_credentials_update'),
+    path('business/<uuid:business_id>/credentials/delete/', views.business_credentials_delete, name='business_credentials_delete'),
+    # Stack credential management
+    path('stack/<uuid:stack_id>/credentials/', views.stack_credentials_list, name='stack_credentials_list'),
+    path('stack/<uuid:stack_id>/credentials/<str:credential_service_name>/secret/', views.stack_credential_secret_get, name='stack_credential_secret_get'),
+    path('stack/<uuid:stack_id>/credentials/<str:credential_service_name>/secret/update/', views.stack_credential_secret_update, name='stack_credential_secret_update'),
+    path('stack/<uuid:stack_id>/credentials/update/', views.stack_credentials_update, name='stack_credentials_update'),
+    path('stack/<uuid:stack_id>/credentials/delete/', views.stack_credentials_delete, name='stack_credentials_delete'),
 ]

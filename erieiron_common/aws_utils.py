@@ -502,7 +502,7 @@ def get_secret_arn(secret_name: str):
         raise
 
 
-def put_secret(secret_name: str, val: dict):
+def put_secret(secret_name: str, val: dict, secrets_manager=None):
     """
     Create or update a secret in AWS Secrets Manager.
 
@@ -510,10 +510,14 @@ def put_secret(secret_name: str, val: dict):
     `val` must be a dict and will be stored as a JSON SecretString.
     Returns a dict with arn and version_id when available.
     """
+    if ":secret:" in secret_name:
+        secret_name = secret_name.split(":secret:", 1)[1]
+    
     if not isinstance(val, dict):
         raise ValueError("put_secret expects `val` to be a dict")
     
-    secrets_manager = get_default_client("secretsmanager")
+    if not secrets_manager:
+        secrets_manager = get_default_client("secretsmanager")
     
     # Debug: Log current AWS context and operation details
     try:
@@ -548,14 +552,18 @@ def put_secret(secret_name: str, val: dict):
         
         if exists:
             resp = secrets_manager.put_secret_value(
-                SecretId=secret_name, SecretString=secret_string
+                SecretId=secret_name, 
+                SecretString=secret_string
             )
             logging.info(
                 f"Updated secret value for {secret_name}, Version: {resp.get('VersionId')}"
             )
         else:
+            # Extract friendly name from ARN for CreateSecret
+
             resp = secrets_manager.create_secret(
-                Name=secret_name, SecretString=secret_string
+                Name=secret_name,
+                SecretString=secret_string
             )
             logging.info(f"Created secret {secret_name}, ARN: {resp.get('ARN')}")
         

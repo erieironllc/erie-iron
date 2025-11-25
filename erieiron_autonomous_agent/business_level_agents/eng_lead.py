@@ -557,11 +557,10 @@ def identify_required_credentials(business: Business):
         output_schema="codeplanner.schema.json"
     ).json()
     
-    current_credentials = business.required_credentials or {}
+    required_credentials = planning_data.get("required_credentials") or {}
+    print(business.name, list(required_credentials.keys()))
+    
     Business.objects.filter(id=business.id).update(
-        required_credentials={
-            **current_credentials,
-            **(planning_data["required_credentials"] or {})
-        }
+        required_credentials=list(required_credentials.keys())
     )
     business.refresh_from_db(fields=["required_credentials"])

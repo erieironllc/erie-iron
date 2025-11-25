@@ -1856,6 +1856,7 @@ def random_string(length=16):
 def assert_not_empty(s):
     if not s:
         raise ValueError("value is empty")
+    return s
 
 
 def get_ip_address():

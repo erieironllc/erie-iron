@@ -30,13 +30,14 @@ import settings
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.business_level_agents import eng_lead
 from erieiron_autonomous_agent.coding_agents import coding_agent
+from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
-from erieiron_common import common, ErieIronJSONEncoder
+from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -1190,6 +1191,40 @@ def _tab_context_design_spec(business: Business) -> dict:
     return {}
 
 
+def _tab_context_credentials(business: Business) -> dict:
+    """Context for credentials tab - provides credential data for page load"""
+    erie_iron = Business.get_erie_iron_business()
+    from erieiron_autonomous_agent.coding_agents import credential_manager
+    
+    credentials_data = []
+    for credential_service_value in common.ensure_list(business.required_credentials):
+        credential_service = CredentialService.valid_or(credential_service_value)
+        if not credential_service:
+            continue
+        
+        cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+        
+        # Get ARN at each level
+        business_arn = common.get(business.credential_arns, credential_service.value)
+        erie_iron_arn = common.get(erie_iron.credential_arns, credential_service.value)
+        
+        # Determine effective ARN and source
+        effective_arn = business_arn or erie_iron_arn
+        source = "business" if business_arn else ("erie_iron" if erie_iron_arn else "none")
+        
+        credentials_data.append({
+            "service": credential_service.value,
+            "service_name": credential_manager.get_desc(credential_service),
+            "provisioning": cred_def.get("provisioning", CredentialServiceProvisioning.USER_SUPPLIED).value,
+            "effective_arn": effective_arn,
+            "source": source,
+        })
+    
+    return {
+        "credentials_data": credentials_data,
+    }
+
+
 def _tab_available_required_credentials(_: Business) -> bool:
     return True
 
@@ -1198,7 +1233,7 @@ def _tab_context_required_credentials(business: Business) -> dict:
     credentials = business.required_credentials or {}
     if not isinstance(credentials, dict):
         credentials = {}
-
+    
     ordered_entries = [
         {
             "service": service_name,
@@ -1206,7 +1241,7 @@ def _tab_context_required_credentials(business: Business) -> dict:
         }
         for service_name, definition in sorted(credentials.items())
     ]
-
+    
     return {
         "required_credentials": credentials,
         "required_credential_services": ordered_entries,
@@ -1351,7 +1386,7 @@ def _project_plan_collect_tasks(initiative: Initiative) -> list[Task]:
 def _project_plan_initiative_status(tasks: list[Task]) -> str:
     if not tasks:
         return TaskStatus.NOT_STARTED.value
-
+    
     statuses = [task.status for task in tasks if getattr(task, "status", None)]
     if statuses and all(status == TaskStatus.COMPLETE.value for status in statuses):
         return TaskStatus.COMPLETE.value
@@ -1370,13 +1405,13 @@ def _build_project_plan_viewmodel(initiatives: Iterable[Initiative]) -> dict:
     max_units = 1
     total_tasks = 0
     initiative_offset_units = 0
-
+    
     for initiative in initiative_list:
         tasks = _project_plan_collect_tasks(initiative)
         total_tasks += len(tasks)
         initiative_status = _project_plan_initiative_status(tasks)
         bar_units = max(len(tasks), 1)
-
+        
         plan_rows.append({
             "type": "initiative",
             "id": getattr(initiative, "id", None),
@@ -1390,7 +1425,7 @@ def _build_project_plan_viewmodel(initiatives: Iterable[Initiative]) -> dict:
             "task_count": len(tasks),
             "offset_units": initiative_offset_units,
         })
-
+        
         task_offset_units = initiative_offset_units
         for task in tasks:
             task_status = getattr(task, "status", TaskStatus.NOT_STARTED.value) or TaskStatus.NOT_STARTED.value
@@ -1409,16 +1444,16 @@ def _build_project_plan_viewmodel(initiatives: Iterable[Initiative]) -> dict:
                 "offset_units": task_offset_units,
             })
             task_offset_units += 1
-
+        
         initiative_offset_units += bar_units
         max_units = max(max_units, initiative_offset_units)
-
+    
     scaling_factor = 100 / max(max_units, 1)
     for row in plan_rows:
         offset_units = row.get("offset_units", 0)
         row["bar_percent"] = round(row["bar_units"] * scaling_factor, 4)
         row["offset_percent"] = round(offset_units * scaling_factor, 4)
-
+    
     return {
         "rows": plan_rows,
         "total_units": max_units,
@@ -1446,7 +1481,7 @@ def _build_project_plan_context(initiatives: Iterable[Initiative]) -> dict:
         }
         for status in PROJECT_PLAN_STATUS_ORDER
     ]
-
+    
     return {
         "project_plan_rows": viewmodel["rows"],
         "project_plan_total_units": viewmodel["total_units"],
@@ -1784,12 +1819,12 @@ def _tab_context_business_plan_consolidated(business: Business, active_sub_tab=N
 
 def _tab_available_implementation_consolidated(business: Business) -> bool:
     return (
-        _tab_available_architecture(business)
-        or _tab_available_required_credentials(business)
-        or _tab_available_infrastructure_stacks(business)
-        or _tab_available_cloud_accounts(business)
-        or _tab_available_codefiles(business)
-        or True  # design-spec is always available
+            _tab_available_architecture(business)
+            or _tab_available_required_credentials(business)
+            or _tab_available_infrastructure_stacks(business)
+            or _tab_available_cloud_accounts(business)
+            or _tab_available_codefiles(business)
+            or True  # design-spec is always available
     )
 
 
@@ -1802,10 +1837,10 @@ def _tab_context_implementation_consolidated(business: Business, active_sub_tab=
         ("architecture", "architecture", _tab_available_architecture, _tab_context_architecture),
         ("design-spec", "design_spec", lambda b: True, _tab_context_design_spec),
         (
-            "required-credentials",
-            "required_credentials",
-            _tab_available_required_credentials,
-            _tab_context_required_credentials,
+            "credentials",
+            "credentials",
+            lambda x: True,
+            _tab_context_credentials,
         ),
         ("infrastructure-stacks", "infrastructure_stacks", _tab_available_infrastructure_stacks, _tab_context_infrastructure_stacks),
         ("cloud-accounts", "cloud_accounts", _tab_available_cloud_accounts, _tab_context_cloud_accounts),
@@ -5641,9 +5676,9 @@ def action_llm_debug_compare(request, llm_request_id):
     verbosity = rget(request, "verbosity")
     reasoning_effort = rget(request, "reasoning_effort")
     creativity = rget(request, "creativity")
-
+    
     orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
-
+    
     resp = system_agent_llm_interface.llm_chat(
         description=f"Compare {orig_llm_request.title} response using {llm_model}",
         messages=orig_llm_request.input_messages,
@@ -5686,13 +5721,13 @@ def action_llm_debug_ask(request, llm_request_id):
     verbosity = rget(request, "verbosity")
     reasoning_effort = rget(request, "reasoning_effort")
     creativity = rget(request, "creativity")
-
+    
     orig_llm_request = LlmRequest.objects.get(id=llm_request_id)
-
+    
     if optimize:
         title = "Optimize"
         system_prompt = "chat_response_interpreter.md"
-        schema=orig_llm_request.output_schema
+        schema = orig_llm_request.output_schema
     elif change_prompt:
         title = "Change"
         system_prompt = "llm_prompt_changer.md"
@@ -5700,8 +5735,8 @@ def action_llm_debug_ask(request, llm_request_id):
     else:
         title = "Debug"
         system_prompt = "chat_evaluator.md"
-        schema=orig_llm_request.output_schema
-
+        schema = orig_llm_request.output_schema
+    
     resp = system_agent_llm_interface.llm_chat(
         description=f"{title} {orig_llm_request.title}",
         messages=[
@@ -6008,3 +6043,373 @@ def api_pubsub_publish(request):
     except Exception as e:
         logger.exception(f"Error publishing PubSub message: {e}")
         return JsonResponse({'error': 'Internal server error'}, status=500)
+
+
+def business_credentials_list(request, business_id):
+    """List all credential services for a business with their ARNs"""
+    business = get_object_or_404(Business, id=business_id)
+    erie_iron = Business.get_erie_iron_business()
+    
+    credentials_data = []
+    # Iterate over required_credentials which is a list of CredentialService values
+    for credential_service_value in common.ensure_list(business.required_credentials):
+        credential_service = CredentialService.valid_or(credential_service_value)
+        if not credential_service:
+            logging.warning(f"Invalid credential service: {credential_service_value}")
+            continue
+        
+        cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+        if not cred_def:
+            logging.error(f"No credential definition for {credential_service}")
+            continue
+        
+        # Get ARN at each level
+        business_arn = common.get(business.credential_arns, credential_service.value)
+        erie_iron_arn = common.get(erie_iron.credential_arns, credential_service.value) if business.id != erie_iron.id else None
+        
+        # Determine effective ARN and source
+        effective_arn = business_arn or erie_iron_arn
+        source = "business" if business_arn else ("erie_iron" if erie_iron_arn else "none")
+        
+        credentials_data.append({
+            "service": credential_service.value,
+            "service_name": credential_manager.get_desc(credential_service),
+            "provisioning": cred_def.get("provisioning"),
+            "effective_arn": effective_arn,
+            "source": source,
+            "business_arn": business_arn,
+            "erie_iron_arn": erie_iron_arn,
+            "schema": cred_def.get("schema", [])
+        })
+    
+    return JsonResponse({"credentials": credentials_data})
+
+
+@require_POST
+@json_endpoint
+def business_credentials_update(request, business_id):
+    """Update credential ARN for a business"""
+    business = get_object_or_404(Business, id=business_id)
+    data = _parse_json_body(request)
+    
+    credential_service_name = data.get("credential_service")
+    arn = data.get("arn", "").strip()
+    
+    # Validate credential service
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    # Validate ARN format if provided
+    if arn and not arn.startswith("arn:aws:secretsmanager:"):
+        return JsonResponse({"error": "Invalid ARN format. Must start with 'arn:aws:secretsmanager:'"}, status=400)
+    
+    # Update business required_credentials
+    if business.required_credentials is None:
+        business.required_credentials = {}
+    
+    if arn:
+        business.required_credentials[credential_service.value] = arn
+    else:
+        # Remove if setting to empty
+        business.required_credentials.pop(credential_service.value, None)
+    
+    business.save(update_fields=["required_credentials"])
+    
+    return JsonResponse({"success": True, "arn": arn})
+
+
+@require_POST
+@json_endpoint
+def business_credentials_delete(request, business_id):
+    """Remove credential ARN from business"""
+    business = get_object_or_404(Business, id=business_id)
+    
+    credential_service_name = rget(request, "credential_service")
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        raise Exception(f"Invalid credential service: {credential_service_name}")
+    
+    credential_arns = business.credential_arns or {}
+    credential_arns.pop(credential_service_name, None)
+    business.credential_arns = credential_arns
+    business.save(update_fields=["credential_arns"])
+
+
+@require_http_methods(["GET"])
+def stack_credentials_list(request, stack_id):
+    """List required credential services for a stack with cascading resolution"""
+    stack = get_object_or_404(InfrastructureStack, id=stack_id)
+    business = stack.business
+    erie_iron = Business.get_erie_iron_business()
+    
+    from erieiron_autonomous_agent.coding_agents import credential_manager
+    
+    credentials_data = []
+    # Only show credentials in business.required_credentials list
+    for credential_service_value in common.ensure_list(business.required_credentials):
+        credential_service = CredentialService.valid_or(credential_service_value)
+        if not credential_service:
+            continue
+        
+        cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+        
+        # Get ARN at each level
+        stack_arn = common.get(stack.credential_arns, credential_service.value)
+        business_arn = common.get(business.credential_arns, credential_service.value)
+        erie_iron_arn = common.get(erie_iron.credential_arns, credential_service.value)
+        
+        # Determine effective ARN and source
+        effective_arn = stack_arn or business_arn or erie_iron_arn
+        source = "stack" if stack_arn else ("business" if business_arn else ("erie_iron" if erie_iron_arn else "none"))
+        
+        credentials_data.append({
+            "service": credential_service.value,
+            "service_name": credential_service.get_desc(),
+            "provisioning": cred_def.get("provisioning", CredentialServiceProvisioning.USER_SUPPLIED).value,
+            "effective_arn": effective_arn,
+            "source": source,
+            "schema": cred_def.get("schema", [])
+        })
+    
+    return JsonResponse({"credentials": credentials_data})
+
+
+@require_POST
+@json_endpoint
+def stack_credentials_update(request, stack_id):
+    """Update credential ARN override for a stack"""
+    stack = get_object_or_404(InfrastructureStack, id=stack_id)
+    data = _parse_json_body(request)
+    
+    credential_service_name = data.get("credential_service")
+    arn = data.get("arn", "").strip()
+    
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    if arn and not arn.startswith("arn:aws:secretsmanager:"):
+        return JsonResponse({"error": "Invalid ARN format"}, status=400)
+    
+    if stack.required_credentials is None:
+        stack.required_credentials = {}
+    
+    if arn:
+        stack.required_credentials[credential_service.value] = arn
+    else:
+        stack.required_credentials.pop(credential_service.value, None)
+    
+    stack.save(update_fields=["credential_arns"])
+    
+    return JsonResponse({"success": True, "arn": arn})
+
+
+@require_POST
+@json_endpoint
+def stack_credentials_delete(request, stack_id):
+    """Remove credential ARN override from stack"""
+    stack = get_object_or_404(InfrastructureStack, id=stack_id)
+    data = _parse_json_body(request)
+    
+    credential_service_name = data.get("credential_service")
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    if stack.credential_arns:
+        stack.credential_arns.pop(credential_service.value, None)
+        stack.save(update_fields=["credential_arns"])
+    
+    return JsonResponse({"success": True})
+
+
+@require_http_methods(["GET"])
+def business_credential_secret_get(request, business_id, credential_service_name):
+    """Get secret values for a credential service"""
+    business = get_object_or_404(Business, id=business_id)
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    # Get the effective ARN
+    business_arn = common.get(business.credential_arns, credential_service.value)
+    erie_iron_arn = common.get(Business.get_erie_iron_business().credential_arns, credential_service.value)
+    effective_arn = business_arn or erie_iron_arn
+    
+    # Get credential definition
+    cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+    schema = cred_def.get("schema", [])
+    
+    # Fetch secret values from AWS if ARN exists
+    secret_values = {}
+    if effective_arn:
+        try:
+            secret_values = aws_utils.get_secret(effective_arn)
+        except Exception as e:
+            logging.warning(f"Failed to fetch secret {effective_arn}: {e}")
+            secret_values = {}
+    
+    # Mask sensitive values
+    masked_values = {}
+    for field in schema:
+        key = field["key"]
+        if key in secret_values:
+            masked_values[key] = "****" if secret_values[key] else ""
+        else:
+            masked_values[key] = ""
+    
+    # Generate suggested ARN if not set at business level
+    suggested_arn = None
+    if not business_arn:
+        cloud_account = business.get_default_cloud_account(EnvironmentType.PRODUCTION)
+        cloud_account_metadata = cloud_account.metadata
+        suggested_arn = f"arn:aws:secretsmanager:{cloud_account.metadata.get('region', aws_utils.get_aws_region())}:{cloud_account.account_identifier}:secret:{business.service_token}/credentials/{credential_service.value}"
+    
+    return JsonResponse({
+        "success": True,
+        "effective_arn": effective_arn,
+        "suggested_arn": suggested_arn,
+        "secret_values": masked_values,
+        "schema": schema
+    })
+
+
+@require_POST
+@json_endpoint
+def business_credential_secret_update(request, business_id, credential_service_name):
+    """Update secret values for a credential service"""
+    business = get_object_or_404(Business, id=business_id)
+    
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    arn = rget(request, "arn").strip()
+    if not arn:
+        return JsonResponse({"error": "ARN is required"}, status=400)
+    
+    # Get existing secret values if ARN exists
+    existing_secret = {}
+    try:
+        existing_secret = aws_utils.get_secret(arn)
+    except:
+        pass  # Secret doesn't exist yet, will be created
+    
+    # Merge updates (only update non-empty values, preserve existing for empty)
+    merged_secret = {**existing_secret}
+    
+    for schema_item in credential_service.get_schema():
+        key = common.assert_not_empty(schema_item.get('key'))
+        value = rget(request, f"secret--{key}")
+        if value and value != "****":  # Only update if value provided and not masked placeholder
+            merged_secret[key] = value
+    
+    cloud_account = business.get_default_cloud_account()
+    with cloud_account.assume_role() as aws_session:
+        aws_utils.put_secret(
+            arn,
+            merged_secret,
+            aws_session.client("secretsmanager")
+        )
+    
+    # Update business credential_arns
+    if not business.credential_arns:
+        business.credential_arns = {}
+    business.credential_arns[credential_service.value] = arn
+    business.save(update_fields=["credential_arns"])
+    
+    return {"success": True, "arn": arn}
+
+
+@require_http_methods(["GET"])
+def stack_credential_secret_get(request, stack_id, credential_service_name):
+    """Get secret values for a credential service at stack level"""
+    stack = get_object_or_404(InfrastructureStack, id=stack_id)
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    # Get credential definition
+    cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+    schema = cred_def.get("schema", [])
+    
+    # Fetch secret values from AWS if ARN exists
+    secret_values = {}
+    effective_arn = stack.get_credential_arn(credential_service)
+    if effective_arn:
+        try:
+            secret_values = aws_utils.get_secret(effective_arn)
+        except Exception as e:
+            logging.warning(f"Failed to fetch secret {effective_arn}: {e}")
+            secret_values = {}
+    
+    # Mask sensitive values
+    masked_values = {}
+    for field in schema:
+        key = field["key"]
+        if key in secret_values:
+            masked_values[key] = "****" if secret_values[key] else ""
+        else:
+            masked_values[key] = ""
+    
+    # Generate suggested ARN if not set at stack level
+    stack_arn = common.get(stack.credential_arns, credential_service.value)
+    suggested_arn = None
+    if not stack_arn:
+        cloud_account = stack.get_cloud_account()
+        suggested_arn = f"arn:aws:secretsmanager:{cloud_account.metadata.get('region', aws_utils.get_aws_region())}:{cloud_account.account_identifier}:secret:{stack.stack_namespace_token}/{credential_service.value}"
+    
+    return JsonResponse({
+        "success": True,
+        "effective_arn": effective_arn,
+        "suggested_arn": suggested_arn,
+        "secret_values": masked_values,
+        "schema": schema
+    })
+
+
+@require_POST
+@json_endpoint
+def stack_credential_secret_update(request, stack_id, credential_service_name):
+    """Update secret values for a credential service at stack level"""
+    stack = get_object_or_404(InfrastructureStack, id=stack_id)
+    data = _parse_json_body(request)
+    
+    credential_service = CredentialService.valid_or(credential_service_name)
+    if not credential_service:
+        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+    
+    arn = data.get("arn", "").strip()
+    secret_updates = data.get("secret_values", {})
+    
+    if not arn:
+        return JsonResponse({"error": "ARN is required"}, status=400)
+    
+    # Get existing secret values if ARN exists
+    existing_secret = {}
+    try:
+        existing_secret = aws_utils.get_secret(arn)
+    except:
+        pass  # Secret doesn't exist yet, will be created
+    
+    # Merge updates (only update non-empty values, preserve existing for empty)
+    merged_secret = {**existing_secret}
+    for key, value in secret_updates.items():
+        if value and value != "****":  # Only update if value provided and not masked placeholder
+            merged_secret[key] = value
+    
+    # Put secret in AWS
+    try:
+        aws_utils.put_secret(arn, merged_secret)
+    except Exception as e:
+        logging.exception(f"Failed to update secret {arn}: {e}")
+        return JsonResponse({"error": f"Failed to update secret: {str(e)}"}, status=500)
+    
+    # Update stack credential_arns
+    if not stack.credential_arns:
+        stack.credential_arns = {}
+    stack.credential_arns[credential_service.value] = arn
+    stack.save(update_fields=["credential_arns"])
+    
+    return JsonResponse({"success": True, "arn": arn})

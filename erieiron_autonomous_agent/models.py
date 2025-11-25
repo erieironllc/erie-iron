@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta, datetime
 from pathlib import Path
@@ -77,6 +78,7 @@ class Business(BaseErieIronModel):
         help_text="Niche category used to generate this business idea (e.g., local_service_arbitrage)"
     )
     required_credentials = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
+    credential_arns = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     core_functions = models.JSONField(default=list)
     execution_dependencies = models.JSONField(default=list)
     business_finder_output = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
@@ -492,6 +494,29 @@ class CloudAccount(BaseErieIronModel):
         if hasattr(self, "_cached_credentials"):
             del self._cached_credentials
     
+    @contextmanager
+    def assume_role(self):
+        """Return a sandboxed boto3 Session using this cloud account's assumed role."""
+        creds = self.get_aws_credentials()
+
+        # Build isolated botocore session
+        import botocore.session
+        botocore_sess = botocore.session.get_session()
+        botocore_sess.set_credentials(
+            creds.access_key_id,
+            creds.secret_access_key,
+            creds.session_token
+        )
+
+        # Wrap botocore session with boto3 Session for ergonomic APIs
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-west-2"
+        boto3_sess = boto3.session.Session(
+            botocore_session=botocore_sess,
+            region_name=region,
+        )
+
+        yield boto3_sess
+    
     def get_aws_credentials(self) -> 'CloudAccount.AwsCredentials':
         cache_key = f"credentials_{self.id}"
         from erieiron_common import cache
@@ -626,7 +651,7 @@ class CloudAccount(BaseErieIronModel):
             region = "us-east-1"
         else:
             region = get_aws_region()
-            
+        
         return boto3.client(
             service_name,
             endpoint_url=endpoint_url,
@@ -999,6 +1024,7 @@ class InfrastructureStack(BaseErieIronModel):
     stack_type = models.TextField(choices=InfrastructureStackType.choices())
     imported_shared_resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     stack_vars = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
+    credential_arns = models.JSONField(null=True, encoder=ErieIronJSONEncoder)
     resources = models.JSONField(default=dict, null=True, encoder=ErieIronJSONEncoder)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now_add=True)
@@ -1021,29 +1047,75 @@ class InfrastructureStack(BaseErieIronModel):
         if hf_model_cache_s3_uri:
             env["HF_MODEL_CACHE_S3_URI"] = hf_model_cache_s3_uri
         
-        for credential_service_name, cred_def in self.business.required_credentials.items():
-            if credential_service_name == CredentialService.RDS.value:
-                # OpenTofu and RDS handle the RDS secret - we update this as a special case later
+        # Populate credential ARNs for all services except RDS and Cognito (stack-generated)
+        from erieiron_autonomous_agent.coding_agents import credential_manager
+        
+        # Collect all required credential services from business and stack
+        for credential_service_name in self.business.required_credentials.keys():
+            credential_service = CredentialService.valid_or(credential_service_name)
+            if not credential_service:
+                logging.warning(f"Invalid credential service: {credential_service_name}")
                 continue
-            if credential_service_name == CredentialService.COGNITO.value:
-                # OpenTofu creates the Cognito secret in the target account alongside Cognito resources
+            
+            # Skip stack-generated credentials (handled by OpenTofu)
+            if credential_service in [CredentialService.RDS, CredentialService.COGNITO]:
+                continue
+            
+            # Get credential definition
+            cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service)
+            if not cred_def:
+                logging.warning(f"No schema defined for {credential_service}")
                 continue
             
             secret_arn_env_var = cred_def.get("secret_arn_env_var")
-            from erieiron_autonomous_agent.coding_agents import credential_manager
-            secrent_arn = credential_manager.manage_credentials(
-                self,
-                credential_service_name,
-                cred_def
-            )
-            if secrent_arn:
-                env[secret_arn_env_var] = secrent_arn
+            
+            try:
+                secret_arn = credential_manager.get_credential_arn(self, credential_service)
+                env[secret_arn_env_var] = secret_arn
+            except ValueError as e:
+                logging.error(f"Missing credential: {e}")
+                # Don't add to env - let deployment fail with clear error
         
         for k in list(env.keys()):
             if k == "AWS_PROFILE" or k.startswith("__") or env.get(k) is None:
                 env.pop(k, None)
         
         return env
+    
+    def get_credential_arn(self, credential_service: CredentialService) -> str:
+        """Cascading lookup: stack → business → erie iron → error
+
+        Args:
+            self: InfrastructureStack instance requiring credentials
+            credential_service: CredentialService enum member
+
+        Returns:
+            Secret ARN string
+
+        Raises:
+            ValueError: If no credential ARN found at any level
+        """
+        # 1. Check stack-level override
+        credential_service = CredentialService(credential_service)
+        
+        arn = common.get(self.credential_arns, credential_service.value)
+        if arn:
+            return arn
+        
+        arn = common.get(self.business.credential_arns, credential_service.value)
+        if arn:
+            return arn
+        
+        arn = common.get(Business.get_erie_iron_business().credential_arns, credential_service.value)
+        if arn:
+            return arn
+        
+        # 4. Fail with clear error (no auto-generation)
+        raise ValueError(
+            f"No credential ARN found for {credential_service.value}. "
+            f"Stack: {self.id}, Business: {self.business.name} ({self.business.id}). "
+            f"Add ARN via UI or check Erie Iron defaults."
+        )
     
     def get_cloud_account(self) -> CloudAccount:
         return (
@@ -1210,7 +1282,7 @@ class InfrastructureStack(BaseErieIronModel):
         if not force:
             if EnvironmentType.PRODUCTION.eq(self.env_type):
                 raise Exception(f"cannot destroy a production stack.  needs to be done manually")
-            
+        
         if not self.resources:
             return
         
@@ -1219,7 +1291,7 @@ class InfrastructureStack(BaseErieIronModel):
             StackManager(self, container_env=self.get_runtime_env()).destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
-            
+        
         return self
     
     def get_template_name(self) -> str:
@@ -1931,7 +2003,7 @@ class LlmRequest(BaseErieIronModel):
     verbosity = models.TextField(null=True)
     creativity = models.TextField(null=True)
     output_schema = models.TextField(null=True)
-
+    
     def get_llm_data(self):
         return {
             "model": self.llm_model,

@@ -527,6 +527,11 @@ class DevelopmentRoutingPath(ErieEnum):
     AWS_PROVISIONING_PLANNER = auto()
 
 
+class CredentialServiceProvisioning(ErieEnum):
+    USER_SUPPLIED = auto()
+    STACK_GENERATED = auto()
+
+
 class CredentialService(ErieEnum):
     RDS = auto()
     COGNITO = auto()
@@ -541,49 +546,12 @@ class CredentialService(ErieEnum):
     OAUTH_GOOGLE = auto()
     COINBASE_COMMERCE = auto()
     
-    @staticmethod
-    def get_stack_input_credentials() -> list['CredentialService']:
-        return [
-            CredentialService.LLM,
-            CredentialService.STRIPE,
-            CredentialService.HCAPTCHA,
-            CredentialService.ONESIGNAL,
-            CredentialService.OAUTH_APPLE,
-            CredentialService.FIREBASE_FCM,
-            CredentialService.OAUTH_GITHUB,
-            CredentialService.OAUTH_GOOGLE,
-            CredentialService.COINBASE_COMMERCE
-        ]
+    def get_spec(self) -> dict:
+        from erieiron_autonomous_agent.coding_agents.credential_manager import CREDENTIALSERVICE_TO_CREDENTIALDEF
+        return CREDENTIALSERVICE_TO_CREDENTIALDEF.get(self)
     
-    @staticmethod
-    def get_stack_output_credentials() -> list['CredentialService']:
-        return [
-            credential_service
-            for credential_service in CredentialService 
-            if CredentialService.get_output_var_to_env_var_mappings(credential_service)
-        ]
-    
-    @staticmethod
-    def get_output_var_to_env_var_mappings(service: 'CredentialService') -> dict[str, str]:
-        return {
-            CredentialService.RDS: {
-                "RdsSecretArn": "RDS_SECRET_ARN",
-                "RdsInstanceDBName": "ERIEIRON_DB_NAME",
-                "RdsInstancePort": "ERIEIRON_DB_PORT",
-                "RdsInstanceEndpoint": "ERIEIRON_DB_HOST",
-            },
-            CredentialService.COGNITO: {
-                "CognitoSecretArn": "COGNITO_SECRET_ARN",
-            }
-        }.get(CredentialService(service))
-    
-    def get_desc(self):
-        if CredentialService.RDS.eq(self):
-            return "AWS RDS"
-        elif CredentialService.COGNITO.eq(self):
-            return "AWS Cognito User Pool"
-        else:
-            return self.title()
+    def get_schema(self) -> list[dict]:
+        return self.get_spec().get("schema")
 
 
 class ContainerPlatform(ErieEnum):

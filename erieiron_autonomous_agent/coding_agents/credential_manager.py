@@ -1,14 +1,10 @@
 import json
-import logging
 import secrets
 import string
 
-import settings
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked
-from erieiron_autonomous_agent.models import InfrastructureStack
 from erieiron_common import aws_utils, common
-from erieiron_common.enums import CredentialService, EnvironmentType
+from erieiron_common.enums import CredentialService, EnvironmentType, CredentialServiceProvisioning
 
 DISALLOWED_RDS_PASSWORD_CHARS = set('/@" ')
 ALLOWED_RDS_SPECIALS = ''.join(ch for ch in string.punctuation if ch not in DISALLOWED_RDS_PASSWORD_CHARS)
@@ -17,6 +13,7 @@ CREDENTIALSERVICE_TO_CREDENTIALDEF = {
     CredentialService.RDS: {
         "secret_arn_env_var": "RDS_SECRET_ARN",
         "secret_arn_cfn_parameter": "RdsSecretArn",
+        "provisioning": CredentialServiceProvisioning.STACK_GENERATED,
         "schema": [
             {
                 "key": "username",
@@ -31,106 +28,135 @@ CREDENTIALSERVICE_TO_CREDENTIALDEF = {
                 "description": "Database password for the application"
             }
         ]
+    },
+    CredentialService.COGNITO: {
+        "secret_arn_env_var": "COGNITO_SECRET_ARN",
+        "secret_arn_cfn_parameter": "CognitoSecretArn",
+        "provisioning": CredentialServiceProvisioning.STACK_GENERATED,
+        "schema": [
+            {"key": "user_pool_id", "type": "string", "required": True, "description": "Cognito User Pool ID"},
+            {"key": "client_id", "type": "string", "required": True, "description": "Cognito App Client ID"},
+            {"key": "client_secret", "type": "string", "required": False, "description": "Cognito App Client Secret"}
+        ]
+    },
+    CredentialService.STRIPE: {
+        "secret_arn_env_var": "STRIPE_API_KEY_SECRET_ARN",
+        "secret_arn_cfn_parameter": "StripeApiKeySecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "api_key", "type": "string", "required": True, "description": "Stripe API secret key"},
+            {"key": "publishable_key", "type": "string", "required": False, "description": "Stripe publishable key"},
+            {"key": "webhook_secret", "type": "string", "required": False, "description": "Stripe webhook signing secret"}
+        ]
+    },
+    CredentialService.HCAPTCHA: {
+        "secret_arn_env_var": "HCAPTCHA_SECRET_ARN",
+        "secret_arn_cfn_parameter": "HcaptchaSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "secret_key", "type": "string", "required": True, "description": "hCaptcha secret key"},
+            {"key": "site_key", "type": "string", "required": False, "description": "hCaptcha site key"}
+        ]
+    },
+    CredentialService.ONESIGNAL: {
+        "secret_arn_env_var": "ONESIGNAL_SECRET_ARN",
+        "secret_arn_cfn_parameter": "OnesignalSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "app_id", "type": "string", "required": True, "description": "OneSignal App ID"},
+            {"key": "api_key", "type": "string", "required": True, "description": "OneSignal REST API Key"}
+        ]
+    },
+    CredentialService.OAUTH_APPLE: {
+        "secret_arn_env_var": "OAUTH_APPLE_SECRET_ARN",
+        "secret_arn_cfn_parameter": "OauthAppleSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "client_id", "type": "string", "required": True, "description": "Apple Services ID"},
+            {"key": "team_id", "type": "string", "required": True, "description": "Apple Team ID"},
+            {"key": "key_id", "type": "string", "required": True, "description": "Apple Key ID"},
+            {"key": "private_key", "type": "string", "required": True, "description": "Apple Private Key (PEM format)"}
+        ]
+    },
+    CredentialService.FIREBASE_FCM: {
+        "secret_arn_env_var": "FIREBASE_FCM_SECRET_ARN",
+        "secret_arn_cfn_parameter": "FirebaseFcmSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "server_key", "type": "string", "required": True, "description": "Firebase Cloud Messaging server key"},
+            {"key": "sender_id", "type": "string", "required": False, "description": "Firebase sender ID"}
+        ]
+    },
+    CredentialService.OAUTH_GITHUB: {
+        "secret_arn_env_var": "OAUTH_GITHUB_SECRET_ARN",
+        "secret_arn_cfn_parameter": "OauthGithubSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "client_id", "type": "string", "required": True, "description": "GitHub OAuth App Client ID"},
+            {"key": "client_secret", "type": "string", "required": True, "description": "GitHub OAuth App Client Secret"}
+        ]
+    },
+    CredentialService.OAUTH_GOOGLE: {
+        "secret_arn_env_var": "OAUTH_GOOGLE_SECRET_ARN",
+        "secret_arn_cfn_parameter": "OauthGoogleSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "client_id", "type": "string", "required": True, "description": "Google OAuth Client ID"},
+            {"key": "client_secret", "type": "string", "required": True, "description": "Google OAuth Client Secret"}
+        ]
+    },
+    CredentialService.COINBASE_COMMERCE: {
+        "secret_arn_env_var": "COINBASE_COMMERCE_SECRET_ARN",
+        "secret_arn_cfn_parameter": "CoinbaseCommerceSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "api_key", "type": "string", "required": True, "description": "Coinbase Commerce API Key"},
+            {"key": "webhook_secret", "type": "string", "required": False, "description": "Coinbase Commerce webhook shared secret"}
+        ]
+    },
+    CredentialService.DJANGO: {
+        "secret_arn_env_var": "DJANGO_SECRET_KEY_ARN",
+        "secret_arn_cfn_parameter": "DjangoSecretKeyArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "secret_key", "type": "string", "required": True, "description": "Django SECRET_KEY for cryptographic signing"}
+        ]
+    },
+    CredentialService.LLM: {
+        "secret_arn_env_var": "LLM_API_KEYS_SECRET_ARN",
+        "secret_arn_cfn_parameter": "LlmApiKeysSecretArn",
+        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
+        "schema": [
+            {"key": "anthropic_api_key", "type": "string", "required": False, "description": "Anthropic Claude API key"},
+            {"key": "openai_api_key", "type": "string", "required": False, "description": "OpenAI API key"},
+            {"key": "google_api_key", "type": "string", "required": False, "description": "Google Gemini API key"},
+            {"key": "deepseek_api_key", "type": "string", "required": False, "description": "DeepSeek API key"}
+        ]
     }
-    
 }
+
+
+def get_desc(credential_service: CredentialService) -> str:
+    return CREDENTIALSERVICE_TO_CREDENTIALDEF[
+        CredentialService(credential_service)
+    ].get(
+        "secret_arn_env_var"
+    ).replace(
+        "_SECRET_ARN", ""
+    ).replace(
+        "_", " "
+    ).title()
 
 
 def get_existing_service_names_desc() -> str:
     return "; ".join(
-        f"{cred_service} ({cred_service.get_desc()})"
+        f"{cred_service} ({get_desc(cred_service)})"
         for cred_service in CredentialService
     )
 
 
 def get_existing_service_schema_desc() -> str:
     return json.dumps(CREDENTIALSERVICE_TO_CREDENTIALDEF, indent=4)
-
-
-def manage_credentials(
-        stack: InfrastructureStack,
-        credential_service_name: str,
-        cred_def: dict
-) -> str:
-    secret_arn_env_var = cred_def.get("secret_arn_env_var")
-    if secret_arn_env_var == "LLM_API_KEYS_SECRET_ARN":
-        return settings.LLM_API_KEYS_SECRET_ARN
-    
-    if secret_arn_env_var == "STRIPE_WEBHOOK_SECRET_ARN":
-        return settings.STRIPE_WEBHOOK_SECRET_ARN
-    
-    cloud_account = stack.get_cloud_account()
-    business = cloud_account.business
-    env_type = stack.env_type
-    credential_service = CredentialService.valid_or(common.default_str(credential_service_name).upper())
-    if not credential_service:
-        logging.debug(f"""Blocked by unsupported credential service: {credential_service_name}
-
-Need a human to set this up
-
-Business:  {business.name} ({business.id})
-Stack ID:  {stack.id} ({stack.env_type})
-Cloud Account ID:  {cloud_account.account_identifier} ({cloud_account.provider})
-Env:  {env_type}
-
-Secret Def:
-{json.dumps(cred_def, indent=4)}
-""")
-        return None
-    
-    aws_secret_key = [
-        business.get_secrets_root_key(env_type)
-    ]
-    if env_type not in [EnvironmentType.PRODUCTION]:
-        aws_secret_key.append(cloud_account.id)
-    aws_secret_key.append(credential_service_name)
-    
-    aws_secret_key = aws_utils.sanitize_aws_name(
-        common.safe_join(aws_secret_key, "/"),
-        512
-    )
-    
-    try:
-        secret_dict = aws_utils.get_secret(aws_secret_key)
-    except:
-        secret_dict = {}
-    
-    missing_secret_vals = validate_secret(
-        secret_dict,
-        CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, cred_def)
-    )
-    
-    if not missing_secret_vals:
-        return aws_utils.get_secret_arn(aws_secret_key)
-    
-    if credential_service == CredentialService.RDS:
-        # If a password exists but violates RDS rules, replace it
-        existing_pwd = secret_dict.get('password')
-        if existing_pwd and not is_valid_rds_password(existing_pwd):
-            secret_dict['password'] = create_password(24)
-        for schema_entity in missing_secret_vals:
-            prop_name = schema_entity.get('key')
-            if prop_name == "username":
-                val = "postgres"
-            elif prop_name == "password":
-                val = create_password(24)
-            elif prop_name == "host":
-                val = ""
-            elif prop_name == "port":
-                val = 5432
-            elif prop_name == "database":
-                val = ""
-            else:
-                raise AgentBlocked(f"invalid prop name {prop_name}")
-            
-            secret_dict[prop_name] = val
-    
-    secret_arn = aws_utils.put_secret(
-        aws_secret_key,
-        secret_dict
-    )
-    
-    return secret_arn
 
 
 def get_aws_role_name(

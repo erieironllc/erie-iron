@@ -279,6 +279,25 @@ const ServerCommsManager = ErieView.extend({
         });
     },
 
+    exec_server_get: async function (
+        url,
+        f_success,
+        f_error
+    ) {
+        $.ajax({
+            url: url,
+            type: "GET",
+            processData: false,
+            contentType: false,
+            success: (resp, status, xhr) => {
+                f_success(resp);
+            },
+            error: (resp) => {
+                f_error(resp);
+            }
+        });
+    },
+
     /**
      * main interaction point with the server - most anytime the app talks to the server
      * it should go through exec_server_post
@@ -293,7 +312,8 @@ const ServerCommsManager = ErieView.extend({
         post_data,
         f_success,
         f_error,
-        suppress_interaction_logging
+        suppress_interaction_logging,
+        type = "POST"
     ) {
         /* ************
         normalize the params
@@ -380,7 +400,7 @@ const ServerCommsManager = ErieView.extend({
         // console.log(form_data_to_dict(form_data));
 
         try {
-            const resp = await this.server_request(post_url, form_data)
+            const resp = await this.server_request(post_url, form_data, type)
             f_success(resp);
         } catch (resp) {
             let err_data = "";
@@ -460,7 +480,7 @@ const ServerCommsManager = ErieView.extend({
         });
     },
 
-    server_request: async function (url, form_data) {
+    server_request: async function (url, form_data, type = "POST") {
         if (!form_data) {
             form_data = new FormData();
         }
