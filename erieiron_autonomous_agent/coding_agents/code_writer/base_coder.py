@@ -13,6 +13,7 @@ from typing import Dict, Tuple, List
 
 from django.db import transaction
 
+from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
     CodingAgentConfig,
     TASK_DESC_CODE_WRITING
@@ -109,6 +110,9 @@ class BaseCoder(ABC):
                 
                 #Initiative Specific Architecture Notes:
                 {initiative.architecture or 'none'}
+                
+                # Credential Schemas
+                {common.json_format_pretty(credential_manager.CREDENTIAL_DEFINITIONS)}
             """))
             
             if business.ui_design_spec:

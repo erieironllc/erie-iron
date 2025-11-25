@@ -547,11 +547,36 @@ class CredentialService(ErieEnum):
     COINBASE_COMMERCE = auto()
     
     def get_spec(self) -> dict:
-        from erieiron_autonomous_agent.coding_agents.credential_manager import CREDENTIALSERVICE_TO_CREDENTIALDEF
-        return CREDENTIALSERVICE_TO_CREDENTIALDEF.get(self)
+        from erieiron_autonomous_agent.coding_agents.credential_manager import CREDENTIAL_DEFINITIONS
+        return CREDENTIAL_DEFINITIONS.get(self)
     
-    def get_schema(self) -> list[dict]:
-        return self.get_spec().get("schema")
+    def get_label(self) -> str:
+        return self.get_spec().get(
+            "runtime_env_var"
+        ).replace(
+            "_SECRET_ARN", ""
+        ).replace(
+            "_", " "
+        ).title()
+    
+    def get_desc(self) -> list[dict]:
+        return self.get_spec().get("description")
+    
+    def get_secret_schema(self) -> list[dict]:
+        return self.get_spec().get("secret_value_schema")
+    
+    def get_provisioning(self) -> CredentialServiceProvisioning:
+        return CredentialServiceProvisioning(self.get_spec().get("provisioning"))
+    
+    def get_stackoutput_var(self) -> tuple[str, str]:
+        return self.get_spec().get("stack_var")
+    
+    def get_stackoutput_and_env_names(self) -> tuple[str, str]:
+        spec = self.get_spec()
+        return spec.get("stack_var"), spec.get("runtime_env_var")
+    
+    def get_secret_keys(self) -> list[str]:
+        return [s.get("key") for s in self.get_secret_schema()]
 
 
 class ContainerPlatform(ErieEnum):

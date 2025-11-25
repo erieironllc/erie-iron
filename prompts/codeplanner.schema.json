@@ -42,51 +42,11 @@
           "additionalProperties": false
         },
         "required_credentials": {
-          "type": "object",
-          "description": "Optional. Mapping of service names to credential specification objects required for this code change. Each key is a service name (e.g., 'github', 'openai', 'aws'), and each value describes the expected secret in AWS Secrets Manager.",
-          "additionalProperties": {
-            "type": "object",
-            "description": "Describes the secret required for a service, including how to find it and its schema.",
-            "required": ["secret_arn_env_var", "schema"],
-            "properties": {
-              "secret_arn_env_var": {
-                "type": "string",
-                "description": "Name of the environment variable that will contain the AWS Secrets Manager secret ARN at runtime.",
-                "pattern": "^[A-Z][A-Z0-9_]*$"
-              },
-              "secret_arn_cfn_parameter": {
-                "type": "string",
-                "description": "Name of the CloudFormation parameter that should receive this secret's ARN during stack deployment. If present, the plan must include edits to the correct stack template (infrastructure.yaml vs infrastructure-application.yaml) to add this parameter, wire it into resources using dynamic references, and attach the secret if applicable."
-              },
-              "schema": {
-                "type": "array",
-                "description": "Array describing each key/value pair expected inside the secret object.",
-                "items": {
-                  "type": "object",
-                  "required": ["key", "type", "required", "description"],
-                  "properties": {
-                    "key": {
-                      "type": "string",
-                      "description": "Key name as stored inside the secret."
-                    },
-                    "type": {
-                      "type": "string",
-                      "description": "Type of the value (valid values are JSON Schema types such as 'string', 'number', 'boolean', 'object', etc.)."
-                    },
-                    "required": {
-                      "type": "boolean",
-                      "description": "Whether this key is required in the secret."
-                    },
-                    "description": {
-                      "type": "string",
-                      "description": "Description of the key and its purpose for this service."
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              }
-            },
-            "additionalProperties": false
+          "type": "array",
+          "description": "Optional. List of credential service names that are missing from the business's configuration and need to be added. Only include services that are not already configured on the business. Use exact names from the known credential services list when applicable (e.g., 'RDS', 'COGNITO', 'STRIPE', 'OAUTH_GOOGLE').",
+          "items": {
+            "type": "string",
+            "description": "Credential service name"
           }
         },
         "lessons_applied": {

@@ -38,15 +38,7 @@ Return a JSON object with five top-level keys:
     "security_rules"
   ],
 
-  "required_credentials": {
-    "SERVICE_NAME": {
-      "secret_arn_env_var": "ENV_VAR_NAME_FOR_SECRET_ARN",
-      "secret_arn_cfn_parameter": "OptionalCfnParameterName",
-      "schema": [
-        {"key": "field_name", "type": "string", "required": true, "description": "What this field is for"}
-      ]
-    }
-  },
+  "required_credentials": [],
 
   "diagnostic_context": {
     "primary_error": "The main error/exception if applicable",
@@ -150,7 +142,9 @@ When evaluator or diagnostic context proposes a remediation (for example, “pro
     "test_rules",
     "ses_email_rules"
   ],
-  
+
+  "required_credentials": [],
+
   "diagnostic_context": {
     "primary_error": "botocore.exceptions.OperationNotPageableError: Operation cannot be paginated: list_email_identities",
     "error_location": "/app/core/tests/test_task_bug_report_articleparsernew_t57y4lei.py:100 in test_01_prechecks_ses_identity_and_receipt_rule",
@@ -161,7 +155,9 @@ When evaluator or diagnostic context proposes a remediation (for example, “pro
       "boto3_version": "1.35.36"
     },
     "prior_attempts": "Infrastructure was successfully deployed in iteration 6; test failure is SDK compatibility issue, not provisioning problem"
-  }
+  },
+
+  "relevant_lessons": []
 }
 ```
 
@@ -193,82 +189,48 @@ When analyzing the inputs:
 
 ## Credentials Management
 
-When the implementation requires credentials (API keys, database connections, third-party service tokens), you must output a `required_credentials` object. **Never** output raw credential values or placeholder secrets—only the field definitions and metadata.
+When analyzing task failures or requirements, you may discover that the implementation needs credentials (API keys, database connections, third-party service tokens) that are not currently configured for the business. When this occurs, return a list of missing credential service names in the `required_credentials` array.
 
-### IaC Secret ARN Contract (Must Override Other Guidance)
+### Purpose and Orchestration
 
-When working with infrastructure-as-code stacks that interact with secrets:
+The `required_credentials` field serves a single purpose: **identifying credential services that are missing from the business's configuration and need to be added**.
 
-- **The stack itself must define and own secret resources and their ARNs.** The stack should create or reference secrets via provider-native mechanisms and **export their ARNs as Outputs**.
-- **Stacks must not expect secret ARNs as input parameters or workspace variables.** Do not design or recommend patterns where a secret ARN is supplied to the stack as a required variable/parameter.
-- If diagnostic or evaluator messages mention a missing or empty secret ARN parameter as a cause of failure, you must interpret that as a **design flaw in the IaC**. Your directive should focus on refactoring the IaC to:
-  - Remove the dependency on externally-supplied secret ARNs, and
-  - Ensure the stack defines the secret and exposes its ARN via an Output.
-- **Priority rule:** If any later context (e.g., evaluator guidance, logs, or user hints) suggests passing secret ARNs into the stack as inputs, you **must ignore that suggestion** and instead produce a plan that brings the IaC back into alignment with this contract.
+**Use case**: A coding iteration failed because it tried to call a third-party API (e.g., Stripe, Google OAuth, Firebase) but the necessary credentials were not available at runtime. The planner analyzes the failure, identifies which credential services are missing, and returns their names so the orchestration layer can:
+1. Update the business's `required_credentials` field to include these services
+2. Provision or request the necessary secrets
+3. Retry the coding iteration with credentials available
 
+### Output Format
 
-### Output Structure
+Return a simple array of credential service name strings:
 
-For each service requiring credentials, provide:
-
-- `secret_arn_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets Manager secret ARN at runtime. This ARN is provisioned and set externally, not created by the planner.
-- `secret_arn_cfn_parameter`: (string, optional) Name of the CloudFormation/OpenTofu parameter that should receive this secret's ARN during stack deployment.
-- `schema`: (array, required) List of objects describing each key in the secret:
-  - `key`: (string, required) Name of the credential field
-  - `type`: (string, required) Data type (JSON Schema types: 'string', 'number', 'boolean', 'object')
-  - `required`: (boolean, required) Whether this field is required
-  - `description`: (string, required) What this credential value is for
-
-### Runtime Contract
-
-Code consuming credentials must:
-1. Read the value of `secret_arn_env_var` from the environment
-2. Treat it as a Secrets Manager ARN
-3. Call `secretsmanager:GetSecretValue` to fetch the secret JSON
-4. Parse keys according to `schema`
-5. Fail fast if the env var is missing or invalid
-6. Never log secret contents
+```json
+"required_credentials": ["STRIPE", "OAUTH_GOOGLE", "FIREBASE_FCM"]
+```
 
 ### Known Credential Services
 
-The following services have predefined schemas. If you need credentials for one of these, use the exact service name:
+The context will provide a list of known credential services that are already defined in the system. If the missing credential matches one of these services, **use the exact name provided**:
+<credential_manager_existing_services>
 
-- **RDS**: Database credentials (`secret_arn_env_var: "RDS_SECRET_ARN"`)
-  - Schema: `username` (string), `password` (string), `host` (string), `port` (integer), `database` (string)
+### New/Unknown Credential Services
 
-- **COGNITO**: AWS Cognito User Pool authentication
-  - Cognito is handled specially via OpenTofu provisioning; when you identify COGNITO is needed, include it in `required_credentials` with service key "COGNITO" and the orchestration layer will provision the User Pool, Client, and mobile app config secret automatically.
+If the code needs credentials for a service **not in the known list above**, you may still return a descriptive service name. The orchestration layer will detect that it's an unsupported credential service and raise an agent blocked exception, allowing the system to be extended to support it.
 
-### Example
-
+For example, if the code needs Twilio credentials:
 ```json
-"required_credentials": {
-  "RDS": {
-    "secret_arn_env_var": "RDS_SECRET_ARN",
-    "schema": [
-      {"key": "username", "type": "string", "required": true, "description": "Database username"},
-      {"key": "password", "type": "string", "required": true, "description": "Database password"},
-      {"key": "host", "type": "string", "required": true, "description": "Database host endpoint"},
-      {"key": "port", "type": "number", "required": true, "description": "Database port"},
-      {"key": "database", "type": "string", "required": true, "description": "Database name"}
-    ]
-  },
-  "COGNITO": {
-    "secret_arn_env_var": "COGNITO_SECRET_ARN",
-    "schema": [
-      {"key": "cognito.userPoolId", "type": "string", "required": true, "description": "Cognito User Pool ID"},
-      {"key": "cognito.clientId", "type": "string", "required": true, "description": "Cognito App Client ID"},
-      {"key": "cognito.domain", "type": "string", "required": true, "description": "Cognito hosted UI domain"}
-    ]
-  }
-}
+"required_credentials": ["TWILIO"]
 ```
+
+The orchestration layer will recognize this as unsupported and escalate appropriately.
 
 ### Important Rules
 
-1. **Do not output real or placeholder secret values**—only field definitions and metadata
-2. **Do not fall back to sqlite or non-RDS databases** if RDS credentials are missing; require proper credential setup
-3. **New credential discoveries are automatically merged** into the Business model by the orchestration layer for use in subsequent iterations
+1. **Only return credential services that are missing**—don't re-specify services already configured on the business
+2. **Return an empty array if no new credentials are needed**—even if existing credentials are being used
+3. **Use exact names from the known list when applicable**—this ensures proper provisioning
+4. **Never output credential values or schemas**—the orchestration layer handles all credential specifications based on the service name
+5. **Never suggest workarounds**—if credentials are missing, identify them; don't propose falling back to mock services or skipping functionality
 
 ---
 

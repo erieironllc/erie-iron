@@ -30,10 +30,10 @@ from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_s
 from erieiron_autonomous_agent.tests.test_shared_vpc_metadata import business
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
-from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager, ErieIronJSONEncoder
+from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError, MissingStackPerms
@@ -121,8 +121,8 @@ def execute(task_id: str, one_off_action: SdaInitialAction = None):
                     )
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
-                config.log(agent_blocked)
                 handle_agent_blocked(task_id, agent_blocked)
+                config.log(common.json_format_pretty(agent_blocked.blocked_data))
                 logging.info(f"Stopping - Agent Blocked")
                 break
             except GoalAchieved as goal_achieved:
@@ -347,7 +347,7 @@ def get_guidance_msg(config: CodingAgentConfig):
     return config.guidance
 
 
-def plan_code_changes(config):
+def plan_code_changes(config: CodingAgentConfig):
     config.set_phase(SdaPhase.PLANNING)
     
     planning_data = None
@@ -416,17 +416,14 @@ def merge_planner_required_credentials(business: Business, planning_data: dict) 
     if not planner_credentials:
         return
     
-    current_credentials = business.required_credentials or {}
-    merged_credentials = {
-        **current_credentials,
-        **planner_credentials
-    }
+    current_credentials = business.required_credentials or []
+    merged_credentials = list(sorted(set(current_credentials + planner_credentials)))
     
     # Only update if there are actual changes
     if merged_credentials != current_credentials:
         logging.info(
             f"Merging planner-discovered credentials into Business {business.service_token}: "
-            f"added {set(planner_credentials.keys()) - set(current_credentials.keys())}"
+            f"added {set(merged_credentials) - set(current_credentials)}"
         )
         Business.objects.filter(id=business.id).update(
             required_credentials=merged_credentials
@@ -434,7 +431,7 @@ def merge_planner_required_credentials(business: Business, planning_data: dict) 
         business.refresh_from_db(fields=["required_credentials"])
 
 
-def get_strategic_unblocking_data(config):
+def get_strategic_unblocking_data(config: CodingAgentConfig):
     return llm_chat(
         "Get Stragic Unblocking Data",
         [
@@ -1006,7 +1003,7 @@ def get_infrastructure_yaml_data(config: CodingAgentConfig, cf_template: Infrast
     )
 
 
-def get_infrastructure_yaml_codeversion(config, cf_template: InfrastructureStackType):
+def get_infrastructure_yaml_codeversion(config: CodingAgentConfig, cf_template: InfrastructureStackType):
     return CodeFile.get(
         config.business,
         cf_template.value
@@ -1399,7 +1396,7 @@ def deploy_iteration(
     if config.stack_manager.get_db_is_running():
         try:
             # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
-            add_tofu_outputs_to_runtime_env(config)
+            ingest_tofu_ouputs(config)
             rds_vals_in_env = True
             
             manage_db(
@@ -1437,28 +1434,42 @@ def deploy_iteration(
     )
 
 
-def add_tofu_outputs_to_runtime_env(config: CodingAgentConfig, outputs: dict | None = None):
+def ingest_tofu_ouputs(config: CodingAgentConfig, outputs: dict | None = None):
     """Populate runtime_env with the OpenTofu outputs required by the runtime."""
     if outputs is None:
         outputs = config.stack_manager.get_outputs()
     
     business = config.initiative.business
     
-    for credential_service  in (business.required_credentials or {}).keys():
-        parsed_credential_service = CredentialService.valid_or(credential_service)
-        if not parsed_credential_service:
-            raise AgentBlocked(f"Business defines an usupported credential service: {credential_service}")
+    missing_outputs = []
+    for credential_service, secret_arn in config.stack.get_credential_arns(CredentialServiceProvisioning.STACK_GENERATED):
+        output_name, env_name = credential_service.get_stackoutput_and_env_names()
+        output_value = str(outputs.get(output_name) or "")
+        if not output_value:
+            missing_outputs.append(credential_service)
+            continue
         
-        output_to_envs = CredentialService.get_output_var_to_env_var_mappings(parsed_credential_service) or {}
-        for output_var_name, env_name in output_to_envs.items():
-            output_var_value = outputs.get(output_var_name)
-            
-            if not output_var_value:
-                raise BadPlan(
-                    f"Infrastructure stack lacks an output value for the required output named '{credential_service} / {output_var_name}'"
-                )
-            
-            config.runtime_env[env_name] = str(output_var_value)
+        config.runtime_env[env_name] = output_value
+        
+        credential_arns = business.credential_arns or {}
+        credential_arns[credential_service.value] = secret_arn
+        
+        business.credential_arns = credential_arns
+        business.save(update_fields=["credential_arns"])
+    
+    if missing_outputs:
+        raise BadPlan("".join([
+            textwrap.dedent(f"""
+                ERROR - Planner please fix:
+                ```
+                    stack.tf lacks an output value for the required output named `{credential_service.get_stackoutput_var()}`  
+                    - This output value should the arn to the secret that defines the `{credential_service}` credentials.  
+                    - The secret defined by the `{credential_service.get_stackoutput_var()}` arn must have values for the following keys: {credential_service.get_secret_keys()}
+                    - stack.tf needs to define this secret with values for the keys {credential_service.get_secret_keys()} and return the arn to the secret as an output variable named `{credential_service.get_stackoutput_var()}`
+                    - if the planner and/or codewriter is unable to define these credential entirely in the stack (like it needs external input), it should return as `blocked`.  This should be a last resort though, try to define the values in the stack
+                ```
+        """) for credential_service in missing_outputs
+        ]))
 
 
 def get_iteration_files_msg(current_iteration):
@@ -2678,7 +2689,7 @@ def update_file_contents(
     return file_path
 
 
-def get_tombstone_message(config, disabled=True) -> list[LlmMessage]:
+def get_tombstone_message(config: CodingAgentConfig, disabled=True) -> list[LlmMessage]:
     asdf = LlmMessage.user_from_data(
         "deprecation_plan", [
             t.data_json for t in AgentTombstone.objects.filter(business=config.business)
@@ -3089,7 +3100,12 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
     task_type = TaskType(task.task_type)
     
     messages = [
-        get_sys_prompt("codeplanner--codewriter_audience.md"),
+        get_sys_prompt(
+            "codeplanner--codewriter_audience.md",
+            replacements=[
+                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+            ]
+        ),
         get_architecture_docs(
             config.initiative
         ),
@@ -3943,7 +3959,7 @@ def deploy_opentofu_stack(
         
         apply_result = stack_manager.apply()
         outputs = apply_result.extra["outputs"]
-        add_tofu_outputs_to_runtime_env(config, outputs)
+        ingest_tofu_ouputs(config, outputs)
         
         if stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
             ses_manager.manage_ses_domain_settings(
@@ -4124,18 +4140,26 @@ def build_tfvars_payload(
     if business.web_desired_count is not None:
         payload["WebDesiredCount"] = business.web_desired_count
     
-    # Add Cognito configuration based on business.required_credentials
-    required_credentials = business.required_credentials or {}
+    missing_secret_params = []
+    for credential_service, secret_arn in config.stack.get_credential_arns(CredentialServiceProvisioning.USER_SUPPLIED):
+        if not secret_arn:
+            missing_secret_params.append(credential_service)
+        else:
+            stack_var, _ = credential_service.get_stackoutput_and_env_names()
+            payload[stack_var] = secret_arn
     
-    if CredentialService.COGNITO.value in required_credentials:
+    if missing_secret_params:
+        raise AgentBlocked({
+            "description": "Missing required secret ARN variables for Terraform module",
+            "missing_secret_variables": sorted(missing_secret_params),
+            "hint": "Need to manually manage the credentialy in the Erie Iron UI"
+        })
+    
+    if CredentialService.COGNITO.value in business.required_credentials:
         payload["EnableCognito"] = True
         mobile_scheme = getattr(business, "mobile_app_scheme", None) or business.service_token
         if mobile_scheme:
             payload["MobileAppScheme"] = mobile_scheme
-    
-    for credential_service in CredentialService.get_stack_input_credentials():
-        if CredentialService(credential_service).value in required_credentials:
-            ...
     
     domain_name = business.domain if EnvironmentType.PRODUCTION.eq(config.env_type) else config.initiative.domain
     if not domain_name:
@@ -4172,32 +4196,6 @@ def build_tfvars_payload(
         param_value = lambda_data.get('s3_key_name')
         if param_name and param_value:
             payload[param_name] = param_value
-    
-    planning_required_creds = required_credentials or {}
-    missing_secret_params: list[str] = []
-    for credential_service, svc_spec in planning_required_creds.items():
-        variable_name = (
-                svc_spec.get("secret_arn_variable")
-                or svc_spec.get("secret_arn_cfn_parameter")
-        )
-        envvar_name = svc_spec.get("secret_arn_env_var")
-        if not variable_name:
-            continue
-        if variable_name not in stack_variables:
-            continue
-        arn_value = config.runtime_env.get(envvar_name) if envvar_name else None
-        if arn_value:
-            payload[variable_name] = arn_value
-        elif CredentialService.RDS.neq(credential_service):
-            missing_secret_params.append(variable_name)
-    
-    if missing_secret_params:
-        raise BadPlan(json.dumps({
-            "description": "Missing required secret ARN variables for Terraform module",
-            "missing_secret_variables": sorted(missing_secret_params),
-            "available_env_vars": config.runtime_env,
-            "hint": "Ensure credential_manager returned the ARN and that the module variable names align with business.required_credentials"
-        }, indent=4), config.current_iteration.planning_json)
     
     provided_values = {
         key: value
@@ -4256,6 +4254,7 @@ def set_secret(aws_secrets_client, admin_secrets_key, json_val):
 
 def ecr_authenticate_for_base_image(config: CodingAgentConfig, dockerfile):
     with open(dockerfile) as f:
+        # noinspection RegExpSimplifiable
         images = re.findall(
             r'FROM(?:\s+--platform=\$\w+)?\s+(\d+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[^\s:]+:[^\s]+)',
             f.read(),

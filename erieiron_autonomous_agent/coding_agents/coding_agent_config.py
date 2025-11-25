@@ -71,7 +71,7 @@ class CodingAgentConfig:
         self.initiative: Initiative = self.task.initiative
         self.task_type: TaskType = TaskType(self.task.task_type)
         self.budget: float = self.task.max_budget_usd or 0
-        self.business = Business.objects.get(initiative__tasks__id=self.task.id)
+        self.business:Business = Business.objects.get(initiative__tasks__id=self.task.id)
         self.guidance = LlmMessage.sys(self.task.guidance) if self.task.guidance else None
         self.sandbox_root_dir = Path(self.self_driving_task.sandbox_path)
         self.current_iteration: SelfDrivingTaskIteration = None

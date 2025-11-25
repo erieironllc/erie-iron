@@ -342,7 +342,7 @@ When you recieve a chat request:
 - The codeplanner must identify all required credentials in a structured format keyed by service name whenever
   credentials are needed for a plan. Instead of outputting raw credential objects or example key/value pairs, the
   codeplanner **must output, for each service:**
-    - `secret_arn_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets
+    - `runtime_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets
       Manager secret ARN for this service at runtime. This ARN will be provisioned and set externally, not created by
       the planner.
     - `schema`: a list of expected keys inside the secret, with metadata for each key. `schema` must always be an array
@@ -353,7 +353,7 @@ When you recieve a chat request:
         - `required`: (boolean, required) Whether this field is required.
         - `description`: (string, required) What this credential value is for.
 
-    - **Runtime contract:** Code must read the value of `secret_arn_env_var` from the environment, treat it as a Secrets
+    - **Runtime contract:** Code must read the value of `runtime_env_var` from the environment, treat it as a Secrets
       Manager ARN, call `secretsmanager:GetSecretValue` to fetch the secret JSON, and parse keys according to `schema`.
       Do not construct secret names or paths in code; do not log secret contents; fail fast if the env var is missing or
       invalid.
@@ -386,7 +386,7 @@ sufficient for secret creation and validation.**
     - Do **not** fall back to sqlite or any non-RDS database. If the secret ARN is not provided or the secret cannot be
       parsed, fail with a deterministic error message.
 - Planning obligations:
-    - Add an entry to `required_credentials` with the service key `RDS` using `secret_arn_env_var: RDS_SECRET_ARN` and
+    - Add an entry to `required_credentials` with the service key `RDS` using `runtime_env_var: RDS_SECRET_ARN` and
       the schema listed above.
     - Ensure the `code_files` list includes the settings module path discovered via `DJANGO_SETTINGS_MODULE` or common
       defaults (`settings.py`, `project/settings.py`, `erieiron_config/settings.py`).
@@ -552,9 +552,9 @@ If the plan is blocked, emit the structure defined in Blocked Output Example; do
 - `required_credentials`
     - An object keyed by service name, specifying the credentials required to accomplish the planned changes. For each
       service, provide:
-        - `secret_arn_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets
+        - `runtime_env_var`: (string, required) Name of the environment variable that will contain the AWS Secrets
           Manager secret ARN for this service at runtime. This ARN is provisioned and set externally.
-        - `secret_arn_cfn_parameter`: (string, optional) Name of the CloudFormation parameter that should receive this
+        - `stack_var`: (string, optional) Name of the CloudFormation parameter that should receive this
           secret's ARN during stack deployment. If present, the plan must include edits to the correct stack template
           (foundation vs application) to add this parameter, wire it into resources using dynamic references, and attach
           the secret if applicable.

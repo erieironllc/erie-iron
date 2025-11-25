@@ -109,6 +109,14 @@
                     </div>
 
                     <div class="mb-3">
+                        <label for="required_credentials" class="form-label">Required Credentials</label>
+                        <input type="text" name="required_credentials" id="required_credentials" class="form-control"
+                               value="{{ business.required_credentials_csv|default:"" }}"
+                               placeholder="e.g., RDS, COGNITO, STRIPE">
+                        <small class="form-text text-muted">Comma-delimited list of credential services</small>
+                    </div>
+
+                    <div class="mb-3">
                         <label for="bank_account_id" class="form-label">Bank Account ID</label>
                         <input type="text" name="bank_account_id" id="bank_account_id" class="form-control"
                                value="{{ business.bank_account_id|default:"" }}">

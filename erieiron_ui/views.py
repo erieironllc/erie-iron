@@ -1202,7 +1202,7 @@ def _tab_context_credentials(business: Business) -> dict:
         if not credential_service:
             continue
         
-        cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+        cred_def = credential_manager.CREDENTIAL_DEFINITIONS.get(credential_service, {})
         
         # Get ARN at each level
         business_arn = common.get(business.credential_arns, credential_service.value)
@@ -1214,7 +1214,7 @@ def _tab_context_credentials(business: Business) -> dict:
         
         credentials_data.append({
             "service": credential_service.value,
-            "service_name": credential_manager.get_desc(credential_service),
+            "service_name": credential_service.get_label(),
             "provisioning": cred_def.get("provisioning", CredentialServiceProvisioning.USER_SUPPLIED).value,
             "effective_arn": effective_arn,
             "source": source,
@@ -4920,7 +4920,13 @@ def action_update_business(request, business_id):
         needs_domain = request.POST.get('needs_domain') == 'on'
         domain = rget(request, 'domain', '').strip()
         domain_certificate_arn = rget(request, 'domain_certificate_arn', '').strip()
-        
+        required_credentials_str = rget(request, 'required_credentials', '').strip()
+
+        # Parse required_credentials from comma-delimited string
+        required_credentials = None
+        if required_credentials_str:
+            required_credentials = [s.strip() for s in required_credentials_str.split(',') if s.strip()]
+
         # Prepare update data
         update_data = {
             'name': name,
@@ -4942,7 +4948,8 @@ def action_update_business(request, business_id):
             'web_container_memory': web_container_memory,
             'web_desired_count': web_desired_count,
             'allow_autonomous_shutdown': allow_autonomous_shutdown,
-            'needs_domain': needs_domain
+            'needs_domain': needs_domain,
+            'required_credentials': required_credentials
         }
         
         # Handle optional autonomy_level
@@ -6058,7 +6065,7 @@ def business_credentials_list(request, business_id):
             logging.warning(f"Invalid credential service: {credential_service_value}")
             continue
         
-        cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+        cred_def = credential_manager.CREDENTIAL_DEFINITIONS.get(credential_service, {})
         if not cred_def:
             logging.error(f"No credential definition for {credential_service}")
             continue
@@ -6073,7 +6080,7 @@ def business_credentials_list(request, business_id):
         
         credentials_data.append({
             "service": credential_service.value,
-            "service_name": credential_manager.get_desc(credential_service),
+            "service_name": credential_service.get_label(),
             "provisioning": cred_def.get("provisioning"),
             "effective_arn": effective_arn,
             "source": source,
@@ -6152,7 +6159,7 @@ def stack_credentials_list(request, stack_id):
         if not credential_service:
             continue
         
-        cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+        cred_def = credential_manager.CREDENTIAL_DEFINITIONS.get(credential_service, {})
         
         # Get ARN at each level
         stack_arn = common.get(stack.credential_arns, credential_service.value)
@@ -6165,7 +6172,7 @@ def stack_credentials_list(request, stack_id):
         
         credentials_data.append({
             "service": credential_service.value,
-            "service_name": credential_service.get_desc(),
+            "service_name": credential_service.get_label(),
             "provisioning": cred_def.get("provisioning", CredentialServiceProvisioning.USER_SUPPLIED).value,
             "effective_arn": effective_arn,
             "source": source,
@@ -6238,7 +6245,7 @@ def business_credential_secret_get(request, business_id, credential_service_name
     effective_arn = business_arn or erie_iron_arn
     
     # Get credential definition
-    cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+    cred_def = credential_manager.CREDENTIAL_DEFINITIONS.get(credential_service, {})
     schema = cred_def.get("schema", [])
     
     # Fetch secret values from AWS if ARN exists
@@ -6299,7 +6306,7 @@ def business_credential_secret_update(request, business_id, credential_service_n
     # Merge updates (only update non-empty values, preserve existing for empty)
     merged_secret = {**existing_secret}
     
-    for schema_item in credential_service.get_schema():
+    for schema_item in credential_service.get_secret_schema():
         key = common.assert_not_empty(schema_item.get('key'))
         value = rget(request, f"secret--{key}")
         if value and value != "****":  # Only update if value provided and not masked placeholder
@@ -6331,7 +6338,7 @@ def stack_credential_secret_get(request, stack_id, credential_service_name):
         return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
     
     # Get credential definition
-    cred_def = credential_manager.CREDENTIALSERVICE_TO_CREDENTIALDEF.get(credential_service, {})
+    cred_def = credential_manager.CREDENTIAL_DEFINITIONS.get(credential_service, {})
     schema = cred_def.get("schema", [])
     
     # Fetch secret values from AWS if ARN exists

@@ -9,12 +9,13 @@ from erieiron_common.enums import CredentialService, EnvironmentType, Credential
 DISALLOWED_RDS_PASSWORD_CHARS = set('/@" ')
 ALLOWED_RDS_SPECIALS = ''.join(ch for ch in string.punctuation if ch not in DISALLOWED_RDS_PASSWORD_CHARS)
 
-CREDENTIALSERVICE_TO_CREDENTIALDEF = {
+CREDENTIAL_DEFINITIONS = {
     CredentialService.RDS: {
-        "secret_arn_env_var": "RDS_SECRET_ARN",
-        "secret_arn_cfn_parameter": "RdsSecretArn",
+        "description": "PostgreSQL/MySQL database credentials",
+        "runtime_env_var": "RDS_SECRET_ARN",
+        "stack_var": "RdsSecretArn",
         "provisioning": CredentialServiceProvisioning.STACK_GENERATED,
-        "schema": [
+        "secret_value_schema": [
             {
                 "key": "username",
                 "type": "string",
@@ -30,48 +31,53 @@ CREDENTIALSERVICE_TO_CREDENTIALDEF = {
         ]
     },
     CredentialService.COGNITO: {
-        "secret_arn_env_var": "COGNITO_SECRET_ARN",
-        "secret_arn_cfn_parameter": "CognitoSecretArn",
+        "description": "AWS Cognito User Pool authentication",
+        "runtime_env_var": "COGNITO_SECRET_ARN",
+        "stack_var": "CognitoSecretArn",
         "provisioning": CredentialServiceProvisioning.STACK_GENERATED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "user_pool_id", "type": "string", "required": True, "description": "Cognito User Pool ID"},
             {"key": "client_id", "type": "string", "required": True, "description": "Cognito App Client ID"},
             {"key": "client_secret", "type": "string", "required": False, "description": "Cognito App Client Secret"}
         ]
     },
     CredentialService.STRIPE: {
-        "secret_arn_env_var": "STRIPE_API_KEY_SECRET_ARN",
-        "secret_arn_cfn_parameter": "StripeApiKeySecretArn",
+        "description": "Stripe payment processing API keys",
+        "runtime_env_var": "STRIPE_API_KEY_SECRET_ARN",
+        "stack_var": "StripeApiKeySecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "api_key", "type": "string", "required": True, "description": "Stripe API secret key"},
             {"key": "publishable_key", "type": "string", "required": False, "description": "Stripe publishable key"},
             {"key": "webhook_secret", "type": "string", "required": False, "description": "Stripe webhook signing secret"}
         ]
     },
     CredentialService.HCAPTCHA: {
-        "secret_arn_env_var": "HCAPTCHA_SECRET_ARN",
-        "secret_arn_cfn_parameter": "HcaptchaSecretArn",
+        "description": "hCaptcha bot protection keys",
+        "runtime_env_var": "HCAPTCHA_SECRET_ARN",
+        "stack_var": "HcaptchaSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "secret_key", "type": "string", "required": True, "description": "hCaptcha secret key"},
             {"key": "site_key", "type": "string", "required": False, "description": "hCaptcha site key"}
         ]
     },
     CredentialService.ONESIGNAL: {
-        "secret_arn_env_var": "ONESIGNAL_SECRET_ARN",
-        "secret_arn_cfn_parameter": "OnesignalSecretArn",
+        "description": "OneSignal push notification credentials",
+        "runtime_env_var": "ONESIGNAL_SECRET_ARN",
+        "stack_var": "OnesignalSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "app_id", "type": "string", "required": True, "description": "OneSignal App ID"},
             {"key": "api_key", "type": "string", "required": True, "description": "OneSignal REST API Key"}
         ]
     },
     CredentialService.OAUTH_APPLE: {
-        "secret_arn_env_var": "OAUTH_APPLE_SECRET_ARN",
-        "secret_arn_cfn_parameter": "OauthAppleSecretArn",
+        "description": "Apple OAuth credentials",
+        "runtime_env_var": "OAUTH_APPLE_SECRET_ARN",
+        "stack_var": "OauthAppleSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "client_id", "type": "string", "required": True, "description": "Apple Services ID"},
             {"key": "team_id", "type": "string", "required": True, "description": "Apple Team ID"},
             {"key": "key_id", "type": "string", "required": True, "description": "Apple Key ID"},
@@ -79,54 +85,60 @@ CREDENTIALSERVICE_TO_CREDENTIALDEF = {
         ]
     },
     CredentialService.FIREBASE_FCM: {
-        "secret_arn_env_var": "FIREBASE_FCM_SECRET_ARN",
-        "secret_arn_cfn_parameter": "FirebaseFcmSecretArn",
+        "description": "Firebase Cloud Messaging credentials",
+        "runtime_env_var": "FIREBASE_FCM_SECRET_ARN",
+        "stack_var": "FirebaseFcmSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "server_key", "type": "string", "required": True, "description": "Firebase Cloud Messaging server key"},
             {"key": "sender_id", "type": "string", "required": False, "description": "Firebase sender ID"}
         ]
     },
     CredentialService.OAUTH_GITHUB: {
-        "secret_arn_env_var": "OAUTH_GITHUB_SECRET_ARN",
-        "secret_arn_cfn_parameter": "OauthGithubSecretArn",
+        "description": "GitHub OAuth credentials",
+        "runtime_env_var": "OAUTH_GITHUB_SECRET_ARN",
+        "stack_var": "OauthGithubSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "client_id", "type": "string", "required": True, "description": "GitHub OAuth App Client ID"},
             {"key": "client_secret", "type": "string", "required": True, "description": "GitHub OAuth App Client Secret"}
         ]
     },
     CredentialService.OAUTH_GOOGLE: {
-        "secret_arn_env_var": "OAUTH_GOOGLE_SECRET_ARN",
-        "secret_arn_cfn_parameter": "OauthGoogleSecretArn",
+        "description": "Google OAuth credentials",
+        "runtime_env_var": "OAUTH_GOOGLE_SECRET_ARN",
+        "stack_var": "OauthGoogleSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "client_id", "type": "string", "required": True, "description": "Google OAuth Client ID"},
             {"key": "client_secret", "type": "string", "required": True, "description": "Google OAuth Client Secret"}
         ]
     },
     CredentialService.COINBASE_COMMERCE: {
-        "secret_arn_env_var": "COINBASE_COMMERCE_SECRET_ARN",
-        "secret_arn_cfn_parameter": "CoinbaseCommerceSecretArn",
+        "description": "Coinbase Commerce payment credentials",
+        "runtime_env_var": "COINBASE_COMMERCE_SECRET_ARN",
+        "stack_var": "CoinbaseCommerceSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "api_key", "type": "string", "required": True, "description": "Coinbase Commerce API Key"},
             {"key": "webhook_secret", "type": "string", "required": False, "description": "Coinbase Commerce webhook shared secret"}
         ]
     },
     CredentialService.DJANGO: {
-        "secret_arn_env_var": "DJANGO_SECRET_KEY_ARN",
-        "secret_arn_cfn_parameter": "DjangoSecretKeyArn",
-        "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "description": "Django secret key and settings",
+        "runtime_env_var": "DJANGO_SECRET_KEY_ARN",
+        "stack_var": "DjangoSecretKeyArn",
+        "provisioning": CredentialServiceProvisioning.STACK_GENERATED,
+        "secret_value_schema": [
             {"key": "secret_key", "type": "string", "required": True, "description": "Django SECRET_KEY for cryptographic signing"}
         ]
     },
     CredentialService.LLM: {
-        "secret_arn_env_var": "LLM_API_KEYS_SECRET_ARN",
-        "secret_arn_cfn_parameter": "LlmApiKeysSecretArn",
+        "description": "Language model API keys (OpenAI, Anthropic, etc.)",
+        "runtime_env_var": "LLM_API_KEYS_SECRET_ARN",
+        "stack_var": "LlmApiKeysSecretArn",
         "provisioning": CredentialServiceProvisioning.USER_SUPPLIED,
-        "schema": [
+        "secret_value_schema": [
             {"key": "anthropic_api_key", "type": "string", "required": False, "description": "Anthropic Claude API key"},
             {"key": "openai_api_key", "type": "string", "required": False, "description": "OpenAI API key"},
             {"key": "google_api_key", "type": "string", "required": False, "description": "Google Gemini API key"},
@@ -137,10 +149,10 @@ CREDENTIALSERVICE_TO_CREDENTIALDEF = {
 
 
 def get_desc(credential_service: CredentialService) -> str:
-    return CREDENTIALSERVICE_TO_CREDENTIALDEF[
+    return CREDENTIAL_DEFINITIONS[
         CredentialService(credential_service)
     ].get(
-        "secret_arn_env_var"
+        "runtime_env_var"
     ).replace(
         "_SECRET_ARN", ""
     ).replace(
@@ -149,14 +161,14 @@ def get_desc(credential_service: CredentialService) -> str:
 
 
 def get_existing_service_names_desc() -> str:
-    return "; ".join(
-        f"{cred_service} ({get_desc(cred_service)})"
+    return "\n".join(
+        f"- `{cred_service.value}`:  {cred_service.get_desc()}"
         for cred_service in CredentialService
     )
 
 
 def get_existing_service_schema_desc() -> str:
-    return json.dumps(CREDENTIALSERVICE_TO_CREDENTIALDEF, indent=4)
+    return json.dumps(CREDENTIAL_DEFINITIONS, indent=4)
 
 
 def get_aws_role_name(
