@@ -93,6 +93,8 @@ class CodingAgentConfig:
         else:
             self.previous_iteration = self.iteration_to_modify = None
         
+        self.is_stagnating = common.get(self.previous_iteration, ["evaluation_json", "is_stagnating"], False)
+        
         artifacts_root = self.sandbox_root_dir / ARTIFACTS
         artifacts_root.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir = artifacts_root

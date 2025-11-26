@@ -1,8 +1,6 @@
-import json
 import os
 import re
 import subprocess
-import textwrap
 import time
 import types
 from pathlib import Path
@@ -60,7 +58,7 @@ class GeminiCoder(BaseCoder):
             env=os.environ.copy(),
             bufsize=1
         )
-
+        
         # Get stdout path for incremental writing
         iteration_id = self.config.current_iteration.id
         stdout_path = self.config.artifacts_dir / f"{iteration_id}_{self.coder_name}_stdout.log"
@@ -74,7 +72,7 @@ class GeminiCoder(BaseCoder):
             # Append streamed output to stdout_path incrementally
             with stdout_path.open("a", encoding="utf-8") as fp:
                 fp.write(clean + "\n")
-
+        
         return_code = process.wait()
         
         # Build a structure mimicking CompletedProcess output so downstream code still works
@@ -119,7 +117,6 @@ class GeminiCoder(BaseCoder):
             raise ExecutionException(
                 f"Gemini CLI exited with code {result.returncode}. Check stdout and stderr for details."
             )
-   
     
     def extract_usage_stats(self, stdout: str, stderr: str, metadata: dict) -> Dict:
         """Extract token/cost metrics from Gemini CLI output."""

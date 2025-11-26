@@ -10,15 +10,12 @@ from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAg
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException, BadPlan, AgentBlocked
 from .claude_coder import ClaudeCoder
 from .codex_coder import CodexCoder
-from .gemini_coder import GeminiCoder
-from .individual_file_coder import IndividualFileCoder
 from ...utils.codegen_utils import CodeCompilationError, validate_dockerfile
 
 CODERS = [
     ("Codex", CodexCoder),
-    ("Gemini", GeminiCoder),
     ("Claude", ClaudeCoder),
-    ("Individual", IndividualFileCoder)
+    # ("Gemini", GeminiCoder),
 ]
 
 
@@ -44,8 +41,13 @@ def write_code(config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Pat
     
     # Define coders in order of preference
     
+    if config.is_stagnating:
+        coders = reversed(CODERS)
+    else:
+        coders = CODERS
+
     errors = []
-    for coder_name, coder_cls in CODERS:
+    for coder_name, coder_cls in coders:
         coder = coder_cls(config, planning_data)
         try:
             config.log(f"Attempting code generation with {coder_name} coder")
