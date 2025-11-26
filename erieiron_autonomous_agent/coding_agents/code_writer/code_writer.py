@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 import yaml
 
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException, BadPlan, AgentBlocked
 from .claude_coder import ClaudeCoder
 from .codex_coder import CodexCoder
 from .gemini_coder import GeminiCoder
@@ -60,6 +60,10 @@ def write_code(config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Pat
             
             return changed_paths, metadata
         
+        except AgentBlocked as e:
+            raise e
+        except BadPlan as e:
+            raise e
         except Exception as e:
             logging.exception(e)
             error_info = {

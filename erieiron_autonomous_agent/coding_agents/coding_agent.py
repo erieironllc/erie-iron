@@ -121,6 +121,12 @@ def execute(task_id: str, one_off_action: SdaInitialAction = None):
                     )
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
+                try:
+                    print("Current Stack Outputs")
+                    for k, v in config.stack_manager.get_outputs().items():
+                        print(f"- `{k}` = `{v}`")
+                except:
+                    ...
                 handle_agent_blocked(task_id, agent_blocked)
                 config.log(common.json_format_pretty(agent_blocked.blocked_data))
                 logging.info(f"Stopping - Agent Blocked")
@@ -1820,6 +1826,10 @@ def evaluate_iteration(
                 "Task Goal"
             ),
             
+            get_code_changes_msg(
+                config
+            ),
+            
             get_previous_iteration_summaries_msg(
                 config
             ),
@@ -1964,6 +1974,18 @@ def get_logs_msg(config, iteration):
             }
         }
     )
+
+
+def get_code_changes_msg(config):
+    iteration = config.current_iteration
+    diffs = []
+    for cv in iteration.codeversion_set.all():
+        diffs.append({
+            "path": cv.code_file.file_path,
+            "diff": cv.get_diff()
+        })
+    
+    return LlmMessage.user_from_data( "Code changes in this iteration",diffs, "code_file")
 
 
 def get_previous_iteration_summaries_msg(config):

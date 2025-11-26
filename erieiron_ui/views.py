@@ -6458,7 +6458,7 @@ def business_credential_secret_get(request, business_id, credential_service_name
     business = get_object_or_404(Business, id=business_id)
     credential_service = CredentialService.valid_or(credential_service_name)
     if not credential_service:
-        return JsonResponse({"error": f"Invalid credential service: {credential_service_name}"}, status=400)
+        raise Exception(f"Invalid credential service: {credential_service_name}")
     
     # Get the effective ARN
     business_arn = common.get(business.credential_arns, credential_service.value)
@@ -6466,8 +6466,7 @@ def business_credential_secret_get(request, business_id, credential_service_name
     effective_arn = business_arn or erie_iron_arn
     
     # Get credential definition
-    cred_def = credential_manager.CREDENTIAL_DEFINITIONS.get(credential_service, {})
-    schema = cred_def.get("schema", [])
+    schema = credential_service.get_secret_schema()
     
     # Fetch secret values from AWS if ARN exists
     secret_values = {}

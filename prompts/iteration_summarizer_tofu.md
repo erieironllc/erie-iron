@@ -62,19 +62,25 @@ You will be provided
    **Rule of thumb:**  
    Mark `blocked: true` only when an orchestration or environment-level issue prevents the iteration from executing or being diagnosed at all. Otherwise, default to `blocked: false`.
 
-3. **Write an Evaluation Summary**  
-   - field name: `summary`  
-   - Summarize what the iteration logs show in clear, compact terms.  
-   - **Purpose:** Give downstream LLMs an immediate, actionable understanding of what happened.  
-   - **Include:**  
-     - **Outcome:** Did execution or tests succeed or fail?  
-     - **Cause:** Primary error(s) and affected components (file, function, service).  
-     - **Scope:** If both infra/runtime and test errors exist, mention both.  
-     - **OpenTofu:** If deployment failed, say so and summarize the failing resources or error messages captured in the OpenTofu logs.  Do not mention if deploy succeeded.
-     - **Blocked Runs:** If execution never started, state that directly (e.g., “Execution blocked by infrastructure failure.”).  
-   - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers`. Avoid verbosity or speculation; prefer clarity and brevity.
+3. **Write a summary of the code changes**
+    - field name: `code_changes_summary`
+    - Summarize what changed in the code.  Optimize for both Human comprension and downstream LLM comprehension.  Use markdown syntax for readability
+    - **Purpose:** Give humans and downstream LLMs understanding of what changed in the code base
+    - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers`. Avoid unnecessary verbosity or speculation; prefer clarity and brevity, but don't lose significant details for the sake of breviity.
 
-4. ### Extract Errors  
+4. **Write an Evaluation Summary**
+    - field name: `summary`
+    - Summarize what the iteration logs show in clear, compact terms.
+    - **Purpose:** Give downstream LLMs an immediate, actionable understanding of what happened.
+    - **Include:**
+        - **Outcome:** Did execution or tests succeed or fail?
+        - **Cause:** Primary error(s) and affected components (file, function, service).
+        - **Scope:** If both infra/runtime and test errors exist, mention both.
+        - **OpenTofu:** If deployment failed, say so and summarize the failing resources or error messages captured in the OpenTofu logs.  Do not mention if deploy succeeded.
+        - **Blocked Runs:** If execution never started, state that directly (e.g., “Execution blocked by infrastructure failure.”).
+    - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers`. Avoid verbosity or speculation; prefer clarity and brevity.
+
+5. ### Extract Errors  
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multiple OpenTofu failures are found, include **all** OpenTofu failure events
    - If the iteration ran automated tests and there were **test errors or failures**, capture **all of them** (since these can be addressed in parallel).  
    - When both runtime or infrastructure/compilation errors **and** automated test failures appear in the logs, include **both** sections in the response. Report the blocking runtime or infrastructure error in `error` *and* enumerate all test failures in `test_errors`. Do not omit the critical error when tests fail downstream.  
@@ -100,7 +106,7 @@ You will be provided
    **Important:**  
    - Always err on the side of including more raw log context.  
 
-5. **Determine if Development is Stagnating**
+6. **Determine if Development is Stagnating**
    - **Field**: `is_stagnating`
    - Return `true` **only if recent iterations show repeated stagnation** — meaning the same or highly similar failures have persisted for **three or more consecutive iterations** with little or no measurable progress toward the GOAL.
    - **Early iterations** (e.g., first or second attempts) should **never** be marked as stagnating, even if they fail in similar ways, since the agent is still exploring and establishing baseline functionality.

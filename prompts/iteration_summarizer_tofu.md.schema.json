@@ -19,6 +19,10 @@
       "type": "string",
       "description": "A high-level summary of the iteration's execution and test results."
     },
+    "code_changes_summary": {
+      "type": "string",
+      "description": "A high-level summary of the code changes (if any) for this iteration."
+    },
     "error": {
       "type": "object",
       "description": "Details of a critical infrastructure, deployment, or compilation error that blocked execution.",

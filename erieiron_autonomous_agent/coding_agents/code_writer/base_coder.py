@@ -105,6 +105,33 @@ class BaseCoder(ABC):
             
             self.write_plan(artifact_paths)
             
+            prev_iteration = self.config.iteration_to_modify
+            error_summary, error_logs = prev_iteration.get_error()
+            artifact_paths["previous_iteration_logs"].write_text(textwrap.dedent(f"""
+                Previous Iteration Error Logs
+                
+                # Summary
+                {error_summary}
+
+                # Cloudwatch Logs
+                {common.json_format_pretty(prev_iteration.log_content_cloudwatch)}
+
+                # Deployment Logs
+                {common.json_format_pretty(prev_iteration.log_content_deployment)}
+
+                # Execution Logs
+                {prev_iteration.log_content_execution}
+
+                # Evaluation Logs
+                {prev_iteration.log_content_evaluation}
+
+                # Coding Logs
+                {prev_iteration.log_content_coding}
+
+                # Init Logs
+                {prev_iteration.log_content_init}
+            """))
+            
             artifact_paths["architecture"].write_text(textwrap.dedent(f"""
                 {business.architecture}
                 
@@ -167,6 +194,7 @@ class BaseCoder(ABC):
             "plan": artifacts_dir / f"{iteration_id}_plan.json",
             "architecture": artifacts_dir / f"{iteration_id}_architecture.md",
             "design_spec": artifacts_dir / f"{iteration_id}_design_spec.md",
+            "previous_iteration_logs": artifacts_dir / f"{iteration_id}_prev_iteration_logs.log",
             "prompt": artifacts_dir / f"{iteration_id}_{self.coder_name}_prompt.txt",
             "stdout": artifacts_dir / f"{iteration_id}_{self.coder_name}_stdout.log",
             "stderr": artifacts_dir / f"{iteration_id}_{self.coder_name}_stderr.log",
@@ -329,6 +357,7 @@ class BaseCoder(ABC):
         **DEVELOPMENT PLAN**:  Follow the approved development plan saved at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
         **SYSTEM ARCHITECTURE**:  The system architecture document is located at `{artifact_paths.get("architecture")}`.  You changes **must** be aligned with this architecture
         **UI DESIGN SPEC**:  If you make any UI changes, **you must** comport the look and feel of the changes to the UI Design Spec saved at `{artifact_paths.get("design_spec")}`
+        **PREVIOUS ITERATION LOGS**  Error Logs from the previous iterations coding|deployment|execution are located at `{artifact_paths.get("previous_iteration_logs")}`.  Review the logs if you need more context that what the plan supplies
         Consult the relevant engineering standards from the reference prompts.
         Do not commit or push changes; the orchestrator handles git commits.
         """)
@@ -339,12 +368,13 @@ class BaseCoder(ABC):
             ## Execution Checklist
             1. Read and understand the full development plan at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
             2. Read and understand the system architecture at `{artifact_paths.get("architecture")}`.  Validate your changes comport to the architecture
-            3. If you are making UI / look and feel changes, understand the UI Design Spec at `{artifact_paths.get("design_spec")}`.  Validate your changes comport to the design spec
-            4. Apply all Erie Iron engineering standards from the reference prompts
-            5. Implement code changes that satisfy the `implementation_directive` and address prior failures
-            6. Scope modifications to the `implementation_directive`.  **Do not** make un-related changes
-            7. Never modify read-only paths
-            8. Leave repository with changes ready for review; do not commit
+            3. Error logs from the previous iterations coding|deployment|execution are located at `{artifact_paths.get("previous_iteration_logs")}`.  Review the logs if you need more context that what the plan supplies
+            4. If you are making UI / look and feel changes, understand the UI Design Spec at `{artifact_paths.get("design_spec")}`.  Validate your changes comport to the design spec
+            5. Apply all Erie Iron engineering standards from the reference prompts
+            6. Implement code changes that satisfy the `implementation_directive` and address prior failures
+            7. Scope modifications to the `implementation_directive`.  **Do not** make un-related changes
+            8. Never modify read-only paths
+            9. Leave repository with changes ready for review; do not commit
             """)
         ]
     

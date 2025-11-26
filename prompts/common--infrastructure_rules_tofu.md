@@ -7,7 +7,7 @@
     required_version = ">= 1.6.0"
     
     backend "s3" {
-      bucket         = "erieiron-opentofu-state"
+      bucket         = "<account_specific_bucket_name>"
       dynamodb_table = "opentofu-locks"
       encrypt        = true
     }
@@ -22,6 +22,8 @@
   ```
 - This block standardizes backend configuration, provider versioning, and ensures consistent setup across all Erie Iron OpenTofu stacks.
 - Do **not** modify the bucket, region, or provider source/version unless explicitly authorized by the infrastructure maintainer.
+- <account_specific_bucket_name> is dynamic based on the account
+- **Never** modify this header block once it is written
 
 ### S3 Versioning Rule
 - OpenTofu provider v5.x and above no longer supports defining S3 bucket versioning directly within the `aws_s3_bucket` resource.

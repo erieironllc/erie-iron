@@ -231,6 +231,8 @@ The orchestration layer will recognize this as unsupported and escalate appropri
 3. **Use exact names from the known list when applicable**—this ensures proper provisioning
 4. **Never output credential values or schemas**—the orchestration layer handles all credential specifications based on the service name
 5. **Never suggest workarounds**—if credentials are missing, identify them; don't propose falling back to mock services or skipping functionality
+6. **Use `required_credentials` to signal blocking missing secrets**: Whenever you determine that a task cannot proceed because credentials for a service are missing or unavailable, you **must** add that service name to the `required_credentials` array. Do not rely solely on prose in `implementation_directive` or other fields to describe a "blocked" or "fail the plan/apply" state due to missing credentials; the structured `required_credentials` output is the authoritative signal for orchestration to obtain those secrets.
+7. **Avoid prescribing failure/blocked behavior for missing credentials**: Do not instruct downstream tools to "fail", "block", or "abort" execution solely because credentials are absent. Instead, (a) describe the need for those credentials and how they will be used in the directive, and (b) list the corresponding services in `required_credentials` so the orchestration layer can handle the blockage.
 
 ---
 
