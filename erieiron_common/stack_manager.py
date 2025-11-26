@@ -1,20 +1,20 @@
 """Utilities for working with OpenTofu (Terraform) configurations."""
 from __future__ import annotations
-import os
-import socket
 
 import json
 import logging
+import os
 import re
 import shlex
 import subprocess
 import tempfile
 import textwrap
 import time
+from dataclasses import dataclass, field
 from datetime import timedelta, datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from enum import Enum
 
 import hcl2
 
@@ -22,11 +22,10 @@ import settings
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
 from erieiron_autonomous_agent.models import InfrastructureStack, Business
 from erieiron_common import aws_utils
-from erieiron_common import common, opentofu_log_utils
+from erieiron_common import common
 from erieiron_common.date_utils import to_utc
 from erieiron_common.enums import InfrastructureStackType, EnvironmentType
 from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandError, OpenTofuException, MissingStackPerms
-from erieiron_common.opentofu_log_utils import OpenTofuRunResult
 
 DEFAULT_TOFU_STATE_BUCKET = "erieiron-opentofu-state"
 
@@ -44,7 +43,7 @@ class ApplyErrorType(Enum):
 # Known duplicate/idempotent error messages that can be treated as success
 KNOWN_DUPLICATE_MSGS = [
     "InvalidPermission.Duplicate",
-    "InvalidChangeBatch", 
+    "InvalidChangeBatch",
     "AlreadyExists",
 ]
 
@@ -63,7 +62,7 @@ HARD_ERROR_INDICATORS = [
 # Permissions-related error patterns that indicate missing AWS permissions
 PERMISSIONS_ERROR_PATTERNS = [
     "AccessDenied",
-    "UnauthorizedOperation", 
+    "UnauthorizedOperation",
     "Forbidden",
     "StatusCode: 403",
     "is not authorized to perform",
@@ -77,6 +76,34 @@ RESOURCES_TO_RETAIN_ON_DESTROY = [
     "aws_security_group_rule.rds_ingress_client",
     "aws_security_group_rule.rds_ingress_vpc",
 ]
+
+
+@dataclass
+class OpenTofuRunResult:
+    """Captures the stdout/stderr streams for a tofu CLI invocation."""
+    
+    stage: str
+    command: Sequence[str]
+    returncode: int
+    started_at: datetime
+    completed_at: datetime
+    stdout: str
+    stderr: str
+    extra: Mapping[str, Any] | None = field(default_factory=dict)
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "command": " ".join(self.command),
+            "returncode": self.returncode,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat(),
+            "duration_seconds": max((self.completed_at - self.started_at).total_seconds(), 0.0),
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "outputs": common.get(self.extra, "outputs"),
+            "extra": self.extra or {},
+        }
 
 
 class StackManager:
@@ -106,7 +133,10 @@ class StackManager:
         
         self.stage = "init"
         self.run_results: list[OpenTofuRunResult] = []
-        
+        self.plan_change_summary = None
+        self.plan_command_results: OpenTofuCommandResult = None
+        self.apply_command_results: OpenTofuCommandResult = None
+
         self.plan_output_path = self.workspace_dir / "current.plan"
         self.init_workspace()
     
@@ -191,7 +221,7 @@ class StackManager:
     def record(self, stage: str, result: OpenTofuCommandResult) -> None:
         self.stage = stage
         self.run_results.append(
-            opentofu_log_utils.OpenTofuRunResult(
+            OpenTofuRunResult(
                 stage=stage,
                 command=result.command,
                 returncode=result.returncode,
@@ -316,7 +346,7 @@ class StackManager:
         key_value = f"{self.stack.stack_namespace_token}/stack.tfstate"
         
         # Generate bucket name following same pattern as apply_target_account_bootstrap.sh
-        terraform_state_bucket =   self._get_terraform_state_bucket_name()
+        terraform_state_bucket = self._get_terraform_state_bucket_name()
         
         storage_key_args = [
             f"-backend-config=bucket={terraform_state_bucket}",
@@ -349,6 +379,8 @@ class StackManager:
             refresh: bool = True,
             json_output: bool = True
     ) -> OpenTofuCommandResult:
+        self.plan_change_summary = None
+        self.plan_command_results = None
         temp_dir: tempfile.TemporaryDirectory[str] | None = None
         try:
             args = ["plan", "-input=false", "-no-color"]
@@ -361,7 +393,7 @@ class StackManager:
             
             args.extend(["-var-file", self.get_tfvars_file()])
             
-            result = self.run_tofu_command(
+            self.plan_command_results = result = self.run_tofu_command(
                 "plan",
                 args,
                 timeout=timeout
@@ -381,9 +413,9 @@ class StackManager:
                         show_result,
                     ) from exc
                 change_summary = self.summarize_plan_changes(plan_json)
+                result.extra["plan_change_summary"] = self.plan_change_summary = change_summary
                 result.extra["plan_path"] = str(self.plan_output_path)
                 result.extra["plan_json"] = plan_json
-                result.extra["plan_change_summary"] = change_summary
                 result.extra["show_result"] = show_result.loggable_dict()
             return result
         finally:
@@ -395,29 +427,29 @@ class StackManager:
         stderr = error.result.stderr or ""
         stdout = error.result.stdout or ""
         combined = f"{stderr}\n{stdout}"
-
+        
         # Check for permissions-related errors
         if any(pattern in combined for pattern in PERMISSIONS_ERROR_PATTERNS):
             return ApplyErrorType.MISSING_PERMISSIONS
-
+        
         # Check for known duplicate/idempotent errors
         duplicate_token: str | None = None
         for msg in KNOWN_DUPLICATE_MSGS:
             if msg in combined:
                 duplicate_token = msg
                 break
-
+        
         if duplicate_token is not None:
             # Pure duplicate?
             if "InvalidPermission.Duplicate" in combined:
                 return ApplyErrorType.DUPLICATE_IDEMPOTENT
-
+            
             # Otherwise check for real hard errors
             if any(indicator in combined for indicator in HARD_ERROR_INDICATORS):
                 return ApplyErrorType.HARD_ERROR_WITH_DUPLICATE
-
+            
             return ApplyErrorType.DUPLICATE_IDEMPOTENT
-
+        
         return ApplyErrorType.TRANSIENT_ERROR
     
     def _extract_missing_permissions(self, error: OpenTofuCommandError) -> list[str]:
@@ -443,6 +475,7 @@ class StackManager:
         access_denied_lines = [line for line in combined.split('\n') if 'AccessDenied' in line or 'UnauthorizedOperation' in line]
         for line in access_denied_lines:
             # Extract AWS actions from context (common AWS API patterns)
+            # noinspection RegExpUnnecessaryNonCapturingGroup
             aws_actions = re.findall(r'([a-z][a-zA-Z0-9]*:[a-zA-Z][a-zA-Z0-9]*(?:\*)?)', line)
             missing_permissions.extend(aws_actions)
         
@@ -468,10 +501,10 @@ class StackManager:
         return unique_permissions
     
     def _create_synthetic_success_result(
-        self, 
-        original_error: OpenTofuCommandError, 
-        outputs: dict[str, Any],
-        duplicate_token: str
+            self,
+            original_error: OpenTofuCommandError,
+            outputs: dict[str, Any],
+            duplicate_token: str
     ) -> OpenTofuCommandResult:
         """Create a synthetic success result for handled duplicate errors."""
         synthetic_result = OpenTofuCommandResult(
@@ -554,7 +587,7 @@ class StackManager:
         
         # Find the duplicate token for logging
         duplicate_token = next(
-            (msg for msg in KNOWN_DUPLICATE_MSGS if msg in combined), 
+            (msg for msg in KNOWN_DUPLICATE_MSGS if msg in combined),
             "unknown"
         )
         
@@ -618,20 +651,21 @@ class StackManager:
         On success (real or handled-duplicate), this returns an OpenTofuCommandResult
         with `extra["outputs"]` populated via `get_outputs()`.
         """
+        self.apply_command_results = None
         args = self._build_apply_args(auto_approve)
         max_attempts = max(1, retries + 1)
         last_exc: OpenTofuCommandError | None = None
-
+        
         for attempt in range(1, max_attempts + 1):
             try:
-                result = self._execute_apply_command(args, timeout)
+                self.apply_command_results = result = self._execute_apply_command(args, timeout)
                 result.extra["outputs"] = self._collect_apply_outputs(timeout)
-                return result
-
+                return result.extra["outputs"]
+            
             except OpenTofuCommandError as error:
                 last_exc = error
                 error_type = self._classify_apply_error(error)
-
+                
                 if error_type == ApplyErrorType.HARD_ERROR_WITH_DUPLICATE:
                     stderr = error.result.stderr or ""
                     stdout = error.result.stdout or ""
@@ -643,7 +677,7 @@ class StackManager:
                         },
                     )
                     raise error
-
+                
                 if error_type == ApplyErrorType.MISSING_PERMISSIONS:
                     missing_permissions = self._extract_missing_permissions(error)
                     stderr = error.result.stderr or ""
@@ -667,19 +701,20 @@ class StackManager:
                         missing_permissions,
                         error.result
                     )
-
+                
                 if error_type == ApplyErrorType.DUPLICATE_IDEMPOTENT:
-                    return self._handle_duplicate_success(error, timeout)
-
+                    self.apply_command_results = self._handle_duplicate_success(error, timeout)
+                    return self.apply_command_results.extra["outputs"]
+                
                 if not self._should_retry_apply(error, attempt, max_attempts):
                     raise error
-
+                
                 time.sleep(retry_backoff_seconds * attempt)
-
+        
         # If we somehow exit the loop without returning or raising, surface a clear error.
         if last_exc is not None:
             raise last_exc
-
+        
         raise self._create_fallback_error(args)
     
     def get_outputs(
@@ -777,12 +812,23 @@ class StackManager:
         common.write_json(tfvars_path, self.stack.stack_vars or {})
         return tfvars_path
     
+    def set_stack_vars(self, tfvars_payload):
+        stack = self.stack
+        stack.stack_configuration = common.assert_exists(
+            self.sandbox_root / InfrastructureStackType(stack.stack_type).get_opentofu_config()
+        ).read_text()
+        
+        stack.stack_vars = {k: v for k, v in tfvars_payload.items() if "password" not in k.lower()}
+        stack.sandbox_root_dir = self.sandbox_root
+        stack.updated_timestamp = common.get_now()
+        stack.save()
+    
     def build_opentofu_env(self) -> dict[str, str]:
         # Start with full parent environment instead of empty env
         # This fixes the DNS resolution issue by ensuring OpenTofu has access to all system environment variables
         env: dict[str, str] = {
             key: str(value)
-            for key, value in os.environ.items() 
+            for key, value in os.environ.items()
             if key not in ["AWS_PROFILE"]  # Exclude AWS_PROFILE to avoid credential conflicts
         }
         logging.info(f"[SUBPROCESS_ENV_DEBUG] Started with {len(env)} variables from parent environment")
@@ -845,7 +891,7 @@ class StackManager:
         root_module = values.get("root_module") or {}
         targets: list[str] = []
         has_retained = False
-
+        
         def walk_module(module: dict) -> None:
             nonlocal has_retained
             for res in module.get("resources", []):
@@ -860,10 +906,10 @@ class StackManager:
                     targets.append(address)
             for child in module.get("child_modules", []):
                 walk_module(child)
-
+        
         walk_module(root_module)
         return targets, has_retained
-
+    
     def destroy_stack(
             self,
             *,
@@ -874,9 +920,9 @@ class StackManager:
         args = ["destroy", "-input=false", "-no-color"]
         if auto_approve:
             args.append("-auto-approve")
-
+        
         args.extend(["-var-file", self.get_tfvars_file()])
-
+        
         # Compute destroy targets while respecting resources we want to retain
         try:
             destroy_targets, has_retained = self._get_destroy_targets_respecting_retained_resources()
@@ -886,7 +932,7 @@ class StackManager:
                 extra={"error": str(exc), "stack": self.stack.stack_namespace_token},
             )
             raise
-
+        
         if has_retained:
             if not destroy_targets:
                 # Nothing to destroy besides retained resources; log and return synthetic success
@@ -910,11 +956,11 @@ class StackManager:
                 )
                 self.record("destroy", synthetic_result)
                 return synthetic_result
-
+            
             # Restrict destroy to non-retained resources using -target arguments
             for addr in destroy_targets:
                 args.append(f"-target={addr}")
-
+        
         try:
             result = self.run_tofu_command("destroy", args, timeout=timeout)
             self.record("destroy", result)
@@ -990,10 +1036,10 @@ class StackManager:
                     name,
                     value
                 ])
-                
+        
         self.stack.imported_shared_resources = list(set(imported_shared_resources))
         self.stack.save()
-
+    
     def read_cloudwatch_stack_activity(
             self,
             env_type: EnvironmentType,
@@ -1175,7 +1221,7 @@ class StackManager:
                     data["alb_error_logs"] = alb_error_logs
             except Exception as e:
                 logging.exception(e)
-
+        
         except Exception as stack_log_ex:
             logging.exception(stack_log_ex)
             data["errors"].append(f"Failed to collect CloudWatch logs for stack resources: {stack_log_ex}")
@@ -1505,29 +1551,29 @@ class StackManager:
             rds_resources = self.get_resources("aws_db_instance")
             if not rds_resources:
                 return False
-
+            
             # If Terraform state has an RDS instance, verify it exists and is available in AWS.
             rds_client = self.cloud_account.get_service_client("rds")
-
+            
             for res in rds_resources:
                 db_id = res.get("values", {}).get("identifier")
                 if not db_id:
                     continue
-                    
+                
                 try:
                     resp = rds_client.describe_db_instances(DBInstanceIdentifier=db_id)
                     instances = resp.get("DBInstances", [])
                     if not instances:
-                       continue
-                        
+                        continue
+                    
                     status = instances[0].get("DBInstanceStatus", "")
                     if status.lower() in ("available", "backing-up", "backtracking"):
                         return True
-                    
+                
                 except Exception as e:
                     logging.exception(e)
                     continue
-
+            
             return False
         
         for i in range(3):
@@ -1535,5 +1581,27 @@ class StackManager:
                 return True
             else:
                 time.sleep(10)
-                
+        
         return _internal_db_is_running()
+    
+    def get_deployment_logs(
+            self,
+            error: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload = {}
+        
+        if self.plan_command_results:
+            payload['tofu_planning_command_results'] = self.plan_command_results.loggable_dict()
+        
+        if self.apply_command_results:
+            payload['apply_command_results'] = self.apply_command_results.loggable_dict()
+        
+        if self.stack.stack_vars:
+            payload['stack_input_vars'] = self.stack.stack_vars
+            
+        payload['stack_outputs'] = self.get_outputs()
+
+        if error:
+            payload['error'] = error
+        
+        return payload

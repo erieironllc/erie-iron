@@ -22,7 +22,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
-from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, STACK_OUTPUT_TO_ENV
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
@@ -30,7 +30,7 @@ from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_s
 from erieiron_autonomous_agent.tests.test_shared_vpc_metadata import business
 from erieiron_autonomous_agent.utils import codegen_utils
 from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
-from erieiron_common import common, aws_utils, opentofu_log_utils, ses_manager
+from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning
@@ -58,6 +58,12 @@ def execute(task_id: str, one_off_action: SdaInitialAction = None):
         self_driving_task.get_git().pull()
         
         with CodingAgentConfig(self_driving_task) as config:
+            with config.cloud_account.assume_role() as aws:
+                aws.client('secretsmanager').delete_secret(
+                    SecretId='z69f8/mobile-app-config',
+                    ForceDeleteWithoutRecovery=True
+                )
+            
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
                     logging.info(f"Stopping - hit the max budget ${config.budget :.2f}")
@@ -560,10 +566,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     return self_driving_task
 
 
-def ensure_lb_alias_record(
-        config: CodingAgentConfig,
-        app_outputs
-):
+def ensure_lb_alias_record(config: CodingAgentConfig):
     aws_interface = config.aws_interface
     
     if EnvironmentType.PRODUCTION.eq(config.env_type):
@@ -573,6 +576,7 @@ def ensure_lb_alias_record(
     
     # Post-deployment validation to ensure ECS tasks are accessible via ALB
     app_stack = config.stack
+    app_outputs = config.stack_manager.get_outputs()
     security_group_id = app_stack.stack_vars["SecurityGroupId"]
     vpc_cidr = app_stack.stack_vars["VpcCidr"]
     target_group_arn = app_outputs["TargetGroupArn"]
@@ -1399,7 +1403,7 @@ def deploy_iteration(
     
     db_migrations_applied = False
     rds_vals_in_env = False
-    if config.stack_manager.get_db_is_running():
+    if False and config.stack_manager.get_db_is_running():
         try:
             # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
             ingest_tofu_ouputs(config)
@@ -1410,8 +1414,10 @@ def deploy_iteration(
                 container_image_tag
             )
             db_migrations_applied = True
+        except BadPlan as e:
+            logging.error(f"failed to apply db migrations. stack not ready")
         except Exception as e:
-            logging.error(f"failed to apply db migrations {e} before deployment")
+            logging.error(f"failed to apply db migrations before deployment: {e}")
         
         if rds_vals_in_env:
             validate_web_container(
@@ -1419,7 +1425,7 @@ def deploy_iteration(
                 container_image_tag
             )
     
-    app_outputs = deploy_opentofu_stack(
+    deploy_opentofu_stack(
         config=config,
         container_image_tag=container_image_tag,
         lambda_datas=lambda_datas
@@ -1434,18 +1440,18 @@ def deploy_iteration(
             container_image_tag
         )
     
-    ensure_lb_alias_record(
-        config,
-        app_outputs
-    )
+    ensure_lb_alias_record(config)
 
 
-def ingest_tofu_ouputs(config: CodingAgentConfig, outputs: dict | None = None):
+def ingest_tofu_ouputs(config: CodingAgentConfig):
     """Populate runtime_env with the OpenTofu outputs required by the runtime."""
-    if outputs is None:
-        outputs = config.stack_manager.get_outputs()
-    
+    outputs = config.stack_manager.get_outputs()
     business = config.initiative.business
+    
+    for output_name, env_name in STACK_OUTPUT_TO_ENV.items():
+        output_value = str(outputs.get(output_name) or "")
+        if output_value:
+            config.runtime_env[env_name] = output_value
     
     missing_outputs = []
     for credential_service, secret_arn in config.stack.get_credential_arns(CredentialServiceProvisioning.STACK_GENERATED):
@@ -1458,7 +1464,7 @@ def ingest_tofu_ouputs(config: CodingAgentConfig, outputs: dict | None = None):
         config.runtime_env[env_name] = output_value
         
         credential_arns = business.credential_arns or {}
-        credential_arns[credential_service.value] = secret_arn
+        credential_arns[credential_service.value] = output_value
         
         business.credential_arns = credential_arns
         business.save(update_fields=["credential_arns"])
@@ -1985,7 +1991,7 @@ def get_code_changes_msg(config):
             "diff": cv.get_diff()
         })
     
-    return LlmMessage.user_from_data( "Code changes in this iteration",diffs, "code_file")
+    return LlmMessage.user_from_data("Code changes in this iteration", diffs, "code_file")
 
 
 def get_previous_iteration_summaries_msg(config):
@@ -3958,14 +3964,9 @@ def deploy_opentofu_stack(
         previous_stack_outputs=previous_stack_outputs
     )
     
-    stack.stack_configuration = common.assert_exists(config.sandbox_root_dir / InfrastructureStackType(stack.stack_type).get_opentofu_config()).read_text()
-    stack.stack_vars = {k: v for k, v in tfvars_payload.items() if "password" not in k.lower()}
-    stack.sandbox_root_dir = config.sandbox_root_dir
-    stack.updated_timestamp = common.get_now()
-    stack.save()
+    config.stack_manager.set_stack_vars(tfvars_payload)
     
-    plan_summary: Mapping[str, Any] | None = None
-    
+    error_payload = None
     try:
         # Construct the correct composite security group rule import ID
         
@@ -3974,14 +3975,10 @@ def deploy_opentofu_stack(
             ("aws_security_group_rule.rds_ingress_vpc", config.aws_interface.get_rds_ingress_vpc_rule_id())
         ])
         
-        plan_result = stack_manager.plan()
-        plan_summary = plan_result.extra.get("plan_change_summary")
-        
-        logging.info(f"applying tofu as {stack_manager.cloud_account.get_service_client('sts').get_caller_identity()}")
-        
-        apply_result = stack_manager.apply()
-        outputs = apply_result.extra["outputs"]
-        ingest_tofu_ouputs(config, outputs)
+        config.log(f"applying tofu as {stack_manager.cloud_account.get_service_client('sts').get_caller_identity()}")
+        stack_manager.plan()
+        stack_manager.apply()
+        ingest_tofu_ouputs(config)
         
         if stack_manager.get_resource_definitions("aws_ses_domain_dkim"):
             ses_manager.manage_ses_domain_settings(
@@ -3989,18 +3986,8 @@ def deploy_opentofu_stack(
                 str(tfvars_payload.get("DomainName") or "").strip()
             )
         
-        log_payload = opentofu_log_utils.build_opentofu_log_payload(
-            plan_summary=plan_summary,
-            results=[result.to_dict() for result in stack_manager.run_results],
-            tfvars=tfvars_payload,
-        )
-        
-        config.add_deployment_log(log_payload)
-        
         stack.resources = stack_manager.get_resources()
         stack.save()
-        
-        return outputs
     except MissingStackPerms as missing_perms_exception:
         logging.exception(missing_perms_exception)
         raise missing_perms_exception
@@ -4093,16 +4080,11 @@ def deploy_opentofu_stack(
             open_tofu_exception.result
         )
         
-        log_payload = opentofu_log_utils.build_opentofu_log_payload(
-            plan_summary=plan_summary,
-            results=[result.to_dict() for result in stack_manager.run_results],
-            tfvars=tfvars_payload,
-            error=error_payload,
-        )
-        
-        config.add_deployment_log(log_payload)
-        
         raise open_tofu_exception
+    finally:
+        config.add_deployment_log(
+            config.stack_manager.get_deployment_logs(error_payload)
+        )
 
 
 def build_tfvars_payload(

@@ -215,6 +215,8 @@
     ```
 - This ensures deterministic planning and prevents "Invalid for_each argument" errors in any resource where output-based iteration would otherwise occur.
 
+
+
 ### Sensitive Output Rule
 - Outputs that include secrets or private data must be marked with `sensitive = true`.
 - This flag hides secret values from CLI output, state files, and dependent stacks.
@@ -235,7 +237,28 @@
 - Overuse of `sensitive` complicates debugging by hiding harmless values.
 - **Rule:** mark only genuinely secret data as sensitive, not general identifiers or connection metadata.
 
--### OpenTofu File Enforcement
+### Region Output Rule
+- Every `stack.tf` file must output the AWS region being used by the provider.
+- This output must be named **AwsRegion** exactly.
+- The output value must be wired to the standard region data source:
+  ```hcl
+  output "AwsRegion" {
+    description = "AWS region being used by the provider."
+    value       = data.aws_region.current.name
+  }
+  ```
+- This output is required for all stacks with no exceptions.
+
+### SecretsManager Recovery Window Rule
+- When creating `aws_secretsmanager_secret` resources, you **must** express the recovery window using a single HCL conditional expression:
+  ```hcl
+  recovery_window_in_days = var.DeletePolicy == "Delete" ? 0 : 7
+  ```
+- Do **not** duplicate the resource or create conditional counts. Always use the ternary expression shown above.
+- This rule guarantees that secret retention behavior aligns with the stack's deletion policy without branching logic.
+- If you find an `aws_secretsmanager_secret` definition that is missing this expression or using a hardcoded value, **YOU MUST** update it to match the exact syntax above.
+
+### OpenTofu File Enforcement
 - Keep OpenTofu definitions inside the single stack template at `opentofu/application/stack.tf`—all infrastructure resources including both persistent and application delivery components belong here.
 - Inline IAM policy attachments (e.g., `AWS::IAM::Policy` targeting stack-defined roles) belong next to the role in whichever template owns it; runtime code must not create or modify IAM.
 - **When attaching IAM policies:**  

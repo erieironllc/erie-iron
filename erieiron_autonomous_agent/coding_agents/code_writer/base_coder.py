@@ -28,6 +28,102 @@ from erieiron_common import common
 from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType, LlmCreativity, EnvironmentType
 
 
+def truncate_log(
+    content: str,
+    max_lines: int = 500,
+    max_bytes: int = 50_000,
+    keep_tail: bool = True,
+) -> str:
+    """
+    Truncate log content to max_lines and max_bytes (whichever is hit first).
+
+    Args:
+        content: Raw log content
+        max_lines: Maximum lines to keep
+        max_bytes: Maximum bytes to keep (secondary cap for dense logs)
+        keep_tail: If True, keep last N lines (default). If False, keep first N.
+
+    Returns:
+        Truncated content with indicator of how many lines were removed.
+    """
+    if not content:
+        return ""
+
+    lines = content.splitlines()
+    original_line_count = len(lines)
+
+    # First pass: line limit
+    if len(lines) > max_lines:
+        if keep_tail:
+            lines = lines[-max_lines:]
+        else:
+            lines = lines[:max_lines]
+
+    # Second pass: byte limit
+    result_lines = []
+    current_bytes = 0
+    line_iter = reversed(lines) if keep_tail else iter(lines)
+
+    for line in line_iter:
+        line_bytes = len(line.encode()) + 1  # +1 for newline
+        if current_bytes + line_bytes > max_bytes:
+            break
+        result_lines.append(line)
+        current_bytes += line_bytes
+
+    if keep_tail:
+        result_lines.reverse()
+
+    truncated_count = original_line_count - len(result_lines)
+    result = "\n".join(result_lines)
+
+    if truncated_count > 0:
+        if keep_tail:
+            return f"[truncated {truncated_count} lines]\n{result}"
+        else:
+            return f"{result}\n[truncated {truncated_count} lines]"
+
+    return result
+
+
+def generate_summary(error_summary: str, log_metadata: list[dict]) -> str:
+    """
+    Generate summary markdown with metadata table and reading suggestions.
+
+    Args:
+        error_summary: High-level error summary text
+        log_metadata: List of dicts with filename, size_kb, lines, truncated keys
+
+    Returns:
+        Formatted markdown summary
+    """
+    table_rows = "\n".join(
+        f"| {m['filename']} | {m['size_kb']}KB | {m['lines']} | {'yes' if m['truncated'] else 'no'} |"
+        for m in log_metadata
+    )
+
+    return textwrap.dedent(f"""\
+        # Previous Iteration Error Logs
+
+        ## Summary
+        {error_summary}
+
+        ## Available Logs
+        | File | Size | Lines | Truncated |
+        |------|------|-------|-----------|
+        {table_rows}
+
+        ## Reading Order
+        Start with this summary. If you need details:
+        1. evaluation.log - test/validation failures
+        2. execution.log - runtime errors
+        3. deployment.json - deployment issues
+        4. coding.log - if issue is in generated code
+        5. cloudwatch.json - AWS-level errors
+        6. init.log - initialization problems
+    """)
+
+
 class BaseCoder(ABC):
     """Abstract base class for coding implementations with common functionality."""
     
@@ -107,30 +203,41 @@ class BaseCoder(ABC):
             
             prev_iteration = self.config.iteration_to_modify
             error_summary, error_logs = prev_iteration.get_error()
-            artifact_paths["previous_iteration_logs"].write_text(textwrap.dedent(f"""
-                Previous Iteration Error Logs
-                
-                # Summary
-                {error_summary}
 
-                # Cloudwatch Logs
-                {common.json_format_pretty(prev_iteration.log_content_cloudwatch)}
+            # Create directory for split logs
+            log_dir = artifact_paths["previous_iteration_logs"].parent / "previous_iteration"
+            log_dir.mkdir(exist_ok=True)
 
-                # Deployment Logs
-                {common.json_format_pretty(prev_iteration.log_content_deployment)}
+            # Define log files and their content
+            log_files = [
+                ("cloudwatch.json", common.json_format_pretty(prev_iteration.log_content_cloudwatch)),
+                ("deployment.json", common.json_format_pretty(prev_iteration.log_content_deployment)),
+                ("execution.log", prev_iteration.log_content_execution),
+                ("evaluation.log", prev_iteration.log_content_evaluation),
+                ("coding.log", prev_iteration.log_content_coding),
+                ("init.log", prev_iteration.log_content_init),
+            ]
 
-                # Execution Logs
-                {prev_iteration.log_content_execution}
+            log_metadata = []
+            for filename, content in log_files:
+                content = content or ""
+                truncated = truncate_log(content, max_lines=500)
+                filepath = log_dir / filename
+                filepath.write_text(truncated)
 
-                # Evaluation Logs
-                {prev_iteration.log_content_evaluation}
+                # Collect metadata for summary
+                log_metadata.append({
+                    "filename": filename,
+                    "size_kb": round(len(truncated.encode()) / 1024, 1),
+                    "lines": len(truncated.splitlines()),
+                    "truncated": truncated != content,
+                })
 
-                # Coding Logs
-                {prev_iteration.log_content_coding}
+            # Write summary index file
+            (log_dir / "summary.md").write_text(generate_summary(error_summary, log_metadata))
 
-                # Init Logs
-                {prev_iteration.log_content_init}
-            """))
+            # Update artifact_paths to point to summary
+            artifact_paths["previous_iteration_logs"] = log_dir / "summary.md"
             
             artifact_paths["architecture"].write_text(textwrap.dedent(f"""
                 {business.architecture}
@@ -357,7 +464,7 @@ class BaseCoder(ABC):
         **DEVELOPMENT PLAN**:  Follow the approved development plan saved at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
         **SYSTEM ARCHITECTURE**:  The system architecture document is located at `{artifact_paths.get("architecture")}`.  You changes **must** be aligned with this architecture
         **UI DESIGN SPEC**:  If you make any UI changes, **you must** comport the look and feel of the changes to the UI Design Spec saved at `{artifact_paths.get("design_spec")}`
-        **PREVIOUS ITERATION LOGS**  Error Logs from the previous iterations coding|deployment|execution are located at `{artifact_paths.get("previous_iteration_logs")}`.  Review the logs if you need more context that what the plan supplies
+        **PREVIOUS ITERATION LOGS**  Error logs from the previous iteration are located at `{artifact_paths.get("previous_iteration_logs")}`. Start with the summary file for an overview. Individual log files (cloudwatch.json, deployment.json, execution.log, evaluation.log, coding.log, init.log) are in the same directory if detailed investigation is needed.
         Consult the relevant engineering standards from the reference prompts.
         Do not commit or push changes; the orchestrator handles git commits.
         """)
@@ -368,7 +475,7 @@ class BaseCoder(ABC):
             ## Execution Checklist
             1. Read and understand the full development plan at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
             2. Read and understand the system architecture at `{artifact_paths.get("architecture")}`.  Validate your changes comport to the architecture
-            3. Error logs from the previous iterations coding|deployment|execution are located at `{artifact_paths.get("previous_iteration_logs")}`.  Review the logs if you need more context that what the plan supplies
+            3. Error logs from the previous iteration are at `{artifact_paths.get("previous_iteration_logs")}`. Read the summary first; if needed, review individual log files in the same directory for detailed context.
             4. If you are making UI / look and feel changes, understand the UI Design Spec at `{artifact_paths.get("design_spec")}`.  Validate your changes comport to the design spec
             5. Apply all Erie Iron engineering standards from the reference prompts
             6. Implement code changes that satisfy the `implementation_directive` and address prior failures
