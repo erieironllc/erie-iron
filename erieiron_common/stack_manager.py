@@ -25,7 +25,7 @@ from erieiron_common import aws_utils
 from erieiron_common import common
 from erieiron_common.date_utils import to_utc
 from erieiron_common.enums import InfrastructureStackType, EnvironmentType
-from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandError, OpenTofuException, MissingStackPerms
+from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandException, OpenTofuException, MissingStackPerms
 
 DEFAULT_TOFU_STATE_BUCKET = "erieiron-opentofu-state"
 
@@ -291,7 +291,7 @@ class StackManager:
                 stdout=exc.stdout or "",
                 stderr=exc.stderr or "",
             )
-            raise OpenTofuCommandError(
+            raise OpenTofuCommandException(
                 f"OpenTofu command timed out after {timeout}s: {' '.join(command)}",
                 result,
             ) from exc
@@ -313,7 +313,7 @@ class StackManager:
                 logging.info(f"OpenTofu plan completed with changes (exit code {result.returncode}). Treating as success.")
             else:
                 logging.error(completed_process.stderr)
-                raise OpenTofuCommandError(
+                raise OpenTofuCommandException(
                     f"OpenTofu command failed with exit code {result.returncode}",
                     result,
                 )
@@ -360,12 +360,12 @@ class StackManager:
         for attempt in range(3):
             try:
                 return self.run_tofu_command("init", args)
-            except OpenTofuCommandError as e:
+            except OpenTofuCommandException as e:
                 last_exception = e
                 time.sleep(10 * (attempt + 1))
                 try:
                     self.run_tofu_command("init", ["init", "-reconfigure", "-input=false", "-no-color"] + storage_key_args)
-                except OpenTofuCommandError as e2:
+                except OpenTofuCommandException as e2:
                     logging.exception(e2)
                     raise e2
         
@@ -408,7 +408,7 @@ class StackManager:
                 try:
                     plan_json = json.loads(show_result.stdout or "{}")
                 except json.JSONDecodeError as exc:
-                    raise OpenTofuCommandError(
+                    raise OpenTofuCommandException(
                         "Failed to decode OpenTofu plan JSON",
                         show_result,
                     ) from exc
@@ -422,7 +422,7 @@ class StackManager:
             if temp_dir:
                 temp_dir.cleanup()
     
-    def _classify_apply_error(self, error: OpenTofuCommandError) -> ApplyErrorType:
+    def _classify_apply_error(self, error: OpenTofuCommandException) -> ApplyErrorType:
         """Classify an apply command error for appropriate handling strategy."""
         stderr = error.result.stderr or ""
         stdout = error.result.stdout or ""
@@ -452,7 +452,7 @@ class StackManager:
         
         return ApplyErrorType.TRANSIENT_ERROR
     
-    def _extract_missing_permissions(self, error: OpenTofuCommandError) -> list[str]:
+    def _extract_missing_permissions(self, error: OpenTofuCommandException) -> list[str]:
         """Extract specific missing permissions from OpenTofu error output."""
         stderr = error.result.stderr or ""
         stdout = error.result.stdout or ""
@@ -502,7 +502,7 @@ class StackManager:
     
     def _create_synthetic_success_result(
             self,
-            original_error: OpenTofuCommandError,
+            original_error: OpenTofuCommandException,
             outputs: dict[str, Any],
             duplicate_token: str
     ) -> OpenTofuCommandResult:
@@ -527,7 +527,7 @@ class StackManager:
         synthetic_result.extra["outputs"] = outputs
         return synthetic_result
     
-    def _should_retry_apply(self, error: OpenTofuCommandError, attempt: int, max_attempts: int) -> bool:
+    def _should_retry_apply(self, error: OpenTofuCommandException, attempt: int, max_attempts: int) -> bool:
         """Determine if an apply error should be retried."""
         if attempt >= max_attempts:
             logging.error(
@@ -572,14 +572,14 @@ class StackManager:
         
         # Defensive: for apply, ONLY exit code 0 is success
         if result.returncode != 0:
-            raise OpenTofuCommandError(
+            raise OpenTofuCommandException(
                 f"OpenTofu apply returned non-zero exit code {result.returncode}",
                 result,
             )
         
         return result
     
-    def _handle_duplicate_success(self, error: OpenTofuCommandError, timeout: int | None) -> OpenTofuCommandResult:
+    def _handle_duplicate_success(self, error: OpenTofuCommandException, timeout: int | None) -> OpenTofuCommandResult:
         """Handle duplicate error as idempotent success."""
         stderr = error.result.stderr or ""
         stdout = error.result.stdout or ""
@@ -604,7 +604,7 @@ class StackManager:
         # Try to read outputs from state. If this succeeds, treat as success
         try:
             outputs = self.get_outputs(timeout=timeout)
-        except OpenTofuCommandError as outputs_exc:
+        except OpenTofuCommandException as outputs_exc:
             logging.warning(
                 "Duplicate/exists apply error encountered, but failed to read "
                 "outputs from state; treating as failure",
@@ -619,9 +619,9 @@ class StackManager:
         self.record("apply", synthetic_result)
         return synthetic_result
     
-    def _create_fallback_error(self, args: list[str]) -> OpenTofuCommandError:
+    def _create_fallback_error(self, args: list[str]) -> OpenTofuCommandException:
         """Create fallback error when apply fails without raising an exception."""
-        return OpenTofuCommandError(
+        return OpenTofuCommandException(
             "OpenTofu apply failed without raising an exception",
             OpenTofuCommandResult(
                 command=[settings.TOFU_BIN, *args],
@@ -654,7 +654,7 @@ class StackManager:
         self.apply_command_results = None
         args = self._build_apply_args(auto_approve)
         max_attempts = max(1, retries + 1)
-        last_exc: OpenTofuCommandError | None = None
+        last_exc: OpenTofuCommandException | None = None
         
         for attempt in range(1, max_attempts + 1):
             try:
@@ -662,7 +662,7 @@ class StackManager:
                 result.extra["outputs"] = self._collect_apply_outputs(timeout)
                 return result.extra["outputs"]
             
-            except OpenTofuCommandError as error:
+            except OpenTofuCommandException as error:
                 last_exc = error
                 error_type = self._classify_apply_error(error)
                 
@@ -731,7 +731,7 @@ class StackManager:
         try:
             outputs = json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
-            raise OpenTofuCommandError("Failed to decode OpenTofu outputs", result) from exc
+            raise OpenTofuCommandException("Failed to decode OpenTofu outputs", result) from exc
         
         normalized: dict[str, Any] = {}
         for key, value in outputs.items():
@@ -926,7 +926,7 @@ class StackManager:
         # Compute destroy targets while respecting resources we want to retain
         try:
             destroy_targets, has_retained = self._get_destroy_targets_respecting_retained_resources()
-        except OpenTofuCommandError as exc:
+        except OpenTofuCommandException as exc:
             logging.error(
                 "Failed to inspect state prior to destroy; aborting to avoid deleting retained resources.",
                 extra={"error": str(exc), "stack": self.stack.stack_namespace_token},
@@ -966,7 +966,7 @@ class StackManager:
             self.record("destroy", result)
             logging.info("Stack destroyed successfully", extra={"stack": self.stack.stack_namespace_token})
             return result
-        except OpenTofuCommandError as exc:
+        except OpenTofuCommandException as exc:
             logging.error("Failed to destroy stack", extra={"error": str(exc), "stack": self.stack.stack_namespace_token})
             raise
     
@@ -975,7 +975,7 @@ class StackManager:
         try:
             return json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
-            raise OpenTofuCommandError("Failed to decode OpenTofu state JSON", result) from exc
+            raise OpenTofuCommandException("Failed to decode OpenTofu state JSON", result) from exc
     
     def get_resources(self, resource_type: str = None) -> list[dict]:
         resource_datas = common.get_list(self.get_state_data(), ["values", "root_module", "resources"])

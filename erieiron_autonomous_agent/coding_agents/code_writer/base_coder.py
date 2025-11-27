@@ -585,7 +585,6 @@ class BaseCoder(ABC):
             changed_paths = self._collect_repo_changed_files(prior_file_checksum_map, readonly_entries)
             
             if not changed_paths:
-                from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
                 raise BadPlan(f"{self.coder_name.title()} CLI produced no persistable file changes")
             
             # Validate changes
@@ -596,7 +595,7 @@ class BaseCoder(ABC):
                 break
             
             if attempt >= max_validation_attempts:
-                raise validation_error
+                raise BadPlan(f"Codewriting failed with {validation_error}")
             
             # Extract lessons and add feedback
             from erieiron_autonomous_agent.coding_agents.coding_agent import extract_lessons
@@ -813,7 +812,7 @@ class BaseCoder(ABC):
             self.config.stack_manager.validate_stack()
         except Exception as e:
             logging.exception(e)
-            validation_errors.append(e)
+            validation_errors.append(str(e))
         
         # Build a lookup from file paths to their validator information
         validator_lookup = {}
@@ -841,13 +840,13 @@ class BaseCoder(ABC):
                     validator
                 )
             except FileNotFoundError:
-                validation_errors.append(BadPlan(f"`{file_path}` is missing after Codex execution; restore the file."))
+                validation_errors.append(f"`{file_path}` is missing after Codex execution; restore the file.")
             except OSError as read_exc:
-                validation_errors.append(BadPlan(f"Unable to read `{file_path}` after Codex execution: {read_exc}"))
+                validation_errors.append(f"Unable to read `{file_path}` after Codex execution: {read_exc}")
             except CodeCompilationError as compile_exc:
-                validation_errors.append(BadPlan(f"Validation failed for `{file_path}`: {compile_exc}"))
+                validation_errors.append(f"Validation failed for `{file_path}`: {compile_exc}")
             except Exception as exc:
-                validation_errors.append(BadPlan(f"Unexpected validation error for `{file_path}`: {exc}"))
+                validation_errors.append(f"Unexpected validation error for `{file_path}`: {exc}")
         
         # Return the first validation error, or None if all files are valid
         return common.safe_join(validation_errors, "\n") if validation_errors else None

@@ -14,7 +14,7 @@ class OpenTofuException(Exception):
     """Base exception for OpenTofu helper errors."""
 
 
-class OpenTofuCommandError(OpenTofuException):
+class OpenTofuCommandException(OpenTofuException):
     """Raised when an OpenTofu CLI invocation fails."""
     
     def __init__(self, message: str, result: "OpenTofuCommandResult"):

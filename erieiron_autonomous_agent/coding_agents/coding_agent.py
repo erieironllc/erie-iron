@@ -36,7 +36,7 @@ from erieiron_common.chat_engine.language_utils import get_text_embedding
 from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandError, MissingStackPerms
+from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
 from erieiron_common.stack_manager import StackManager
 
 
@@ -2113,9 +2113,13 @@ def get_iteration_eval_llm_messages(
 def get_architecture_docs(initiative: Initiative):
     return [
         textwrap.dedent(f"""
+        # Required Alignment
+        All code **must** comport to this architecture
+        
         ## Architecture
         {initiative.architecture or initiative.business.architecture}
         """),
+        
         textwrap.dedent(f"""
         ## User Documentation / Help Docs (**note** domain names in the docs may reference the top level business domain.  task level domains are usually subdomains - unless you're pushing to production env, use the subdomain)
         {initiative.user_documentation}
@@ -2139,7 +2143,7 @@ def perform_code_review(
                 "common--credentials_architecture_tofu.md"
             ]
         ),
-        get_architecture_docs(
+        et_architecture_docs(
             config.initiative
         ),
         get_tombstone_message(
@@ -2496,14 +2500,14 @@ def write_initiative_tdd_test(config: CodingAgentConfig):
         test_file_name=f"test_initiative_{config.initiative.id}.py",
         system_prompt_name="codewriter--python_tdd_initiative.md",
         user_messages=[
-            *LlmMessage.user_from_data(
+            LlmMessage.user_from_data(
                 "Please one-shot write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
                 {
                     "name": initiative.title,
                     "description": initiative.description
                 }
             ),
-            *LlmMessage.user_from_data(
+            LlmMessage.user_from_data(
                 "**Additional Context** = existing code and automated tests",
                 [
                     f.get_latest_version().get_llm_message_data()
@@ -2638,6 +2642,7 @@ def write_test(
                     system_prompt_name,
                     "codewriter--python_tdd_common.md",
                     "common--infrastructure_rules_tofu.md",
+                    "codeplanner--common.md",
                     "codewriter--common.md",
                     "codewriter--lambda_coder.md",
                     "common--iam_role_tofu.md",
@@ -2648,9 +2653,12 @@ def write_test(
                     "common--forbidden_actions_tofu.md",
                     "common--environment_variables_tofu.md"
                 ], replacements=[
+                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
+                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
                     ("<env_vars>", get_env_var_names(config)),
                     ("<business_tag>", config.business.service_token)
                 ]),
+                get_architecture_docs(config.initiative),
                 user_messages
             ]
             
@@ -3991,7 +3999,7 @@ def deploy_opentofu_stack(
     except MissingStackPerms as missing_perms_exception:
         logging.exception(missing_perms_exception)
         raise missing_perms_exception
-    except OpenTofuCommandError as open_tofu_exception:
+    except OpenTofuCommandException as open_tofu_exception:
         # Enhanced error logging and context
         logging.error(f"[DEPLOY_DEBUG] OpenTofu command failed during {stack_manager.stage} stage")
         logging.error(f"[DEPLOY_DEBUG] Command: {' '.join(open_tofu_exception.result.command)}")
