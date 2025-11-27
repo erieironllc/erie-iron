@@ -29,10 +29,10 @@ from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageTy
 
 
 def truncate_log(
-    content: str,
-    max_lines: int = 500,
-    max_bytes: int = 50_000,
-    keep_tail: bool = True,
+        content: str,
+        max_lines: int = 500,
+        max_bytes: int = 50_000,
+        keep_tail: bool = True,
 ) -> str:
     """
     Truncate log content to max_lines and max_bytes (whichever is hit first).
@@ -48,41 +48,41 @@ def truncate_log(
     """
     if not content:
         return ""
-
+    
     lines = content.splitlines()
     original_line_count = len(lines)
-
+    
     # First pass: line limit
     if len(lines) > max_lines:
         if keep_tail:
             lines = lines[-max_lines:]
         else:
             lines = lines[:max_lines]
-
+    
     # Second pass: byte limit
     result_lines = []
     current_bytes = 0
     line_iter = reversed(lines) if keep_tail else iter(lines)
-
+    
     for line in line_iter:
         line_bytes = len(line.encode()) + 1  # +1 for newline
         if current_bytes + line_bytes > max_bytes:
             break
         result_lines.append(line)
         current_bytes += line_bytes
-
+    
     if keep_tail:
         result_lines.reverse()
-
+    
     truncated_count = original_line_count - len(result_lines)
     result = "\n".join(result_lines)
-
+    
     if truncated_count > 0:
         if keep_tail:
             return f"[truncated {truncated_count} lines]\n{result}"
         else:
             return f"{result}\n[truncated {truncated_count} lines]"
-
+    
     return result
 
 
@@ -101,7 +101,7 @@ def generate_summary(error_summary: str, log_metadata: list[dict]) -> str:
         f"| {m['filename']} | {m['size_kb']}KB | {m['lines']} | {'yes' if m['truncated'] else 'no'} |"
         for m in log_metadata
     )
-
+    
     return textwrap.dedent(f"""\
         # Previous Iteration Error Logs
 
@@ -115,12 +115,11 @@ def generate_summary(error_summary: str, log_metadata: list[dict]) -> str:
 
         ## Reading Order
         Start with this summary. If you need details:
-        1. evaluation.log - test/validation failures
-        2. execution.log - runtime errors
+        1. init.log - initialization problems
+        2. coding.log - if issue is related to generating the code
         3. deployment.json - deployment issues
-        4. coding.log - if issue is in generated code
+        4. execution.log - test failures and other runtime errors
         5. cloudwatch.json - AWS-level errors
-        6. init.log - initialization problems
     """)
 
 
@@ -203,28 +202,34 @@ class BaseCoder(ABC):
             
             prev_iteration = self.config.iteration_to_modify
             error_summary, error_logs = prev_iteration.get_error()
-
+            
             # Create directory for split logs
             log_dir = artifact_paths["previous_iteration_logs"].parent / "previous_iteration"
             log_dir.mkdir(exist_ok=True)
-
+            
             # Define log files and their content
+            log_content_deployment_json = prev_iteration.log_content_deployment
+            deployment_logs = common.first(prev_iteration.log_content_deployment.get("deployment_logs"))
+            if log_content_deployment_json.get("deployment_successful"):
+                deployment_json = common.get(deployment_logs, ["apply_command_results", "extra"], {})
+            else:
+                deployment_json = log_content_deployment_json
+            
             log_files = [
                 ("cloudwatch.json", common.json_format_pretty(prev_iteration.log_content_cloudwatch)),
                 ("deployment.json", common.json_format_pretty(prev_iteration.log_content_deployment)),
                 ("execution.log", prev_iteration.log_content_execution),
-                ("evaluation.log", prev_iteration.log_content_evaluation),
                 ("coding.log", prev_iteration.log_content_coding),
                 ("init.log", prev_iteration.log_content_init),
             ]
-
+            
             log_metadata = []
             for filename, content in log_files:
                 content = content or ""
-                truncated = truncate_log(content, max_lines=500)
+                truncated = content  # truncate_log(content)
                 filepath = log_dir / filename
                 filepath.write_text(truncated)
-
+                
                 # Collect metadata for summary
                 log_metadata.append({
                     "filename": filename,
@@ -232,10 +237,10 @@ class BaseCoder(ABC):
                     "lines": len(truncated.splitlines()),
                     "truncated": truncated != content,
                 })
-
+            
             # Write summary index file
             (log_dir / "summary.md").write_text(generate_summary(error_summary, log_metadata))
-
+            
             # Update artifact_paths to point to summary
             artifact_paths["previous_iteration_logs"] = log_dir / "summary.md"
             

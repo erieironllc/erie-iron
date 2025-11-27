@@ -136,7 +136,7 @@ class StackManager:
         self.plan_change_summary = None
         self.plan_command_results: OpenTofuCommandResult = None
         self.apply_command_results: OpenTofuCommandResult = None
-
+        
         self.plan_output_path = self.workspace_dir / "current.plan"
         self.init_workspace()
     
@@ -1590,17 +1590,16 @@ class StackManager:
     ) -> dict[str, Any]:
         payload = {}
         
-        if self.plan_command_results:
-            payload['tofu_planning_command_results'] = self.plan_command_results.loggable_dict()
-        
-        if self.apply_command_results:
-            payload['apply_command_results'] = self.apply_command_results.loggable_dict()
-        
         if self.stack.stack_vars:
             payload['stack_input_vars'] = self.stack.stack_vars
-            
+        
+        if self.apply_command_results:
+            payload['tofu_apply_command_results'] = self.apply_command_results.loggable_dict()
+        elif self.plan_command_results:
+            payload['tofu_planning_command_results'] = self.plan_command_results.loggable_dict()
+        
         payload['stack_outputs'] = self.get_outputs()
-
+        
         if error:
             payload['error'] = error
         
