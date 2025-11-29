@@ -2,7 +2,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat
-from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity
+from erieiron_common import common
+from erieiron_common.enums import LlmModel, LlmReasoningEffort, LlmVerbosity, LlmCreativity, LlmMessageType
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.llm_apis.llm_response import LlmResponse
 
@@ -23,6 +24,8 @@ def llm_chat_triple_check(
     2. Having each model rank the other two responses in parallel
     3. Selecting winner based on rankings with tie-breaking: Claude > OpenAI > Gemini
     """
+    
+    messages:list[LlmMessage] = common.flatten(messages)
     
     # Define the three models to use
     models = [
@@ -60,6 +63,9 @@ def llm_chat_triple_check(
         raise Exception(f"Expected 3 responses but got {len(responses)}")
     
     # Helper function to create ranking prompt
+    original_question = LlmMessage.parse_prompt(LlmModel.OPENAI_GPT_5_1, messages, code_response=code_response)
+    original_question = common.json_format_pretty([m.get_message_json(LlmModel.OPENAI_GPT_5_1) for m in original_question if LlmMessageType.SYSTEM.eq(m.message_type)])
+    
     def _create_ranking_prompt(
             response_a_model: LlmModel,
             response_a: LlmResponse,
@@ -69,7 +75,7 @@ def llm_chat_triple_check(
         ranking_prompt = f'''You are being asked to rank two LLM responses to determine which better answers the original question.
 
 ORIGINAL QUESTION:
-{messages[-1].text if messages else "N/A"}
+{original_question}
 
 RESPONSE A (from {response_a_model.value}):
 {response_a.text}

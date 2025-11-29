@@ -555,6 +555,8 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         config.business.snapshot_code(first_iteration)
         if first_iteration != config.current_iteration:
             config.business.snapshot_code(config.current_iteration)
+        
+        
 
     return self_driving_task
 
@@ -2679,7 +2681,7 @@ def write_test(
             code = llm_chat_triple_check(
                 description,
                 messages,
-                reasoning_effort=LlmReasoningEffort.HIGH,
+                reasoning_effort=LlmReasoningEffort.MEDIUM,
                 verbosity=LlmVerbosity.LOW,
                 tag_entity=config.current_iteration
             ).text
