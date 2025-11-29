@@ -2,10 +2,9 @@ import logging
 import os
 import random
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
 
-import settings
 from erieiron_autonomous_agent.enums import BusinessOperationType
 from erieiron_autonomous_agent.models import LlmRequest, Business, Initiative, SelfDrivingTaskIteration
 from erieiron_common import common
@@ -187,12 +186,13 @@ def agent_chat(
         return resp.json()
 
 
+
 def llm_chat(
         description: str,
         messages: list[LlmMessage],
         tag_entity,
         model: LlmModel = LlmModel.OPENAI_GPT_5_MINI,
-        output_schema = None,
+        output_schema=None,
         reasoning_effort: LlmReasoningEffort = LlmReasoningEffort.LOW,
         verbosity: LlmVerbosity = LlmVerbosity.LOW,
         creativity: LlmCreativity = LlmCreativity.NONE,

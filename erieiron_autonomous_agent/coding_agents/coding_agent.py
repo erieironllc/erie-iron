@@ -24,6 +24,7 @@ from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
+from erieiron_autonomous_agent.consensus_llm_interface import llm_chat_triple_check
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
@@ -2675,10 +2676,9 @@ def write_test(
     Please attempt to write the code again and avoid causing this error
                 """)
             
-            code = llm_chat(
+            code = llm_chat_triple_check(
                 description,
                 messages,
-                model=LlmModel.OPENAI_GPT_5_1,
                 reasoning_effort=LlmReasoningEffort.HIGH,
                 verbosity=LlmVerbosity.LOW,
                 tag_entity=config.current_iteration

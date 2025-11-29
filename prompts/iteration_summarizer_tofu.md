@@ -63,6 +63,24 @@ You will be provided
    - `blocked: true` means the **automation platform itself** cannot make further progress or produce usable diagnostics without human help.  
    - Ordinary build, deployment, or runtime failures of the **target system** are *not* considered blocked; they should be captured in `error` and/or `test_errors` with `blocked: false` so that subsequent iterations can address them.
 
+    ### Transient vs. Persistent Failures
+
+    **Transient failures that should NOT be marked as blocked:**
+    - Expired or invalid AWS session tokens/credentials during test execution (the orchestration layer refreshes credentials between iterations)
+    - Temporary network timeouts or rate-limiting from AWS services that can be retried
+    - Intermittent service availability issues that do not indicate a fundamental platform problem
+    - Resource quota errors that can be addressed through infrastructure changes or resource cleanup
+
+    **Mark these as `blocked: false`** and document the error in the `error` or `test_errors` fields. The next iteration will retry with refreshed credentials or after transient conditions clear.
+
+    **Persistent failures that SHOULD be marked as blocked:**
+    - The orchestration framework cannot start or crashes repeatedly across multiple iterations
+    - Core tooling (Python, package managers, container runtime) is missing or fundamentally broken
+    - Hard policy boundaries that explicitly prohibit the automation from proceeding
+    - The logs are so corrupted or incomplete that no diagnostic information can be extracted
+
+    When in doubt: **if a retry with the same code would likely succeed** (due to credential refresh, network recovery, or transient condition clearing), mark `blocked: false`.
+
    When in doubt, prefer `blocked: false` and provide detailed error information instead of marking the iteration as blocked.
 
 3. **Write a summary of the code changes**
@@ -87,6 +105,17 @@ You will be provided
    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multiple OpenTofu failures are found, include **all** OpenTofu failure events
    - If the iteration ran automated tests and there were **test errors or failures**, capture **all of them** (since these can be addressed in parallel).  
    - When both runtime or infrastructure/compilation errors **and** automated test failures appear in the logs, include **both** sections in the response. Report the blocking runtime or infrastructure error in `error` *and* enumerate all test failures in `test_errors`. Do not omit the critical error when tests fail downstream.  
+
+    #### Credential and Authentication Errors
+
+    When AWS credential errors occur during test execution (e.g., `ExpiredTokenException`, `InvalidClientTokenId`, expired session tokens):
+
+    - **Do not mark the iteration as blocked**
+    - Capture the error in the `error` field with full stack trace context
+    - Set `blocked: false` because the orchestration layer will refresh credentials before the next iteration
+    - In the `summary`, note that the test run was interrupted by credential expiry and will be retried automatically
+
+    These errors indicate that the current AWS session expired during execution, not that the platform or application code is fundamentally broken. The next iteration will receive fresh credentials and can proceed normally.
 
     **Classification refinement:**
     - Errors occur during test execution (e.g., CloudWatch `FilterLogEvents` `InvalidParameterException` due to filter pattern) are considered test/runtime failures. Include them in `test_errors` with full context.
