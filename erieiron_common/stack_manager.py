@@ -136,7 +136,8 @@ class StackManager:
         self.plan_change_summary = None
         self.plan_command_results: OpenTofuCommandResult = None
         self.apply_command_results: OpenTofuCommandResult = None
-        
+        self.validate_command_results: OpenTofuCommandResult = None
+
         self.plan_output_path = self.workspace_dir / "current.plan"
         self.init_workspace()
     
@@ -312,7 +313,6 @@ class StackManager:
             if result.returncode in (2, 3):
                 logging.info(f"OpenTofu plan completed with changes (exit code {result.returncode}). Treating as success.")
             else:
-                logging.error(completed_process.stderr)
                 raise OpenTofuCommandException(
                     f"OpenTofu command failed with exit code {result.returncode}",
                     result,
@@ -854,7 +854,9 @@ class StackManager:
     
     def validate_stack(self):
         try:
-            self.run_tofu_command("validate", ["fmt", "-check"])
+            self.validate_command_results = self.run_tofu_command("validate", ["fmt", "-check"])
+        except OpenTofuCommandException as otce:
+            self.validate_command_results = otce.result
         except subprocess.CalledProcessError as exc:
             logging.exception(exc)
             return BadPlan(textwrap.dedent(f"""
@@ -867,7 +869,9 @@ class StackManager:
             """))
         
         try:
-            self.run_tofu_command("validate", ["validate"])
+            self.validate_command_results = self.run_tofu_command("validate", ["validate"])
+        except OpenTofuCommandException as otce:
+            self.validate_command_results = otce.result
         except subprocess.CalledProcessError as exc:
             return BadPlan(textwrap.dedent(f"""
                 OpenTofu validate failed for {self.stack.stack_type} module.
@@ -1592,11 +1596,13 @@ class StackManager:
         
         if self.stack.stack_vars:
             payload['stack_input_vars'] = self.stack.stack_vars
-        
+
         if self.apply_command_results:
             payload['tofu_apply_command_results'] = self.apply_command_results.loggable_dict()
         elif self.plan_command_results:
             payload['tofu_planning_command_results'] = self.plan_command_results.loggable_dict()
+        elif self.validate_command_results:
+            payload['tofu_validate_command_results'] = self.validate_command_results.loggable_dict()
         
         payload['stack_outputs'] = self.get_outputs()
         

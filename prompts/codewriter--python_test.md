@@ -24,10 +24,43 @@ You must:
 - The test file is **required** to contain an acceptance or smoke style full end-to-end test or test suite that validates the acceptance criteria.
     - Acceptance/smoke tests must not use mocks. They must exercise actual system components end to end.
 - If the task involves email receipt or SES inbound processing, include an acceptance test that sends an email (using the SES mailbox simulator) and asserts the stack-configured receipt rule processes and delivers it to the expected destination.
-- The test file may also include unit style tests if you determines that doing so would be valuable for the particular case.  
+- The test file may also include unit style tests if you determines that doing so would be valuable for the particular case.
     - Unit tests may use mocks to isolate behavior, but this is optional and does not replace the required acceptance/smoke test.
 
 Tests must prefer assertions that provide context for debugging when they fail. Use explicit comparison assertions (e.g., `assertEqual(a, b)`, `assertIn(x, y)`, `assertIsNone(val)`) instead of generic truth assertions like `assertTrue(a == b)` or `assertFalse(condition)`. The goal is to maximize diagnostic information in the failure logs since the coding agent only sees the logs to fix issues.
+
+### Critical Assertion Guidelines
+
+**You must ONLY assert behavior explicitly defined in the architecture or task requirements. Never add speculative assertions.**
+
+- **Do NOT** assert implementation details that are not required by the task or architecture
+- **Do NOT** assert data formats, field names, or structure unless the requirements explicitly specify them
+- **Do NOT** assert error messages, log content, or internal state unless required
+- **Do NOT** assert side effects (database records, files created, etc.) unless the requirements call for them
+- **Do NOT** assert presence/absence of specific fields in responses unless explicitly required
+- **Do NOT** make assumptions about "reasonable" behavior and assert those assumptions
+
+**DO assert:**
+- Explicit acceptance criteria stated in the task requirements
+- Observable behavior defined in the architecture
+- Success/failure states required by the specification
+- End-to-end workflows that the task explicitly requires
+
+**Example of unnecessary assertion to avoid:**
+```python
+# BAD: Task says "parse email", but doesn't specify return structure
+result = parse_email(raw_email)
+self.assertIn("sender", result)  # NOT REQUIRED - speculative
+self.assertIn("subject", result)  # NOT REQUIRED - speculative
+```
+
+**Example of appropriate assertion:**
+```python
+# GOOD: Task says "parse email and extract sender address"
+result = parse_email(raw_email)
+self.assertIsNotNone(result)  # Required: parsing succeeded
+self.assertIn("sender", result)  # Required: sender extraction specified
+```
 
 ---
 

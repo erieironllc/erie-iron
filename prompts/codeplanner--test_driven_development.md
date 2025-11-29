@@ -7,12 +7,17 @@ You are developing code in the **Test-Driven-Development style**.  The automated
 - When tests need to send emails, always construct the "FROM" address from the task's DomainName (for example, `noreply@{os.getenv("DOMAIN_NAME")}`) and ensure that identity is verified in SES before the test runs.
 - Automated SES smoke or integration tests must target the SES Mailbox Simulator (e.g., `success@simulator.amazonses.com` for happy-path delivery, or other simulator addresses when validating bounces/complaints). Never point tests at real recipients or DomainName inboxes.
 - When implementing or modifying tests **Only modify <test_file_path>.** You may not create additional test files under any circumstances.
-- If repeated iterations show the test itself is faulty or lacks the logging needed to diagnose failures, update it to correct the issue or add focused diagnostics while keeping the test’s spirit intact.
-- You may modify or add tests inside `<test_file_path>`, if doing so is necessary to bring the implementation closer to the GOAL or to fix a failing assertion.
-- You must preserve the original **intent and spirit** of the test logic generated in the first iteration, as defined by Test Driven Development (TDD). This means:
-  - Don’t remove or neuter failing tests just to make the code pass.
-  - Don’t fake inputs, mock outputs, or bypass test logic to “force” success.
-  - Do not remove test assertions unless they are clearly redundant or logically invalid.
+- If repeated iterations show the test itself is faulty or lacks the logging needed to diagnose failures, update it to correct the issue or add focused diagnostics while keeping the test's spirit intact.
+- You may modify or add tests inside `<test_file_path>` only when one of the following conditions is met:
+  - The test is clearly making bad assertions that are not aligned with the architecture document (the architecture document is the canonical source for technical information)
+  - The test clearly has a bug (e.g., syntax error, incorrect API usage, resource leaks)
+  - The test is not aligned with the architecture document requirements
+  - Adding focused diagnostics or logging to help identify the root cause of failures
+- When modifying tests, you must preserve the original **intent and spirit** of the test logic as defined by Test Driven Development (TDD). This means:
+  - Don't remove or neuter failing tests just to make the code pass
+  - Don't fake inputs, mock outputs, or bypass test logic to "force" success
+  - Focus on making tests pass by editing the application code, not by weakening the tests
+  - Do not remove test assertions unless they are clearly redundant, logically invalid, or misaligned with the architecture
 - It is acceptable to refactor or extend the test suite for clarity, coverage, or correctness — but only if it helps validate the GOAL more effectively.
 - Any test edits must be fully aligned with evaluator feedback and must advance the system toward satisfying the GOAL.
 - You must **never remove or replace all test logic** in the file.

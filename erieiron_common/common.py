@@ -711,10 +711,10 @@ def safe_split(s, delimeter: str = ",", strip=True, lower=False):
         for d in delimeter:
             s = replace_case_insensitive(s, d, ",")
         return safe_split(s, ",", strip)
-    
+
     if is_empty(s):
         return []
-    
+
     vals = []
     for s1 in s.split(delimeter):
         s1 = default_str(s1)
@@ -724,6 +724,7 @@ def safe_split(s, delimeter: str = ",", strip=True, lower=False):
             s1 = s1.lower()
         vals.append(s1)
     return vals
+
 
 
 def ensure_numeric(s):
@@ -1931,3 +1932,8 @@ def uuids(vals):
     return [
         u for u in ensure_list(vals) if is_valid_uuid(u)
     ]
+
+
+def camel_to_snake(s: str) -> str:
+    s1 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s)
+    return re.sub('([A-Z]+)([A-Z][a-z])', r'\1_\2', s1)

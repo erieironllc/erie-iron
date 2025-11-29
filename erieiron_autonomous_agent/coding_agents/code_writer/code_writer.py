@@ -19,7 +19,7 @@ CODERS = [
 ]
 
 
-def write_code(config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Path], Dict]:
+def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
     """
     Main entry point for code generation.
     
@@ -28,7 +28,6 @@ def write_code(config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Pat
     
     Args:
         config: Coding agent configuration
-        planning_data: Planning data dictionary
         
     Returns:
         Tuple of (changed_paths, execution_metadata)
@@ -48,7 +47,7 @@ def write_code(config: CodingAgentConfig, planning_data: dict) -> Tuple[List[Pat
 
     errors = []
     for coder_name, coder_cls in coders:
-        coder = coder_cls(config, planning_data)
+        coder = coder_cls(config)
         try:
             config.log(f"Attempting code generation with {coder_name} coder")
             

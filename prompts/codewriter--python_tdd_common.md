@@ -14,6 +14,25 @@ You work in support of test-driven development
 - It is **optional** to also include unit style tests if the LLM determines that doing so would be valuable for the particular case.
   - Unit style tests may use mock entities if that is the best way to validate the behavior in isolation, but they do not replace the required full end-to-end acceptance/smoke test.
 
+### Critical Assertion Guidelines
+
+**You must ONLY assert behavior explicitly defined in the architecture or task requirements. Never add speculative assertions.**
+
+- **Do NOT** assert implementation details that are not required by the task or architecture
+- **Do NOT** assert data formats, field names, or structure unless the requirements explicitly specify them
+- **Do NOT** assert error messages, log content, or internal state unless required
+- **Do NOT** assert side effects (database records, files created, etc.) unless the requirements call for them
+- **Do NOT** assert presence/absence of specific fields in responses unless explicitly required
+- **Do NOT** make assumptions about "reasonable" behavior and assert those assumptions
+
+**DO assert:**
+- Explicit acceptance criteria stated in the task requirements
+- Observable behavior defined in the architecture
+- Success/failure states required by the specification
+- End-to-end workflows that the task explicitly requires
+
+When in doubt, assert less rather than more. Unnecessary assertions cause test failures and slow down the development loop.
+
 ---
 
 ## Test authoring guidelines
@@ -29,6 +48,20 @@ You work in support of test-driven development
 - When verifying CloudFormation stack metadata, only reference parameter or output logical IDs that start with a letter and contain only alphanumeric characters (`[A-Za-z0-9]+`). Use the camel-case names defined in the template and never assert snake_case or other invalid identifiers.
 - Never require invalid parameter or output names in assertions; if required data is missing, fail with remediation guidance instead of demanding impossible identifiers.
 - Expect the prompt to include existing automated tests; study them, avoid duplicating their coverage, and ensure any new tests you add can pass alongside the existing suites without contradiction.
+
+---
+
+### Using Secrets in Tests
+
+- When a test needs to validate that configuration values are sourced correctly from a secret and the environment:
+  - First, consult the credential service's `secret_value_schema` to determine **exactly** which keys are stored in the secret.
+  - Only those documented keys may be asserted as coming from the secret. Tests must **not** require the secret to contain additional configuration fields not listed in the schema.
+  - For configuration fields that are **not** part of the secret schema but appear in an endpoint response (such as URLs, domains, or redirect paths in example docs), tests should:
+    - Assert that the response contains them with the correct format/value.
+    - Treat those fields as derived from environment variables, stack parameters, or other non-secret sources, according to the architecture, **not** from the secret.
+- Avoid writing assertions that couple an endpoint's full JSON response 1:1 to the secret's JSON. Instead, assert that:
+  - Secret-backed fields match the secret values.
+  - Non-secret fields match their documented non-secret sources.
 
 ---
 

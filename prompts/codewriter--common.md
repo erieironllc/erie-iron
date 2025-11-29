@@ -37,6 +37,15 @@ You have the Architecture for the business and the current Product Initiative in
 - Verify the code you write is in alignment with the architecture.  
 - If you write code that is out of alignment with the architecture, redo your answer
 
+### Interpreting Example Configuration JSON
+
+- Example JSON structures in the architecture (such as sample configuration responses) may combine values from **multiple sources** (secrets, environment variables, stack parameters, derived constants).
+- **Do not** infer that every field shown in an example JSON structure is stored directly in a secret. The only fields that live in a secret are those explicitly listed in that credential service's `secret_value_schema`.
+- When implementing or testing endpoints based on these examples:
+  - Use the credential schemas to determine which fields come from secrets.
+  - Use the environment-variable and stack-parameter contracts to determine which fields must be derived from non-secret inputs (e.g., domain names, redirect URLs, regions).
+  - Design tests to reflect this split of responsibility, rather than assuming that all example fields share the same backing store.
+
 ---
 
 ## Context understanding
@@ -128,7 +137,14 @@ DSL execution takes priority. Only fall back to natural-language instructions if
 
 ## Test integrity
 - Assume existing tests and their assertions are correct by default and represent valid assertions of the acceptance criteria.
-- Do not weaken, skip, xfail, or delete assertions to make tests pass. Plan code changes to satisfy the assertions.
+- Do not weaken, skip, xfail, or delete assertions to make tests pass.
+- Focus on making tests pass by editing application code, not by modifying the tests.
+- Only modify automated tests when:
+  - The test is making bad assertions that are not aligned with the architecture document (the architecture document is the canonical source for technical information)
+  - The test clearly has a bug (e.g., syntax error, incorrect API usage, resource leaks)
+  - The test is not aligned with the architecture document requirements
+  - Adding targeted diagnostics or logging to help identify root causes of failures
+- When these conditions are not met, plan code changes to satisfy the test assertions rather than modifying the tests.
 - Do not use any AWS emulator or mock for acceptance or smoke tests. This includes LocalStack, moto, botocore Stubber, and custom HTTP shims.
 - Tests must exercise actual AWS services and connectivity in the configured region. Do not set `endpoint_url` to non-AWS hosts for these tests.
 - Acceptance and smoke tests must never use mock entities. They must hit real AWS endpoints and real resources provisioned by the stack or explicitly created ephemerally for the test.

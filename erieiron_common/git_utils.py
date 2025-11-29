@@ -79,9 +79,31 @@ class GitWrapper:
         return self.exec("clone", self.wrap_url_with_token(source_repo), self.source_root)
     
     def pull(self) -> 'GitWrapper':
+        # Step 0: auto-resolve any preexisting unmerged files (Option D: prefer theirs)
+        try:
+            # Query status for merge conflicts
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(self.source_root.absolute()) if self.source_root.exists() else None,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            status_output = status_result.stdout
+
+            # Detect any kind of merge conflict before stashing
+            conflict_prefixes = ("UU", "AA", "DD", "DU", "UD", "MM", "AM", "MA")
+            if any(line[:2] in conflict_prefixes or "needs merge" in line for line in status_output.splitlines()):
+                # Prefer the remote/stashed version
+                self.exec("checkout", "--theirs", ".")
+                self.exec("add", ".")
+        except Exception as e:
+            logging.warning(f"Pre-stash conflict auto-resolution failed: {e}")
+
         # Stash any local changes first
         try:
-            self.exec("stash", "push", "-m", "Auto-stash before pull")
+            # Stash only unstaged changes
+            self.exec("stash", "push", "-m", "Auto-stash before pull", "--keep-index")
             # Check if files were actually stashed by examining the output
             stashed = "No local changes to save" not in self._last_result.stdout
         except:
@@ -93,11 +115,24 @@ class GitWrapper:
         # Re-apply stashed changes if we stashed anything
         if stashed:
             try:
-                self.exec("stash", "pop")
+                # Apply without dropping so unresolved conflicts don't lose work
+                self.exec("stash", "apply")
+                # Drop stash only if apply succeeded
+                self.exec("stash", "drop")
             except:
-                # If pop fails due to conflicts, keep the stash for manual resolution
-                logging.warning("Stash pop failed - conflicts may need manual resolution")
-                raise
+                # Automatically prefer the stashed version ("theirs") for all conflicted files
+                try:
+                    # Resolve all conflicts by taking the stashed version
+                    self.exec("checkout", "--theirs", ".")
+                    self.exec("add", ".")
+                    # Drop the stash since changes were incorporated
+                    self.exec("stash", "drop")
+                except Exception as resolve_err:
+                    logging.warning("Automatic conflict resolution (theirs) failed")
+                    raise resolve_err
+                
+                # Do NOT raise the original stash apply exception
+                return self
         
         return self
     

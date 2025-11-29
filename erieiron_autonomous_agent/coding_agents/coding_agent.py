@@ -22,7 +22,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
-from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, STACK_OUTPUT_TO_ENV
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
@@ -211,10 +211,7 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
     if SdaInitialAction.WRITE_INITIATIVE_TEST.eq(one_off_action):
         write_initiative_tdd_test(config)
     elif SdaInitialAction.CODE.eq(one_off_action):
-        write_code(
-            config,
-            config.current_iteration.planning_json
-        )
+        write_code(config)
     elif SdaInitialAction.PLAN.eq(one_off_action):
         # config.iteration_to_modify.strategic_unblocking_json = get_strategic_unblocking_data(config)
         # config.iteration_to_modify.save()
@@ -243,7 +240,7 @@ def plan_and_implement_code_changes(config):
         planning_data = plan_code_changes(config)
         config.set_phase(SdaPhase.CODING)
         
-        write_code(config, planning_data)
+        write_code(config)
 
 
 def handle_agent_blocked(task_id, agent_blocked):
@@ -552,17 +549,12 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         
         if not config.business.codefile_set.exists():
             config.git.mk_venv()
-            config.business.snapshot_code(
-                config.current_iteration,
-                include_erie_common=True
-            )
         
-        elif not self_driving_task.selfdrivingtaskiteration_set.filter(evaluation_json__isnull=False).exists():
-            config.business.snapshot_code(
-                config.current_iteration,
-                include_erie_common=False
-            )
-    
+        first_iteration = self_driving_task.selfdrivingtaskiteration_set.first()
+        config.business.snapshot_code(first_iteration)
+        if first_iteration != config.current_iteration:
+            config.business.snapshot_code(config.current_iteration)
+
     return self_driving_task
 
 
@@ -1138,7 +1130,7 @@ def run_container_command(
     
     config.log("\n" + "=" * 50 + "\n")
     config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
-    print(f"DUDE {' '.join(cmd)} in {config.sandbox_root_dir}\n")
+    # print(f"DUDE {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
     
     # Capture podman run start time
@@ -1198,7 +1190,6 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         logging.exception(e)
         raise e
     except OpenTofuException as e:
-        logging.exception(e)
         config.log(f"OpenTofu deployment error: {e}")
     except FailingTestException as e:
         config.log(f"Tests are failing.  **review sysout logs for details**")
@@ -1212,10 +1203,7 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         
         exec_container_prune()
         
-        config.business.snapshot_code(
-            config.current_iteration,
-            include_erie_common=False
-        )
+        config.business.snapshot_code(config.current_iteration)
 
 
 def store_deploy_and_execution_logs(
@@ -1224,22 +1212,33 @@ def store_deploy_and_execution_logs(
 ):
     config.current_iteration.log_content_cloudwatch = config.stack_manager.get_cloudwatch_content()
     
-    deploy_errors = []
-    for stack_result in config.deployment_logs:
-        for plan_result in common.ensure_list(stack_result.get("plan_results", [])):
-            if not plan_result.get("stderr"):
-                continue
-            deploy_errors.append({
-                "stage": plan_result.get("stage"),
-                "stderr": plan_result.get("stderr")
+    deploy_logs = []
+    deployment_errors = []
+    for run_result in config.stack_manager.run_results:
+        deploy_logs.append({
+            "stage": run_result.stage,
+            "command": run_result.command,
+            "started_at": run_result.started_at,
+            "completed_at": run_result.completed_at,
+            "stdout": run_result.stdout,
+        })
+        
+        if run_result.stderr:
+            deployment_errors.append({
+                "stage": run_result.stage,
+                "command": run_result.command,
+                "started_at": run_result.started_at,
+                "completed_at": run_result.completed_at,
+                "stdout": run_result.stdout,
+                "stderr": run_result.stderr
             })
     
     config.current_iteration.log_content_deployment = {
         "schema": "opentofu/v1",
         "deployment_window_start": datetime.fromtimestamp(deployment_start_epoch, tz=dt_timezone.utc).isoformat(),
-        "deployment_successful": len(deploy_errors) == 0,
-        "deployment_logs": config.deployment_logs,
-        "deploy_errors": deploy_errors
+        "deployment_successful": len(deployment_errors) == 0,
+        "deployment_logs": deploy_logs,
+        "deployment_errors": deployment_errors
     }
     
     config.current_iteration.save(update_fields=["log_content_deployment", "log_content_cloudwatch"])
@@ -1448,7 +1447,13 @@ def ingest_tofu_ouputs(config: CodingAgentConfig):
     outputs = config.stack_manager.get_outputs()
     business = config.initiative.business
     
-    for output_name, env_name in STACK_OUTPUT_TO_ENV.items():
+    for output_name, output_value in outputs.items():
+        output_value = str(outputs.get(output_name) or "")
+        config.runtime_env[
+            common.camel_to_snake(output_name)
+        ] = str(output_value)
+    
+    for env_name, output_name in ENVVAR_TO_STACK_OUTPUT.items():
         output_value = str(outputs.get(output_name) or "")
         if output_value:
             config.runtime_env[env_name] = output_value
@@ -1751,7 +1756,7 @@ def compute_goal_achievement_gate(config: CodingAgentConfig, ) -> tuple[bool, st
     if not iteration.log_content_deployment:
         return False, "OpenTofu plan/apply logs were not captured. You may not declare goal complete."
     
-    if common.get(iteration.log_content_deployment, "deploy_errors") and "No deployment errors" not in common.first(common.get(iteration.log_content_deployment, "deploy_errors")):
+    if common.get(iteration.log_content_deployment, "deployment_errors") and "No deployment errors" not in common.first(common.get(iteration.log_content_deployment, "deployment_errors")):
         return False, "OpenTofu plan/apply reported errors. Resolve them before declaring success."
     
     if config.current_iteration.version_number == 1:
@@ -1773,13 +1778,13 @@ def evaluate_iteration(
         subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
     
-    deploy_errors = common.get(iteration.log_content_deployment, "deploy_errors")
+    deployment_errors = common.get(iteration.log_content_deployment, "deployment_errors")
     runtime_errors = common.get(iteration.log_content_cloudwatch, "errors")
     
     if (
             TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type)
             and iteration.log_content_deployment
-            and not (runtime_errors or deploy_errors)
+            and not (runtime_errors or deployment_errors)
     ):
         raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
     
@@ -1788,7 +1793,7 @@ def evaluate_iteration(
         [
             get_sys_prompt("log_parser_tofu.md"),
             LlmMessage.user_from_data("Logs", {
-                "Deployment Errors": deploy_errors,
+                "Deployment Errors": deployment_errors,
                 "Runtime Errors (cloudwatch)": runtime_errors,
                 "Runtime Logs (other)": iteration.log_content_execution or ""
             })
@@ -2143,7 +2148,7 @@ def perform_code_review(
                 "common--credentials_architecture_tofu.md"
             ]
         ),
-        et_architecture_docs(
+        get_architecture_docs(
             config.initiative
         ),
         get_tombstone_message(
@@ -2673,6 +2678,9 @@ def write_test(
             code = llm_chat(
                 description,
                 messages,
+                model=LlmModel.OPENAI_GPT_5_1,
+                reasoning_effort=LlmReasoningEffort.HIGH,
+                verbosity=LlmVerbosity.LOW,
                 tag_entity=config.current_iteration
             ).text
             
@@ -3187,6 +3195,7 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
         model=planning_model,
         tag_entity=config.current_iteration,
         reasoning_effort=LlmReasoningEffort.NONE,
+        output_schema="codeplanner--codewriter_audience.md.schema.json",
         verbosity=LlmVerbosity.LOW,
         creativity=LlmCreativity.NONE
     ).json()
@@ -3194,6 +3203,7 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
             planning_model=planning_model,
+            planning_json=planning_data,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
         )

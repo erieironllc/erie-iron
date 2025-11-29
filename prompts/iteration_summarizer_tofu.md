@@ -45,22 +45,25 @@ You will be provided
 2. **Determine if the agent is blocked and needs human intervention**  
    - field name: `blocked`  
    - Type: boolean  
-   - Indicates whether the agent cannot proceed autonomously and requires human input.
+   - **Meaning:** `blocked` describes the health of the **orchestration/runtime environment**, *not* whether the current change deployed successfully. It should only be `true` when the automation system itself cannot proceed or produce actionable diagnostics, and human intervention is required.
 
-   **Mark `blocked: true` if:**
-   - Execution failed due to orchestration (errors in the agent, out-of-disk space).
-   - The agent cannot start or complete tests (e.g., domain/DNS boundary, missing env vars beyond contract).
-   - The system is repeating the same error many times after many attempts to fix with no progress.
+   **Mark `blocked: true` only if:**
+   - The orchestration or execution framework is failing (e.g., agent crashes, CI/runner cannot start, out-of-disk/CPU, core tooling not installed or not invocable).
+   - The agent cannot start or complete tests for environment/execution reasons (for example, infrastructure outside the task’s control is unavailable, mandatory credentials for the platform itself are missing, or network/policy prevents the tests from running at all).
+   - Logs are so incomplete or corrupted that you cannot reliably determine what failed or which component needs changes.
+   - A hard governance or environment boundary is hit where policy explicitly says the iteration must stop and escalate instead of making changes.
 
-   **Do *not* mark blocked (prefer `blocked: false`) if:**
-   - Tests ran and failed due to OpenTofu configuration, application code, schema, IAM adjustments, SDK calls, or log validation.
-   - AWS SDK or CloudWatch filter queries failed due to syntax or parameter issues (e.g., `InvalidParameterException`).
-   - Expected logs exist but test filters did not match them (logging mismatch).
-   - Stacks deployed and at least one test executed successfully, even if other errors occurred.
-   - The stack environment is missing credentials or a credential secret.  When this happens, include enough information in the context so the code planner can fix it
+   **Do *not* mark blocked (keep `blocked: false`) when:**
+   - The target application or its infrastructure fails to build, deploy, or validate due to configuration, schema, or policy issues that are visible in logs (for example: invalid resource arguments, schema mismatches, missing parameters, IAM/permission errors, quota limits, or other deployment-time validation failures). In these cases, record the problem under `error` and allow downstream agents to fix it.
+   - Tests ran and failed due to configuration, application code, schema, IAM, SDK, or log-matching problems.
+   - The stack environment is missing or misconfigured application-level credentials or settings that can be supplied or wired up by code or infrastructure changes in later iterations.
+   - The system can run deployments/tests and produce clear failure logs, even if nothing deployed successfully in this iteration.
 
    **Rule of thumb:**  
-   Mark `blocked: true` only when an orchestration or environment-level issue prevents the iteration from executing or being diagnosed at all. Otherwise, default to `blocked: false`.
+   - `blocked: true` means the **automation platform itself** cannot make further progress or produce usable diagnostics without human help.  
+   - Ordinary build, deployment, or runtime failures of the **target system** are *not* considered blocked; they should be captured in `error` and/or `test_errors` with `blocked: false` so that subsequent iterations can address them.
+
+   When in doubt, prefer `blocked: false` and provide detailed error information instead of marking the iteration as blocked.
 
 3. **Write a summary of the code changes**
     - field name: `code_changes_summary`

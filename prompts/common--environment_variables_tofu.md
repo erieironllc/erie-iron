@@ -2,6 +2,36 @@
 
 The Erie Iron platform exposes a fixed base set of environment variables plus any iteration-specific entries enumerated in `<env_vars>` (rendered by the evaluator). Code **may only read** variables from those two sources.
 
+### OpenTofu Output to Environment Variable Translation
+
+**How OpenTofu Outputs Become Environment Variables:**
+
+OpenTofu stack outputs (defined in `opentofu/application/stack.tf` and `opentofu/target_account_provisioning/stack.tf`) use CamelCase naming (e.g., `LoadBalancerDNSName`, `RdsInstanceEndpoint`, `ApplicationUrl`). These are automatically converted to ALL_CAPS_SNAKE_CASE environment variables for use in runtime code and tests.
+
+**Automatic Conversion:**
+- `LoadBalancerDNSName` → `LOAD_BALANCER_DNS_NAME`
+- `RdsInstanceEndpoint` → `RDS_INSTANCE_ENDPOINT`
+- `ApplicationUrl` → `APPLICATION_URL`
+- `EcsClusterName` → `ECS_CLUSTER_NAME`
+- `RdsInstanceDBName` → `RDS_INSTANCE_DB_NAME`
+
+**Override Registry (ENVVAR_TO_STACK_OUTPUT):**
+
+Some outputs use explicit env var names defined defined by this mapping:
+
+```python
+ENVVAR_TO_STACK_OUTPUT = {
+    'AWS_REGION': 'AwsRegion',
+    'AWS_DEFAULT_REGION': 'AwsRegion',
+    'ERIEIRON_DB_NAME': 'RdsInstanceDBName',
+    'ERIEIRON_DB_HOST': 'RdsInstanceEndpoint',
+    'ERIEIRON_DB_PORT': 'RdsInstancePort'
+}
+```
+
+When an output name appears as a VALUE in this registry, the corresponding KEY becomes the env var name in addition to the auto-generated name.
+
+
 ### Canonical base set (always allowed)
 | Name | Purpose / Notes | Source |
 | --- | --- | --- |

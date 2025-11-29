@@ -361,6 +361,17 @@ When you recieve a chat request:
 **Do not include any real or placeholder secret values — only the field definitions and metadata. The schema must be
 sufficient for secret creation and validation.**
 
+### Canonical Secret Schema Rule (Tests and Code)
+
+- Treat each credential service's `secret_value_schema` as **canonical and exhaustive** for what keys exist inside that secret.
+- **Do not** assume that additional keys exist in the secret based on narrative architecture documents, example JSON payloads, or endpoint contracts.
+- When writing application code or tests that read from a secret:
+  - Only expect and parse the keys explicitly listed in that service's `secret_value_schema`.
+  - Any other configuration fields required by the application **must** come from non-secret sources such as environment variables, stack parameters, or derived values (e.g., combining environment variables), as described elsewhere in the architecture.
+- When tests need to verify that an endpoint response "matches values from a secret and/or the environment":
+  - Compare the response only against the intersection of fields that are actually defined in the secret's `secret_value_schema`.
+  - For all other response fields, assert that they are present and correctly derived from their documented non-secret sources, **without** requiring them to be present in the secret.
+- If there is any tension between a narrative example and `secret_value_schema`, **always** follow `secret_value_schema` and treat the example as illustrative rather than a definition of secret structure.
 --- 
 
 ## Database connection contract
@@ -778,14 +789,16 @@ marked for removal, and never reintroduced once deprecated. This applies across 
 
 ## Test integrity
 
-- Assume existing tests and their assertions are correct by default and represent valid assertions of the acceptance
-  criteria.
+- Assume existing tests and their assertions are correct by default and represent valid assertions of the acceptance criteria.
 - **Do not propose edits** that weaken or delete assertions to make tests pass.
-- **Never** add code to skip tests when they fail. Effort **must** be made to make the tests pass with the assumption
-  the test is valid
-- Only propose test-file edits to existing tests when there is clear evidence the test is wrong (e.g., evaluator cites a
-  spec mismatch or the acceptance criteria changed). When doing so, include a short rationale that cites the evaluator
-  output or updated specification and increases, not reduces, coverage.
+- **Never** add code to skip tests when they fail. Effort **must** be made to make the tests pass with the assumption the test is valid.
+- Focus on making tests pass by editing application code, not by modifying the tests themselves.
+- Only propose test-file edits to existing tests when one of the following conditions is clearly met:
+  - The test is making bad assertions that are not aligned with the architecture document (the architecture document is the canonical source for technical information)
+  - The test clearly has a bug (e.g., syntax error, incorrect API usage, resource leaks)
+  - The test is not aligned with the architecture document requirements
+  - Adding targeted diagnostics or logging to help identify root causes of failures
+- When proposing test edits, include a short rationale that cites the evaluator output or architecture document and explain why the test modification is necessary. The modification should increase test quality and alignment with architecture, not reduce coverage.
 - Do not use any AWS emulator or mock for acceptance or smoke tests. This includes LocalStack, moto, botocore Stubber,
   and custom HTTP shims.
 - Tests must exercise actual AWS services and connectivity in the configured region. Do not set `endpoint_url` to

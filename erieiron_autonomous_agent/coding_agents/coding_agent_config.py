@@ -49,12 +49,12 @@ MAP_TASKTYPE_TO_PLANNING_PROMPT = {
 
 ARTIFACTS = "artifacts"
 
-STACK_OUTPUT_TO_ENV = {
-    'AwsRegion': ['AWS_DEFAULT_REGION', 'AWS_DEFAULT_REGION'],
-    'RdsInstanceDBName': 'ERIEIRON_DB_NAME',
-    'RdsInstanceEndpoint': 'ERIEIRON_DB_HOST',
-    'RdsInstancePort': 'ERIEIRON_DB_PORT'
-    
+ENVVAR_TO_STACK_OUTPUT = {
+    'AWS_REGION': 'AwsRegion',
+    'AWS_DEFAULT_REGION': 'AwsRegion',
+    'ERIEIRON_DB_NAME': 'RdsInstanceDBName',
+    'ERIEIRON_DB_HOST': 'RdsInstanceEndpoint',
+    'ERIEIRON_DB_PORT': 'RdsInstancePort'
 }
 
 

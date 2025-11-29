@@ -1,5 +1,51 @@
 ## Infrastructure-Specific Planning Requirements
 
+### Resource Tagging Standard
+
+All taggable AWS resources must use a consistent tagging pattern with centralized base tags:
+
+1. **Define base tags in a `locals` block** at the top of `stack.tf`:
+   ```hcl
+   locals {
+     base_tags = {
+       Stack        = var.StackIdentifier
+       ManagedBy    = "ErieIron"
+       DeletePolicy = var.DeletePolicy
+       Environment  = var.Environment
+     }
+   }
+   ```
+
+2. **For resources requiring only standard tags**, use the base tags directly:
+   ```hcl
+   resource "aws_security_group" "example" {
+     # ... resource configuration ...
+     tags = local.base_tags
+   }
+   ```
+
+3. **For resources requiring a `Name` tag or other resource-specific tags**, merge with base tags:
+   ```hcl
+   resource "aws_vpc" "main" {
+     # ... resource configuration ...
+     tags = merge(
+       local.base_tags,
+       {
+         Name = "${var.StackIdentifier}-vpc"
+       }
+     )
+   }
+   ```
+
+4. **Tag application rules:**
+   - Apply tags to all resources that support the `tags` attribute (VPC, subnets, security groups, RDS instances, S3 buckets, ECS clusters, etc.)
+   - The `Name` tag value must include the `StackIdentifier` prefix for resource identification
+   - Do **not** add custom tags beyond `Name` unless explicitly required by the task
+   - Existing templates with inline tag blocks must be refactored to use this pattern
+   - Before adding a `tags` block to any resource, the agent must explicitly confirm that the resource type supports tagging. If the resource does not support tags, do not add the `tags` attribute and do not attempt to merge base tags.
+
+This standard ensures consistent resource tagging across all stacks, enables cost tracking and resource filtering, and eliminates tag-related drift.
+
 ### Terraform Header Requirement
 - Every `stack.tf` file must begin with the following header block:
   ```hcl

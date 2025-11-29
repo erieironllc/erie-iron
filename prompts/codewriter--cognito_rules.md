@@ -25,9 +25,19 @@ variable "MobileAppScheme" {
 Add these resources (conditionally created when `EnableCognito = true`):
 
 ```hcl
+locals {
+  base_tags = {
+    Stack           = var.StackIdentifier
+    ManagedBy       = "ErieIron"
+    DeletePolicy    = var.DeletePolicy
+    Environment     = var.Environment
+  }
+}
+
 resource "aws_cognito_user_pool" "main" {
   count = var.EnableCognito ? 1 : 0
   name  = "${var.StackIdentifier}-user-pool"
+  tags = local.base_tags
 
   auto_verified_attributes = ["email"]
   username_attributes      = ["email"]
@@ -46,8 +56,6 @@ resource "aws_cognito_user_pool" "main" {
       priority = 1
     }
   }
-
-  tags = local.base_tags
 
   lifecycle {
     prevent_destroy = ERIE_IRON_RETAIN_RESOURCES

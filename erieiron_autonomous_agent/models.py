@@ -373,12 +373,8 @@ class Business(BaseErieIronModel):
     
     def snapshot_code(
             self,
-            self_driving_task_iteration: "SelfDrivingTaskIteration",
-            include_erie_common=True,
+            self_driving_task_iteration: "SelfDrivingTaskIteration"
     ):
-        if True:
-            return
-        
         instructions = common.get(
             self_driving_task_iteration, ["evaluation_json", "instructions"]
         )
@@ -401,26 +397,6 @@ class Business(BaseErieIronModel):
                 gitignore_patterns=["core/migrations/"],
             )
         )
-        
-        if include_erie_common:
-            erie_common_path = "venv/lib/python3.11/site-packages/erieiron_public"
-            files_to_index += [
-                f"{erie_common_path}/{f}"
-                for f in common.iterate_files_deep(
-                    sandbox_path / erie_common_path,
-                    file_extensions=[
-                        ".py",
-                        ".html",
-                        ".js",
-                        ".css",
-                        ".scss",
-                        ".yaml",
-                        ".sh",
-                    ],
-                    respect_git_ignore=False,
-                    gitignore_patterns=["migrations/"],
-                )
-            ]
         
         for relative_file_path in common.strings(files_to_index):
             code_file = CodeFile.get(self, relative_file_path)
