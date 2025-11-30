@@ -15,7 +15,7 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, SdaPhase
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType, InfrastructureStackType, SdaPhase, CredentialsSpace
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.stack_manager import StackManager
 
@@ -129,6 +129,13 @@ class CodingAgentConfig:
             self.runtime_env,
             self.sandbox_root_dir
         )
+    
+    def get_env_for_credentials_space(self, credential_space: CredentialsSpace):
+        if CredentialsSpace.ERIE_IRON.eq(credential_space):
+            stack = Business.get_erie_iron_business().infrastructurestack_set.first()
+            return stack.get_runtime_env()
+        else:
+            return self.stack.get_runtime_env()
     
     def add_deployment_log(self, log_results: dict):
         self.deployment_logs.append(log_results)

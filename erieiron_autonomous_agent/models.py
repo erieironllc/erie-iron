@@ -1767,9 +1767,9 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
             if code_version:
                 code_version.write_to_disk(sandbox_path)
             elif code_file.allow_autonomous_delete():
-                common.quietly_delete(sandbox_path / code_file.get_path())
-                logging.info(
-                    f"{code_file.get_path()} did not exist at iteration {self.id}.  removing from disk"
+                # common.quietly_delete(sandbox_path / code_file.get_path())
+                logging.error(
+                    f"{code_file.get_path()} did not exist at iteration {self.id}.  NOT removing from disk"
                 )
     
     def get_code_version(self, code_file: "CodeFile"):

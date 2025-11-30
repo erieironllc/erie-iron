@@ -24,7 +24,6 @@ from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
-from erieiron_autonomous_agent.consensus_llm_interface import llm_chat_triple_check
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
@@ -34,7 +33,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, 
 from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
@@ -555,9 +554,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
         config.business.snapshot_code(first_iteration)
         if first_iteration != config.current_iteration:
             config.business.snapshot_code(config.current_iteration)
-        
-        
-
+    
     return self_driving_task
 
 
@@ -705,7 +702,7 @@ def build_container_image(
         stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True,
-        env=config.runtime_env
+        env=config.get_env_for_credentials_space(CredentialsSpace.ERIE_IRON)
     )
     
     while build_process.poll() is None:
@@ -1037,7 +1034,11 @@ def push_image_to_ecr(
         region
     )
     
-    ecr_login(config, full_image_uri)
+    ecr_login(
+        config,
+        full_image_uri,
+        CredentialsSpace.TARGET_ACCOUNT
+    )
     
     config.log(f"\n\n\n\n======== Begining ECR Push to {full_image_uri} ")
     
@@ -2678,9 +2679,10 @@ def write_test(
     Please attempt to write the code again and avoid causing this error
                 """)
             
-            code = llm_chat_triple_check(
+            code = llm_chat(
                 description,
                 messages,
+                model=LlmModel.OPENAI_GPT_5_1,
                 reasoning_effort=LlmReasoningEffort.MEDIUM,
                 verbosity=LlmVerbosity.LOW,
                 tag_entity=config.current_iteration
@@ -4289,7 +4291,7 @@ def ecr_authenticate_for_base_image(config: CodingAgentConfig, dockerfile):
         last_err = None
         for attempt in range(3):
             try:
-                ecr_login(config, base_img)
+                ecr_login(config, base_img, CredentialsSpace.ERIE_IRON)
                 last_err = None
                 break
             except Exception as e:
@@ -4303,7 +4305,7 @@ def ecr_authenticate_for_base_image(config: CodingAgentConfig, dockerfile):
             })
 
 
-def ecr_login(config: CodingAgentConfig, ecr_repo_uri):
+def ecr_login(config: CodingAgentConfig, ecr_repo_uri, credentials_space):
     """
     Log into the correct ECR registry for the provided image URI.
     Ensures the registry hostname is parsed correctly (account.dkr.ecr.region.amazonaws.com).
@@ -4317,17 +4319,14 @@ def ecr_login(config: CodingAgentConfig, ecr_repo_uri):
         # Extract region from registry string
         region = parse_region_from_ecr_uri(ecr_repo_uri)
         
-        cmd = (
-            f"aws ecr get-login-password --region {region} "
-            f"| podman login --username AWS --password-stdin {registry}"
-        )
-        
-        print(cmd)
         subprocess.run(
-            cmd,
+            (
+                f"aws ecr get-login-password --region {region} "
+                f"| podman login --username AWS --password-stdin {registry}"
+            ),
             shell=True,
             check=True,
-            env=config.runtime_env,
+            env=config.get_env_for_credentials_space(credentials_space),
             stdout=config.log_f,
             stderr=subprocess.STDOUT
         )

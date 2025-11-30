@@ -642,3 +642,11 @@ class BusinessNiche(ErieEnum):
     
     def get_prompt_filename(self) -> str:
         return f"niche_finders/{str(self.value).lower()}.md"
+
+
+class CredentialsSpace(ErieEnum):
+    ERIE_IRON = auto()
+    TARGET_ACCOUNT = auto()
+
+
+ERIE_IRON = auto()
