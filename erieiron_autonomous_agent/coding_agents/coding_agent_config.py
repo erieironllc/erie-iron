@@ -328,3 +328,27 @@ class CodingAgentConfig:
             return self.log_path.read_text()
         except Exception:
             return traceback.format_exc()
+    
+    def dump_env_to_envrc(self):
+        # Dump runtime_env to .envrc file
+        envrc_path = self.sandbox_root_dir / ".envrc"
+        if envrc_path.exists():
+            # Read existing content and find the Erie Iron section
+            existing_content = envrc_path.read_text()
+            marker = "### START ERIE IRON ENV ###"
+            if marker in existing_content:
+                # Remove everything from the marker onwards
+                envrc_content = existing_content[:existing_content.index(marker)]
+            else:
+                envrc_content = existing_content
+        else:
+            envrc_content = ""
+        
+        # Append Erie Iron environment variables
+        envrc_content += "### START ERIE IRON ENV ###\n"
+        for key, value in self.runtime_env.items():
+            # Escape double quotes in the value
+            escaped_value = str(value).replace('"', '\\"')
+            envrc_content += f'export {key}="{escaped_value}"\n'
+        
+        envrc_path.write_text(envrc_content)

@@ -523,22 +523,43 @@ def validate_plan(config: CodingAgentConfig, planning_data):
 
 def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
-    
+
     initiative_has_iterations = SelfDrivingTaskIteration.objects.filter(
         self_driving_task__task__initiative_id=task.initiative_id
     ).exists()
-    
+
     Task.objects.filter(id=task.id).update(
         status=TaskStatus.IN_PROGRESS
     )
-    
+
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
-    
+
     if not initiative_has_iterations:
         # no tests
         self_driving_task.initial_tests_pass = True
         self_driving_task.save()
+
+    # Create symbolic link to sandbox_root_dir for debugging
+    business = task.initiative.business
+    initiative = task.initiative
+    debug_link_dir = Path.home() / "src" / "erieiron_debug" / business.service_token / str(initiative.id)
+    debug_link_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing link if it exists
+    if debug_link_dir.exists() or debug_link_dir.is_symlink():
+        debug_link_dir.unlink()
+
+    # Create symbolic link to sandbox
+    sandbox_path = Path(self_driving_task.sandbox_path)
+    debug_link_dir.symlink_to(sandbox_path)
     
+    print(textwrap.dedent(f"""
+    SYMLINK TO SOURCE
+    
+    {debug_link_dir}
+    
+    """))
+
     with CodingAgentConfig(self_driving_task) as config:
         config.set_phase(SdaPhase.INIT)
         
@@ -1300,6 +1321,8 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     import time
     random.seed(time.time())
     
+    config.dump_env_to_envrc()
+    
     test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
     
     # try:
@@ -1392,6 +1415,7 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             "This indicates flakiness. Please review the test code for flakiness risks and fix."
         )
         raise FailingTestException("Some test runs failed - flaky tests")
+
 
 
 def deploy_iteration(
