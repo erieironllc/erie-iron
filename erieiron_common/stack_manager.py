@@ -137,9 +137,8 @@ class StackManager:
         self.plan_command_results: OpenTofuCommandResult = None
         self.apply_command_results: OpenTofuCommandResult = None
         self.validate_command_results: OpenTofuCommandResult = None
-
+        
         self.plan_output_path = self.workspace_dir / "current.plan"
-        self.init_workspace()
     
     def get_swizzled_module_file(self):
         stack_config_source_file = self.sandbox_root / self.stack_type.get_opentofu_config()
@@ -308,6 +307,7 @@ class StackManager:
             stderr=completed_process.stderr or "",
         )
         
+        self.record(stage, result)
         if result.returncode != 0:
             # Allow return codes 2 and 3 for plan stage (indicate "changes pending" or "changes present")
             if result.returncode in (2, 3):
@@ -319,7 +319,6 @@ class StackManager:
                 )
         
         logging.debug("OpenTofu command completed", extra=result.loggable_dict())
-        self.record(stage, result)
         return result
     
     def init_workspace(self) -> OpenTofuCommandResult:
@@ -1596,7 +1595,7 @@ class StackManager:
         
         if self.stack.stack_vars:
             payload['stack_input_vars'] = self.stack.stack_vars
-
+        
         if self.apply_command_results:
             payload['tofu_apply_command_results'] = self.apply_command_results.loggable_dict()
         elif self.plan_command_results:

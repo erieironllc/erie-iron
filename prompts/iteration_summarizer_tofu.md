@@ -57,11 +57,16 @@ You will be provided
    - The target application or its infrastructure fails to build, deploy, or validate due to configuration, schema, or policy issues that are visible in logs (for example: invalid resource arguments, schema mismatches, missing parameters, IAM/permission errors, quota limits, or other deployment-time validation failures). In these cases, record the problem under `error` and allow downstream agents to fix it.
    - Tests ran and failed due to configuration, application code, schema, IAM, SDK, or log-matching problems.
    - The stack environment is missing or misconfigured application-level credentials or settings that can be supplied or wired up by code or infrastructure changes in later iterations.
-   - The system can run deployments/tests and produce clear failure logs, even if nothing deployed successfully in this iteration.
-
+   - The system can run deployments/tests and produce clear failure logs, even if nothing deployed successfully in this iteration. 
+   - The infrastructure-as-code tool (e.g., OpenTofu/Terraform) fails during `init`, `plan`, or `apply` due to configuration, syntax, validation, or resource-definition errors **inside templates that are part of the codebase managed by this loop** (for example: invalid locals/expressions, bad variable references, missing required arguments, IAM policy/schema issues, or resource attribute validation failures). These are standard infra errors for downstream agents to fix; set `blocked: false` and record details under `error`.
+   
    **Rule of thumb:**  
    - `blocked: true` means the **automation platform itself** cannot make further progress or produce usable diagnostics without human help.  
    - Ordinary build, deployment, or runtime failures of the **target system** are *not* considered blocked; they should be captured in `error` and/or `test_errors` with `blocked: false` so that subsequent iterations can address them.
+
+   **Special rule for infrastructure-as-code errors:**
+    - Do **not** set `blocked: true` solely because the infrastructure-as-code tool (OpenTofu/Terraform, etc.) cannot initialize, plan, or apply due to problems in stack templates or configuration files that are owned by this task. Those issues **must** be treated as ordinary infra failures: set `blocked: false`, populate `error` with rich context, and allow planners/writers to modify the templates.
+    - Reserve `blocked: true` for failures in the orchestration/runtime environment itself (missing/broken tooling, CI/runner outages, corrupted logs, or hard governance boundaries) that cannot be resolved by editing code or templates within the repository.
 
     ### Transient vs. Persistent Failures
 

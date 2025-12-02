@@ -1189,8 +1189,9 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
+        config.stack_manager.init_workspace()
         config.stack_manager.validate_stack()
-        
+
         container_image_tag, lambda_datas = build_iteration(
             config
         )

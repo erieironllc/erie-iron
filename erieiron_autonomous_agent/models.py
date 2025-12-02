@@ -2218,9 +2218,12 @@ class CodeVersion(BaseErieIronModel):
         return file_path
     
     def update_codebert_embedding(self):
+        path = self.code_file.file_path
+        # logging.info(f"skipping update_codebert_embedding() for {path}")
+        return
+        
         from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
         
-        path = self.code_file.file_path
         logging.info(f"about to update embedding for {path}")
         
         CodeVersion.objects.filter(id=self.id).update(
