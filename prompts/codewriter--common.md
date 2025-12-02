@@ -192,6 +192,23 @@ If the `deprecation_plan` field is present, it contains a `tombstones` array. Ea
 
 ---
 
+## Iteration History Awareness
+
+If an iteration_history.md file is provided, read it carefully before making code changes. This file shows:
+- Previous attempts to solve this problem
+- Errors that have occurred multiple times
+- Files that have repeatedly caused issues
+
+**RULES for using iteration history:**
+1. Do not repeat the exact same approach that failed in previous iterations
+2. If an error is listed as "recurring", ensure your changes address the root cause
+3. When modifying files that caused regressions, add comments explaining why your change won't regress
+4. If you must change code that was working in a previous iteration, preserve the fix while solving the new problem
+
+The iteration history provides a chronological record of what has been tried and what has failed. Use this information to avoid repeating mistakes and to understand patterns of failure that may indicate deeper architectural issues requiring a different approach.
+
+---
+
 ## **Previously Learned Lessons**
 If lessons learned from past planner failures are provided, you must treat them as authoritative and use them to guide your planning.
 

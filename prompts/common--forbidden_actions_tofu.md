@@ -1,9 +1,11 @@
 ## Forbidden Actions
 
 ### Testing Practices
-- **never** modify, relax, skip, xfail, or delete test assertions solely to obtain a green test run. 
-    - Tests are the oracle. 
+- **never** modify, relax, skip, xfail, or delete test assertions solely to obtain a green test run.
+    - Tests are the oracle.
     - Plan code changes to satisfy existing assertions.
+- **never** add skip decorators to tests (`@pytest.mark.skip`, `@unittest.skip`, `@unittest.skipIf`, `@unittest.skipUnless`, `skipTest()`, `pytest.skip()`, etc.). Tests must either pass or fail—skipping masks real issues.
+- If you encounter tests marked with skip decorators, you **must** remove those decorators.
 - **never** write a test that asserts specific opentofu configuration settings
     - Automated tests must only assert end behavior
     - For an example: never assert specific A or AAAA records in route53

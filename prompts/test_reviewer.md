@@ -36,8 +36,9 @@ Return exactly one JSON object with the following shape. Do not include any addi
 - If both failed and errored exist, report both and set `all_passed=false`.
 - Normalize pytest nodeids into `pkg.mod.ClassName.test_method`.
 - Capture error_type from the exception class, message from assertion or exception, and traceback as contiguous block.
-- Skips and xfail do not cause failure.
-- If no tests detected, return `all_passed=false` with one failure entry noting “no tests detected.”
+- **Skipped tests are treated as failures.** If any tests are skipped, set `all_passed=false` and include each skipped test in the `failures` array with `status: "skipped"` and `error_type: "Skipped"` and a message explaining that skipped tests are not allowed.
+- xfail tests do not cause failure (but skip does).
+- If no tests detected, return `all_passed=false` with one failure entry noting "no tests detected."
 
 ## Edge Cases
 - Partial logs → still report known failures.

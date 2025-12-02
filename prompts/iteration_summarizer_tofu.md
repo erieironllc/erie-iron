@@ -102,9 +102,14 @@ You will be provided
     - **Format:** Use concise markdown bullets, **bold key terms**, and `code` for identifiers`. Avoid verbosity or speculation; prefer clarity and brevity.
 
 5. ### Extract Errors  
-   - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multiple OpenTofu failures are found, include **all** OpenTofu failure events
-   - If the iteration ran automated tests and there were **test errors or failures**, capture **all of them** (since these can be addressed in parallel).  
-   - When both runtime or infrastructure/compilation errors **and** automated test failures appear in the logs, include **both** sections in the response. Report the blocking runtime or infrastructure error in `error` *and* enumerate all test failures in `test_errors`. Do not omit the critical error when tests fail downstream.  
+    - If the first error is **infrastructure, deployment, or compilation related**, capture **only the first critical error** that blocked execution.  Exception to this:  If multiple OpenTofu failures are found, include **all** OpenTofu failure events
+    - If the iteration ran automated tests and there were **test errors or failures**, capture **all of them** (since these can be addressed in parallel).  
+    - When both runtime or infrastructure/compilation errors **and** automated test failures appear in the logs, include **both** sections in the response. Report the blocking runtime or infrastructure error in `error` *and* enumerate all test failures in `test_errors`. Do not omit the critical error when tests fail downstream.  
+    - **Important distinction for `goal_achieved`:**
+      - The presence of exceptions or error-looking lines in logs does **not automatically** mean the iteration failed.
+      - Use log content to populate `error` and `test_errors` with rich diagnostic context.
+      - Use **build/deploy status and final test results** to decide `goal_achieved`.
+      - When tests intentionally raise and catch errors as part of validation, and the test runner still reports success, treat those errors as **expected behavior**, not as a reason to force `goal_achieved: false`.
 
     #### Credential and Authentication Errors
 

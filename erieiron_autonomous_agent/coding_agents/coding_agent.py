@@ -1839,6 +1839,24 @@ def evaluate_iteration(
         - Set `"goal_achieved": true` only if the logs contain no errors, the task output clearly meets the stated GOAL, and test logs show that one or more tests were actually run.  
         - If any errors or incomplete behaviors are detected in the logs, set `"goal_achieved": false`.  
         - Base this determination only on the current logs—do not consider prior iterations.
+        
+       **Primary decision rule (test-centric):**
+       - Set `"goal_achieved": true` when **all** of the following are true:
+         - Build/packaging steps completed successfully (no unrecovered build/compiler errors).
+         - Infrastructure deployment (e.g., OpenTofu plan/apply) either succeeded or was not invoked; there are no final plan/apply failures.
+         - The test runner executed **one or more tests** (i.e., not `Ran 0 tests`).
+         - The final test result for the executed suite shows **no failing or erroring tests** (status equivalent to OK / PASSED in the chosen framework).
+       - Set `"goal_achieved": false` when **any** of the above conditions are not met (e.g., build/deploy failure, tests did not run, or the test runner reports failing/erroring tests).
+
+       **Treatment of log errors and simulated failures:**
+       - Do **not** set `goal_achieved` to `false` **solely** because log output contains stack traces, exceptions, or error messages **if** the relevant tests ultimately pass. Tests may intentionally simulate failures and assert correct handling; such logged errors are acceptable when the test framework reports success.
+       - Continue to record important runtime or infra issues in the `error` or `test_errors` fields so downstream agents see them, but let the **test outcomes** drive the `goal_achieved` flag.
+
+       **Skipped tests policy:**
+       - If organizational policy requires, you may treat skipped tests as a reason to keep `goal_achieved: false`. Otherwise, treat a run with skips but no failures/errors as `goal_achieved: true` **only when explicitly instructed by higher-level configuration or input fields.**
+
+       **Do not infer cross-iteration state:**
+       - Base this determination only on the current iteration's logs and test results; ignore earlier iterations.
     """)
     
     allow_goal_achieved, goal_achieved_reason = compute_goal_achievement_gate(

@@ -197,6 +197,8 @@ The test code must:
 - Do not use mocks in acceptance/smoke tests. These must connect to real system components end to end. Only the explicitly pre-approved stubs may be used if necessary.
 - Mocks are permitted in unit tests but cannot substitute for the acceptance/smoke test.
 - Tests must **never** assert the presence of Lambda environment variables starting with `AWS_` (e.g., asserting an `AWS_DEFAULT_REGION` variable is forbidden).
+- **Never** add skip decorators to tests (`@pytest.mark.skip`, `@unittest.skip`, `skipTest`, `pytest.skip`, etc.). Tests must either pass or fail—skipping masks real issues.
+- If you encounter tests marked with skip decorators, you **must** remove those decorators.
 
 
 

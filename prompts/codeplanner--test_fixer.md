@@ -15,8 +15,20 @@ When making these fixes, do not introduce changes that make tests brittle or ove
 
 ## Scope and Non-Scope
 
-- **Scope:** Repair failing tests caused by refactors, namespace shifts, outdated imports, or moved test modules.
+- **Scope:** Repair failing tests caused by refactors, namespace shifts, outdated imports, or moved test modules. Also includes removing skip decorators from tests.
 - **Non-scope:** Application code edits, behavior changes, test weakening, infrastructure changes, or business logic fixes.
+
+### Skip Decorator Removal Requirement
+
+When fixing tests, you **must** check for and remove any skip decorators:
+- `@pytest.mark.skip`
+- `@unittest.skip`
+- `@unittest.skipIf`
+- `@unittest.skipUnless`
+- `skipTest()` calls
+- `pytest.skip()` calls
+
+Skipped tests mask real issues and are not allowed. If a test needs infrastructure or credentials that are missing, the test should fail with a clear error message explaining what is needed—not be skipped.
 
 ---
 

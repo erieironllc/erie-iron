@@ -792,11 +792,14 @@ marked for removal, and never reintroduced once deprecated. This applies across 
 - Assume existing tests and their assertions are correct by default and represent valid assertions of the acceptance criteria.
 - **Do not propose edits** that weaken or delete assertions to make tests pass.
 - **Never** add code to skip tests when they fail. Effort **must** be made to make the tests pass with the assumption the test is valid.
+- **Never** add skip decorators to tests (`@pytest.mark.skip`, `@unittest.skip`, `@unittest.skipIf`, `@unittest.skipUnless`, `skipTest()`, `pytest.skip()`, etc.). Tests must either pass or fail—skipping masks real issues.
+- If you encounter tests marked with skip decorators, you **must** remove those decorators in this iteration.
 - Focus on making tests pass by editing application code, not by modifying the tests themselves.
 - Only propose test-file edits to existing tests when one of the following conditions is clearly met:
   - The test is making bad assertions that are not aligned with the architecture document (the architecture document is the canonical source for technical information)
   - The test clearly has a bug (e.g., syntax error, incorrect API usage, resource leaks)
   - The test is not aligned with the architecture document requirements
+  - The test has skip decorators that need to be removed
   - Adding targeted diagnostics or logging to help identify root causes of failures
 - When proposing test edits, include a short rationale that cites the evaluator output or architecture document and explain why the test modification is necessary. The modification should increase test quality and alignment with architecture, not reduce coverage.
 - Do not use any AWS emulator or mock for acceptance or smoke tests. This includes LocalStack, moto, botocore Stubber,
