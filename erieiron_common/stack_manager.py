@@ -113,6 +113,7 @@ class StackManager:
             container_env: dict = None,
             sandbox_root: Path = None
     ):
+        self._initialized = False
         logging.info(f"Initiatize Stack Mangage for {stack.stack_namespace_token} ({stack.stack_type})")
         
         self.stack = stack
@@ -322,6 +323,9 @@ class StackManager:
         return result
     
     def init_workspace(self) -> OpenTofuCommandResult:
+        if self._initialized:
+            return
+        
         un_swizzled_module_file = self.sandbox_root / self.stack_type.get_opentofu_config()
         lock_file = self.swizzled_module_file.parent / ".terraform.lock.hcl"
         
@@ -358,12 +362,16 @@ class StackManager:
         
         for attempt in range(3):
             try:
-                return self.run_tofu_command("init", args)
+                self.run_tofu_command("init", args)
+                self._initialized = True
+                return
             except OpenTofuCommandException as e:
                 last_exception = e
                 time.sleep(10 * (attempt + 1))
                 try:
                     self.run_tofu_command("init", ["init", "-reconfigure", "-input=false", "-no-color"] + storage_key_args)
+                    self._initialized = True
+                    return
                 except OpenTofuCommandException as e2:
                     logging.exception(e2)
                     raise e2
@@ -474,7 +482,6 @@ class StackManager:
         access_denied_lines = [line for line in combined.split('\n') if 'AccessDenied' in line or 'UnauthorizedOperation' in line]
         for line in access_denied_lines:
             # Extract AWS actions from context (common AWS API patterns)
-            # noinspection RegExpUnnecessaryNonCapturingGroup
             aws_actions = re.findall(r'([a-z][a-zA-Z0-9]*:[a-zA-Z][a-zA-Z0-9]*(?:\*)?)', line)
             missing_permissions.extend(aws_actions)
         
@@ -485,19 +492,24 @@ class StackManager:
             missing_permissions.append('iam:DetachRolePolicy')
             missing_permissions.append('iam:DeleteRole')
         
-        # Remove duplicates while preserving order
-        unique_permissions = []
+        # Deduplicate while preserving order
         seen = set()
+        unique_permissions = []
         for perm in missing_permissions:
             if perm and perm not in seen:
                 unique_permissions.append(perm)
                 seen.add(perm)
         
-        unique_permissions = [
-            p for p in unique_permissions if str(p.split(":")[1][0]).isupper()
-        ]
+        # Normalize AWS-style capitalization
+        def normalize(perm: str) -> str:
+            if ":" not in perm:
+                return perm
+            svc, action = perm.split(":", 1)
+            parts = re.split(r'[^a-zA-Z0-9]', action)
+            normalized_action = "".join(part.capitalize() for part in parts if part)
+            return f"{svc.lower()}:{normalized_action}"
         
-        return unique_permissions
+        return [normalize(p) for p in unique_permissions]
     
     def _create_synthetic_success_result(
             self,

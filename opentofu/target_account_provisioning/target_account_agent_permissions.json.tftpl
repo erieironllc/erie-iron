@@ -15,6 +15,7 @@
         "iam:TagRole",
         "iam:AttachRolePolicy",
         "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
         "iam:CreateServiceLinkedRole"
       ],
       "Resource": [
@@ -30,6 +31,14 @@
         "logs:*",
         "ecr:*",
         "elasticloadbalancing:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SQSFullAccess",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:*"
       ],
       "Resource": "*"
     },

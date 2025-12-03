@@ -129,6 +129,11 @@ class CodingAgentConfig:
             self.runtime_env,
             self.sandbox_root_dir
         )
+        
+        try:
+            self.stack_manager.init_workspace()
+        except Exception as e:
+            logging.exception(e)
     
     def get_env_for_credentials_space(self, credential_space: CredentialsSpace):
         if CredentialsSpace.ERIE_IRON.eq(credential_space):

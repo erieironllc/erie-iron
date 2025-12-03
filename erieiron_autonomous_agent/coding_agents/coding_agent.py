@@ -1479,13 +1479,13 @@ def ingest_tofu_ouputs(config: CodingAgentConfig):
     for output_name, output_value in outputs.items():
         output_value = str(outputs.get(output_name) or "")
         config.runtime_env[
-            common.camel_to_snake(output_name)
+            common.camel_to_snake(output_name).upper()
         ] = str(output_value)
     
     for env_name, output_name in ENVVAR_TO_STACK_OUTPUT.items():
         output_value = str(outputs.get(output_name) or "")
         if output_value:
-            config.runtime_env[env_name] = output_value
+            config.runtime_env[env_name.upper()] = output_value
     
     missing_outputs = []
     for credential_service, secret_arn in config.stack.get_credential_arns(CredentialServiceProvisioning.STACK_GENERATED):
@@ -1495,7 +1495,7 @@ def ingest_tofu_ouputs(config: CodingAgentConfig):
             missing_outputs.append(credential_service)
             continue
         
-        config.runtime_env[env_name] = output_value
+        config.runtime_env[env_name.upper()] = output_value
         
         credential_arns = business.credential_arns or {}
         credential_arns[credential_service.value] = output_value
