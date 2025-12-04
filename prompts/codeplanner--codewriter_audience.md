@@ -72,6 +72,8 @@ When determining `required_rule_contexts`, include:
 - **s3_storage_rules**: For S3 bucket configuration or object operations
 - **sqs_queue_rules**: For SQS queue operations or event processing
 - **cognito_rules**: For Cognito User Pool, App Client, Domain, and mobile app config secret provisioning
+- **react_native_rules**: For React Native UI with cross-platform mobile and web support using react-native-web (web-only deployment)
+- **react_web_rules**: For Next.js React web applications without mobile requirements (static export mode)
 
 ## Directive Quality Standards
 
@@ -175,7 +177,14 @@ When analyzing the inputs:
 
 5. **Formulate directive**: Write a clear, actionable strategy that respects constraints and learns from prior attempts
 
-6. **search for tokens to add to required_rule_contexts**: after identifying the problem scope, scan all input messages (architecture, evaluator, tests, goals) for named managed services or provider-specific features. For each named service or provider found, include the corresponding service-specific rule token in required_rule_contexts if there's an applicable rule 
+6. **search for tokens to add to required_rule_contexts**: after identifying the problem scope, scan all input messages (architecture, evaluator, tests, goals) for named managed services or provider-specific features. For each named service or provider found, include the corresponding service-specific rule token in required_rule_contexts if there's an applicable rule
+
+7. **Detect UI framework requirements**: Scan architecture and task descriptions for React/React Native keywords:
+   - If architecture mentions "React Native", "react-native", "mobile app" + "React", "iOS" + "Android" + "React", "cross-platform" + "React", OR "react-native-web" → include `react_native_rules`
+   - If architecture mentions "Next.js", "next.js", "React web", "React" + "web" (without mobile keywords), OR "SSR React" → include `react_web_rules`
+   - If neither React pattern detected but mentions "jQuery", "Backbone", OR "Bootstrap" → use existing `ui_rules` for jQuery/Backbone.js
+   - If no UI framework detected → use `ui_rules` as safe default
+   - NEVER combine `react_native_rules`, `react_web_rules`, and `ui_rules` in the same plan (they are mutually exclusive UI approaches - choose only one based on architecture)
 
 ## Anti-Patterns to Avoid
 

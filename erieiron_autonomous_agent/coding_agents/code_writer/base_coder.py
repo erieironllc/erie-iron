@@ -440,6 +440,10 @@ class BaseCoder(ABC):
                 reference_prompts.add("prompts/codewriter--sqs_rules.md")
             elif rule_context == "cognito_rules":
                 reference_prompts.add("prompts/codewriter--cognito_rules.md")
+            elif rule_context == "react_native_rules":
+                reference_prompts.add("prompts/codewriter--react_native.md")
+            elif rule_context == "react_web_rules":
+                reference_prompts.add("prompts/codewriter--react_web.md")
             else:
                 self.config.log(f"ERROR:  unhandled required_rule_contexts value {rule_context}")
         

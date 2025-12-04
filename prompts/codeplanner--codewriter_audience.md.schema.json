@@ -49,7 +49,9 @@
           "ses_email_rules",
           "s3_storage_rules",
           "sqs_queue_rules",
-          "cognito_rules"
+          "cognito_rules",
+          "react_native_rules",
+          "react_web_rules"
         ]
       }
     },
