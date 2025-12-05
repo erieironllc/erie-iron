@@ -19,7 +19,8 @@ from erieiron_common.enums import LlmModel, TaskType, ErieEnum, EnvironmentType,
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.stack_manager import StackManager
 
-ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.30"
+ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.31"
+COUNT_TEST_RUNS_REQUIRED = 3
 TASK_DESC_CODE_WRITING = "code writing"
 LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 
@@ -32,7 +33,6 @@ os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 
 class SdaInitialAction(ErieEnum):
     CODE = auto()
-    WRITE_INITIATIVE_TEST = auto()
     PLAN = auto()
     DEPLOY = auto()
     EVAL = auto()
@@ -355,5 +355,29 @@ class CodingAgentConfig:
             # Escape double quotes in the value
             escaped_value = str(value).replace('"', '\\"')
             envrc_content += f'export {key}="{escaped_value}"\n'
+        
+        envrc_path.write_text(envrc_content)
+    
+    def dump_env_to_env_file(self):
+        # Dump runtime_env to .envrc file
+        envrc_path = self.sandbox_root_dir / ".env"
+        if envrc_path.exists():
+            # Read existing content and find the Erie Iron section
+            existing_content = envrc_path.read_text()
+            marker = "### START ERIE IRON ENV ###"
+            if marker in existing_content:
+                # Remove everything from the marker onwards
+                envrc_content = existing_content[:existing_content.index(marker)]
+            else:
+                envrc_content = existing_content
+        else:
+            envrc_content = ""
+        
+        # Append Erie Iron environment variables
+        envrc_content += "### START ERIE IRON ENV ###\n"
+        for key, value in self.runtime_env.items():
+            # Escape double quotes in the value
+            escaped_value = str(value).replace('"', '\\"')
+            envrc_content += f'{key}="{escaped_value}"\n'
         
         envrc_path.write_text(envrc_content)

@@ -103,7 +103,7 @@ class Business(BaseErieIronModel):
             for c in common.ensure_list(self.required_credentials)
             if bool(CredentialService.valid_or(c))
         ]
-
+    
     @property
     def required_credentials_csv(self) -> str:
         """Return required_credentials as a comma-delimited string for form display"""
@@ -111,7 +111,7 @@ class Business(BaseErieIronModel):
             return ""
         credentials_list = common.ensure_list(self.required_credentials)
         return ", ".join(credentials_list)
-
+    
     @staticmethod
     def get_portfolio_business() -> QuerySet['Business']:
         return Business.objects.exclude(id=Business.get_erie_iron_business().id)
@@ -1764,13 +1764,28 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
                 continue
             
             code_version = code_file.get_version(self, default_to_latest=True)
+            first_version = code_file.codeversion_set.order_by("created_at").first()
             if code_version:
                 code_version.write_to_disk(sandbox_path)
-            elif code_file.allow_autonomous_delete():
-                # common.quietly_delete(sandbox_path / code_file.get_path())
-                logging.error(
-                    f"{code_file.get_path()} did not exist at iteration {self.id}.  NOT removing from disk"
-                )
+            elif first_version and code_file.allow_autonomous_delete():
+                # Detect if this code_file was introduced:
+                #  1. in this Task
+                first_version_in_this_task = first_version.task_iteration.self_driving_task_id == self.self_driving_task_id
+                
+                #  2. in an iteration that's **after** the self iteration
+                first_version_iteration_after_this_iteration = first_version.task_iteration.version_number > self.version_number
+                
+                # If both conditions are met, then this file should be deleted
+                if first_version_in_this_task and first_version_iteration_after_this_iteration:
+                    # File was introduced after this iteration in the same task
+                    common.quietly_delete(sandbox_path / code_file.get_path())
+                    logging.info(
+                        f"{code_file.get_path()} was introduced after iteration {self.id}. Deleted from disk."
+                    )
+                else:
+                    logging.info(
+                        f"{code_file.get_path()} did not exist at iteration {self.id}.  NOT removing from disk.  first_version_in_this_task={first_version_in_this_task}; first_version_iteration_after_this_iteration={first_version_iteration_after_this_iteration}"
+                    )
     
     def get_code_version(self, code_file: "CodeFile"):
         if isinstance(code_file, Path):

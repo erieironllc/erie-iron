@@ -22,7 +22,7 @@ import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
-from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT, COUNT_TEST_RUNS_REQUIRED
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
@@ -208,8 +208,6 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
     
-    if SdaInitialAction.WRITE_INITIATIVE_TEST.eq(one_off_action):
-        write_initiative_tdd_test(config)
     elif SdaInitialAction.CODE.eq(one_off_action):
         write_code(config)
     elif SdaInitialAction.PLAN.eq(one_off_action):
@@ -523,32 +521,32 @@ def validate_plan(config: CodingAgentConfig, planning_data):
 
 def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
-
+    
     initiative_has_iterations = SelfDrivingTaskIteration.objects.filter(
         self_driving_task__task__initiative_id=task.initiative_id
     ).exists()
-
+    
     Task.objects.filter(id=task.id).update(
         status=TaskStatus.IN_PROGRESS
     )
-
+    
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
-
+    
     if not initiative_has_iterations:
         # no tests
         self_driving_task.initial_tests_pass = True
         self_driving_task.save()
-
+    
     # Create symbolic link to sandbox_root_dir for debugging
     business = task.initiative.business
     initiative = task.initiative
     debug_link_dir = Path.home() / "src" / "erieiron_debug" / business.service_token / str(initiative.id)
     debug_link_dir.parent.mkdir(parents=True, exist_ok=True)
-
+    
     # Remove existing link if it exists
     if debug_link_dir.exists() or debug_link_dir.is_symlink():
         debug_link_dir.unlink()
-
+    
     # Create symbolic link to sandbox
     sandbox_path = Path(self_driving_task.sandbox_path)
     debug_link_dir.symlink_to(sandbox_path)
@@ -559,7 +557,7 @@ def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
     {debug_link_dir}
     
     """))
-
+    
     with CodingAgentConfig(self_driving_task) as config:
         config.set_phase(SdaPhase.INIT)
         
@@ -1133,32 +1131,53 @@ def push_image_to_ecr(
     return full_image_uri
 
 
-def run_container_command(
+def run_django_container_command(
         config: CodingAgentConfig,
         command_args: list[str],
         container_image_tag: str
 ) -> None:
-    command_args = common.ensure_list(command_args)
-    
+    return run_generic_container_command(
+        config,
+        ["python", "manage.py"] + command_args,
+        container_image_tag
+    )
+
+
+def run_generic_container_command(
+        config: CodingAgentConfig,
+        command: list[str],
+        container_image_tag: str,
+        working_dir: str = "/app"
+) -> None:
+    """
+    Run arbitrary command in container (not limited to manage.py).
+
+    Args:
+        config: CodingAgentConfig
+        command: Full command to execute (e.g., ["npm", "test"])
+        container_image_tag: Container image tag
+        working_dir: Working directory inside container
+    """
     cmd = [
         "podman", "run", "--rm",
         "--memory", "4g",
         "--memory-swap", "10g",
         "--platform", ContainerPlatform.FARGATE,
         "-v", f"{config.sandbox_root_dir}:/app",
-        "-w", "/app",
+        "-w", working_dir,
         *build_env_flags(config.runtime_env),
         container_image_tag,
-        "python", "manage.py",
-        *command_args
+        *command
     ]
     
     config.log("\n" + "=" * 50 + "\n")
     config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
-    # print(f"DUDE {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
     
-    # Capture podman run start time
+    print("=" * 50 + "\n")
+    print(f"\n\n\n\nDUDE\n{' '.join(cmd)}\nin {config.sandbox_root_dir}\n\n\n\n\n")
+    print("=" * 50 + "\n")
+    
     process = subprocess.Popen(
         common.strings(cmd),
         stdout=config.log_f,
@@ -1167,20 +1186,97 @@ def run_container_command(
         text=True
     )
     
-    config.log(f"Podman {command_args[-1]} execution started with PID {process.pid}")
+    config.log(f"Container command execution started with PID {process.pid}")
     
-    # Wait for completion
     while process.poll() is None:
         time.sleep(2)
     
     return_code = process.returncode
     
     if return_code == 0:
-        logging.info(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
+        logging.info(f"\nCommand execution completed successfully (return code: {return_code})\n")
     elif return_code == 137:
-        raise ExecutionException(f"\n{command_args[-1]} execution was killed with SIGKILL (exit code 137). Possible Out-Of-Memory condition.\n")
+        raise ExecutionException(f"\nCommand was killed with SIGKILL (exit code 137). Possible OOM.\n")
     else:
-        raise ExecutionException(f"\n{command_args[-1]} execution completed with return code: {return_code}\n")
+        raise ExecutionException(f"\nCommand execution failed with return code: {return_code}\n")
+
+
+def run_jest_tests(
+        config: CodingAgentConfig,
+        container_image_tag: str,
+        frontend_dir: Path
+) -> None:
+    """Run Jest component tests."""
+    config.log("\n" + "=" * 80)
+    config.log("RUNNING JEST COMPONENT TESTS")
+    config.log("=" * 80 + "\n")
+    
+    # Determine working directory relative to /app mount
+    work_dir = f"/app/{frontend_dir.relative_to(config.sandbox_root_dir)}" if frontend_dir != config.sandbox_root_dir else "/app"
+    
+    run_generic_container_command(
+        config=config,
+        command=["npm", "test", "--", "--ci", "--coverage=false", "--maxWorkers=2"],
+        container_image_tag=container_image_tag,
+        working_dir=work_dir
+    )
+    config.log("✅ Jest component tests PASSED\n")
+
+
+def run_playwright_tests(
+        config: CodingAgentConfig,
+        container_image_tag: str,
+        frontend_dir: Path
+) -> None:
+    """Run Playwright E2E tests."""
+    config.log("\n" + "=" * 80)
+    config.log("RUNNING PLAYWRIGHT E2E TESTS")
+    config.log("=" * 80 + "\n")
+    
+    work_dir = f"/app/{frontend_dir.relative_to(config.sandbox_root_dir)}" if frontend_dir != config.sandbox_root_dir else "/app"
+    
+    # Install Playwright browsers if needed (one-time in container)
+    config.log("Installing Playwright browsers...")
+    try:
+        run_generic_container_command(
+            config=config,
+            command=["npx", "playwright", "install", "--with-deps", "chromium"],
+            container_image_tag=container_image_tag,
+            working_dir=work_dir
+        )
+    except ExecutionException as e:
+        config.log(f"⚠️  Playwright browser installation failed: {e}")
+        config.log("⚠️  Attempting to run tests anyway...")
+    
+    # Run E2E tests
+    run_generic_container_command(
+        config=config,
+        command=["npx", "playwright", "test"],
+        container_image_tag=container_image_tag,
+        working_dir=work_dir
+    )
+    config.log("✅ Playwright E2E tests PASSED\n")
+
+
+def run_cypress_tests(
+        config: CodingAgentConfig,
+        container_image_tag: str,
+        frontend_dir: Path
+) -> None:
+    """Run Cypress E2E tests."""
+    config.log("\n" + "=" * 80)
+    config.log("RUNNING CYPRESS E2E TESTS")
+    config.log("=" * 80 + "\n")
+    
+    work_dir = f"/app/{frontend_dir.relative_to(config.sandbox_root_dir)}" if frontend_dir != config.sandbox_root_dir else "/app"
+    
+    run_generic_container_command(
+        config=config,
+        command=["npx", "cypress", "run", "--headless", "--browser", "chrome"],
+        container_image_tag=container_image_tag,
+        working_dir=work_dir
+    )
+    config.log("✅ Cypress E2E tests PASSED\n")
 
 
 def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
@@ -1191,7 +1287,7 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         
         config.stack_manager.init_workspace()
         config.stack_manager.validate_stack()
-
+        
         container_image_tag, lambda_datas = build_iteration(
             config
         )
@@ -1281,7 +1377,7 @@ def execute_iteration(
     self_driving_task = config.self_driving_task
     
     if TaskType.CODING_ML.eq(task_type):
-        run_container_command(
+        run_django_container_command(
             config=config,
             command_args=self_driving_task.main_name,
             container_image_tag=container_image_tag
@@ -1299,7 +1395,7 @@ def execute_iteration(
         
         output_file = task_io_dir / f"{task.id}-output.json"
         
-        run_container_command(
+        run_django_container_command(
             config=config,
             command_args=[
                 self_driving_task.main_name,
@@ -1317,6 +1413,75 @@ def execute_iteration(
         logging.info(f"nothing to execute for task type {task_type}")
 
 
+def detect_frontend_framework(config: CodingAgentConfig) -> dict[str, Any]:
+    """
+    Detect if sandbox contains React or React Native frontend.
+
+    Returns dict with:
+    - has_frontend: bool
+    - framework: "react" | "react-native" | None
+    - package_json_path: Path | None
+    - has_jest: bool
+    - has_playwright: bool
+    - has_cypress: bool
+    - frontend_dir: Path | None (e.g., "frontend/" or root)
+    """
+    sandbox = Path(config.sandbox_root_dir)
+    
+    # Check for package.json in common locations
+    package_json_candidates = [
+        sandbox / "mobile" / "package.json",  # frontend/ subdirectory
+        sandbox / "frontend" / "package.json",  # frontend/ subdirectory
+        sandbox / "client" / "package.json",  # client/ subdirectory
+    ]
+    
+    for pkg_path in package_json_candidates:
+        if not pkg_path.exists():
+            continue
+        
+        try:
+            pkg_data = json.loads(pkg_path.read_text())
+            deps = {**pkg_data.get("dependencies", {}), **pkg_data.get("devDependencies", {})}
+            
+            # Detect framework
+            framework = None
+            if "react-native" in deps:
+                framework = "react-native"
+            elif "react" in deps or "next" in deps:
+                framework = "react"
+            
+            if not framework:
+                continue
+            
+            # Detect test frameworks
+            has_jest = "jest" in deps or "test" in pkg_data.get("scripts", {})
+            has_playwright = "@playwright/test" in deps or "playwright" in deps
+            has_cypress = "cypress" in deps
+            
+            return {
+                "has_frontend": True,
+                "framework": framework,
+                "package_json_path": pkg_path,
+                "has_jest": has_jest,
+                "has_playwright": has_playwright,
+                "has_cypress": has_cypress,
+                "frontend_dir": pkg_path.parent,
+            }
+        except (json.JSONDecodeError, OSError) as e:
+            config.log(f"Failed to parse {pkg_path}: {e}")
+            continue
+    
+    return {
+        "has_frontend": False,
+        "framework": None,
+        "package_json_path": None,
+        "has_jest": False,
+        "has_playwright": False,
+        "has_cypress": False,
+        "frontend_dir": None,
+    }
+
+
 def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     import random
     import time
@@ -1324,7 +1489,42 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     
     config.dump_env_to_envrc()
     
+    # Detect frontend framework
+    frontend_info = detect_frontend_framework(config)
+    
     test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
+    
+    if frontend_info["has_frontend"]:
+        frontend_dir = frontend_info["frontend_dir"]
+        
+        if not any([frontend_info["has_jest"], frontend_info["has_playwright"], frontend_info["has_cypress"]]):
+            raise BadPlan(textwrap.dedent(f"""
+                ⚠️  No E2E test framework found (Playwright/Cypress/Jest) - skipping E2E tests.  Please update {frontend_dir}/package.json to include a testing framework
+                ⚠️  WARNING: Per codeplanner--test_driven_development.md, E2E tests are REQUIRED for React projects
+            """ ))
+        
+        
+        if frontend_info["has_jest"]:
+            try:
+                run_jest_tests(config, container_image_tag, frontend_dir)
+            except ExecutionException as e:
+                raise FailingTestException(f"Jest component tests failed. See logs above for details.")
+        
+        if frontend_info["has_playwright"]:
+            try:
+                run_playwright_tests(config, container_image_tag, frontend_dir)
+            except ExecutionException as e:
+                raise FailingTestException(f"Playwright E2E tests failed. See logs above for details.")
+        
+        if frontend_info["has_cypress"]:
+            try:
+                run_cypress_tests(config, container_image_tag, frontend_dir)
+            except ExecutionException as e:
+                raise FailingTestException(f"Cypress E2E tests failed. See logs above for details.")
+    
+    config.log("\n" + "=" * 80)
+    config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY.  PROCEEDING TO BACKEND TESTS")
+    config.log("=" * 80 + "\n")
     
     # try:
     #     empty_stack_buckets(
@@ -1367,7 +1567,7 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     if first_tests:
         config.log(f"Running task's automated test first: {first_tests}")
         try:
-            run_container_command(
+            run_django_container_command(
                 config=config,
                 command_args=["test", "--keepdb", "--noinput", *first_tests],
                 container_image_tag=container_image_tag
@@ -1383,10 +1583,10 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
         "If all runs fail, tests are broken."
     )
     results = []
-    for i in range(3):
+    for i in range(COUNT_TEST_RUNS_REQUIRED):
         time.sleep(random.uniform(0.5, 1.5))
         try:
-            run_container_command(
+            run_django_container_command(
                 config=config,
                 command_args=["test", "--keepdb", "--noinput"],
                 container_image_tag=container_image_tag
@@ -1401,14 +1601,14 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
                 results.append(False)
     
     passes = sum(results)
-    if passes == 3:
-        config.log("ALL TESTS PASS ON ALL THREE RUNS")
+    if passes == COUNT_TEST_RUNS_REQUIRED:
+        config.log("ALL DJANGO BACKEND TESTS PASS ON ALL RUNS.  **SUCCESS**!!!")
         
         if not config.self_driving_task.initial_tests_pass:
             config.self_driving_task.initial_tests_pass = True
             config.self_driving_task.save()
     elif passes == 0:
-        config.log("TESTS FAILED ON ALL THREE RUNS")
+        config.log("TESTS FAILED ON ALL RUNS")
         raise FailingTestException("All test runs failed")
     else:
         config.log(
@@ -1416,7 +1616,6 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             "This indicates flakiness. Please review the test code for flakiness risks and fix."
         )
         raise FailingTestException("Some test runs failed - flaky tests")
-
 
 
 def deploy_iteration(
@@ -1431,7 +1630,7 @@ def deploy_iteration(
     
     db_migrations_applied = False
     rds_vals_in_env = False
-    if False and config.stack_manager.get_db_is_running():
+    if config.stack_manager.get_db_is_running():
         try:
             # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
             ingest_tofu_ouputs(config)
@@ -1552,7 +1751,13 @@ def build_iteration(config):
             tag_entity=config.current_iteration,
             reasoning_effort=LlmReasoningEffort.LOW
         ).json()
-    
+        
+    # TODO Take this out
+    required_build_steps = {
+        BuildStep.CONTAINERS.value: True,
+        BuildStep.LAMBDAS.value: False
+    }
+
     if required_build_steps.get(BuildStep.LAMBDAS.value):
         lambda_datas = build_lambda_packages(
             config
@@ -1637,13 +1842,13 @@ def manage_db(config: CodingAgentConfig, container_image_tag: str):
     #     return
     
     try:
-        run_container_command(
+        run_django_container_command(
             config=config,
             command_args=["makemigrations", "--noinput"],
             container_image_tag=container_image_tag
         )
         
-        run_container_command(
+        run_django_container_command(
             config=config,
             command_args=["migrate"],
             container_image_tag=container_image_tag
@@ -2692,6 +2897,7 @@ def write_test(
                 get_sys_prompt([
                     "codewriter--python_test.md",
                     system_prompt_name,
+                    "codeplanner--test_driven_development.md",
                     "codewriter--python_tdd_common.md",
                     "common--infrastructure_rules_tofu.md",
                     "codeplanner--common.md",
