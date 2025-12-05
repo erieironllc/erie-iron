@@ -21,19 +21,17 @@ from erieiron_public import agent_tools
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
-from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
-from erieiron_autonomous_agent.coding_agents.coding_agent_config import USE_CODEX, TASK_DESC_CODE_WRITING, MAP_TASKTYPE_TO_PLANNING_PROMPT, SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT, COUNT_TEST_RUNS_REQUIRED
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT, COUNT_TEST_RUNS_REQUIRED
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_autonomous_agent.tests.test_shared_vpc_metadata import business
-from erieiron_autonomous_agent.utils import codegen_utils
-from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError, get_codebert_embedding
+from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
 from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, DevelopmentRoutingPath, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
@@ -80,7 +78,8 @@ def execute(task_id: str, one_off_action: SdaInitialAction = None):
                     if config.iteration_to_modify and i > 0:
                         config.iteration_to_modify.write_to_disk()
                     
-                    plan_and_implement_code_changes(config)
+                    plan_code_changes(config)
+                    write_code(config)
                 
                 build_deploy_exec_iteration(
                     config
@@ -208,14 +207,13 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
     
-    elif SdaInitialAction.CODE.eq(one_off_action):
+    if SdaInitialAction.CODE.eq(one_off_action):
         write_code(config)
     elif SdaInitialAction.PLAN.eq(one_off_action):
         # config.iteration_to_modify.strategic_unblocking_json = get_strategic_unblocking_data(config)
         # config.iteration_to_modify.save()
-        plan_and_implement_code_changes(
-            config
-        )
+        plan_code_changes(config)
+        write_code(config)
     
     if not SdaInitialAction.EVAL.eq(one_off_action):
         build_deploy_exec_iteration(
@@ -223,22 +221,6 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
         )
     
     evaluate_iteration(config)
-
-
-def plan_and_implement_code_changes(config):
-    if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
-        config.set_phase(SdaPhase.CODING)
-        
-        if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
-            write_initiative_tdd_test(config)
-        else:
-            write_task_tdd_test(config)
-    
-    else:
-        planning_data = plan_code_changes(config)
-        config.set_phase(SdaPhase.CODING)
-        
-        write_code(config)
 
 
 def handle_agent_blocked(task_id, agent_blocked):
@@ -290,50 +272,6 @@ def handle_goal_achieved(config):
         config.git.cleanup()
 
 
-def do_coding(config, planning_data):
-    config.current_iteration.codeversion_set.all().delete()
-    
-    cr_exception = None
-    failed_code_reviews = []
-    for review_iteration_idx in range(5):
-        try:
-            implement_code_changes(
-                config,
-                planning_data,
-                cr_exception
-            )
-            
-            if not config.previous_iteration.has_error():
-                perform_code_review(
-                    config,
-                    planning_data
-                )
-            
-            break
-        except CodeReviewException as code_review_exception:
-            extract_lessons(
-                config,
-                TASK_DESC_CODE_WRITING,
-                code_review_exception.review_data
-            )
-            
-            failed_code_reviews.append(code_review_exception.review_data)
-            cr_exception = code_review_exception
-            if code_review_exception.bad_plan:
-                raise BadPlan(
-                    f"Code Review failed five times, time for a new plan.  this is all of code review blockers.",
-                    {
-                        "failed_code_reviews": failed_code_reviews
-                    }
-                )
-            elif review_iteration_idx == 4:
-                # out of retries
-                raise BadPlan(
-                    f"Code Review failed 5 times.  Need a new plan.  ",
-                    code_review_exception.review_data
-                )
-
-
 def on_reset_task_test(task_id):
     task = Task.objects.get(id=task_id)
     self_driving_task = task.selfdrivingtask
@@ -343,9 +281,11 @@ def on_reset_task_test(task_id):
         return config
     
     if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
-        write_initiative_tdd_test(config)
+        plan_initiative_tdd_code_changes(config)
     else:
-        write_task_tdd_test(config)
+        plan_task_tdd_code_changes(config)
+    
+    write_code(config)
     
     return config
 
@@ -357,40 +297,24 @@ def get_guidance_msg(config: CodingAgentConfig):
 def plan_code_changes(config: CodingAgentConfig):
     config.set_phase(SdaPhase.PLANNING)
     
-    planning_data = None
+    # if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
+    #     if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
+    #         planning_data = plan_initiative_tdd_code_changes(config)
+    #     else:
+    #         planning_data = plan_task_tdd_code_changes(config)
+    # else:
+    #      planning_data = plan_iterative_code_changes(config)
+    planning_data = plan_task_tdd_code_changes(config)
     
-    config.log(f"PHASE - plan_code_changes: {config.current_iteration.id}")
-    if USE_CODEX:
-        planning_data = plan_code_changes_for_codex(config)
-    elif not config.self_driving_task.initial_tests_pass:
-        # ok the tests for exists tasks pass, but we don't have a test for this task.  write it now
-        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-            routing_json={
-                "recovery_path_explanation": "previous task's tests have regressed",
-                "recovery_path": DevelopmentRoutingPath.DIRECT_FIX,
-                "classification": "previous task's tests have regressed.  need to fix before we do anything else"
-            }
-        )
-        config.current_iteration.refresh_from_db(fields=["routing_json"])
-        
-        planning_data = plan_test_fixing_code_changes(config)
-    else:
-        route_to = route_code_changes(config)
-        
-        if route_to in [DevelopmentRoutingPath.DIRECT_FIX, DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER] and config.guidance:
-            config.log(f"rerouting dev path from {route_to} to {DevelopmentRoutingPath.ESCALATE_TO_PLANNER} as we have task level guidance")
-            route_to = DevelopmentRoutingPath.ESCALATE_TO_PLANNER
-        
-        if DevelopmentRoutingPath.ESCALATE_TO_PLANNER.eq(route_to):
-            planning_data = plan_full_code_changes(config)
-        elif DevelopmentRoutingPath.AWS_PROVISIONING_PLANNER.eq(route_to):
-            planning_data = plan_aws_provisioning_code_changes(config)
-        elif DevelopmentRoutingPath.DIRECT_FIX.eq(route_to):
-            planning_data = plan_direct_fix_code_changes(config)
-        elif DevelopmentRoutingPath.ESCALATE_TO_HUMAN.eq(route_to):
-            raise AgentBlocked(f"task {config.task.id} is blocked by {json.dumps(config.current_iteration.routing_json, indent=4)}")
+    validate_plan(
+        config,
+        planning_data
+    )
     
-    validate_plan(config, planning_data)
+    merge_planner_required_credentials(
+        config.business,
+        planning_data
+    )
     
     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
         planning_json=planning_data
@@ -405,9 +329,6 @@ def plan_code_changes(config: CodingAgentConfig):
                 "data_json": tombstone_data
             }
         )
-    
-    # Merge any newly discovered required_credentials from the planner into the Business model
-    merge_planner_required_credentials(config.business, planning_data)
     
     return planning_data
 
@@ -483,7 +404,6 @@ def get_strategic_unblocking_data(config: CodingAgentConfig):
                 "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
                 config
             ),
-            get_tasktype_specific_instructions(config),
             get_goal_msg(config, "Please think of ways to unblock the agent from reaching this goal ")
         ],
         output_schema="codeplanning--strategic_unblocker.md.schema.json",
@@ -1170,12 +1090,25 @@ def run_generic_container_command(
         *command
     ]
     
+    
     config.log("\n" + "=" * 50 + "\n")
     config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
     
+    cmd_no_envs = " ".join([
+        "podman", "run", "--rm",
+        "--memory", "4g",
+        "--memory-swap", "10g",
+        "--platform", ContainerPlatform.FARGATE,
+        "-v", f"{config.sandbox_root_dir}:/app",
+        "-w", working_dir,
+        "--env-file", ".envrc",
+        container_image_tag,
+        *command
+    ])
+    
     print("=" * 50 + "\n")
-    print(f"\n\n\n\nDUDE\n{' '.join(cmd)}\nin {config.sandbox_root_dir}\n\n\n\n\n")
+    print(f'\n\n\n\nDUDE\n{cmd_no_envs}\nin {config.sandbox_root_dir}\n\n\n\n\n')
     print("=" * 50 + "\n")
     
     process = subprocess.Popen(
@@ -1216,7 +1149,14 @@ def run_jest_tests(
     
     run_generic_container_command(
         config=config,
-        command=["npm", "test", "--", "--ci", "--coverage=false", "--maxWorkers=2"],
+        command=[
+            "npm", "test", "--",
+            "--ci",
+            "--forceExit",
+            "--runInBand",
+            "--detectOpenHandles",
+            "--coverage=false"
+        ],
         container_image_tag=container_image_tag,
         working_dir=work_dir
     )
@@ -1501,8 +1441,7 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             raise BadPlan(textwrap.dedent(f"""
                 ⚠️  No E2E test framework found (Playwright/Cypress/Jest) - skipping E2E tests.  Please update {frontend_dir}/package.json to include a testing framework
                 ⚠️  WARNING: Per codeplanner--test_driven_development.md, E2E tests are REQUIRED for React projects
-            """ ))
-        
+            """))
         
         if frontend_info["has_jest"]:
             try:
@@ -1751,13 +1690,13 @@ def build_iteration(config):
             tag_entity=config.current_iteration,
             reasoning_effort=LlmReasoningEffort.LOW
         ).json()
-        
+    
     # TODO Take this out
     required_build_steps = {
         BuildStep.CONTAINERS.value: True,
         BuildStep.LAMBDAS.value: False
     }
-
+    
     if required_build_steps.get(BuildStep.LAMBDAS.value):
         lambda_datas = build_lambda_packages(
             config
@@ -2592,199 +2531,38 @@ def extract_lessons(
         )
 
 
-def implement_code_changes(
-        config: CodingAgentConfig,
-        planning_data: dict,
-        code_review_exception: CodeReviewException
-) -> SelfDrivingTaskIteration:
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    code_file_instructions = planning_data.get("code_files", [])
-    if not code_file_instructions:
-        raise BadPlan("no code files found", planning_data)
-    
-    if code_review_exception:
-        code_review_file_blockers, code_review_file_warnings = code_review_exception.get_issue_dicts()
-    else:
-        code_review_file_blockers = code_review_file_warnings = defaultdict(list)
-    
-    code_file_instructions = (
-            [cfi for cfi in code_file_instructions if cfi.get("code_file_path") == "requirements.txt"]
-            +
-            [cfi for cfi in code_file_instructions if cfi.get("code_file_path") != "requirements.txt"]
-    )
-    
-    if previous_iteration and (previous_iteration != iteration_to_modify):
-        roll_back_reason = planning_data.get("rollback_reason")
-    else:
-        roll_back_reason = None
-    
-    requirements_txt = CodeFile.get(config.business, "requirements.txt").get_latest_version().code
-    
-    for cfi in code_file_instructions:
-        code_file_path_str: str = cfi.get("code_file_path")
-        if code_file_path_str.startswith("/"):
-            raise BadPlan(f"invalid file path: {code_file_path_str} - code file paths are forbidden from starting with a slash", planning_data)
-        
-        if code_file_path_str.startswith(str(config.sandbox_root_dir)):
-            code_file_path_str = code_file_path_str[len(str(config.sandbox_root_dir)) + 1:]
-        
-        blocking_issues = code_review_file_blockers[code_file_path_str]
-        if code_review_exception and not blocking_issues:
-            # we are fixing a codereview exception, but no changes to this file
-            continue
-        
-        non_blocking_issues = code_review_file_warnings[code_file_path_str]
-        
-        code_file_path: Path = config.sandbox_root_dir / code_file_path_str
-        if not code_file_path:
-            raise BadPlan(f"missing code file name: {json.dumps(cfi)}", planning_data)
-        
-        if not code_file_path.exists():
-            code_file_path.parent.mkdir(parents=True, exist_ok=True)
-            code_file_path.touch()
-        
-        code_version_to_modify = iteration_to_modify.get_code_version(
-            code_file_path
-        )
-        code_file = code_version_to_modify.code_file
-        
-        instructions = cfi.get("instructions", [])
-        dsl_instructions = cfi.get("dsl_instructions", [])
-        if not (instructions or dsl_instructions):
-            config.log(f"no modifications for {code_file_path}")
-            code_file.update(
-                current_iteration,
-                code_version_to_modify.code
-            )
-        else:
-            previous_exception = None
-            code_str = None
-            for i in range(3):
-                try:
-                    code_str = write_code_file(
-                        config=config,
-                        code_version_to_modify=code_version_to_modify,
-                        code_file_data=cfi,
-                        requirements_txt=requirements_txt,
-                        blocking_issues=blocking_issues,
-                        code_writing_model=LlmModel.valid_or(cfi.get("code_writing_model"), LlmModel.OPENAI_GPT_5_1),
-                        roll_back_reason=roll_back_reason,
-                        previous_exception=previous_exception
-                    )
-                    
-                    previous_exception = None
-                    break
-                except CodeCompilationError as e:
-                    extract_lessons(
-                        config,
-                        TASK_DESC_CODE_WRITING,
-                        f"""
-the code written for {code_version_to_modify.code_file.file_path}:
-'''
-{e.code_str}
-'''
-
-written by following these instructions:
-'''
-{instructions}
-'''
-
-resulted in this validation error
-'''
-{traceback.format_exc()}
-'''
-                        """
-                    )
-                    previous_exception = e
-            
-            if previous_exception:
-                # validation failed three times.  keep going, if it fails in deployment or execution we'll have another 
-                # chances at the feedback loop
-                config.log(previous_exception)
-            
-            if code_str:
-                code_file.update(
-                    current_iteration,
-                    code_str,
-                    code_instructions=instructions
-                )
-                if code_file_path_str == "requirements.txt":
-                    requirements_txt = code_str
-    
-    config.git.add_files()
-    return current_iteration
-
-
-def post_process_code_ouput(code_str: str, code_version_to_modify: CodeVersion) -> str:
-    if not code_str:
-        return code_str
-    
-    code_file_path_str = code_version_to_modify.code_file.get_path()
-    
-    # FULL_FILE: <path> header support
-    stripped = code_str.lstrip()
-    if stripped.startswith('FULL_FILE:'):
-        # Drop the header line and keep the remainder as the file contents
-        newline_idx = stripped.find('\n')
-        code_str = '' if newline_idx == -1 else stripped[newline_idx + 1:]
-    elif codegen_utils.looks_like_unified_diff(code_str):
-        try:
-            # Apply patch against the current version of the file
-            code_str = codegen_utils.apply_unified_diff_to_text(
-                code_version_to_modify.code,
-                code_str
-            )
-        except Exception as patch_e:
-            # Surface a structured error that preserves context for lesson extraction
-            raise CodeCompilationError(
-                code_version_to_modify.code,
-                f"Failed to apply git patch to {code_file_path_str}: {patch_e}"
-            )
-    return code_str
-
-
-def write_initiative_tdd_test(config: CodingAgentConfig):
+def plan_initiative_tdd_code_changes(config: CodingAgentConfig):
     config.iterate_if_necessary()
     
     task = config.task
     initiative = config.initiative
     
-    test_file_path = write_test(
+    return plan_tdd_code_changes(
         config,
-        description="Write initiative end-to-end test",
-        test_file_name=f"test_initiative_{config.initiative.id}.py",
-        system_prompt_name="codewriter--python_tdd_initiative.md",
         user_messages=[
-            LlmMessage.user_from_data(
-                "Please one-shot write a single file, comprensive test suite that asserts the following Initiative has been implemented correctly",
+            LlmMessage.sys_from_data(
+                """
+                    Please create a plan to one-shot write a single file, comprensive test suite that asserts 
+                    the following Initiative has been implemented correctly
+                    
+                    This test must always assert end-to-end behavior using real services (never mocks)
+                    This test is the last line of QA before a production push
+                """,
                 {
                     "name": initiative.title,
-                    "description": initiative.description
+                    "description": initiative.description,
+                    "user_documentation": initiative.user_documentation or "None"
                 }
-            ),
-            LlmMessage.user_from_data(
-                "**Additional Context** = existing code and automated tests",
-                [
-                    f.get_latest_version().get_llm_message_data()
-                    for f in config.business.codefile_set.all() if f.get_latest_version()
-                ], item_name="file"
             )
         ]
     )
-    
-    with transaction.atomic():
-        SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
-            test_file_path=test_file_path
-        )
-        config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
-def write_task_tdd_test(config: CodingAgentConfig):
+def plan_task_tdd_code_changes(config: CodingAgentConfig):
     config.iterate_if_necessary()
     task = config.task
     
+    initiative = task.initiative
     goal_data = {
         "GOAL": task.description,
         "acceptance_criteria": task.completion_criteria,
@@ -2793,22 +2571,32 @@ def write_task_tdd_test(config: CodingAgentConfig):
     if task.debug_steps:
         goal_data['debug_steps'] = task.debug_steps
     
-    test_file_path = write_test(
+    return plan_tdd_code_changes(
         config,
-        description="Write initial test",
-        test_file_name=f"test_{task.id}.py",
-        system_prompt_name="codewriter--python_tdd_task.md",
-        user_messages=LlmMessage.user_from_data(
-            "**Please one-shot write a single file, comprensive test suite that asserts this behavior.  This test suite will be used for Test Driven Development**",
-            goal_data
-        )
+        user_messages=[
+            LlmMessage.user_from_data(
+                textwrap.dedent("""
+                **Parent Initiative**
+                
+                This 'parent initiative' data is for higher level context only. 
+                - The test you write **only** needs to assert the task's 'GOAL' and 'acceptance_criteria'
+                - But, if in writing the test you identify that you need to know more context about the task, look at the parent_initiative data for that higher level context
+            """),
+                {
+                    "parent_initiative_name": initiative.title,
+                    "parent_initiative_description": initiative.description,
+                    "parent_initiative_user_documentation": initiative.user_documentation or "None"
+                }
+            ),
+            LlmMessage.user_from_data(
+                textwrap.dedent("""
+                **You Must** create a plan to one-shot write a **single file**, comprensive test suite that asserts this task's behavior.  
+                    - this test suite will be used for Test Driven Development**
+            """),
+                goal_data
+            )
+        ]
     )
-    
-    with transaction.atomic():
-        SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
-            test_file_path=test_file_path
-        )
-        config.self_driving_task.refresh_from_db(fields=["test_file_path"])
 
 
 def get_existing_test_context_messages(
@@ -2867,111 +2655,29 @@ def get_existing_test_context_messages(
     return messages
 
 
-def write_test(
+def plan_tdd_code_changes(
         config: CodingAgentConfig,
-        description: str,
-        test_file_name: str,
-        system_prompt_name: str,
         user_messages: list[LlmMessage]
 ):
-    sanitized_test_file_name = common.sanitize_filename(test_file_name)
+    planning_json = plan_iterative_code_changes(
+        config,
+        goal_instructions=[
+            LlmMessage.sys("""
+            **Engage Test Authoring Mode**
+            
+            The plan **must** define instructions for writing a **single test file**
+            """),
+            get_existing_test_context_messages(config.initiative),
+            common.ensure_list(user_messages)
+        ],
+        include_prev_iterations=False
+    )
     
-    test_file_path_dir = config.sandbox_root_dir / "core" / "tests"
-    test_file_path_dir.mkdir(parents=True, exist_ok=True)
-    (test_file_path_dir / "__init__.py").touch(exist_ok=True)
-    test_file_path = test_file_path_dir / sanitized_test_file_name
+    tdd_test_file = planning_json.get("tdd_test_file")
+    if not tdd_test_file:
+        raise BadPlan(f"When writing an automated test plan, the planning data **must** include a file path value for `tdd_test_file`")
     
-    user_messages = [
-        *get_architecture_docs(config.initiative),
-        *get_existing_test_context_messages(
-            config.initiative,
-            test_file_path
-        ),
-        *common.ensure_list(user_messages)
-    ]
-    
-    previous_exception = None
-    for i in range(3):
-        try:
-            messages = [
-                get_sys_prompt([
-                    "codewriter--python_test.md",
-                    system_prompt_name,
-                    "codeplanner--test_driven_development.md",
-                    "codewriter--python_tdd_common.md",
-                    "common--infrastructure_rules_tofu.md",
-                    "codeplanner--common.md",
-                    "codewriter--common.md",
-                    "codewriter--lambda_coder.md",
-                    "common--iam_role_tofu.md",
-                    "common--agent_provided_functionality_tofu.md",
-                    "common--domain_management_tofu.md",
-                    "common--llm_chat.md",
-                    "common--credentials_architecture_tofu.md",
-                    "common--forbidden_actions_tofu.md",
-                    "common--environment_variables_tofu.md"
-                ], replacements=[
-                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    ("<env_vars>", get_env_var_names(config)),
-                    ("<business_tag>", config.business.service_token)
-                ]),
-                get_architecture_docs(config.initiative),
-                user_messages
-            ]
-            
-            if previous_exception:
-                messages.append(f"""
-    Your previous attempt at writing this code failed with this exception:
-    {previous_exception}
-
-    Please attempt to write the code again and avoid causing this error
-                """)
-            
-            code = llm_chat(
-                description,
-                messages,
-                model=LlmModel.OPENAI_GPT_5_1,
-                reasoning_effort=LlmReasoningEffort.MEDIUM,
-                verbosity=LlmVerbosity.LOW,
-                tag_entity=config.current_iteration
-            ).text
-            
-            for code_validation_idx in range(5):
-                try:
-                    if "from django.test import TestCase" not in code:
-                        raise CodeCompilationError(code, f"The tests **MUST** extend from \n'''\nfrom django.test import TestCase\n'''")
-                    
-                    validate_code(
-                        config,
-                        test_file_path,
-                        code
-                    )
-                    break
-                except CodeCompilationError as code_compilation_error:
-                    config.log(f"Code failed validation. Attempting fix using cheaper model.  Fix attempt {code_validation_idx + 1} of 5")
-                    if code_validation_idx == 5:
-                        raise code_compilation_error
-                    else:
-                        code = fix_code_compilation(
-                            config,
-                            sanitized_test_file_name,
-                            code,
-                            code_compilation_error
-                        )
-            
-            test_file_path.write_text(code)
-            code_verson = config.current_iteration.get_code_version(test_file_path.relative_to(config.sandbox_root_dir))
-            code_verson.code = code
-            code_verson.save()
-            code_verson.write_to_disk(config.sandbox_root_dir)
-            
-            return test_file_path.relative_to(config.sandbox_root_dir)
-        except Exception as e:
-            config.log(e)
-            previous_exception = e
-    
-    raise previous_exception
+    return planning_json
 
 
 def update_file_contents(
@@ -3008,160 +2714,6 @@ You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget
     """)
 
 
-def route_code_changes(config: CodingAgentConfig) -> DevelopmentRoutingPath:
-    business = config.self_driving_task.business
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    
-    if not iteration_to_modify.has_error():
-        return DevelopmentRoutingPath.ESCALATE_TO_PLANNER
-    else:
-        error_summary, error_logs = iteration_to_modify.get_error()
-        routing_data = llm_chat(
-            "Identify Development Route",
-            [
-                get_sys_prompt(
-                    [
-                        "failure_router.md",
-                        "common--iam_role_tofu.md",
-                        "common--agent_provided_functionality_tofu.md",
-                        "common--domain_management_tofu.md",
-                        "common--forbidden_actions_tofu.md",
-                        "common--credentials_architecture_tofu.md",
-                        "common--environment_variables_tofu.md"
-                    ],
-                    replacements=[
-                        ("<env_vars>", get_env_var_names(config)),
-                        get_readonly_files_replacement(config)
-                    ]
-                ),
-                get_guidance_msg(
-                    config
-                ),
-                get_architecture_docs(
-                    config.initiative
-                ),
-                get_previous_iteration_summaries_msg(
-                    config
-                ),
-                iteration_to_modify.get_error_llm_msg(
-                    f"Error observed why building, deploying, or executing the code are modifying (Iteration {iteration_to_modify.version_number})"
-                ),
-                get_tombstone_message(
-                    config
-                ),
-                get_lessons_msg(
-                    "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                    config
-                ),
-                get_dependencies_msg(
-                    config,
-                    for_planning=True
-                ),
-                "Please perform the routing analysis"
-            ],
-            tag_entity=config.current_iteration,
-            output_schema="failure_router.md.schema.json"
-        ).json()
-        
-        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            routing_json=routing_data
-        )
-        current_iteration.refresh_from_db(fields=["routing_json"])
-        
-        return DevelopmentRoutingPath(routing_data.get("recovery_path"))
-
-
-def plan_aws_provisioning_code_changes(config: CodingAgentConfig):
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    routing_json = current_iteration.routing_json
-    
-    context_files = routing_json.get("context_files", []) + [
-        "Dockerfile",
-        InfrastructureStackType.APPLICATION.get_opentofu_config()
-    ]
-    
-    planning_model = config.get_code_planning_model()
-    planning_data = llm_chat(
-        "Plan aws provisioning code changes",
-        [
-            get_sys_prompt(
-                [
-                    "codeplanner--aws_provisioning_tofu.md",
-                    "common--general_coding_rules.md",
-                    "common--agent_provided_functionality_tofu.md",
-                    "codeplanner--common.md",
-                    "common--llm_chat.md",
-                    "common--iam_role_tofu.md",
-                    "common--agent_provided_functionality_tofu.md",
-                    "common--domain_management_tofu.md",
-                    "common--forbidden_actions_tofu.md",
-                    "common--environment_variables_tofu.md",
-                    "common--infrastructure_rules_tofu.md",
-                    "codewriter--lambda_coder.md",
-                    "common--credentials_architecture_tofu.md"
-                ], replacements=[
-                    ("<business_tag>", config.business.service_token),
-                    ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                    ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                    ("<env_vars>", get_env_var_names(config)),
-                    get_readonly_files_replacement(config)
-                ]
-            ),
-            get_guidance_msg(
-                config
-            ),
-            get_architecture_docs(
-                config.initiative
-            ),
-            config.business.get_existing_required_credentials_llmm(),
-            get_lessons_msg(
-                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                config
-            ),
-            build_opentofu_plan_context_messages(
-                config
-            ),
-            build_previous_iteration_context_messages(
-                config,
-                title="Previous Iterations"
-            ),
-            get_relevant_code_files(
-                config,
-                context_files
-            ),
-            LlmMessage.user_from_data(
-                "structured failure triage object",
-                routing_json
-            ),
-            LlmMessage.user_from_data(
-                "Strategic Unblocking Guidance",
-                config.iteration_to_modify.strategic_unblocking_json
-            ) if config.iteration_to_modify.strategic_unblocking_json else None,
-            get_tasktype_specific_instructions(config),
-            "Please produce a development plan that addresses this issue"
-        ],
-        model=planning_model,
-        tag_entity=config.current_iteration,
-        output_schema="codeplanner.schema.json"
-    ).json()
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=planning_model
-        )
-        current_iteration.refresh_from_db(fields=["planning_model"])
-    
-    blocked_data = planning_data.get('blocked')
-    if blocked_data:
-        raise AgentBlocked(blocked_data)
-    
-    return planning_data
-
-
 def get_readonly_files_replacement(config: CodingAgentConfig) -> tuple[str, str]:
     parts = []
     
@@ -3174,219 +2726,8 @@ def get_readonly_files_replacement(config: CodingAgentConfig) -> tuple[str, str]
     return "<read_only_files>", "\n".join(parts)
 
 
-def plan_direct_fix_code_changes(config: CodingAgentConfig):
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    routing_json = current_iteration.routing_json
-    
-    planning_model = config.get_code_planning_model()
-    planning_data = llm_chat(
-        "Plan quick fix code changes",
-        [
-            get_sys_prompt([
-                "codeplanner--quick_fix.md",
-                "common--general_coding_rules.md",
-                "common--agent_provided_functionality_tofu.md",
-                "codeplanner--common.md",
-                "common--llm_chat.md",
-                "common--iam_role_tofu.md",
-                "common--agent_provided_functionality_tofu.md",
-                "common--domain_management_tofu.md",
-                "common--forbidden_actions_tofu.md",
-                "common--environment_variables_tofu.md",
-                "common--credentials_architecture_tofu.md",
-                "common--infrastructure_rules_tofu.md",
-                "codewriter--lambda_coder.md"
-            ], replacements=[
-                ("<business_tag>", config.business.service_token),
-                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                ("<env_vars>", get_env_var_names(config)),
-                ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                get_readonly_files_replacement(config)
-            ]),
-            get_guidance_msg(
-                config
-            ),
-            get_architecture_docs(
-                config.initiative
-            ),
-            config.business.get_existing_required_credentials_llmm(),
-            get_lessons_msg(
-                "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-                config
-            ),
-            build_opentofu_plan_context_messages(
-                config
-            ),
-            build_previous_iteration_context_messages(
-                config,
-                title="structured error reports"
-            ),
-            get_relevant_code_files(
-                config,
-                routing_json.get("context_files", [])
-            ),
-            LlmMessage.user_from_data(
-                "structured failure triage object",
-                routing_json
-            ),
-            get_tasktype_specific_instructions(config),
-            LlmMessage.user_from_data(
-                "Strategic Unblocking Guidance",
-                config.iteration_to_modify.strategic_unblocking_json
-            ) if config.iteration_to_modify.strategic_unblocking_json else None,
-            "Please produce a development plan that addresses this issue"
-        ],
-        model=planning_model,
-        tag_entity=config.current_iteration,
-        output_schema="codeplanner.schema.json"
-    ).json()
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=planning_model
-        )
-        current_iteration.refresh_from_db(fields=["planning_model"])
-    
-    blocked_data = planning_data.get('blocked')
-    if blocked_data:
-        raise AgentBlocked(blocked_data)
-    
-    return planning_data
 
-
-def plan_test_fixing_code_changes(config: CodingAgentConfig):
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    
-    relevant_code_files = get_relevant_code_files(config)
-    
-    business = config.self_driving_task.business
-    
-    task = config.self_driving_task.task
-    task_type = TaskType(task.task_type)
-    
-    system_prompt_files = [
-        MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
-        "codeplanner--test_fixer.md",
-        "common--general_coding_rules.md",
-        "common--agent_provided_functionality_tofu.md",
-        "codeplanner--common.md",
-        "common--llm_chat.md",
-        "common--iam_role_tofu.md",
-        "common--agent_provided_functionality_tofu.md",
-        "common--domain_management_tofu.md",
-        "common--forbidden_actions_tofu.md",
-        "common--credentials_architecture_tofu.md",
-        "common--environment_variables_tofu.md",
-        "common--infrastructure_rules_tofu.md",
-        "codewriter--lambda_coder.md"
-    ]
-    
-    messages = [
-        get_sys_prompt(
-            system_prompt_files,
-            [
-                ("<business_tag>", config.business.service_token),
-                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                ("<env_vars>", get_env_var_names(config)),
-                ("<aws_tag>", str(business.service_token)),
-                ("<db_name>", str(business.service_token)),
-                ("<iam_role_name>", str(business.get_iam_role_name())),
-                ("<artifacts_directory>", str(config.artifacts_dir)),
-                ("<sandbox_dir>", str(config.sandbox_root_dir)),
-                get_readonly_files_replacement(config)
-            ]
-        ),
-        get_architecture_docs(
-            config.initiative
-        ),
-        config.business.get_existing_required_credentials_llmm(),
-        get_budget_message(
-            config
-        ),
-        build_opentofu_plan_context_messages(
-            config
-        ),
-        get_tombstone_message(
-            config
-        ),
-        build_previous_iteration_context_messages(
-            config
-        ),
-        get_dependencies_msg(
-            config,
-            for_planning=True
-        ),
-        relevant_code_files,
-        get_docs_msg(
-            config
-        ),
-        get_file_structure_msg(
-            config.sandbox_root_dir
-        ) if not iteration_to_modify.has_error() else [],
-        get_guidance_msg(
-            config
-        ),
-        get_lessons_msg(
-            "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-            config
-        ),
-        get_tasktype_specific_instructions(config),
-        LlmMessage.user_from_data(
-            "Strategic Unblocking Guidance",
-            config.iteration_to_modify.strategic_unblocking_json
-        ) if config.iteration_to_modify.strategic_unblocking_json else None,
-        textwrap.dedent(f"""
-            One or more of the automated tests have regressed in the new environment
-
-            Your GOAL is to **MAKE THE FAILING TESTS PASS**
-        """)
-    
-    ]
-    
-    planning_model = config.get_code_planning_model()
-    planning_data = llm_chat(
-        "Plan code changes",
-        messages,
-        model=planning_model,
-        tag_entity=config.current_iteration,
-        output_schema="codeplanner.schema.json"
-    ).json()
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=planning_model,
-            execute_module=planning_data.get('execute_module'),
-            test_module=planning_data.get('test_module')
-        )
-        current_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
-    
-    blocked_data = planning_data.get('blocked')
-    if blocked_data:
-        raise AgentBlocked(blocked_data)
-    
-    return planning_data
-
-
-def get_tasktype_specific_instructions(config: CodingAgentConfig) -> str:
-    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
-        return textwrap.dedent(f"""
-                The Initiative's end-to-end test is located at 
-                {config.self_driving_task.test_file_path}
-                
-                This test must always assert end-to-end behavior using real services (never mocks)
-                
-                This test is the last line of QA before a production push
-            """)
-    else:
-        return None
-
-
-def plan_code_changes_for_codex(config: CodingAgentConfig):
+def plan_iterative_code_changes(config: CodingAgentConfig, goal_instructions=None, include_prev_iterations=True):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify
@@ -3418,7 +2759,7 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
         ),
         build_previous_iteration_context_messages(
             config
-        ),
+        ) if include_prev_iterations else [],
         get_dependencies_msg(
             config,
             for_planning=True
@@ -3437,8 +2778,7 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
             "Strategic Unblocking Guidance",
             config.iteration_to_modify.strategic_unblocking_json
         ) if config.iteration_to_modify.strategic_unblocking_json else None,
-        get_tasktype_specific_instructions(config),
-        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
+        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL") if not goal_instructions else common.ensure_list(goal_instructions)
     ]
     
     planning_model = LlmModel.OPENAI_GPT_5_MINI
@@ -3467,325 +2807,6 @@ def plan_code_changes_for_codex(config: CodingAgentConfig):
         raise AgentBlocked(blocked_data)
     
     return planning_data
-
-
-def plan_full_code_changes(config: CodingAgentConfig):
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    
-    relevant_code_files = get_relevant_code_files(config)
-    
-    business = config.self_driving_task.business
-    
-    task = config.self_driving_task.task
-    task_type = TaskType(task.task_type)
-    
-    system_prompt_files = [
-        MAP_TASKTYPE_TO_PLANNING_PROMPT[task_type],
-        "codeplanner--full_plan_base.md",
-        "common--general_coding_rules.md",
-        "common--agent_provided_functionality_tofu.md",
-        "codeplanner--common.md",
-        "common--llm_chat.md",
-        "common--iam_role_tofu.md",
-        "common--agent_provided_functionality_tofu.md",
-        "common--domain_management_tofu.md",
-        "common--forbidden_actions_tofu.md",
-        "common--credentials_architecture_tofu.md",
-        "common--environment_variables_tofu.md",
-        "common--infrastructure_rules_tofu.md",
-        "codewriter--lambda_coder.md"
-    ]
-    
-    if config.self_driving_task.test_file_path:
-        system_prompt_files.append(
-            "codeplanner--test_driven_development.md"
-        )
-    
-    messages = [
-        get_sys_prompt(
-            system_prompt_files,
-            [
-                ("<business_tag>", config.business.service_token),
-                ("<credential_manager_existing_services>", credential_manager.get_existing_service_names_desc()),
-                ("<credential_manager_existing_service_schemas>", credential_manager.get_existing_service_schema_desc()),
-                ("<test_file_path>", str(config.self_driving_task.test_file_path or "")),
-                ("<env_vars>", get_env_var_names(config)),
-                ("<aws_tag>", str(business.service_token)),
-                ("<db_name>", str(business.service_token)),
-                ("<iam_role_name>", str(business.get_iam_role_name())),
-                ("<artifacts_directory>", str(config.artifacts_dir)),
-                ("<sandbox_dir>", str(config.sandbox_root_dir)),
-                get_readonly_files_replacement(config)
-            ]
-        ),
-        get_architecture_docs(
-            config.initiative
-        ),
-        config.business.get_existing_required_credentials_llmm(),
-        get_budget_message(
-            config
-        ),
-        build_opentofu_plan_context_messages(
-            config
-        ),
-        get_tombstone_message(
-            config
-        ),
-        build_previous_iteration_context_messages(
-            config
-        ),
-        get_dependencies_msg(
-            config,
-            for_planning=True
-        ),
-        relevant_code_files,
-        get_docs_msg(
-            config
-        ),
-        get_file_structure_msg(
-            config.sandbox_root_dir
-        ) if not iteration_to_modify.has_error() else [],
-        get_guidance_msg(
-            config
-        ),
-        get_lessons_msg(
-            "Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-            config
-        ),
-        LlmMessage.user_from_data(
-            "Strategic Unblocking Guidance",
-            config.iteration_to_modify.strategic_unblocking_json
-        ) if config.iteration_to_modify.strategic_unblocking_json else None,
-        get_tasktype_specific_instructions(config),
-        get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL")
-    
-    ]
-    
-    planning_model = config.get_code_planning_model()
-    planning_data = llm_chat(
-        "Plan code changes",
-        messages,
-        model=planning_model,
-        tag_entity=config.current_iteration,
-        output_schema="codeplanner.schema.json"
-    ).json()
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=planning_model,
-            execute_module=planning_data.get('execute_module'),
-            test_module=planning_data.get('test_module')
-        )
-        current_iteration.refresh_from_db(fields=["planning_model", "execute_module", "test_module"])
-    
-    blocked_data = planning_data.get('blocked')
-    if blocked_data:
-        raise AgentBlocked(blocked_data)
-    
-    return planning_data
-
-
-def write_code_file(
-        config: CodingAgentConfig,
-        code_version_to_modify: CodeVersion,
-        code_file_data: dict,
-        code_writing_model: LlmModel,
-        requirements_txt: str,
-        blocking_issues: list[dict],
-        roll_back_reason: str = None,
-        previous_exception: Optional[CodeCompilationError] = None
-) -> str:
-    # instruction = "\n".join([i.get("details") for i in instructions])
-    
-    current_iteration = config.current_iteration
-    previous_iteration = config.previous_iteration
-    iteration_to_modify = config.iteration_to_modify
-    
-    code_file = code_version_to_modify.code_file
-    code_file_path = code_file.get_path()
-    code_file_name = code_file_path.name
-    logging.info(f"writing code: {code_file_name}")
-    
-    messages: list[LlmMessage] = [
-        get_sys_prompt(
-            [
-                *get_codewriter_system_prompt(code_file_path),
-                "codewriter--common.md",
-                "common--iam_role_tofu.md",
-                "common--agent_provided_functionality_tofu.md",
-                "common--domain_management_tofu.md",
-                "common--credentials_architecture_tofu.md",
-                "common--forbidden_actions_tofu.md"
-            ],
-            replacements=[
-                ("<business_tag>", config.business.service_token),
-                ("<included_dependencies>", "\n\t\t".join(code_file_data.get("dependencies", []))),
-                ("<sandbox_dir>", str(config.sandbox_root_dir)),
-                ("<env_vars>", get_env_var_names(config))
-            ]
-        ),
-        get_architecture_docs(
-            config.initiative
-        ),
-        build_previous_iteration_context_messages(
-            config,
-            title="previous iteration evaluations - learn from these past attempts. **you must not repeat these errors**"
-        ),
-        get_tombstone_message(
-            config
-        ),
-        LlmMessage.sys(
-            "## Forbidden Actions\n• You **MUST NEVER** wrap the code in Markdown-style code fences such as ```<filetype>. Output must be raw code syntax only."
-        )
-        if not code_file_name.endswith(".md") else []
-    ]
-    if code_file_name == InfrastructureStackType.APPLICATION.get_opentofu_config():
-        messages += build_opentofu_plan_context_messages(config)
-    
-    related_code_file_versions = []
-    for cfp in code_file_data.get("related_code_file_paths", []):
-        if not CodeFile.objects.filter(business=config.business, file_path=cfp).exists():
-            config.log(f"ERROR: related_code_file_path {cfp} does not exist")
-            continue
-        
-        if cfp == code_file_data.get("code_file_path"):
-            config.log(f"ERROR: related_code_file_path {cfp} is the same as the file to be edited")
-            continue
-        
-        version = CodeFile.get(
-            business=config.business,
-            relative_path=cfp
-        ).get_version(
-            current_iteration,
-            default_to_latest=True
-        )
-        
-        if not version:
-            config.log(f"ERROR: not version for {cfp} exists")
-            continue
-        
-        related_code_file_versions.append(
-            version.get_llm_message_data()
-        )
-    
-    if related_code_file_versions:
-        messages += LlmMessage.user_from_data(
-            title="Related Code File Context",
-            data=related_code_file_versions,
-            item_name="related_code_files"
-        )
-    
-    if 'lambda' not in str(code_file_path) and code_file_name.endswith(".py"):
-        messages += get_requirementstxt_msg(requirements_txt)
-    
-    code_versions = {}
-    if previous_iteration:
-        messages += get_iteration_eval_llm_messages(
-            config,
-            previous_iteration
-        )
-        
-        previous_iteration_version = code_file.get_version(previous_iteration)
-        if previous_iteration_version:
-            code_versions[previous_iteration_version.id] = (
-                "Previous Iteration's Code (your previous attempt at writing this code)",
-                previous_iteration_version
-            )
-    
-    if code_version_to_modify and code_version_to_modify.code:
-        current_version_title = f"Contents of {code_file.file_path}.  THIS IS CODE YOU WILL MODIFY.  "
-        if roll_back_reason:
-            current_version_title += f"We rolled back to a previous version and are editing this rolled back version because of the following reason:\n'''\n{roll_back_reason}\n'''"
-        
-        code_versions[code_version_to_modify.id] = (
-            current_version_title,
-            code_version_to_modify
-        )
-    
-    messages += LlmMessage.user_from_data("Code Files", {
-        "code_file_versions": [
-            {
-                "file_description": title,
-                **code_version.get_llm_message_data()
-            } for title, code_version in code_versions.values() if code_version.code
-        ]
-    })
-    
-    fix_prompt = common.get(current_iteration, ["routing_json", "fix_prompt"])
-    if fix_prompt:
-        messages.append(f"suggested prompt to assist in fixing the issue:  {fix_prompt}")
-    
-    coding_task_data = {
-        "guidance": code_file_data.get("guidance"),
-    }
-    
-    if "dsl_instructions" in code_file_data:
-        coding_task_data["dsl_instructions"] = code_file_data.get("dsl_instructions")
-    elif "instructions" in code_file_data:
-        coding_task_data["instructions"] = code_file_data.get("instructions")
-    else:
-        raise Exception(f"no instructions in {json.dumps(coding_task_data, indent=4)}")
-    
-    lessons = get_lessons(config, task_desc=TASK_DESC_CODE_WRITING)
-    if lessons:
-        coding_task_data["previously_learned_lessons"] = {
-            "description": "Lessons learned in previous iterations.  Do not repeat these mistakes - before you respond, checklist each item to make sure you're not repeating it",
-            **lessons
-        }
-    
-    if blocking_issues:
-        coding_task_data["code_review_errors"] = {
-            "description": "**Code Review Failure** Your previous attempt to generate code based on the instruction set resulted in these blocking code review errors.  **You must** avoid these errors in the next version of the code",
-            "blocking_codereview_errors": str(blocking_issues)
-        }
-    
-    if previous_exception:
-        coding_task_data["code_validation_errors"] = {
-            "description": "**Code Validation Failure** Your previous attempt to generate code based on the instruction set resulted in these validation errors.  **You must** avoid these errors in the next version of the code",
-            "error_log": str(previous_exception)
-        }
-    
-    messages += LlmMessage.user_from_data(
-        f"**YOUR ONE AND ONLY TASK:**\n{'Modify' if code_version_to_modify.code else 'Write the initial version of'} {code_file.file_path}, following each of these instruction steps exactly and in order, while avoiding repeating any previous errors or blocking_codereview_errors (if applicable) and applying the applicable lessons learned from previous attempts.",
-        coding_task_data
-    )
-    
-    code = llm_chat(
-        f"Write code for {code_file_name} {code_file_data.get('validator')}",
-        messages,
-        model=code_writing_model,
-        tag_entity=config.current_iteration
-    ).text
-    
-    # Detect and handle git patch vs full-file outputs from the code writer
-    code = post_process_code_ouput(
-        code,
-        code_version_to_modify
-    )
-    
-    for i in range(5):
-        try:
-            return validate_code(
-                config,
-                code_file_path,
-                code,
-                code_file_data.get("validator")
-            )
-        except CodeCompilationError as code_compilation_error:
-            config.log(f"Primary code failed validation. Attempting fix using cheaper model.  Fix attempt {i + 1} of 5")
-            if i == 4:
-                raise code_compilation_error
-            else:
-                code = fix_code_compilation(
-                    config,
-                    code_file_path,
-                    code,
-                    code_compilation_error
-                )
-    
-    return Exception("failed to write validated code")
 
 
 def get_requirementstxt_msg(requirements_txt, header="The python environment has the following packages installed.  The code you write may only import from packages listed here") -> list[LlmMessage]:

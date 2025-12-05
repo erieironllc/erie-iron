@@ -5,11 +5,15 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import yaml
+from django.db import transaction
 
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import CodingAgentConfig
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException, BadPlan, AgentBlocked
+from erieiron_common import common
+from erieiron_common.enums import SdaPhase
 from .claude_coder import ClaudeCoder
 from .codex_coder import CodexCoder
+from ...models import SelfDrivingTask
 from ...utils.codegen_utils import CodeCompilationError, validate_dockerfile
 
 CODERS = [
@@ -20,6 +24,7 @@ CODERS = [
 
 
 def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
+    config.set_phase(SdaPhase.CODING)
     """
     Main entry point for code generation.
     
@@ -39,12 +44,13 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
     """
     
     # Define coders in order of preference
+    tdd_test_file = common.get(config.current_iteration, ["planning_json", "tdd_test_file"])
     
-    if config.is_stagnating:
+    if config.is_stagnating or tdd_test_file:
         coders = reversed(CODERS)
     else:
         coders = CODERS
-
+    
     errors = []
     for coder_name, coder_cls in coders:
         coder = coder_cls(config)
@@ -58,6 +64,18 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
             metadata["successful_coder"] = coder_name.lower()
             metadata["attempts_made"] = len(errors) + 1
             metadata["failed_coders"] = [e["coder"] for e in errors]
+            
+            # if we are writing a test (ie the plan defines tdd_test_file), then make sure the test was written
+            if tdd_test_file:
+                tdd_test_file = config.sandbox_root_dir / tdd_test_file
+                if not tdd_test_file.exists():
+                    raise BadPlan(f"Failed to write a test file named `{tdd_test_file}`")
+                
+                with transaction.atomic():
+                    SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
+                        test_file_path=tdd_test_file
+                    )
+                    config.self_driving_task.refresh_from_db(fields=["test_file_path"])
             
             return changed_paths, metadata
         

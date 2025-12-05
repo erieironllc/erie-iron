@@ -26,7 +26,6 @@ LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'
 
 MIN_PODMAN_STORAGE_FREE_GB = 4.0
 COUNT_FULL_LOGS_IN_CONTEXT = 2
-USE_CODEX = True
 
 os.environ["DOCKER_DEFAULT_PLATFORM"] = "linux/arm64"
 

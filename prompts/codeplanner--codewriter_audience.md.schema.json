@@ -8,7 +8,7 @@
     "diagnostic_context",
     "relevant_lessons"
   ],
-  "additionalProperties": false,
+  "additionalProperties": true,
 
   "properties": {
     "implementation_directive": {
@@ -94,6 +94,11 @@
     "relevant_lessons": {
       "type": "array",
       "items": { "type": "string" }
+    },
+
+    "tdd_test_file": {
+      "type": "string",
+      "description": "Relative file path to the test file. Only present when planner is explicitly writing a test."
     }
   }
 }

@@ -184,6 +184,8 @@ class BaseCoder(ABC):
     
     def execute_coding(self) -> Tuple[List[Path], Dict]:
         """Execute coding and return (changed_paths, execution_metadata)."""
+        tdd_test_file = common.get(self.config.current_iteration, ["planning_json", "tdd_test_file"])
+        
         initiative = self.config.initiative
         business = initiative.business
         self.config.current_iteration.codeversion_set.all().delete()
@@ -200,29 +202,33 @@ class BaseCoder(ABC):
             
             self.write_plan(artifact_paths)
             
-            prev_iteration = self.config.iteration_to_modify
-            error_summary, error_logs = prev_iteration.get_error()
-            
-            # Create directory for split logs
             log_dir = artifact_paths["previous_iteration_logs"].parent / "previous_iteration"
             log_dir.mkdir(exist_ok=True)
             
-            deployment_json = common.get(
-                prev_iteration,
-                ["log_content_deployment", "deployment_errors"],
-                common.get(
+            if tdd_test_file:
+                log_files = []
+                error_summary = None
+            else:
+                prev_iteration = self.config.iteration_to_modify
+                error_summary, error_logs = prev_iteration.get_error()
+                
+                # Create directory for split logs
+                deployment_json = common.get(
                     prev_iteration,
-                    ["log_content_deployment", "deployment_logs"]
+                    ["log_content_deployment", "deployment_errors"],
+                    common.get(
+                        prev_iteration,
+                        ["log_content_deployment", "deployment_logs"]
+                    )
                 )
-            )
-            
-            log_files = [
-                ("cloudwatch.json", common.json_format_pretty(prev_iteration.log_content_cloudwatch)),
-                ("deployment.json", common.json_format_pretty(deployment_json)),
-                ("execution.log", prev_iteration.log_content_execution),
-                ("coding.log", prev_iteration.log_content_coding),
-                ("init.log", prev_iteration.log_content_init),
-            ]
+                
+                log_files = [
+                    ("cloudwatch.json", common.json_format_pretty(prev_iteration.log_content_cloudwatch)),
+                    ("deployment.json", common.json_format_pretty(deployment_json)),
+                    ("execution.log", prev_iteration.log_content_execution),
+                    ("coding.log", prev_iteration.log_content_coding),
+                    ("init.log", prev_iteration.log_content_init),
+                ]
             
             log_metadata = []
             for filename, content in log_files:
@@ -240,10 +246,11 @@ class BaseCoder(ABC):
                 })
             
             # Write summary index file
-            (log_dir / "summary.md").write_text(generate_summary(error_summary, log_metadata))
-            
-            # Update artifact_paths to point to summary
-            artifact_paths["previous_iteration_logs"] = log_dir / "summary.md"
+            if error_summary:
+                (log_dir / "summary.md").write_text(generate_summary(error_summary, log_metadata))
+                
+                # Update artifact_paths to point to summary
+                artifact_paths["previous_iteration_logs"] = log_dir / "summary.md"
             
             artifact_paths["architecture"].write_text(textwrap.dedent(f"""
                 {business.architecture}
@@ -254,35 +261,36 @@ class BaseCoder(ABC):
                 # Credential Schemas
                 {common.json_format_pretty(credential_manager.CREDENTIAL_DEFINITIONS)}
             """))
-
+            
             # Build iteration history context
-            try:
-                from erieiron_autonomous_agent.coding_agents.iteration_history_analyzer import IterationHistoryAnalyzer
-
-                if self.config.current_iteration.version_number > 1:
-                    history_analyzer = IterationHistoryAnalyzer(self.config.current_iteration)
-                    history_summary = history_analyzer.generate_history_summary()
-                    artifact_paths["iteration_history"].write_text(history_summary)
-
-                    self.config.log(f"Generated iteration history: {len(history_analyzer.iteration_chain)} previous iterations")
-
-                    # Log recurring errors for visibility
-                    recurring = history_analyzer.find_recurring_errors()
-                    if recurring:
-                        self.config.log(f"WARNING: {len(recurring)} recurring error patterns detected:")
-                        for item in recurring[:3]:
-                            self.config.log(f"  - {item['error_signature']} (appeared {item['count']} times)")
-                else:
-                    # First iteration - no history
-                    artifact_paths["iteration_history"].write_text("# Iteration History\n\nThis is the first iteration - no previous history.")
-                    self.config.log("First iteration - no iteration history available")
-            except Exception as e:
-                # Don't fail coding if history generation crashes
-                self.config.log(f"Warning: Failed to generate iteration history: {e}")
-                artifact_paths["iteration_history"].write_text(
-                    "# Iteration History\n\nHistory unavailable due to error during generation."
-                )
-
+            if not tdd_test_file:
+                try:
+                    from erieiron_autonomous_agent.coding_agents.iteration_history_analyzer import IterationHistoryAnalyzer
+                    
+                    if self.config.current_iteration.version_number > 1:
+                        history_analyzer = IterationHistoryAnalyzer(self.config.current_iteration)
+                        history_summary = history_analyzer.generate_history_summary()
+                        artifact_paths["iteration_history"].write_text(history_summary)
+                        
+                        self.config.log(f"Generated iteration history: {len(history_analyzer.iteration_chain)} previous iterations")
+                        
+                        # Log recurring errors for visibility
+                        recurring = history_analyzer.find_recurring_errors()
+                        if recurring:
+                            self.config.log(f"WARNING: {len(recurring)} recurring error patterns detected:")
+                            for item in recurring[:3]:
+                                self.config.log(f"  - {item['error_signature']} (appeared {item['count']} times)")
+                    else:
+                        # First iteration - no history
+                        artifact_paths["iteration_history"].write_text("# Iteration History\n\nThis is the first iteration - no previous history.")
+                        self.config.log("First iteration - no iteration history available")
+                except Exception as e:
+                    # Don't fail coding if history generation crashes
+                    self.config.log(f"Warning: Failed to generate iteration history: {e}")
+                    artifact_paths["iteration_history"].write_text(
+                        "# Iteration History\n\nHistory unavailable due to error during generation."
+                    )
+            
             if business.ui_design_spec:
                 artifact_paths["design_spec"].write_text(business.ui_design_spec)
             
@@ -330,7 +338,7 @@ class BaseCoder(ABC):
         """Set up artifact file paths."""
         iteration_id = self.config.current_iteration.id
         artifacts_dir = self.config.artifacts_dir
-
+        
         paths = {
             "plan": artifacts_dir / f"{iteration_id}_plan.json",
             "architecture": artifacts_dir / f"{iteration_id}_architecture.md",
@@ -497,23 +505,39 @@ class BaseCoder(ABC):
         return "\n\n".join(part.strip() for part in prompt_parts if part)
     
     def _get_coder_intro(self, artifact_paths: dict[str, Path]) -> str:
+        tdd_test_file = common.get(self.config.current_iteration, ["planning_json", "tdd_test_file"])
+        if tdd_test_file:
+            specific_instruction = f"To reiterate - you job is to write a test file named {tdd_test_file}"
+        else:
+            specific_instruction = ""
+
         return textwrap.dedent(f"""
-        You are assisting Erie Iron's self-driving coding workflow using Gemini.
+        You are assisting Erie Iron's self-driving coding workflow. 
         Work within the repository at `{self.config.sandbox_root_dir}`
         **DEVELOPMENT PLAN**:  Follow the approved development plan saved at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
+        - {specific_instruction}
+        
         **SYSTEM ARCHITECTURE**:  The system architecture document is located at `{artifact_paths.get("architecture")}`.  You changes **must** be aligned with this architecture
         **UI DESIGN SPEC**:  If you make any UI changes, **you must** comport the look and feel of the changes to the UI Design Spec saved at `{artifact_paths.get("design_spec")}`
         **ITERATION HISTORY**:  The iteration history document is located at `{artifact_paths.get("iteration_history")}`. This shows previous attempts to solve this problem, recurring errors, and files that have repeatedly caused issues. **CRITICAL**: Review this carefully before making changes to avoid repeating past mistakes.
         **PREVIOUS ITERATION LOGS**  Error logs from the previous iteration are located at `{artifact_paths.get("previous_iteration_logs")}`. Start with the summary file for an overview. Individual log files (cloudwatch.json, deployment.json, execution.log, evaluation.log, coding.log, init.log) are in the same directory if detailed investigation is needed.
+        
         Consult the relevant engineering standards from the reference prompts.
         Do not commit or push changes; the orchestrator handles git commits.
         """)
     
     def _get_final_prompt_sections(self, artifact_paths: dict[str, Path]) -> List[str]:
+        tdd_test_file = common.get(self.config.current_iteration, ["planning_json", "tdd_test_file"])
+        if tdd_test_file:
+            specific_instruction = f"1.a To reiterate - you job is to write a test file named {tdd_test_file}"
+        else:
+            specific_instruction = ""
+
         return [
             textwrap.dedent(f"""
             ## Execution Checklist
             1. Read and understand the full development plan at `{artifact_paths.get("plan")}`.  Your job is to implement the `implementation_directive`, using the `diagnostic_context` for reference and learning from the `relevant_lessons`
+            {specific_instruction}
             2. Read and understand the system architecture at `{artifact_paths.get("architecture")}`.  Validate your changes comport to the architecture
             3. **CRITICAL**: Review the iteration history at `{artifact_paths.get("iteration_history")}` to understand what has been tried before, which errors have recurred, and which files have repeatedly caused issues. Do not repeat mistakes from previous iterations.
             4. Error logs from the previous iteration are at `{artifact_paths.get("previous_iteration_logs")}`. Read the summary first; if needed, review individual log files in the same directory for detailed context.
@@ -625,7 +649,7 @@ class BaseCoder(ABC):
             
             # Validate changes
             normalized_changed = {self._normalize_relative_path(p) for p in changed_paths}
-            validation_error = None # self.validate_all_changed_files(normalized_changed)
+            validation_error = None  # self.validate_all_changed_files(normalized_changed)
             
             if validation_error is None:
                 break
@@ -932,8 +956,6 @@ class BaseCoder(ABC):
     
     def write_plan(self, artifact_paths):
         lesson_ids = common.uuids(self.planning_data.get("relevant_lessons"))
-        
-        asef = 1
         
         plan = {
             "implementation_directive": self.planning_data.get("implementation_directive"),

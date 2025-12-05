@@ -520,11 +520,6 @@ class FailureClassification(ErieEnum):
     UNKNOWN = auto()
 
 
-class DevelopmentRoutingPath(ErieEnum):
-    DIRECT_FIX = auto()
-    ESCALATE_TO_PLANNER = auto()
-    ESCALATE_TO_HUMAN = auto()
-    AWS_PROVISIONING_PLANNER = auto()
 
 
 class CredentialServiceProvisioning(ErieEnum):

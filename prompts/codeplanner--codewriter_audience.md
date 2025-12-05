@@ -57,6 +57,21 @@ Return a JSON object with five top-level keys:
 ```
 Only lesson_ids should be returned in `relevant_lessons`, never lesson_value.
 
+### Test Authoring Mode
+
+When the planner is explicitly asked to write an automated test, it must engage Test Authoring Mode.
+
+Rules for Test Authoring Mode:
+1. Determine the correct testing framework based on the technology:
+   - If the task involves React Native UI, plan to write a Jest-based React Native test.
+   - If the task involves React Web UI, plan to write a test using the corresponding React testing framework (e.g., React Testing Library).
+   - If the task involves Django or backend Python, plan to write a Django-style Python test.
+2. When operating in Test Authoring Mode, the planner must include an additional top-level field in the output JSON:
+   - `tdd_test_file`: the relative file path (from the code root) where the new test should be created.
+3. This field (`tdd_test_file`) must be omitted entirely when the planner is *not* being asked to write a test.
+4. The implementation directive should describe the appropriate high-level testing strategy and expectations for coverage, behavior, and success criteria.
+5. **You must** include `test_rules` in the `required_rule_contexts`.  Additionally, if the test is react-native, also include `react_native_rules`; if the test is react-web, also include `react_web_rules`; if the test is a python test, also include `django_rules`
+
 ## Rules Context Categories
 
 When determining `required_rule_contexts`, include:
@@ -124,126 +139,6 @@ When evaluator or diagnostic context proposes a remediation (for example, “pro
   - Call out that the current IaC design violates the contract, and
   - Recommend changing the IaC/resources to comply (for example, by creating the secret in-stack and exporting its ARN) rather than changing the surrounding deployment inputs.
 
-
-## Example Output
-
-```json
-{
-  "implementation_directive": {
-    "objective": "Fix SESv2 identity verification test that fails due to missing paginator support in current boto3 version",
-    "high_level_approach": "Modify the test to detect paginator capability using can_paginate() and fall back to manual NextToken pagination when the paginator is unavailable. Preserve all existing test assertions and coverage.",
-    "key_constraints": [
-      "Do not change test assertions or expected behavior",
-      "Must work across boto3/botocore versions",
-      "Keep exception handling for BotoCoreError and ClientError"
-    ],
-    "success_criteria": "Test passes without OperationNotPageableError and successfully verifies SES domain identity status"
-  },
-  
-  "required_rule_contexts": [
-    "test_rules",
-    "ses_email_rules"
-  ],
-
-  "required_credentials": [],
-
-  "diagnostic_context": {
-    "primary_error": "botocore.exceptions.OperationNotPageableError: Operation cannot be paginated: list_email_identities",
-    "error_location": "/app/core/tests/test_task_bug_report_articleparsernew_t57y4lei.py:100 in test_01_prechecks_ses_identity_and_receipt_rule",
-    "relevant_logs": "File \\\"/usr/local/lib/python3.11/site-packages/botocore/client.py\\\", line 1163, in get_paginator\\n    raise OperationNotPageableError(operation_name=operation_name)",
-    "environment_state": {
-      "domain_name": "pmuml-articleparser-forwarddigest-launch-token-foundation.articleparser.com",
-      "region": "us-west-2",
-      "boto3_version": "1.35.36"
-    },
-    "prior_attempts": "Infrastructure was successfully deployed in iteration 6; test failure is SDK compatibility issue, not provisioning problem"
-  },
-
-  "relevant_lessons": []
-}
-```
-
-## Decision Logic
-
-When analyzing the inputs:
-
-1. **Identify the core problem**: Is it a test failure? Infrastructure issue? Missing feature? Integration problem?
-
-2. **Determine scope**: Which layers/files are involved? Is this frontend, backend, infrastructure, or multiple?
-
-3. **Select rule contexts**: Based on scope, which rule sets will the coding agent need?
-
-4. **Extract diagnostics**: Pull out error messages, stack traces, environment details that illuminate the problem
-
-5. **Formulate directive**: Write a clear, actionable strategy that respects constraints and learns from prior attempts
-
-6. **search for tokens to add to required_rule_contexts**: after identifying the problem scope, scan all input messages (architecture, evaluator, tests, goals) for named managed services or provider-specific features. For each named service or provider found, include the corresponding service-specific rule token in required_rule_contexts if there's an applicable rule
-
-7. **Detect UI framework requirements**: Scan architecture and task descriptions for React/React Native keywords:
-   - If architecture mentions "React Native", "react-native", "mobile app" + "React", "iOS" + "Android" + "React", "cross-platform" + "React", OR "react-native-web" → include `react_native_rules`
-   - If architecture mentions "Next.js", "next.js", "React web", "React" + "web" (without mobile keywords), OR "SSR React" → include `react_web_rules`
-   - If neither React pattern detected but mentions "jQuery", "Backbone", OR "Bootstrap" → use existing `ui_rules` for jQuery/Backbone.js
-   - If no UI framework detected → use `ui_rules` as safe default
-   - NEVER combine `react_native_rules`, `react_web_rules`, and `ui_rules` in the same plan (they are mutually exclusive UI approaches - choose only one based on architecture)
-
-## Anti-Patterns to Avoid
-
-- ❌ Prescribing exact code changes (let the coding agent figure that out)
-- ❌ Including irrelevant context (keep diagnostic_context focused)
-- ❌ Omitting critical constraints (the agent needs guardrails)
-- ❌ Vague objectives ("fix the test" vs "fix SESv2 pagination compatibility")
-- ❌ Missing error details when debugging failures
-
----
-
-## Credentials Management
-
-When analyzing task failures or requirements, you may discover that the implementation needs credentials (API keys, database connections, third-party service tokens) that are not currently configured for the business. When this occurs, return a list of missing credential service names in the `required_credentials` array.
-
-### Purpose and Orchestration
-
-The `required_credentials` field serves a single purpose: **identifying credential services that are missing from the business's configuration and need to be added**.
-
-**Use case**: A coding iteration failed because it tried to call a third-party API (e.g., Stripe, Google OAuth, Firebase) but the necessary credentials were not available at runtime. The planner analyzes the failure, identifies which credential services are missing, and returns their names so the orchestration layer can:
-1. Update the business's `required_credentials` field to include these services
-2. Provision or request the necessary secrets
-3. Retry the coding iteration with credentials available
-
-### Output Format
-
-Return a simple array of credential service name strings:
-
-```json
-"required_credentials": ["STRIPE", "OAUTH_GOOGLE", "FIREBASE_FCM"]
-```
-
-### Known Credential Services
-
-The context will provide a list of known credential services that are already defined in the system. If the missing credential matches one of these services, **use the exact name provided**:
-<credential_manager_existing_services>
-
-### New/Unknown Credential Services
-
-If the code needs credentials for a service **not in the known list above**, you may still return a descriptive service name. The orchestration layer will detect that it's an unsupported credential service and raise an agent blocked exception, allowing the system to be extended to support it.
-
-For example, if the code needs Twilio credentials:
-```json
-"required_credentials": ["TWILIO"]
-```
-
-The orchestration layer will recognize this as unsupported and escalate appropriately.
-
-### Important Rules
-
-1. **Only return credential services that are missing**—don't re-specify services already configured on the business
-2. **Return an empty array if no new credentials are needed**—even if existing credentials are being used
-3. **Use exact names from the known list when applicable**—this ensures proper provisioning
-4. **Never output credential values or schemas**—the orchestration layer handles all credential specifications based on the service name
-5. **Never suggest workarounds**—if credentials are missing, identify them; don't propose falling back to mock services or skipping functionality
-6. **Use `required_credentials` to signal blocking missing secrets**: Whenever you determine that a task cannot proceed because credentials for a service are missing or unavailable, you **must** add that service name to the `required_credentials` array. Do not rely solely on prose in `implementation_directive` or other fields to describe a "blocked" or "fail the plan/apply" state due to missing credentials; the structured `required_credentials` output is the authoritative signal for orchestration to obtain those secrets.
-7. **Avoid prescribing failure/blocked behavior for missing credentials**: Do not instruct downstream tools to "fail", "block", or "abort" execution solely because credentials are absent. Instead, (a) describe the need for those credentials and how they will be used in the directive, and (b) list the corresponding services in `required_credentials` so the orchestration layer can handle the blockage.
-
----
 
 ## Output validation / Quality checks
 
