@@ -297,14 +297,16 @@ def get_guidance_msg(config: CodingAgentConfig):
 def plan_code_changes(config: CodingAgentConfig):
     config.set_phase(SdaPhase.PLANNING)
     
-    # if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
-    #     if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
-    #         planning_data = plan_initiative_tdd_code_changes(config)
-    #     else:
-    #         planning_data = plan_task_tdd_code_changes(config)
-    # else:
-    #      planning_data = plan_iterative_code_changes(config)
-    planning_data = plan_task_tdd_code_changes(config)
+    if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
+        if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
+            planning_data = plan_initiative_tdd_code_changes(config)
+        else:
+            planning_data = plan_task_tdd_code_changes(config)
+    else:
+        planning_data = plan_iterative_code_changes(config)
+        if "tdd_test_file" in planning_data:
+            # planner made a mistake.  tdd_test_file only valid when writing a test.  just clean it up
+            planning_data.pop("tdd_test_file", None)
     
     validate_plan(
         config,
