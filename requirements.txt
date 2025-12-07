@@ -44,7 +44,9 @@ sentence-transformers==2.6.1
 sqlparse
 tiktoken
 tree_sitter_languages
-tree-sitter==0.25.2
+tree_sitter==0.25.2
 torch==2.6.0+cpu; platform_system == "Linux"
 torch==2.6.0; platform_system == "Darwin"
 torchvggish
+
+ruff

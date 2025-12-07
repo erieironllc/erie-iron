@@ -88,6 +88,9 @@ class CodingAgentConfig:
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
         
+        # self.self_driving_task.test_file_path = Path(self.self_driving_task.test_file_path).relative_to(self.sandbox_root_dir)
+        # self.self_driving_task.save()
+
         if self.task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
             self.env_type = EnvironmentType.PRODUCTION
         else:

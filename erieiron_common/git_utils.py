@@ -79,61 +79,35 @@ class GitWrapper:
         return self.exec("clone", self.wrap_url_with_token(source_repo), self.source_root)
     
     def pull(self) -> 'GitWrapper':
-        # Step 0: auto-resolve any preexisting unmerged files (Option D: prefer theirs)
-        try:
-            # Query status for merge conflicts
-            status_result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=str(self.source_root.absolute()) if self.source_root.exists() else None,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            status_output = status_result.stdout
+        # Detect local changes
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(self.source_root),
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        status_output = status_result.stdout.strip()
+        has_local_changes = len(status_output) > 0
 
-            # Detect any kind of merge conflict before stashing
-            conflict_prefixes = ("UU", "AA", "DD", "DU", "UD", "MM", "AM", "MA")
-            if any(line[:2] in conflict_prefixes or "needs merge" in line for line in status_output.splitlines()):
-                # Prefer the remote/stashed version
-                self.exec("checkout", "--theirs", ".")
-                self.exec("add", ".")
-        except Exception as e:
-            logging.warning(f"Pre-stash conflict auto-resolution failed: {e}")
+        # Stash local changes if any
+        if has_local_changes:
+            self.exec("stash", "push", "-m", "auto-stash-before-pull")
 
-        # Stash any local changes first
-        try:
-            # Stash only unstaged changes
-            self.exec("stash", "push", "-m", "Auto-stash before pull", "--keep-index")
-            # Check if files were actually stashed by examining the output
-            stashed = "No local changes to save" not in self._last_result.stdout
-        except:
-            stashed = False
-        
-        # Pull with auto-merge strategy
-        self.exec("pull", "--no-edit", "--strategy=ort", "--strategy-option=ours")
-        
-        # Re-apply stashed changes if we stashed anything
-        if stashed:
+        # Perform a normal pull (no custom merge strategy)
+        self.exec("pull", "--no-edit")
+
+        # Try to reapply stashed changes
+        if has_local_changes:
             try:
-                # Apply without dropping so unresolved conflicts don't lose work
                 self.exec("stash", "apply")
-                # Drop stash only if apply succeeded
                 self.exec("stash", "drop")
-            except:
-                # Automatically prefer the stashed version ("theirs") for all conflicted files
-                try:
-                    # Resolve all conflicts by taking the stashed version
-                    self.exec("checkout", "--theirs", ".")
-                    self.exec("add", ".")
-                    # Drop the stash since changes were incorporated
-                    self.exec("stash", "drop")
-                except Exception as resolve_err:
-                    logging.warning("Automatic conflict resolution (theirs) failed")
-                    raise resolve_err
-                
-                # Do NOT raise the original stash apply exception
-                return self
-        
+            except Exception:
+                # If stash apply produced conflicts, prefer local edits
+                self.exec("checkout", "--ours", ".")
+                self.exec("add", ".")
+                # Do not drop the stash since it was not cleanly applied
+
         return self
     
     def exists(self, repo_url):

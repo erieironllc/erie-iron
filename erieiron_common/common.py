@@ -711,10 +711,10 @@ def safe_split(s, delimeter: str = ",", strip=True, lower=False):
         for d in delimeter:
             s = replace_case_insensitive(s, d, ",")
         return safe_split(s, ",", strip)
-
+    
     if is_empty(s):
         return []
-
+    
     vals = []
     for s1 in s.split(delimeter):
         s1 = default_str(s1)
@@ -724,7 +724,6 @@ def safe_split(s, delimeter: str = ",", strip=True, lower=False):
             s1 = s1.lower()
         vals.append(s1)
     return vals
-
 
 
 def ensure_numeric(s):
@@ -1545,6 +1544,30 @@ def assert_exists(path: Path) -> Path:
     if not p.exists():
         raise Exception(f"{path} does not exist")
     return p
+
+
+def normalize_relative_path(path: str | None) -> str:
+    """
+    Normalize a potentially relative file path.
+
+    This function converts backslashes to forward slashes, trims surrounding
+    whitespace, and strips leading './' components repeatedly until none remain.
+
+    Args:
+        path (str | None): A file path or None.
+
+    Returns:
+        str: A normalized path using forward slashes, or an empty string if
+        the input is None or empty.
+    """
+    if not path:
+        return ""
+    
+    normalized = str(path).strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+        
+    return normalized
 
 
 def iterate_files_deep(

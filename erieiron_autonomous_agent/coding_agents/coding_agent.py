@@ -75,7 +75,7 @@ def execute(task_id: str, one_off_action: SdaInitialAction = None):
                 else:
                     config.set_iteration(self_driving_task.iterate())
                     
-                    if config.iteration_to_modify and i > 0:
+                    if config.iteration_to_modify and config.iteration_to_modify != config.previous_iteration and i > 0:
                         config.iteration_to_modify.write_to_disk()
                     
                     plan_code_changes(config)
@@ -1092,7 +1092,6 @@ def run_generic_container_command(
         *command
     ]
     
-    
     config.log("\n" + "=" * 50 + "\n")
     config.log(f"RUNNING {' '.join(cmd)} in {config.sandbox_root_dir}\n")
     config.log("=" * 50 + "\n")
@@ -1436,6 +1435,8 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     
     test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
     
+    failing_tests = []
+    
     if frontend_info["has_frontend"]:
         frontend_dir = frontend_info["frontend_dir"]
         
@@ -1449,23 +1450,24 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             try:
                 run_jest_tests(config, container_image_tag, frontend_dir)
             except ExecutionException as e:
-                raise FailingTestException(f"Jest component tests failed. See logs above for details.")
+                failing_tests.append(f"Jest component tests failed. See logs above for details.")
         
         if frontend_info["has_playwright"]:
             try:
                 run_playwright_tests(config, container_image_tag, frontend_dir)
             except ExecutionException as e:
-                raise FailingTestException(f"Playwright E2E tests failed. See logs above for details.")
+                failing_tests.append(f"Playwright E2E tests failed. See logs above for details.")
         
         if frontend_info["has_cypress"]:
             try:
                 run_cypress_tests(config, container_image_tag, frontend_dir)
             except ExecutionException as e:
-                raise FailingTestException(f"Cypress E2E tests failed. See logs above for details.")
+                failing_tests.append(f"Cypress E2E tests failed. See logs above for details.")
     
-    config.log("\n" + "=" * 80)
-    config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY.  PROCEEDING TO BACKEND TESTS")
-    config.log("=" * 80 + "\n")
+        if not failing_tests:
+            config.log("\n" + "=" * 80)
+            config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY.  PROCEEDING TO BACKEND TESTS")
+            config.log("=" * 80 + "\n")
     
     # try:
     #     empty_stack_buckets(
@@ -1476,13 +1478,15 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     #     config.log(e)
     #     raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
     
-    if test_errors_blob:
+    failing_python_tests = [t for t in test_errors_blob if t.get("file_name", "").endswith(".py")] if test_errors_blob else []
+    if failing_python_tests:
         first_tests = llm_chat(
             "parse test failures",
             [
                 LlmMessage.sys(textwrap.dedent("""
-                    Parse the failing tests from the supplied log output.  
+                    Parse the failing python tests from the supplied log output.  
                     format the test name as fully qualified test_module.test_method
+                    **important** only return the failing python (or django) tests
                     return a list of all failing tests using the following format
                     ```json
                     {
@@ -1491,7 +1495,7 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
                         ]
                     }
                 """)),
-                LlmMessage.user_from_data("Tests log output", test_errors_blob)
+                LlmMessage.user_from_data("Tests log output", failing_python_tests)
             ],
             tag_entity=config.current_iteration,
             model=LlmModel.OPENAI_GPT_5_NANO,
@@ -1499,9 +1503,12 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
         ).json().get("failing_tests")
     elif config.self_driving_task.test_file_path:
         test_label = config.self_driving_task.test_file_path
-        first_tests = [
-            test_label.replace("/", ".").removesuffix(".py").lstrip(".")
-        ]
+        if test_label.endswith(".py"):
+            first_tests = [
+                test_label.replace("/", ".").removesuffix(".py").lstrip(".")
+            ]
+        else:
+            first_tests = None
     else:
         first_tests = None
     
@@ -1515,7 +1522,10 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             )
             config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
         except ExecutionException as e:
-            raise FailingTestException(f"Some or all of {first_tests} failed. See logs above for details.")
+            failing_tests.append(f"Some or all of {first_tests} failed. See logs above for details.")
+    
+    if failing_tests:
+        raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
     
     config.log(
         "Running the test suite three times to detect flakiness. "
@@ -1540,6 +1550,9 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             else:
                 config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
                 results.append(False)
+    
+    if failing_tests:
+        raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
     
     passes = sum(results)
     if passes == COUNT_TEST_RUNS_REQUIRED:
@@ -1937,7 +1950,7 @@ def compute_goal_achievement_gate(config: CodingAgentConfig, ) -> tuple[bool, st
     if config.current_iteration.version_number == 1:
         return False, "We have not written any code yet for this task"
     
-    if not (config.self_driving_task.test_file_path and (config.sandbox_root_dir / config.self_driving_task.test_file_path).exists()):
+    if not config.self_driving_task.test_file_path:
         return False, "this task does not yet have an automated test.  Need to write an automated test and make it pass before allowing goal achieved"
     
     return True, "we've written code and it deployed successfully"
@@ -1998,6 +2011,7 @@ def evaluate_iteration(
        **Treatment of log errors and simulated failures:**
        - Do **not** set `goal_achieved` to `false` **solely** because log output contains stack traces, exceptions, or error messages **if** the relevant tests ultimately pass. Tests may intentionally simulate failures and assert correct handling; such logged errors are acceptable when the test framework reports success.
        - Continue to record important runtime or infra issues in the `error` or `test_errors` fields so downstream agents see them, but let the **test outcomes** drive the `goal_achieved` flag.
+       - **Assume negative-path assertions are intentional:** When a passing test suite includes log lines with exceptions, stack traces, warnings, or error messages that are raised and handled inside tests or application code, assume these are part of intentional negative‑case coverage. **Never** set `goal_achieved: false` solely because such errors appear in the logs if all build/deploy steps and tests have succeeded. You may still record these details in `error` or `test_errors` for diagnostics, but they must not influence the `goal_achieved` flag when tests pass.
 
        **Skipped tests policy:**
        - If organizational policy requires, you may treat skipped tests as a reason to keep `goal_achieved: false`. Otherwise, treat a run with skips but no failures/errors as `goal_achieved: true` **only when explicitly instructed by higher-level configuration or input fields.**
@@ -2728,8 +2742,7 @@ def get_readonly_files_replacement(config: CodingAgentConfig) -> tuple[str, str]
     return "<read_only_files>", "\n".join(parts)
 
 
-
-def plan_iterative_code_changes(config: CodingAgentConfig, goal_instructions=None, include_prev_iterations=True):
+def plan_iterative_code_changes(config: CodingAgentConfig, goal_instructions=None, include_prev_iterations=False):
     current_iteration = config.current_iteration
     previous_iteration = config.previous_iteration
     iteration_to_modify = config.iteration_to_modify

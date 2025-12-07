@@ -14,6 +14,7 @@ from typing import Dict, Tuple, List
 from django.db import transaction
 
 from erieiron_autonomous_agent.coding_agents import credential_manager
+from erieiron_autonomous_agent.coding_agents.code_writer.code_validator import validate
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
     CodingAgentConfig,
     TASK_DESC_CODE_WRITING
@@ -510,7 +511,7 @@ class BaseCoder(ABC):
             specific_instruction = f"To reiterate - you job is to write a test file named {tdd_test_file}"
         else:
             specific_instruction = ""
-
+        
         return textwrap.dedent(f"""
         You are assisting Erie Iron's self-driving coding workflow. 
         Work within the repository at `{self.config.sandbox_root_dir}`
@@ -532,7 +533,7 @@ class BaseCoder(ABC):
             specific_instruction = f"1.a To reiterate - you job is to write a test file named {tdd_test_file}"
         else:
             specific_instruction = ""
-
+        
         return [
             textwrap.dedent(f"""
             ## Execution Checklist
@@ -546,7 +547,8 @@ class BaseCoder(ABC):
             7. Implement code changes that satisfy the `implementation_directive` and address prior failures
             8. Scope modifications to the `implementation_directive`.  **Do not** make un-related changes
             9. Never modify read-only paths
-            10. Leave repository with changes ready for review; do not commit
+            10. After writing TypeScript, run an internal mental pass using the ESLint rules shown below. If you detect any violations, silently correct them before returning the final code.
+            11. Leave repository with changes ready for review; do not commit
             """)
         ]
     
@@ -642,20 +644,21 @@ class BaseCoder(ABC):
             )
             
             # Collect changed files
-            changed_paths = self._collect_repo_changed_files(prior_file_checksum_map, readonly_entries)
+            changed_paths = self._collect_repo_changed_files(
+                prior_file_checksum_map,
+                readonly_entries
+            )
             
             if not changed_paths:
                 raise BadPlan(f"{self.coder_name.title()} CLI produced no persistable file changes")
             
             # Validate changes
-            normalized_changed = {self._normalize_relative_path(p) for p in changed_paths}
-            validation_error = None  # self.validate_all_changed_files(normalized_changed)
-            
-            if validation_error is None:
+            validation_error = self.validate_all_changed_files(changed_paths)
+            if not validation_error:
                 break
             
             if attempt >= max_validation_attempts:
-                raise BadPlan(f"Codewriting failed with {validation_error}")
+                raise BadPlan(f"Codewriting output failed validation: {validation_error}")
             
             # Extract lessons and add feedback
             from erieiron_autonomous_agent.coding_agents.coding_agent import extract_lessons
@@ -677,7 +680,7 @@ class BaseCoder(ABC):
         else:
             from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import ExecutionException
             raise ExecutionException(
-                f"{self.coder_name.title()} CLI reached maximum validation attempts without resolving OpenTofu validation errors."
+                f"{self.coder_name.title()} CLI reached maximum validation attempts without resolving validation errors."
             )
         
         return changed_paths, metadata
@@ -790,7 +793,7 @@ class BaseCoder(ABC):
             if self._should_skip_code_version(rel_path):
                 continue
             
-            normalized_path = self._normalize_relative_path(rel_path)
+            normalized_path = common.normalize_relative_path(rel_path)
             absolute_path = sandbox_root / normalized_path
             
             if not absolute_path.exists() or absolute_path.is_dir():
@@ -862,63 +865,24 @@ class BaseCoder(ABC):
             for f in common.iterate_files_deep(dir_name) if not self._should_skip_code_version(f)
         }
     
-    def validate_all_changed_files(self, normalized_changed):
-        from erieiron_autonomous_agent.coding_agents.code_writer.code_writer import validate_code
-        
-        """Validate all changed files using appropriate validators"""
+    def validate_all_changed_files(self, changed_paths):
         validation_errors = []
         
-        try:
-            self.config.stack_manager.validate_stack()
-        except Exception as e:
-            logging.exception(e)
-            validation_errors.append(str(e))
-        
-        # Build a lookup from file paths to their validator information
-        validator_lookup = {}
-        if self.planning_data:
-            for code_file_entry in self.planning_data.get("code_files", []):
-                file_path = code_file_entry.get("code_file_path")
-                validator = code_file_entry.get("validator")
-                if file_path and validator:
-                    validator_lookup[self._normalize_relative_path(file_path)] = validator
-        
-        for file_path in normalized_changed:
-            full_path = self.config.sandbox_root_dir / file_path
-            validator = validator_lookup.get(file_path)
-            
-            # Skip if file doesn't exist or is not a regular file
+        for file_path in changed_paths:
+            full_path = self.config.sandbox_root_dir / common.normalize_relative_path(file_path)
             if not full_path.exists() or not full_path.is_file():
                 continue
             
             try:
-                file_content = full_path.read_text(encoding="utf-8")
-                validate_code(
-                    self.config,
-                    full_path,
-                    file_content,
-                    validator
-                )
-            except FileNotFoundError:
-                validation_errors.append(f"`{file_path}` is missing after Codex execution; restore the file.")
-            except OSError as read_exc:
-                validation_errors.append(f"Unable to read `{file_path}` after Codex execution: {read_exc}")
+                validate(full_path)
             except CodeCompilationError as compile_exc:
                 validation_errors.append(f"Validation failed for `{file_path}`: {compile_exc}")
             except Exception as exc:
+                logging.exception(exc)
                 validation_errors.append(f"Unexpected validation error for `{file_path}`: {exc}")
         
         # Return the first validation error, or None if all files are valid
         return common.safe_join(validation_errors, "\n") if validation_errors else None
-    
-    def _normalize_relative_path(self, path: str | None) -> str:
-        if not path:
-            return ""
-        
-        normalized = str(path).strip().replace("\\", "/")
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-        return normalized
     
     def _should_skip_code_version(self, relative_path: str) -> bool:
         if not relative_path:
@@ -940,7 +904,7 @@ class BaseCoder(ABC):
             return lookup
         
         for entry in common.ensure_list(self.planning_data.get("code_files")):
-            path = self._normalize_relative_path(entry.get("code_file_path"))
+            path = common.normalize_relative_path(entry.get("code_file_path"))
             if not path:
                 continue
             

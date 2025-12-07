@@ -1,18 +1,15 @@
+from pathlib import Path
+
 from django.core.management.base import BaseCommand
-import json
+from tree_sitter import Parser
+from tree_sitter_languages import get_language
 
-from tqdm import tqdm
-
-from erieiron_autonomous_agent.business_level_agents.eng_lead import identify_required_credentials
-from erieiron_autonomous_agent.enums import BusinessStatus
-from erieiron_autonomous_agent.models import Business, InfrastructureStack, Task, CodeFile
-from erieiron_common.llm_apis import llm_interface
+from erieiron_autonomous_agent.coding_agents.code_writer import code_validator
+from erieiron_autonomous_agent.coding_agents.code_writer.code_validator import LintRules
 
 
 class Command(BaseCommand):
     def handle(self, env_type=None, *args, **options):
-        CodeFile.objects.filter(
-            business__id="2c52e0c6-2cf9-469c-a5c0-fcb0103e856d",
-            file_path__contains="test_task_bug_report_articleparsernew_t57y4lei"
-        ).delete()
-        # task = Task.objects.get(id="task_extend_recommendation_model_for_chat")
+        code_validator.validate(
+            "/Users/jjschultz/src/erieiron/erieiron_ui/js/view-business-conversations.js"
+        )

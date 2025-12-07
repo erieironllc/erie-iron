@@ -14,11 +14,10 @@ from erieiron_common.enums import SdaPhase
 from .claude_coder import ClaudeCoder
 from .codex_coder import CodexCoder
 from ...models import SelfDrivingTask
-from ...utils.codegen_utils import CodeCompilationError, validate_dockerfile
 
 CODERS = [
-    ("Codex", CodexCoder),
     ("Claude", ClaudeCoder),
+    ("Codex", CodexCoder),
     # ("Gemini", GeminiCoder),
 ]
 
@@ -46,7 +45,7 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
     # Define coders in order of preference
     tdd_test_file = common.get(config.current_iteration, ["planning_json", "tdd_test_file"])
     
-    if config.is_stagnating or tdd_test_file:
+    if config.is_stagnating:
         coders = reversed(CODERS)
     else:
         coders = CODERS
@@ -67,8 +66,7 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
             
             # if we are writing a test (ie the plan defines tdd_test_file), then make sure the test was written
             if tdd_test_file:
-                tdd_test_file = config.sandbox_root_dir / tdd_test_file
-                if not tdd_test_file.exists():
+                if not (config.sandbox_root_dir / tdd_test_file).exists():
                     raise BadPlan(f"Failed to write a test file named `{tdd_test_file}`")
                 
                 with transaction.atomic():
@@ -106,98 +104,3 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
     )
 
 
-def validate_code(
-        config: CodingAgentConfig,
-        code_file_path: Path,
-        code: str,
-        validator=None
-) -> str:
-    code_file_name = code_file_path.name.lower()
-    if validator == "jinja":
-        try:
-            from jinja2 import Environment
-            Environment().parse(code)
-        except Exception as e:
-            raise CodeCompilationError(code, f"Jinja syntax error: {e}")
-    elif validator == "django_template":
-        from django.template import Template
-        try:
-            Template(code)
-        except Exception as e:
-            raise CodeCompilationError(code, f"Django template syntax error: {e}")
-    elif code_file_name.endswith(".js"):
-        import subprocess
-        import tempfile
-        try:
-            with tempfile.NamedTemporaryFile(mode='w+', suffix=".js", delete=False) as tmp:
-                tmp.write(code)
-                tmp.flush()
-                result = subprocess.run(
-                    ["eslint", "--no-eslintrc", "--stdin", "--stdin-filename", tmp.name],
-                    capture_output=True,
-                    text=True
-                )
-            if result.returncode != 0:
-                raise CodeCompilationError(code, f"JavaScript lint errors:\n{result.stdout.strip()}")
-        finally:
-            os.remove(tmp.name)
-    
-    elif code_file_name.endswith(".css"):
-        import subprocess
-        import tempfile
-        try:
-            with tempfile.NamedTemporaryFile(mode='w+', suffix=".css", delete=False) as tmp:
-                tmp.write(code)
-                tmp.flush()
-                result = subprocess.run(
-                    ["stylelint", tmp.name],
-                    capture_output=True,
-                    text=True
-                )
-            if result.returncode != 0:
-                raise CodeCompilationError(code, f"CSS lint errors:\n{result.stdout.strip()}")
-        finally:
-            os.remove(tmp.name)
-    
-    elif code_file_name.endswith("json"):
-        try:
-            json.loads(code)
-        except Exception as e:
-            raise CodeCompilationError(code, f"json parse error:\n{e}")
-    
-    elif "Dockerfile" in code_file_name:
-        validate_dockerfile(
-            config.sandbox_root_dir,
-            code_file_name
-        )
-    
-    elif code_file_name.endswith(".yaml"):
-        try:
-            data = yaml.load(code, Loader=yaml.BaseLoader)
-        except Exception as e:
-            raise CodeCompilationError(code, f"yaml parse error:\n{e}")
-    
-    elif code_file_name.endswith(".py"):
-        import ast
-        try:
-            ast.parse(code)
-        except SyntaxError as e:
-            raise CodeCompilationError(code, f"Syntax error in Python file '{code_file_name}': {e}")
-    
-    elif code_file_name == "requirements.txt":
-        # noinspection PyProtectedMember
-        from pip._internal.req.constructors import install_req_from_line
-        # noinspection PyProtectedMember
-        from pip._internal.exceptions import InstallationError
-        
-        lines = code.splitlines()
-        for i, line in enumerate(lines, start=1):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue  # Allow empty lines and comments
-            try:
-                install_req_from_line(line)
-            except InstallationError as e:
-                raise CodeCompilationError(line, f"Invalid requirement on line {i}: '{line}' — {e}")
-    
-    return code
