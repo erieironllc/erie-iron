@@ -10,6 +10,7 @@
 1. **Staff-Level Guardrail** — Approach every plan and implementation with staff-level ownership: clarify ambiguity up front, surface tradeoffs, avoid shortcuts, and insist on clean, reusable solutions that improve the long-term health of the system.
 2. **Engineering Craftsmanship Pledge** — Leave every surface better than you found it by writing well-factored, well-documented components, articulating rationale, and structuring work so future engineers can extend it confidently.
 3. **Quality First Directive** — Prioritize correctness, observability, and testability; design for reuse and change, and refuse to ship work that compromises these standards.
+4. **Fail Fast** — No fallback handlers unless requested. Do not wrap exceptions. Allow exceptions to bubble. If you catch one, log it with logging.exception() including the full stack.
 
 ---
 
