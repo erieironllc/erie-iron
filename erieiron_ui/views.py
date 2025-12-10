@@ -24,6 +24,7 @@ from django.utils import timezone, formats
 from django.utils.html import escape
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_http_methods
 
 import settings
@@ -1962,7 +1963,10 @@ def _task_tab_context_llmrequests_consolidated(task, active_sub_tab=None, reques
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(task, request=request))
             else:
-                context.update(context_fn(task))
+                try:
+                    context.update(context_fn(task))
+                except Exception as e:
+                    logging.exception(e)
     
     context["active_sub_tab"] = active_sub_tab or "llm-spend"
     return context
@@ -2069,9 +2073,9 @@ def view_business(request, business_id, tab='overview'):
     tabs = _build_business_tabs(business)
     tab_definition = tab_defitions.BUSINESS_TAB_MAP[tab]
     
-    is_available = next((t for t in tabs if t['slug'] == tab), None)
-    if not is_available or not is_available['available']:
-        raise Http404
+    # is_available = next((t for t in tabs if t['slug'] == tab), None)
+    # if not is_available or not is_available['available']:
+    #     raise Http404
     
     context = {
         "business": business,
@@ -3398,7 +3402,7 @@ def _task_tab_context_edit(task, business, self_driving_task: SelfDrivingTask) -
     }
 
 
-def _task_tab_available_llm_spend(task: Task, business: Business, self_driving_task) -> bool:
+def _task_tab_available_llm_spend(task: Task, business: Business=None, self_driving_task=None) -> bool:
     return LlmRequest.objects.filter(task_iteration__self_driving_task__task=task).exists()
 
 
@@ -4064,7 +4068,7 @@ def action_restart_task(request, task_id):
         ...
     
     SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=task_id).delete()
-    CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
+    # CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
     
     # Reset task status and clear any existing executions
     Task.objects.filter(id=task_id).update(
@@ -4238,6 +4242,31 @@ def action_delete_business(request, business_id):
         messages.error(request, f'Error deleting business: {str(e)}')
     
     return redirect(reverse('view_portfolio'))
+
+
+@csrf_exempt
+def action_export_pitch_deck(request, business_id):
+    """Generate and download pitch deck PPTX for business."""
+    from erieiron_autonomous_agent.pitch_deck_generator import PitchDeckGenerator
+
+    business = get_object_or_404(Business, id=business_id)
+
+    # Generate pitch deck
+    generator = PitchDeckGenerator(business)
+    pptx_buffer = generator.generate_pitch_deck()
+
+    # Create HTTP response with PPTX file
+    response = HttpResponse(
+        pptx_buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    )
+
+    # Set filename for download
+    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', business.name)
+    filename = f"{safe_name}_pitch_deck.pptx"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    return response
 
 
 def action_submit_bug_report(request, business_id):
