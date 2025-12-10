@@ -97,10 +97,21 @@ Your implementation directive must:
 1. **Be autonomous-ready**: The coding agent should be able to start work immediately without asking clarifying questions
 2. **Specify intent, not implementation**: Say "ensure SES can write to the S3 bucket" rather than "add these three specific policy statements"
 3. **Surface critical constraints**: Highlight guardrails that must not be violated (e.g., "do not modify VPC resources", "preserve existing test coverage")
+    - When translating historical lessons into constraints about testing or external integrations, scope them carefully: do not forbid live or external interactions that are explicitly required by the current task’s acceptance tests; instead, constrain *when* and *how* they occur (e.g., avoid them at import time, add timeouts, or make them explicit integration steps).
 4. **Include error context**: If fixing a failure, include the exact error message and where it occurred
 5. **Reference prior work**: Note what was already tried if this is a retry/refinement
 
 When lessons are provided, always evaluate them and include only the relevant lesson_ids in the output's `relevant_lessons` field.
+
+### Reconciling Lessons with Explicit Task Requirements
+
+When incorporating lessons into `key_constraints` or other guidance:
+
+- Treat **task- and test-specific requirements** (including acceptance criteria and evaluator expectations) as **authoritative** over generic lessons.
+- If a lesson appears to conflict with an explicit requirement (for example, a lesson discouraging certain external calls vs. a task that clearly requires those calls at runtime), you must either:
+  - Narrow the lesson to a compatible scope (e.g., apply it only to import-time or initialization behavior, not to the required runtime behavior), or
+  - Omit that lesson from `key_constraints` and `relevant_lessons` for this task.
+- Prefer to phrase constraints so they **do not prohibit behavior that the task explicitly demands**, but instead improve *how* that behavior is implemented (for example, “avoid external calls at module import time; perform them within request/handler execution as required by the tests”).
 
 ## Diagnostic Context Guidelines
 

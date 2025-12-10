@@ -4,6 +4,7 @@
     <table class="table table-striped">
         <thead>
         <tr>
+            <th>ID</th>
             <th>Agent Step</th>
             <th>Pattern</th>
             <th>Trigger</th>
@@ -16,6 +17,7 @@
         <tbody>
         {% for lesson in agent_lessons %}
             <tr>
+                <td nowrap=true>{{ lesson.id }}</td>
                 <td>{{ lesson.agent_step }}</td>
                 <td>{{ lesson.pattern|truncatewords:10 }}</td>
                 <td>{{ lesson.trigger|truncatewords:10 }}</td>

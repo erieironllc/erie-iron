@@ -2,11 +2,21 @@
 <div class="tab-pane-content business-overview">
     <section class="business-overview__section">
         <div class="business-overview__section-header">
-            <h5 class="business-overview__section-title d-flex align-items-center gap-2">
-                <i class="bi bi-journal-text" aria-hidden="true"></i>
-                Business Plan
-            </h5>
-            <span class="business-overview__section-subtitle">Narrative snapshot of the current strategy</span>
+            <div class="d-flex justify-content-between align-items-start w-100">
+                <div>
+                    <h5 class="business-overview__section-title d-flex align-items-center gap-2">
+                        <i class="bi bi-journal-text" aria-hidden="true"></i>
+                        Business Plan
+                    </h5>
+                    <span class="business-overview__section-subtitle">Narrative snapshot of the current strategy</span>
+                </div>
+                <button type="button"
+                        class="btn btn-outline-primary btn-sm export-pitch-deck-btn"
+                        data-business-id="{{ business.id }}">
+                    <i class="bi bi-file-earmark-ppt" aria-hidden="true"></i>
+                    Export as Pitch Deck
+                </button>
+            </div>
         </div>
         <div class="business-overview__section-body">
             {% if business.business_plan %}
@@ -57,3 +67,10 @@
         </div>
     {% endif %}
 </div>
+
+<script>
+    $(document).ready(function() {
+        const businessPlanView = new BusinessPlanView();
+        businessPlanView.init_view();
+    });
+</script>

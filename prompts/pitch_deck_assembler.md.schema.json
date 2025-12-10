@@ -1,0 +1,52 @@
+{
+  "type": "object",
+  "properties": {
+    "design": {
+      "type": "object",
+      "properties": {
+        "primary_color": {
+          "type": "string",
+          "description": "Hex color code for primary brand color"
+        },
+        "secondary_color": {
+          "type": "string",
+          "description": "Hex color code for secondary/accent color"
+        },
+        "accent_color": {
+          "type": "string",
+          "description": "Hex color code for highlights and emphasis"
+        },
+        "style_notes": {
+          "type": "string",
+          "description": "Brief description of visual style"
+        }
+      },
+      "required": ["primary_color", "secondary_color", "accent_color"]
+    },
+    "slides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Slide title"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Bullet points or content items for the slide"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional speaker notes"
+          }
+        },
+        "required": ["title", "content"]
+      }
+    }
+  },
+  "required": ["design", "slides"]
+}

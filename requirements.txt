@@ -32,6 +32,7 @@ pillow
 psutil
 psycopg2-binary
 Pygments
+python-pptx>=0.6.21
 pytest-django
 python-dateutil>=2.8.0
 python-decouple>=3.8
