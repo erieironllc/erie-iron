@@ -30,6 +30,12 @@ class Command(BaseCommand):
             choices=[a.name for a in SdaInitialAction],
             required=False
         )
+        
+        parser.add_argument(
+            '--restart',
+            action="store_true",
+            help="Restart the self driving task"
+        )
     
     def handle(self, *args, **options):
         task_id = options.get("task_id")
@@ -52,4 +58,8 @@ class Command(BaseCommand):
         Running as {boto3.client("sts").get_caller_identity()['Arn']}
 
         """))
-        coding_agent.execute(task_id, SdaInitialAction.valid_or(options.get("action")))
+        coding_agent.execute(
+            task_id, 
+            SdaInitialAction.valid_or(options.get("action")), 
+            options.get("restart")
+        )

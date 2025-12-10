@@ -1463,6 +1463,26 @@ class Task(BaseErieIronModel):
         root_str = root_str.split("--")[-1]
         
         return root_str.replace("_", " ").replace("-", " ").capitalize()
+    
+    def restart(self):
+        try:
+            common.delete_dir(self.selfdrivingtask.sandbox_path)
+        except:
+            ...
+        
+        SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=self.id).delete()
+        CodeFile.objects.filter(business_id=self.initiative.business_id).delete()
+        
+        # Reset task status and clear any existing executions
+        Task.objects.filter(id=self.id).update(
+            status=TaskStatus.NOT_STARTED
+        )
+        
+        if SelfDrivingTask.objects.filter(task_id=self.id).exists():
+            SelfDrivingTask.objects.filter(id=self.selfdrivingtask.id).update(
+                test_file_path=None,
+                initial_tests_pass=False
+            )
 
 
 class TaskExecution(BaseErieIronModel):

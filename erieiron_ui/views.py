@@ -4056,26 +4056,7 @@ def action_retry_task(request, task_id):
 
 
 def action_restart_task(request, task_id):
-    task = get_object_or_404(Task, pk=task_id)
-    
-    try:
-        common.delete_dir(task.selfdrivingtask.sandbox_path)
-    except:
-        ...
-    
-    SelfDrivingTaskIteration.objects.filter(self_driving_task__task_id=task_id).delete()
-    CodeFile.objects.filter(business_id=task.initiative.business_id).delete()
-    
-    # Reset task status and clear any existing executions
-    Task.objects.filter(id=task_id).update(
-        status=TaskStatus.NOT_STARTED
-    )
-    
-    if SelfDrivingTask.objects.filter(task_id=task.id).exists():
-        SelfDrivingTask.objects.filter(id=task.selfdrivingtask.id).update(
-            test_file_path=None,
-            initial_tests_pass=False
-        )
+    Task.objects.get(id=task_id).restart()
     
     PubSubManager.publish_id(
         PubSubMessageType.TASK_UPDATED,
@@ -4084,6 +4065,7 @@ def action_restart_task(request, task_id):
     
     messages.success(request, f'Task {task_id} restarted successfully!')
     return redirect(reverse('view_task', args=[task_id]))
+
 
 
 def action_delete_task(request, task_id):

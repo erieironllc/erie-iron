@@ -38,9 +38,13 @@ from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandE
 from erieiron_common.stack_manager import StackManager
 
 
-def execute(task_id: str, one_off_action: SdaInitialAction = None):
+def execute(
+        task_id: str, 
+        one_off_action: SdaInitialAction = None,
+        restart=False
+):
     try:
-        self_driving_task = bootstrap_selfdriving_agent(task_id)
+        self_driving_task = bootstrap_selfdriving_agent(task_id, restart)
         
         if one_off_action:
             with CodingAgentConfig(self_driving_task, one_off_action) as config:
@@ -441,8 +445,11 @@ def validate_plan(config: CodingAgentConfig, planning_data):
     return planning_data
 
 
-def bootstrap_selfdriving_agent(task_id) -> SelfDrivingTask:
+def bootstrap_selfdriving_agent(task_id, restart) -> SelfDrivingTask:
     task = Task.objects.get(id=task_id)
+    
+    if restart:
+        task.restart()
     
     initiative_has_iterations = SelfDrivingTaskIteration.objects.filter(
         self_driving_task__task__initiative_id=task.initiative_id
