@@ -630,8 +630,9 @@ def build_container_image(
     container_build_cmd = common.strings([
         "podman",
         "build",
-        "--memory", "4g",
-        "--memory-swap", "10g",
+        "--memory", "16g",
+        "--memory-swap", "16g",
+        "--shm-size", "2g",
         "--platform", ContainerPlatform.FARGATE,
         "--build-arg", f"ERIEIRON_PUBLIC_COMMON_SHA={ERIEIRON_PUBLIC_COMMON_VERSION}",
         "-t", container_image_tag,
@@ -643,6 +644,13 @@ def build_container_image(
         config,
         container_file
     )
+    print(textwrap.dedent(f"""
+    DUDE
+    
+    building with
+    {common.safe_join(container_build_cmd, ' ')}
+    
+    """))
     
     config.log(f"\n\nstarting podman build with the command:\n{' '.join(container_build_cmd)}\n\n")
     build_process = subprocess.Popen(

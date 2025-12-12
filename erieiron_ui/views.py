@@ -24,6 +24,7 @@ from django.utils import timezone, formats
 from django.utils.html import escape
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_http_methods
 
 import settings
@@ -1683,17 +1684,15 @@ def _tab_context_bug_report(business: Business) -> dict:
         initiative_type=InitiativeType.ENGINEERING,
         title__icontains="Bug Fix"
     ).first()
-
+    
     return {
         "bug_fix_initiative": bug_fix_initiative
     }
 
 
 def _tab_context_conversation(business: Business) -> dict:
-    from erieiron_autonomous_agent.models import BusinessConversation
-
     conversations = business.conversations.all().order_by('-updated_at')[:20]
-
+    
     return {
         "conversations": conversations
     }
@@ -4240,6 +4239,31 @@ def action_delete_business(request, business_id):
     return redirect(reverse('view_portfolio'))
 
 
+@csrf_exempt
+def action_export_pitch_deck(request, business_id):
+    """Generate and download pitch deck PPTX for business."""
+    from erieiron_autonomous_agent.pitch_deck_generator import PitchDeckGenerator
+    
+    business = get_object_or_404(Business, id=business_id)
+    
+    # Generate pitch deck
+    generator = PitchDeckGenerator(business)
+    pptx_buffer = generator.generate_pitch_deck()
+    
+    # Create HTTP response with PPTX file
+    response = HttpResponse(
+        pptx_buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    )
+    
+    # Set filename for download
+    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', business.name)
+    filename = f"{safe_name}_pitch_deck.pptx"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    
+    return response
+
+
 def action_submit_bug_report(request, business_id):
     if request.method != 'POST':
         raise Exception()
@@ -4931,12 +4955,12 @@ def action_update_business(request, business_id):
         domain = rget(request, 'domain', '').strip()
         domain_certificate_arn = rget(request, 'domain_certificate_arn', '').strip()
         required_credentials_str = rget(request, 'required_credentials', '').strip()
-
+        
         # Parse required_credentials from comma-delimited string
         required_credentials = None
         if required_credentials_str:
             required_credentials = [s.strip() for s in required_credentials_str.split(',') if s.strip()]
-
+        
         # Prepare update data
         update_data = {
             'name': name,
@@ -6067,25 +6091,25 @@ def api_pubsub_publish(request):
 @require_http_methods(["POST"])
 def business_conversation_create(request, business_id):
     """Create a new conversation for a business"""
-    from erieiron_autonomous_agent.models import BusinessConversation, Initiative
+    from erieiron_autonomous_agent.models import Initiative
     from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
-
+    
     business = get_object_or_404(Business, id=business_id)
-
+    
     # Optional: scope to initiative
     initiative_id = rget(request, 'initiative_id')
     initiative = None
     if initiative_id:
         initiative = get_object_or_404(Initiative, id=initiative_id)
-
+    
     title = rget(request, 'title', 'New Conversation')
-
+    
     conversation = BusinessConversationManager.create_conversation(
         business=business,
         initiative=initiative,
         title=title
     )
-
+    
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'business_id': str(business.id),
@@ -6099,22 +6123,22 @@ def business_conversation_message(request, conversation_id):
     """Add a user message and get assistant response"""
     from erieiron_autonomous_agent.models import BusinessConversation
     from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
-
+    
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
     user_message_content = rget(request, 'message')
-
+    
     if not user_message_content:
         return JsonResponse({'error': 'Message content required'}, status=400)
-
+    
     manager = BusinessConversationManager(conversation)
-
+    
     # Add user message
     user_msg = manager.add_user_message(user_message_content)
-
+    
     # Generate response
     try:
         assistant_msg, changes = manager.generate_response()
-
+        
         return JsonResponse({
             'user_message': {
                 'id': str(user_msg.id),
@@ -6146,11 +6170,11 @@ def business_conversation_detail(request, conversation_id):
     """Get full conversation history"""
     from erieiron_autonomous_agent.models import BusinessConversation
     from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
-
+    
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
-
+    
     manager = BusinessConversationManager(conversation)
-
+    
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'business_id': str(conversation.business.id),
@@ -6166,11 +6190,10 @@ def business_conversation_detail(request, conversation_id):
 @require_http_methods(["GET"])
 def business_conversations_list(request, business_id):
     """List all conversations for a business"""
-    from erieiron_autonomous_agent.models import BusinessConversation
-
+    
     business = get_object_or_404(Business, id=business_id)
     conversations = business.conversations.all()[:20]  # Latest 20
-
+    
     return JsonResponse({
         'business_id': str(business.id),
         'conversations': [
@@ -6191,10 +6214,10 @@ def business_conversations_list(request, business_id):
 def conversation_changes_list(request, conversation_id):
     """List all change proposals for a conversation"""
     from erieiron_autonomous_agent.models import BusinessConversation
-
+    
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
     changes = conversation.changes.all()
-
+    
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'changes': [
@@ -6216,28 +6239,28 @@ def conversation_changes_list(request, conversation_id):
 def conversation_change_approve(request, change_id):
     """Approve a proposed change and apply it"""
     from erieiron_autonomous_agent.models import ConversationChange
-
+    
     change = get_object_or_404(ConversationChange, id=change_id)
-
+    
     if change.approved:
         return JsonResponse({'error': 'Change already approved'}, status=400)
-
+    
     # Mark as approved
     change.approved = True
     change.approved_at = timezone.now()
     change.save()
-
+    
     logger.info(f"Change {change.id} approved for conversation {change.conversation.id}")
-
+    
     # Mark conversation as having led to change
     change.conversation.status = 'led_to_change'
     change.conversation.save()
-
+    
     # Apply the change
     try:
         from erieiron_autonomous_agent.change_application_engine import ChangeApplicationEngine
         ChangeApplicationEngine.apply_approved_change(change)
-
+        
         return JsonResponse({
             'change_id': str(change.id),
             'approved': True,
@@ -6259,17 +6282,17 @@ def conversation_change_approve(request, change_id):
 def conversation_change_decline(request, change_id):
     """Decline a proposed change"""
     from erieiron_autonomous_agent.models import ConversationChange
-
+    
     change = get_object_or_404(ConversationChange, id=change_id)
-
+    
     if change.approved:
         return JsonResponse({'error': 'Change already approved'}, status=400)
-
+    
     # Just delete the declined change
     change.delete()
-
+    
     logger.info(f"Change {change.id} declined and deleted for conversation {change.conversation.id}")
-
+    
     return JsonResponse({'success': True})
 
 
