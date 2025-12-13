@@ -520,8 +520,6 @@ class FailureClassification(ErieEnum):
     UNKNOWN = auto()
 
 
-
-
 class CredentialServiceProvisioning(ErieEnum):
     USER_SUPPLIED = auto()
     STACK_GENERATED = auto()
@@ -604,6 +602,8 @@ class InfrastructureStackType(ErieEnum):
 
 class InitiativeNames(ErieEnum):
     OPERATIONAL_TASKS = "Operational Tasks"
+    BOOTSTRAP_ENVS = "Bootstrap Business"
+    BOOTSTRAP_ENVS_LEGACY = "BOOTSTRAP_ENVS"
 
 
 class BuildStep(ErieEnum):

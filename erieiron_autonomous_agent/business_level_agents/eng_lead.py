@@ -11,12 +11,11 @@ from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus
 from erieiron_autonomous_agent.models import Initiative, Task, ProductRequirement, Business, SelfDrivingTask
 from erieiron_autonomous_agent.system_agent_llm_interface import business_level_chat, llm_chat, get_sys_prompt
 from erieiron_common import common
-from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType, LlmModel, LlmReasoningEffort, LlmVerbosity
+from erieiron_common.enums import TaskExecutionSchedule, InitiativeType, TaskType, Level, PubSubMessageType, LlmModel, LlmReasoningEffort, LlmVerbosity, InitiativeNames
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
-INITIATIVE_TITLE_BOOTSTRAP_ENVS = "Bootstrap Business"
 DEFAULT_ENV_VARS = [
     "AWS_DEFAULT_REGION",
     "AWS_ACCOUNT_ID",
@@ -331,11 +330,11 @@ def bootstrap_buiness(business_id):
             business.save()
         
         bootstrap_initiative, _ = business.initiative_set.get_or_create(
-            title=INITIATIVE_TITLE_BOOTSTRAP_ENVS,
+            title=InitiativeNames.BOOTSTRAP_ENVS,
             defaults={
                 "id": uuid.uuid4(),
                 "business": business,
-                "title": INITIATIVE_TITLE_BOOTSTRAP_ENVS,
+                "title": InitiativeNames.BOOTSTRAP_ENVS,
                 "initiative_type": InitiativeType.ENGINEERING,
                 "priority": Level.HIGH,
                 "description": "Clone the bootstrap project and setup the runtime environments"

@@ -1347,19 +1347,27 @@ def _tab_context_cloud_accounts(business: Business) -> dict:
 
 
 def _tab_available_product_initiatives(business: Business) -> bool:
-    from erieiron_autonomous_agent.business_level_agents.eng_lead import INITIATIVE_TITLE_BOOTSTRAP_ENVS
-    return business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).exists()
+    return business.initiative_set.exclude(title=InitiativeNames.BOOTSTRAP_ENVS_LEGACY).exclude(title=InitiativeNames.BOOTSTRAP_ENVS).exists()
 
 
 def _tab_context_product_initiatives(business: Business) -> dict:
-    from erieiron_autonomous_agent.business_level_agents.eng_lead import INITIATIVE_TITLE_BOOTSTRAP_ENVS
     existing_kpis = [
         kpi.name or kpi.kpi_id
         for kpi in business.businesskpi_set.order_by("name")
         if (kpi.name or kpi.kpi_id)
     ]
+    
+    initiatives = business.initiative_set.exclude(
+        title__in=[InitiativeNames.BOOTSTRAP_ENVS_LEGACY, InitiativeNames.BOOTSTRAP_ENVS]
+    ).order_by("created_timestamp")
+    
+    initiatives = (
+            [i for i in initiatives if InitiativeNames.OPERATIONAL_TASKS.neq(i.title)]
+            + [i for i in initiatives if InitiativeNames.OPERATIONAL_TASKS.eq(i.title)]
+    )
+    
     return {
-        "initiatives": business.initiative_set.exclude(title="BOOTSTRAP_ENVS").exclude(title=INITIATIVE_TITLE_BOOTSTRAP_ENVS).order_by("created_timestamp"),
+        "initiatives": initiatives,
         "business_kpis": existing_kpis
     }
 
@@ -1408,6 +1416,9 @@ def _build_project_plan_viewmodel(initiatives: Iterable[Initiative]) -> dict:
     initiative_offset_units = 0
     
     for initiative in initiative_list:
+        if InitiativeNames.OPERATIONAL_TASKS.eq(initiative.title):
+            continue
+        
         tasks = _project_plan_collect_tasks(initiative)
         total_tasks += len(tasks)
         initiative_status = _project_plan_initiative_status(tasks)
