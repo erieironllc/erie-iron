@@ -412,6 +412,40 @@ resource "aws_iam_role_policy" "web_llm_api_keys" {
   }
 }
 
+resource "aws_iam_role_policy" "web_websocket" {
+  name = "${var.StackIdentifier}-web-websocket"
+  role = aws_iam_role.web_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowApiGatewayManagement"
+        Effect = "Allow"
+        Action = "execute-api:ManageConnections"
+        Resource = "${aws_apigatewayv2_api.websocket.execution_arn}/*/*/@connections/*"
+      },
+      {
+        Sid    = "AllowDynamoDBWebSocketConnections"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:Query",
+          "dynamodb:GetItem",
+          "dynamodb:DeleteItem"
+        ]
+        Resource = [
+          aws_dynamodb_table.websocket_connections.arn,
+          "${aws_dynamodb_table.websocket_connections.arn}/index/person_id-index"
+        ]
+      }
+    ]
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
 resource "aws_ecs_task_definition" "web" {
   family                   = substr("${var.StackIdentifier}-web", 0, 255)
   cpu                      = tostring(var.WebContainerCpu)
@@ -447,7 +481,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "ERIEIRON_DB_PORT", value = tostring(aws_db_instance.primary.port) },
         { name = "STATIC_COMPILED_DIR", value = var.StaticCompiledDir },
         { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
-        { name = "DOMAIN_NAME", value = var.DomainName }
+        { name = "DOMAIN_NAME", value = var.DomainName },
+        { name = "CLIENT_MESSAGE_WEBSOCKET_ENDPOINT", value = replace(replace(aws_apigatewayv2_stage.websocket.invoke_url, "wss://", ""), "ws://", "") },
+        { name = "CLIENT_MESSAGE_DYNAMO_TABLE", value = aws_dynamodb_table.websocket_connections.name }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -622,6 +658,304 @@ resource "aws_security_group_rule" "ecs_ingress" {
   cidr_blocks       = [var.VpcCidr]
   description       = "Allow ALB to reach ECS tasks on port 8006"
 }
+
+# ============================================================================
+# WebSocket Infrastructure
+# ============================================================================
+
+# DynamoDB table for WebSocket connection tracking
+resource "aws_dynamodb_table" "websocket_connections" {
+  name           = "${var.StackIdentifier}-websocket-connections"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "connection_id"
+
+  attribute {
+    name = "connection_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "person_id"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "person_id-index"
+    hash_key        = "person_id"
+    projection_type = "ALL"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-websocket-connections"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+# IAM role for WebSocket Lambda functions
+resource "aws_iam_role" "websocket_lambda" {
+  name = substr("${var.StackIdentifier}-websocket-lambda-role", 0, 64)
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-websocket-lambda-role"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+# Attach basic Lambda execution policy
+resource "aws_iam_role_policy_attachment" "websocket_lambda_basic" {
+  role       = aws_iam_role.websocket_lambda.name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# DynamoDB access policy for Lambda
+resource "aws_iam_role_policy" "websocket_lambda_dynamodb" {
+  name = "${var.StackIdentifier}-websocket-lambda-dynamodb"
+  role = aws_iam_role.websocket_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowDynamoDBAccess"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:GetItem"
+        ]
+        Resource = aws_dynamodb_table.websocket_connections.arn
+      }
+    ]
+  })
+}
+
+# Lambda function for WebSocket connect
+data "archive_file" "websocket_connect" {
+  type        = "zip"
+  output_path = "${path.module}/.terraform/lambda-connect.zip"
+
+  source {
+    content = <<-EOT
+import json
+import boto3
+import os
+from datetime import datetime, timedelta
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+def lambda_handler(event, context):
+    connection_id = event['requestContext']['connectionId']
+    query_params = event.get('queryStringParameters', {}) or {}
+    person_id = query_params.get('uid')
+
+    if not person_id:
+        return {'statusCode': 400, 'body': 'Missing uid parameter'}
+
+    # Store connection with TTL (24 hours)
+    ttl = int((datetime.utcnow() + timedelta(hours=24)).timestamp())
+
+    table.put_item(Item={
+        'connection_id': connection_id,
+        'person_id': person_id,
+        'ttl': ttl,
+        'connected_at': datetime.utcnow().isoformat()
+    })
+
+    return {'statusCode': 200, 'body': 'Connected'}
+EOT
+    filename = "lambda_function.py"
+  }
+}
+
+resource "aws_lambda_function" "websocket_connect" {
+  filename         = data.archive_file.websocket_connect.output_path
+  function_name    = "${var.StackIdentifier}-websocket-connect"
+  role             = aws_iam_role.websocket_lambda.arn
+  handler          = "lambda_function.lambda_handler"
+  source_code_hash = data.archive_file.websocket_connect.output_base64sha256
+  runtime          = "python3.11"
+  timeout          = 30
+
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.websocket_connections.name
+    }
+  }
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-websocket-connect"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+# Lambda function for WebSocket disconnect
+data "archive_file" "websocket_disconnect" {
+  type        = "zip"
+  output_path = "${path.module}/.terraform/lambda-disconnect.zip"
+
+  source {
+    content = <<-EOT
+import json
+import boto3
+import os
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+def lambda_handler(event, context):
+    connection_id = event['requestContext']['connectionId']
+
+    table.delete_item(Key={'connection_id': connection_id})
+
+    return {'statusCode': 200, 'body': 'Disconnected'}
+EOT
+    filename = "lambda_function.py"
+  }
+}
+
+resource "aws_lambda_function" "websocket_disconnect" {
+  filename         = data.archive_file.websocket_disconnect.output_path
+  function_name    = "${var.StackIdentifier}-websocket-disconnect"
+  role             = aws_iam_role.websocket_lambda.arn
+  handler          = "lambda_function.lambda_handler"
+  source_code_hash = data.archive_file.websocket_disconnect.output_base64sha256
+  runtime          = "python3.11"
+  timeout          = 30
+
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.websocket_connections.name
+    }
+  }
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-websocket-disconnect"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+# API Gateway WebSocket API
+resource "aws_apigatewayv2_api" "websocket" {
+  name                       = "${var.StackIdentifier}-websocket-api"
+  protocol_type              = "WEBSOCKET"
+  route_selection_expression = "$request.body.action"
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-websocket-api"
+  })
+}
+
+# Connect route integration
+resource "aws_apigatewayv2_integration" "connect" {
+  api_id                    = aws_apigatewayv2_api.websocket.id
+  integration_type          = "AWS_PROXY"
+  integration_uri           = aws_lambda_function.websocket_connect.invoke_arn
+  integration_method        = "POST"
+  content_handling_strategy = "CONVERT_TO_TEXT"
+}
+
+resource "aws_apigatewayv2_route" "connect" {
+  api_id    = aws_apigatewayv2_api.websocket.id
+  route_key = "$connect"
+  target    = "integrations/${aws_apigatewayv2_integration.connect.id}"
+}
+
+# Disconnect route integration
+resource "aws_apigatewayv2_integration" "disconnect" {
+  api_id                    = aws_apigatewayv2_api.websocket.id
+  integration_type          = "AWS_PROXY"
+  integration_uri           = aws_lambda_function.websocket_disconnect.invoke_arn
+  integration_method        = "POST"
+  content_handling_strategy = "CONVERT_TO_TEXT"
+}
+
+resource "aws_apigatewayv2_route" "disconnect" {
+  api_id    = aws_apigatewayv2_api.websocket.id
+  route_key = "$disconnect"
+  target    = "integrations/${aws_apigatewayv2_integration.disconnect.id}"
+}
+
+# Deployment and stage
+resource "aws_apigatewayv2_deployment" "websocket" {
+  api_id = aws_apigatewayv2_api.websocket.id
+
+  depends_on = [
+    aws_apigatewayv2_route.connect,
+    aws_apigatewayv2_route.disconnect
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_apigatewayv2_stage" "websocket" {
+  api_id        = aws_apigatewayv2_api.websocket.id
+  name          = var.ErieIronEnv
+  deployment_id = aws_apigatewayv2_deployment.websocket.id
+
+  default_route_settings {
+    throttling_burst_limit = 5000
+    throttling_rate_limit  = 10000
+  }
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-websocket-stage"
+  })
+
+  lifecycle {
+    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+  }
+}
+
+# Lambda permissions for API Gateway to invoke functions
+resource "aws_lambda_permission" "websocket_connect" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.websocket_connect.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.websocket.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "websocket_disconnect" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.websocket_disconnect.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.websocket.execution_arn}/*/*"
+}
+
 output "LoadBalancerDNSName" {
   description = "Public DNS name of the application load balancer."
   value       = aws_lb.web.dns_name
@@ -688,4 +1022,30 @@ output "RdsSecretArn" {
   description = "Alias of the generated Secrets Manager secret for the DB master user."
   value       = try(aws_db_instance.primary.master_user_secret[0].secret_arn, null)
   sensitive   = true
+}
+
+# WebSocket outputs
+output "WebSocketApiId" {
+  description = "API Gateway WebSocket API identifier."
+  value       = aws_apigatewayv2_api.websocket.id
+}
+
+output "WebSocketEndpoint" {
+  description = "WebSocket endpoint URL (without stage name)."
+  value       = aws_apigatewayv2_api.websocket.api_endpoint
+}
+
+output "WebSocketStageUrl" {
+  description = "Full WebSocket URL including stage (use this for connections)."
+  value       = "wss://${replace(aws_apigatewayv2_stage.websocket.invoke_url, "wss://", "")}"
+}
+
+output "WebSocketConnectionsTableName" {
+  description = "DynamoDB table name for WebSocket connection tracking."
+  value       = aws_dynamodb_table.websocket_connections.name
+}
+
+output "WebSocketConnectionsTableArn" {
+  description = "DynamoDB table ARN for WebSocket connection tracking."
+  value       = aws_dynamodb_table.websocket_connections.arn
 }

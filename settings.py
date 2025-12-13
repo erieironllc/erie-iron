@@ -49,8 +49,8 @@ COGNITO_CLIENT_ID = config("COGNITO_CLIENT_ID")
 COGNITO_DOMAIN = config("COGNITO_DOMAIN", default="https://login.collaya.com")
 
 DISABLE_EMAIL_SEND = config('DISABLE_EMAIL_SEND', default=False, cast=bool)
-CLIENT_MESSAGE_WEBSOCKET_ENDPOINT = "rkbq6d3yd4.execute-api.us-west-2.amazonaws.com/production"
-CLIENT_MESSAGE_DYNAMO_TABLE = "client-websocket_connections-db"
+CLIENT_MESSAGE_WEBSOCKET_ENDPOINT = config('CLIENT_MESSAGE_WEBSOCKET_ENDPOINT')
+CLIENT_MESSAGE_DYNAMO_TABLE = config('CLIENT_MESSAGE_DYNAMO_TABLE')
 GOOGLE_ANALYTICS_PROPERTY_ID = "TODO"
 MESSAGE_QUEUE_ENV = config('MESSAGE_QUEUE_ENV', default=None, cast=str)
 MESSAGE_TYPES = os.getenv("MESSAGE_TYPES", config('MESSAGE_TYPES', default=None, cast=str))
