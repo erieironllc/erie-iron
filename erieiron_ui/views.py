@@ -43,7 +43,7 @@ from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, request_llm_async, get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -4041,13 +4041,13 @@ def action_resolve_task(request, task_id):
 
 def action_task_regenerate_test(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
-    
-    # PubSubManager.publish_id(
-    #     PubSubMessageType.RESET_TASK_TEST,
-    #     task_id
-    # )
-    coding_agent.on_reset_task_test(task_id)
-    
+
+    PubSubManager.publish_id(
+        PubSubMessageType.RESET_TASK_TEST,
+        task_id
+    )
+
+    messages.info(request, 'Test regeneration started. You will be notified when complete.')
     return redirect(reverse('view_task_tab', args=['testcode', task_id]))
 
 
@@ -4195,43 +4195,51 @@ def action_business_define_ui_design_spec(request, business_id):
 
 def action_business_regenerate_architecture(request, business_id):
     business = get_object_or_404(Business, pk=business_id)
-    
-    # PubSubManager.publish_id(
-    #     PubSubMessageType.RESET_TASK_TEST,
-    #     business_id
-    # )
-    eng_lead.write_business_architecture(business)
-    
+
+    PubSubManager.publish_id(
+        PubSubMessageType.BUSINESS_ARCHITECTURE_GENERATION_REQUESTED,
+        business_id
+    )
+
+    messages.info(request, 'Business architecture regeneration started. You will be notified when complete.')
     return redirect(reverse('view_business_tab', args=['architecture', business_id]))
 
 
 def action_initiative_regenerate_architecture(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-    
-    # PubSubManager.publish_id(
-    #     PubSubMessageType.RESET_TASK_TEST,
-    #     initiative_id
-    # )
-    eng_lead.write_initiative_architecture(initiative)
-    initiative.write_user_documentation()
-    
+
+    PubSubManager.publish_id(
+        PubSubMessageType.INITIATIVE_ARCHITECTURE_GENERATION_REQUESTED,
+        initiative_id
+    )
+
+    messages.info(request, 'Initiative architecture regeneration started. You will be notified when complete.')
     return redirect(reverse('view_initiative_tab', args=['architecture', initiative_id]))
 
 
 def action_initiative_regenerate_user_documentation(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-    
-    initiative.write_user_documentation()
-    
+
+    PubSubManager.publish_id(
+        PubSubMessageType.INITIATIVE_USER_DOCUMENTATION_GENERATION_REQUESTED,
+        initiative_id
+    )
+
+    messages.info(request, 'User documentation regeneration started. You will be notified when complete.')
     return redirect(reverse('view_initiative_tab', args=['user-documentation', initiative_id]))
 
 
 def action_initiative_regenerate_tasks(request, initiative_id):
     initiative: Initiative = get_object_or_404(Initiative, pk=initiative_id)
-    
+
     initiative.tasks.all().delete()
-    eng_lead.define_tasks_for_initiative(initiative_id)
-    
+
+    PubSubManager.publish_id(
+        PubSubMessageType.INITIATIVE_TASKS_GENERATION_REQUESTED,
+        initiative_id
+    )
+
+    messages.info(request, 'Task regeneration started. You will be notified when complete.')
     return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
 
 
@@ -4345,40 +4353,36 @@ def action_submit_bug_report(request, business_id):
 def action_submit_bug_report_initiative(request, initiative_id):
     if request.method != 'POST':
         raise Exception()
-    
+
+    person = get_current_user(request)
     initiative = get_object_or_404(Initiative, id=initiative_id)
-    
+
     bug_description = rget(request, 'bug_description', '').strip()
-    
+
     if not bug_description:
         messages.error(request, 'Please provide a bug description.')
         return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
-    
+
     try:
-        # Use LLM to parse the bug report and extract structured information
-        parsed_data = system_agent_llm_interface.llm_chat(
+        request_llm_async(
+            person=person,
             description=f"Parse bug report for {initiative.title}",
             messages=[
                 get_sys_prompt("eng_lead--bug_ingester.md"),
                 LlmMessage.user_from_data("Bug Report", bug_description)
             ],
-            tag_entity=initiative,
             model=LlmModel.OPENAI_GPT_5_MINI,
-            verbosity=LlmVerbosity.MEDIUM
-        ).json()
-        
-        Task.objects.create(
-            id=f"task_bug_report_{initiative.business.service_token}_{common.gen_random_token(8)}",
-            initiative=initiative,
-            task_type=TaskType.HUMAN_WORK,
-            status=TaskStatus.NOT_STARTED,
-            description=parsed_data.get('description', f'Bug report: {bug_description[:100]}'),
-            risk_notes=parsed_data.get('risk_notes', ''),
-            completion_criteria=parsed_data.get('completion_criteria', ['Bug is reproduced and fixed'])
+            tag_entity=initiative,
+            verbosity=LlmVerbosity.MEDIUM,
+            completion_view_url=request.build_absolute_uri(reverse('action_submit_bug_report_initiative_completion')),
+            completion_view_data={
+                "initiative_id": initiative_id,
+                "bug_description": bug_description
+            }
         )
-        
-        messages.success(request, 'Bug report submitted successfully! A task has been created in this initiative.')
-        return redirect(reverse('view_initiative_tab', args=["tasks", initiative_id]))
+
+        messages.info(request, 'Processing bug report...')
+        return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
     
     except Exception as e:
         messages.error(request, f'Error submitting bug report: {str(e)}')
@@ -6672,5 +6676,40 @@ def stack_credential_secret_update(request, stack_id, credential_service_name):
         stack.credential_arns = {}
     stack.credential_arns[credential_service.value] = arn
     stack.save(update_fields=["credential_arns"])
-    
+
     return JsonResponse({"success": True, "arn": arn})
+
+
+# LLM Async Completion Handlers
+
+@json_endpoint
+def action_submit_bug_report_initiative_completion(request):
+    """Completion handler for async bug report processing"""
+    try:
+        body = _parse_json_body(request)
+        llm_response = body.get('llm_response', {})
+        initiative_id = body.get('initiative_id')
+        bug_description = body.get('bug_description')
+
+        if llm_response.get('error'):
+            logging.error(f"LLM error processing bug report: {llm_response['error']}")
+            return {"success": False, "error": llm_response['error']}
+
+        parsed_data = llm_response.get('json', {})
+        initiative = Initiative.objects.get(id=initiative_id)
+
+        Task.objects.create(
+            id=f"task_bug_report_{initiative.business.service_token}_{common.gen_random_token(8)}",
+            initiative=initiative,
+            task_type=TaskType.HUMAN_WORK,
+            status=TaskStatus.NOT_STARTED,
+            description=parsed_data.get('description', f'Bug report: {bug_description[:100]}'),
+            risk_notes=parsed_data.get('risk_notes', ''),
+            completion_criteria=parsed_data.get('completion_criteria', ['Bug is reproduced and fixed'])
+        )
+
+        return {"success": True, "task_created": True}
+
+    except Exception as e:
+        logging.exception(e)
+        return {"success": False, "error": str(e)}

@@ -104,6 +104,17 @@ def on_business_architecture_generation_requested(payload):
     identify_required_credentials(business)
 
 
+def on_initiative_architecture_generation_requested(initiative_id):
+    initiative = Initiative.objects.get(id=initiative_id)
+    write_initiative_architecture(initiative)
+    initiative.write_user_documentation()
+
+
+def on_initiative_user_documentation_generation_requested(initiative_id):
+    initiative = Initiative.objects.get(id=initiative_id)
+    initiative.write_user_documentation()
+
+
 def on_product_initiatives_defined(business_id):
     business = Business.objects.get(id=business_id)
     write_business_architecture(business)

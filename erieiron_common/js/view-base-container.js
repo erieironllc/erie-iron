@@ -99,6 +99,11 @@ BaseContainerView = ErieView.extend({
             this.delegateEvents();
         });
 
+        // Register WebSocket handler for async LLM responses
+        erie_server().on("LLM_RESPONSE_READY", (payload) => {
+            this.handle_llm_response(payload);
+        });
+
         document.addEventListener('keydown', (event) => {
             if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === 'z') {
                 $("body").trigger("on_redo_requested");
@@ -170,6 +175,37 @@ BaseContainerView = ErieView.extend({
         this.delegateEvents()
 
 
+    },
+
+    handle_llm_response: function(payload) {
+        /**
+         * Handler for async LLM response WebSocket messages.
+         *
+         * Per requirements: "when the browser client receives the webclient message,
+         * it writes the payload to the console"
+         */
+        console.log("LLM Response Received:", payload);
+
+        // Check for errors
+        if (payload.error) {
+            console.error("LLM Request Error:", payload.error);
+            console.error("Original Description:", payload.original_description);
+            return;
+        }
+
+        // Log successful response details
+        console.log("LLM Request ID:", payload.llm_request_id);
+        console.log("Model:", payload.model);
+        console.log("Duration:", payload.chat_millis + "ms");
+        console.log("Cost:", "$" + payload.price_total);
+        console.log("Response Text:", payload.text);
+
+        if (payload.json) {
+            console.log("Parsed JSON:", payload.json);
+        }
+
+        // Trigger custom event that views can listen to
+        $("body").trigger("llm_response_ready", [payload]);
     },
 
     delegate_events_tester_click(target_el) {

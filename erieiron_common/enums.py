@@ -210,6 +210,7 @@ class PubSubMessagePriority(ErieEnum):
 
 class ClientMessage(ErieEnum):
     INTERACTION_RESPONSE_UPDATED = auto()
+    LLM_RESPONSE_READY = auto()
 
 
 class PubSubWorkerResponse(ErieEnum):
@@ -270,8 +271,13 @@ class PubSubMessageType(ErieEnum):
     SELF_DRIVING_CODER_REQUESTED = auto()
     SELF_DRIVING_CODER_UPDATED = auto()
     SELF_DRIVING_CODER_COMPLETED = auto()
-    
+
+    LLM_REQUEST = auto()
+
     RESET_TASK_TEST = auto()
+    INITIATIVE_ARCHITECTURE_GENERATION_REQUESTED = auto()
+    INITIATIVE_TASKS_GENERATION_REQUESTED = auto()
+    INITIATIVE_USER_DOCUMENTATION_GENERATION_REQUESTED = auto()
     
     @staticmethod
     def get_cuda_only_message_types() -> Tuple['PubSubMessageType']:

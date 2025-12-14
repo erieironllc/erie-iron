@@ -3,6 +3,7 @@ from erieiron_autonomous_agent.business_level_agents import eng_lead, product_le
 from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_common.enums import PubSubMessageType as T
 from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSubManager
+from erieiron_common import llm_request_handler
 
 
 @pubsub_workflow
@@ -65,6 +66,12 @@ def board_workflow(pubsub_manager: PubSubManager):
         coding_agent.on_reset_task_test
     )
 
+    # Generic LLM Request Handler
+    pubsub_manager.on(
+        T.LLM_REQUEST,
+        llm_request_handler.handle_llm_request
+    )
+
 
 @pubsub_workflow
 def business_workflow(pubsub_manager: PubSubManager):
@@ -104,6 +111,15 @@ def business_workflow(pubsub_manager: PubSubManager):
     ).on(
         T.BUSINESS_ARCHITECTURE_GENERATION_REQUESTED,
         eng_lead.on_business_architecture_generation_requested
+    ).on(
+        T.INITIATIVE_ARCHITECTURE_GENERATION_REQUESTED,
+        eng_lead.on_initiative_architecture_generation_requested
+    ).on(
+        T.INITIATIVE_TASKS_GENERATION_REQUESTED,
+        eng_lead.define_tasks_for_initiative
+    ).on(
+        T.INITIATIVE_USER_DOCUMENTATION_GENERATION_REQUESTED,
+        eng_lead.on_initiative_user_documentation_generation_requested
     ).on(
         T.TASK_BLOCKED,
         eng_lead.on_task_blocked,

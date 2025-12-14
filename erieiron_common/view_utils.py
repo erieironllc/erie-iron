@@ -480,3 +480,121 @@ def rget(request, key, default_val=None):
         return common.get(request.GET, key, default_val)
     else:
         return default_val
+
+
+def request_llm_async(
+        person,
+        description,
+        messages,
+        model,
+        tag_entity=None,
+        output_schema=None,
+        reasoning_effort=None,
+        verbosity=None,
+        creativity=None,
+        code_response=False,
+        completion_view_url=None,
+        completion_view_data=None
+):
+    """
+    Helper function to publish an async LLM request to the PubSub queue.
+
+    This allows views to request LLM processing without blocking the request thread.
+    The LLM response will be sent to the frontend via WebSocket when complete.
+
+    Args:
+        person: Person object (current user)
+        description: str - Description of the LLM request
+        messages: list[LlmMessage] - Messages to send to the LLM
+        model: LlmModel - The LLM model to use
+        tag_entity: Optional entity to tag the LlmRequest with (Business, Initiative, Task, etc.)
+        output_schema: Optional JSON schema for structured output
+        reasoning_effort: LlmReasoningEffort - Level of reasoning effort
+        verbosity: LlmVerbosity - Response verbosity level
+        creativity: LlmCreativity - Creativity level
+        code_response: bool - Whether response is code
+        completion_view_url: Optional URL to POST results to (Option B pattern)
+        completion_view_data: Optional dict of additional data to pass to completion view
+
+    Returns:
+        PubSubMessage object that was created
+
+    Example:
+        from erieiron_common.view_utils import request_llm_async
+        from erieiron_common.llm_apis.llm_interface import LlmMessage
+        from erieiron_common.enums import LlmModel
+
+        @json_endpoint
+        def my_view(request):
+            person = get_current_user(request)
+            messages = [LlmMessage.user("What is 2+2?")]
+
+            request_llm_async(
+                person=person,
+                description="Simple math question",
+                messages=messages,
+                model=LlmModel.OPENAI_GPT_5_MINI,
+                completion_view_url=reverse('my_completion_handler'),
+                completion_view_data={"user_id": person.id}
+            )
+
+            return {"status": "processing"}
+    """
+    from erieiron_common.enums import PubSubMessageType, LlmReasoningEffort, LlmVerbosity, LlmCreativity
+    from erieiron_common.message_queue.pubsub_manager import PubSubManager
+
+    # Serialize messages to dict format for payload
+    messages_data = []
+    for msg in messages:
+        msg_dict = {
+            "message_type": msg.message_type.value,
+            "text": msg.text
+        }
+        if hasattr(msg, 'file') and msg.file:
+            # Note: file handling requires additional serialization
+            # For now, we'll skip files in async requests
+            pass
+        messages_data.append(msg_dict)
+
+    # Determine tag entity info
+    tag_entity_type = None
+    tag_entity_id = None
+    if tag_entity:
+        tag_entity_type = tag_entity.__class__.__name__
+        tag_entity_id = str(tag_entity.id)
+
+    # Build payload
+    payload = {
+        "person_id": str(person.id),
+        "description": description,
+        "messages": messages_data,
+        "model": model.value,
+        "tag_entity_type": tag_entity_type,
+        "tag_entity_id": tag_entity_id,
+        "code_response": code_response
+    }
+
+    # Add optional parameters if provided
+    if output_schema:
+        payload["output_schema"] = output_schema
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort.value
+    if verbosity:
+        payload["verbosity"] = verbosity.value
+    if creativity:
+        payload["creativity"] = creativity.value
+    if completion_view_url:
+        payload["completion_view_url"] = completion_view_url
+    if completion_view_data:
+        payload["completion_view_data"] = completion_view_data
+
+    # Publish to PubSub
+    message = PubSubManager.publish(
+        message_type=PubSubMessageType.LLM_REQUEST,
+        namespace_context=person.id,  # Use person ID as namespace for tracking
+        payload=payload
+    )
+
+    common.log_info(f"Published async LLM request for {person.email}: {description}")
+
+    return message

@@ -27,6 +27,7 @@ urlpatterns = [
     path("_business/export_pitch_deck/<uuid:business_id>", views.action_export_pitch_deck, name="action_export_pitch_deck"),
     path("_business/submit_bug_report/<uuid:business_id>", views.action_submit_bug_report, name="action_submit_bug_report"),
     path("_initiative/submit_bug_report/<str:initiative_id>", views.action_submit_bug_report_initiative, name="action_submit_bug_report_initiative"),
+    path("_initiative/submit_bug_report_completion", views.action_submit_bug_report_initiative_completion, name="action_submit_bug_report_initiative_completion"),
     path("_initiative/submit_task/<str:initiative_id>", views.action_submit_initiative_task, name="action_submit_initiative_task"),
     path("business/<uuid:business_id>", views.view_business, name="view_business"),
     path("business/<slug:tab>/<uuid:business_id>", views.view_business, name="view_business_tab"),
