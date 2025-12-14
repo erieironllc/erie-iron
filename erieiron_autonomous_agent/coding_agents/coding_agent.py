@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -283,24 +284,24 @@ def on_reset_task_test(task_id):
         config.log("Skipping test regeneration for production deployment task")
         return config
     
-    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
-        plan_initiative_tdd_code_changes(config)
-    else:
-        plan_task_tdd_code_changes(config)
-    
-    write_code(config)
+    write_tdd_test(config)
     
     return config
+
+
+def write_tdd_test(config: CodingAgentConfig):
+    plan_code_changes(config, write_tdd_test=True)
+    write_code(config)
 
 
 def get_guidance_msg(config: CodingAgentConfig):
     return config.guidance
 
 
-def plan_code_changes(config: CodingAgentConfig):
+def plan_code_changes(config: CodingAgentConfig, write_tdd_test=False):
     config.set_phase(SdaPhase.PLANNING)
     
-    if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
+    if write_tdd_test:
         if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
             planning_data = plan_initiative_tdd_code_changes(config)
         else:
@@ -496,6 +497,9 @@ def bootstrap_selfdriving_agent(task_id, restart) -> SelfDrivingTask:
         
         if not config.business.codefile_set.exists():
             config.git.mk_venv()
+        
+        if self_driving_task.test_file_path is None or not (config.sandbox_root_dir / self_driving_task.test_file_path).exists():
+            write_tdd_test(config)
         
         first_iteration = self_driving_task.selfdrivingtaskiteration_set.first()
         config.business.snapshot_code(first_iteration)
@@ -1169,12 +1173,8 @@ def run_jest_tests(
     run_generic_container_command(
         config=config,
         command=[
-            "npm", "test", "--",
-            "--ci",
-            "--forceExit",
-            "--runInBand",
-            "--detectOpenHandles",
-            "--coverage=false"
+            "sh", "-lc",
+            "npm ci && npm test -- --ci --forceExit --runInBand --detectOpenHandles --coverage=false"
         ],
         container_image_tag=container_image_tag,
         working_dir=work_dir
@@ -1244,18 +1244,18 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
-        config.stack_manager.init_workspace()
-        config.stack_manager.validate_stack()
+        config.stack_manager.init_workspace().validate_stack()
         
         container_image_tag, lambda_datas = build_iteration(
             config
         )
         
-        deploy_iteration(
-            config,
-            container_image_tag,
-            lambda_datas
-        )
+        if not config.is_ui_first_phase:
+            deploy_iteration(
+                config,
+                container_image_tag,
+                lambda_datas
+            )
         
         execute_iteration(
             config,
@@ -1448,45 +1448,22 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     
     config.dump_env_to_envrc()
     
-    # Detect frontend framework
-    frontend_info = detect_frontend_framework(config)
+    failing_tests = run_frontend_tests(
+        config,
+        container_image_tag
+    )
     
-    test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
+    if not (config.should_skip_aws_deployment() or failing_tests):
+        failing_tests = run_backend_tests(
+            config,
+            container_image_tag
+        )
     
-    failing_tests = []
-    
-    if frontend_info["has_frontend"]:
-        frontend_dir = frontend_info["frontend_dir"]
-        
-        if not any([frontend_info["has_jest"], frontend_info["has_playwright"], frontend_info["has_cypress"]]):
-            raise BadPlan(textwrap.dedent(f"""
-                ⚠️  No E2E test framework found (Playwright/Cypress/Jest) - skipping E2E tests.  Please update {frontend_dir}/package.json to include a testing framework
-                ⚠️  WARNING: Per codeplanner--test_driven_development.md, E2E tests are REQUIRED for React projects
-            """))
-        
-        if frontend_info["has_jest"]:
-            try:
-                run_jest_tests(config, container_image_tag, frontend_dir)
-            except ExecutionException as e:
-                failing_tests.append(f"Jest component tests failed. See logs above for details.")
-        
-        if frontend_info["has_playwright"]:
-            try:
-                run_playwright_tests(config, container_image_tag, frontend_dir)
-            except ExecutionException as e:
-                failing_tests.append(f"Playwright E2E tests failed. See logs above for details.")
-        
-        if frontend_info["has_cypress"]:
-            try:
-                run_cypress_tests(config, container_image_tag, frontend_dir)
-            except ExecutionException as e:
-                failing_tests.append(f"Cypress E2E tests failed. See logs above for details.")
-        
-        if not failing_tests:
-            config.log("\n" + "=" * 80)
-            config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY.  PROCEEDING TO BACKEND TESTS")
-            config.log("=" * 80 + "\n")
-    
+    if failing_tests:
+        raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
+
+
+def run_backend_tests(config: CodingAgentConfig, container_image_tag: str) -> list[Any]:
     # try:
     #     empty_stack_buckets(
     #         config,
@@ -1496,6 +1473,8 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
     #     config.log(e)
     #     raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
     
+    test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
+    failing_tests = []
     failing_python_tests = [t for t in test_errors_blob if t.get("file_name", "").endswith(".py")] if test_errors_blob else []
     if failing_python_tests:
         first_tests = llm_chat(
@@ -1543,7 +1522,7 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             failing_tests.append(f"Some or all of {first_tests} failed. See logs above for details.")
     
     if failing_tests:
-        raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
+        return failing_tests
     
     config.log(
         "Running the test suite three times to detect flakiness. "
@@ -1569,9 +1548,6 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
                 config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
                 results.append(False)
     
-    if failing_tests:
-        raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
-    
     passes = sum(results)
     if passes == COUNT_TEST_RUNS_REQUIRED:
         config.log("ALL DJANGO BACKEND TESTS PASS ON ALL RUNS.  **SUCCESS**!!!")
@@ -1581,13 +1557,52 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
             config.self_driving_task.save()
     elif passes == 0:
         config.log("TESTS FAILED ON ALL RUNS")
-        raise FailingTestException("All test runs failed")
     else:
         config.log(
             "TESTS PASSED ON SOME RUNS BUT FAILED ON OTHERS. "
             "This indicates flakiness. Please review the test code for flakiness risks and fix."
         )
-        raise FailingTestException("Some test runs failed - flaky tests")
+    
+    return failing_tests
+
+
+def run_frontend_tests(config: CodingAgentConfig, container_image_tag: str) -> list[Any]:
+    frontend_info = detect_frontend_framework(config)
+    failing_tests = []
+    
+    if frontend_info["has_frontend"]:
+        frontend_dir = frontend_info["frontend_dir"]
+        
+        if not any([frontend_info["has_jest"], frontend_info["has_playwright"], frontend_info["has_cypress"]]):
+            raise BadPlan(textwrap.dedent(f"""
+                ⚠️  No E2E test framework found (Playwright/Cypress/Jest) - skipping E2E tests.  Please update {frontend_dir}/package.json to include a testing framework
+                ⚠️  WARNING: Per codeplanner--test_driven_development.md, E2E tests are REQUIRED for React projects
+            """))
+        
+        if frontend_info["has_jest"]:
+            try:
+                run_jest_tests(config, container_image_tag, frontend_dir)
+            except ExecutionException as e:
+                failing_tests.append(f"Jest component tests failed. See logs above for details.")
+        
+        if frontend_info["has_playwright"]:
+            try:
+                run_playwright_tests(config, container_image_tag, frontend_dir)
+            except ExecutionException as e:
+                failing_tests.append(f"Playwright E2E tests failed. See logs above for details.")
+        
+        if frontend_info["has_cypress"]:
+            try:
+                run_cypress_tests(config, container_image_tag, frontend_dir)
+            except ExecutionException as e:
+                failing_tests.append(f"Cypress E2E tests failed. See logs above for details.")
+        
+        if not failing_tests:
+            config.log("\n" + "=" * 80)
+            config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY")
+            config.log("=" * 80 + "\n")
+            
+    return failing_tests
 
 
 def deploy_iteration(

@@ -41,14 +41,14 @@ class ApplyErrorType(Enum):
 
 
 # Known duplicate/idempotent error messages that can be treated as success
-KNOWN_DUPLICATE_MSGS = [
+KNOWN_DUPLICATE_MSGS = {
     "InvalidPermission.Duplicate",
     "InvalidChangeBatch",
     "AlreadyExists",
-]
+}
 
 # Error indicators that should never be treated as idempotent success
-HARD_ERROR_INDICATORS = [
+HARD_ERROR_INDICATORS = {
     "AccessDenied",
     "UnauthorizedOperation",
     "Forbidden",
@@ -57,7 +57,7 @@ HARD_ERROR_INDICATORS = [
     "StatusCode: 403",
     "Error: creating",
     "Error: updating",
-]
+}
 
 # Permissions-related error patterns that indicate missing AWS permissions
 PERMISSIONS_ERROR_PATTERNS = [
@@ -72,10 +72,15 @@ PERMISSIONS_ERROR_PATTERNS = [
 ]
 
 # Resources that should be retained (not destroyed) when destroying the stack.
-RESOURCES_TO_RETAIN_ON_DESTROY = [
+RESOURCE_TYPS_TO_RETAIN_ON_DESTROY = {
+    "aws_s3_bucket"
+}
+
+# Resources that should be retained (not destroyed) when destroying the stack.
+RESOURCES_TO_RETAIN_ON_DESTROY = {
     "aws_security_group_rule.rds_ingress_client",
     "aws_security_group_rule.rds_ingress_vpc",
-]
+}
 
 
 @dataclass
@@ -322,9 +327,9 @@ class StackManager:
         logging.debug("OpenTofu command completed", extra=result.loggable_dict())
         return result
     
-    def init_workspace(self) -> OpenTofuCommandResult:
+    def init_workspace(self) -> StackManager:
         if self._initialized:
-            return
+            return self
         
         un_swizzled_module_file = self.sandbox_root / self.stack_type.get_opentofu_config()
         lock_file = self.swizzled_module_file.parent / ".terraform.lock.hcl"
@@ -364,19 +369,19 @@ class StackManager:
             try:
                 self.run_tofu_command("init", args)
                 self._initialized = True
-                return
+                return self
             except OpenTofuCommandException as e:
                 last_exception = e
                 time.sleep(10 * (attempt + 1))
                 try:
                     self.run_tofu_command("init", ["init", "-reconfigure", "-input=false", "-no-color"] + storage_key_args)
                     self._initialized = True
-                    return
+                    return self
                 except OpenTofuCommandException as e2:
                     logging.exception(e2)
-                    raise e2
+                    raise self
         
-        raise last_exception
+        raise self
     
     def plan(
             self,
@@ -482,6 +487,7 @@ class StackManager:
         access_denied_lines = [line for line in combined.split('\n') if 'AccessDenied' in line or 'UnauthorizedOperation' in line]
         for line in access_denied_lines:
             # Extract AWS actions from context (common AWS API patterns)
+            # noinspection RegExpUnnecessaryNonCapturingGroup
             aws_actions = re.findall(r'([a-z][a-zA-Z0-9]*:[a-zA-Z][a-zA-Z0-9]*(?:\*)?)', line)
             missing_permissions.extend(aws_actions)
         
@@ -899,7 +905,10 @@ class StackManager:
         targets: list of fully-qualified resource addresses that are safe to destroy.
         has_retained_resources: True if any resources in state match RESOURCES_TO_RETAIN_ON_DESTROY.
         """
-        resources_to_retain = set(common.ensure_list(RESOURCES_TO_RETAIN_ON_DESTROY) + common.ensure_list(self.stack.imported_shared_resources))
+        resources_to_retain = set(
+            common.ensure_list(RESOURCES_TO_RETAIN_ON_DESTROY) 
+            + common.ensure_list(self.stack.imported_shared_resources)
+        )
         
         state = self.get_state_data()
         values = state.get("values") or {}
@@ -911,14 +920,20 @@ class StackManager:
             nonlocal has_retained
             for res in module.get("resources", []):
                 r_type = res.get("type", "")
+                if r_type in RESOURCE_TYPS_TO_RETAIN_ON_DESTROY:
+                    has_retained = True
+                    continue
+                    
                 r_name = res.get("name", "")
                 base_id = f"{r_type}.{r_name}" if r_type and r_name else ""
                 if base_id in resources_to_retain:
                     has_retained = True
                     continue
+                    
                 address = res.get("address") or base_id
                 if address:
                     targets.append(address)
+                    
             for child in module.get("child_modules", []):
                 walk_module(child)
         

@@ -593,7 +593,7 @@ class InfrastructureStackType(ErieEnum):
     FOUNDATION = auto()
     APPLICATION = auto()
     TARGET_ACCOUNT_BOOTSTRAP = auto()
-    
+
     def get_opentofu_config(self) -> str:
         if InfrastructureStackType.FOUNDATION.eq(self):
             logging.warning(f"{InfrastructureStackType.FOUNDATION} is deprecated")
@@ -604,6 +604,31 @@ class InfrastructureStackType(ErieEnum):
             return "./opentofu/target_account_provisioning/stack.tf"
         else:
             raise Exception(f"unhandled stack type {self}")
+
+
+class StackStrategy(ErieEnum):
+    """
+    Defines how a business manages infrastructure stacks.
+
+    - SINGLE_STACK: All work in production stack only (minimal isolation, lowest cost)
+    - PROD_AND_DEV: Two stacks - production and shared development
+    - PER_INITIATIVE: Production + one stack per initiative (maximum isolation, current behavior)
+    """
+    SINGLE_STACK = 'single_stack'
+    PROD_AND_DEV = 'prod_and_dev'
+    PER_INITIATIVE = 'per_initiative'
+
+    def allows_dev_stack(self) -> bool:
+        """Returns True if this strategy allows a business-level dev stack."""
+        return self == StackStrategy.PROD_AND_DEV
+
+    def allows_initiative_stacks(self) -> bool:
+        """Returns True if this strategy allows initiative-scoped stacks."""
+        return self == StackStrategy.PER_INITIATIVE
+
+    def requires_production_only(self) -> bool:
+        """Returns True if all work must happen in production stack."""
+        return self == StackStrategy.SINGLE_STACK
 
 
 class InitiativeNames(ErieEnum):

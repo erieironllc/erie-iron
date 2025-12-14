@@ -103,6 +103,21 @@
                     </div>
 
                     <div class="mb-3">
+                        <label for="stack_strategy" class="form-label">Stack Strategy</label>
+                        <select name="stack_strategy" id="stack_strategy" class="form-select">
+                            <option value="single_stack" {% if business.stack_strategy == 'single_stack' %}selected{% endif %}>
+                                Single Stack – Production only (lowest cost)
+                            </option>
+                            <option value="prod_and_dev" {% if business.stack_strategy == 'prod_and_dev' %}selected{% endif %}>
+                                Production + Development – Two stacks
+                            </option>
+                            <option value="per_initiative" {% if business.stack_strategy == 'per_initiative' %}selected{% endif %}>
+                                Per Initiative – Maximum isolation (highest cost)
+                            </option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
                         <label for="service_token" class="form-label">Service Token</label>
                         <input type="text" name="service_token" id="service_token" class="form-control"
                                value="{{ business.service_token|default:"" }}">

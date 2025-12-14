@@ -38,7 +38,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -4957,6 +4957,7 @@ def action_update_business(request, business_id):
         status = rget(request, 'status', '').strip()
         source = rget(request, 'source', '').strip()
         autonomy_level = rget(request, 'autonomy_level', '').strip()
+        stack_strategy = rget(request, 'stack_strategy', '').strip()
         service_token = rget(request, 'service_token', '').strip()
         bank_account_id = rget(request, 'bank_account_id', '').strip()
         github_repo_url = rget(request, 'github_repo_url', '').strip()
@@ -4988,6 +4989,7 @@ def action_update_business(request, business_id):
             'audience': audience or None,
             'status': status,
             'source': source,
+            'stack_strategy': stack_strategy or StackStrategy.PER_INITIATIVE,
             'service_token': service_token or None,
             'bank_account_id': bank_account_id or None,
             'github_repo_url': github_repo_url or None,
@@ -5184,16 +5186,15 @@ def action_destroy_stack(request, stack_id):
             request,
             f'Failed to destroy infrastructure resources for stack "{stack_display}": {exc}'
         )
-        return redirect(reverse('view_stack', args=[stack_id]))
-    
+        return redirect(reverse('view_business_tab', args=['infrastructure-stacks', business_id]))
+
     try:
         stack.delete()
+        messages.success(request, f'Stack "{stack_display}" destroyed successfully.')
     except Exception as exc:
         logger.exception(exc)
         messages.error(request, f'Failed to delete stack "{stack_display}": {exc}')
-        return redirect(reverse('view_stack', args=[stack_id]))
     
-    messages.success(request, f'Stack "{stack_display}" destroyed successfully.')
     return redirect(reverse('view_business_tab', args=['infrastructure-stacks', business_id]))
 
 

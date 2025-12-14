@@ -28,8 +28,6 @@ from erieiron_autonomous_agent.enums import (
     TaskStatus,
     BusinessOperationType,
 )
-from erieiron_autonomous_agent.utils import codegen_utils
-from erieiron_autonomous_agent.utils.codegen_utils import extract_methods
 from erieiron_common import common
 from erieiron_common.enums import (
     Level,
@@ -41,6 +39,7 @@ from erieiron_common.enums import (
     TaskType,
     EnvironmentType,
     InfrastructureStackType,
+    StackStrategy,
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
     CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning, TaskImplementationPhase,
@@ -90,6 +89,11 @@ class Business(BaseErieIronModel):
     web_container_memory = models.PositiveIntegerField(default=1024)
     web_desired_count = models.PositiveIntegerField(default=1)
     autonomy_level = models.TextField(null=True, choices=Level.choices())
+    stack_strategy = models.TextField(
+        default=StackStrategy.PER_INITIATIVE,
+        choices=StackStrategy.choices(),
+        help_text="Determines how infrastructure stacks are allocated for this business"
+    )
     domain = models.TextField(null=True)
     domain_certificate_arn = models.TextField(null=True)
     route53_hosted_zone_id = models.TextField(null=True, blank=True)
@@ -111,6 +115,11 @@ class Business(BaseErieIronModel):
             return ""
         credentials_list = common.ensure_list(self.required_credentials)
         return ", ".join(credentials_list)
+    
+    @property
+    def stack_strategy_enum(self) -> StackStrategy:
+        """Return stack_strategy as StackStrategy enum for template access"""
+        return StackStrategy(self.stack_strategy)
     
     @staticmethod
     def get_portfolio_business() -> QuerySet['Business']:
@@ -137,6 +146,38 @@ class Business(BaseErieIronModel):
     def get_domain_manager(self, cloud_account=None):
         from erieiron_common.domain_manager import DomainManager
         return DomainManager(self, cloud_account)
+    
+    def get_stack_strategy_info(self) -> dict:
+        """
+        Returns information about current stack strategy and existing stacks.
+        Useful for UI warnings when changing strategies.
+        """
+        strategy = StackStrategy(self.stack_strategy)
+        
+        # Count existing stacks
+        prod_stacks = self.infrastructurestack_set.filter(
+            env_type=EnvironmentType.PRODUCTION
+        ).count()
+        dev_stacks = self.infrastructurestack_set.filter(
+            env_type=EnvironmentType.DEV,
+            initiative__isnull=True
+        ).count()
+        initiative_stacks = self.infrastructurestack_set.filter(
+            env_type=EnvironmentType.DEV,
+            initiative__isnull=False
+        ).count()
+        
+        return {
+            'strategy': strategy.value,
+            'strategy_label': strategy.label(),
+            'prod_stack_count': prod_stacks,
+            'dev_stack_count': dev_stacks,
+            'initiative_stack_count': initiative_stacks,
+            'total_stacks': prod_stacks + dev_stacks + initiative_stacks,
+            'allows_dev_stack': strategy.allows_dev_stack(),
+            'allows_initiative_stacks': strategy.allows_initiative_stacks(),
+            'requires_production_only': strategy.requires_production_only(),
+        }
     
     def get_existing_required_credentials_llmm(self) -> list[LlmMessage]:
         return LlmMessage.user_from_data(
@@ -1179,27 +1220,41 @@ class InfrastructureStack(BaseErieIronModel):
             env_type: EnvironmentType,
             assert_create=False,
     ) -> "InfrastructureStack":
+        """
+        Get or create infrastructure stack based on business stack_strategy.
+
+        This method is being phased out in favor of get_stack_for_task().
+        For new code, prefer using resolve_target_stack() + get_stack_for_task().
+        """
         from erieiron_common.aws_utils import sanitize_aws_name
         
+        business = initiative.business
+        
+        # Determine initiative scope based on env_type and strategy
+        # This maintains backward compatibility for existing callers
         if EnvironmentType.PRODUCTION.eq(env_type):
-            stack = InfrastructureStack.objects.filter(
-                business_id=initiative.business_id,
-                initiative__isnull=True,
-                stack_type=stack_type,
-                env_type=env_type,
-            ).first()
+            initiative_scope = None  # Production is always business-level
         else:
-            stack = InfrastructureStack.objects.filter(
-                initiative=initiative, stack_type=stack_type, env_type=env_type
-            ).first()
+            strategy = StackStrategy(business.stack_strategy)
+            if strategy.allows_initiative_stacks():
+                initiative_scope = initiative
+            else:
+                # SINGLE_STACK and PROD_AND_DEV use business-level stacks
+                initiative_scope = None
+        
+        # Try to find existing stack
+        stack = InfrastructureStack.objects.filter(
+            business_id=business.id,
+            initiative=initiative_scope,
+            stack_type=stack_type,
+            env_type=env_type,
+        ).first()
         
         if stack:
             if assert_create:
                 raise Exception("was supposed to create new but did not")
-            else:
-                return stack
+            return stack
         
-        # create a new stack
         stack_namespace_token = None
         for i in range(100):
             stack_namespace_token_candidate = common.gen_random_token(DEV_STACK_TOKEN_LENGTH)
@@ -1212,24 +1267,28 @@ class InfrastructureStack(BaseErieIronModel):
         if not stack_namespace_token:
             raise Exception(f"unable to find a unique stack_namespace_token")
         
-        business = initiative.business
+        # Generate stack name
         if EnvironmentType.PRODUCTION.eq(env_type):
             stack_name = sanitize_aws_name(
                 [stack_namespace_token, business.service_token, stack_type]
             )
         else:
-            stack_name = sanitize_aws_name(
-                [stack_namespace_token, initiative.id, stack_type]
-            )
+            if initiative_scope:
+                stack_name = sanitize_aws_name(
+                    [stack_namespace_token, initiative.id, stack_type]
+                )
+            else:
+                # Business-level dev stack
+                stack_name = sanitize_aws_name(
+                    [stack_namespace_token, business.service_token, "dev", stack_type]
+                )
         
         domain_manager = business.get_domain_manager()
         cloud_account = domain_manager.cloud_account
         
         stack = InfrastructureStack.objects.create(
             business=business,
-            initiative=(
-                initiative if not EnvironmentType.PRODUCTION.eq(env_type) else None
-            ),
+            initiative=initiative_scope,
             cloud_account=cloud_account,
             stack_type=stack_type,
             stack_name=stack_name,
@@ -1237,24 +1296,45 @@ class InfrastructureStack(BaseErieIronModel):
             env_type=env_type,
         )
         
+        # Set up domain for dev stacks
         if InfrastructureStackType.APPLICATION.eq(stack_type) and EnvironmentType.DEV.eq(env_type):
             new_sub_domain = f"{sanitize_aws_name(stack_name, 63)}.{business.domain}"
             
-            Initiative.objects.filter(id=initiative.id).update(domain=new_sub_domain)
-            initiative.refresh_from_db(fields=["domain"])
+            if initiative_scope:
+                # Initiative-scoped: update initiative domain
+                Initiative.objects.filter(id=initiative.id).update(domain=new_sub_domain)
+                initiative.refresh_from_db(fields=["domain"])
+            # For business-level dev stack, we don't update initiative domain
             
             zone_id = business.route53_hosted_zone_id
             if not zone_id:
                 from erieiron_common import aws_utils
-                
                 zone_id = domain_manager.find_hosted_zone_id(business.domain)
             
-            domain_manager.add_dns_records(
-                zone_id,
-                new_sub_domain
-            )
+            domain_manager.add_dns_records(zone_id, new_sub_domain)
         
         return stack
+    
+    @staticmethod
+    def get_stack_for_task(
+            task: 'Task',
+            stack_type: InfrastructureStackType,
+    ) -> "InfrastructureStack":
+        """
+        Get or create the appropriate stack for a task based on business stack_strategy.
+
+        This is the preferred method for task execution code.
+        It uses resolve_target_stack() to determine the correct stack.
+        """
+        business = task.initiative.business
+        env_type = task.resolve_target_env_type(stack_type)
+        
+        # Use task's initiative as context, but actual scope determined by resolver
+        return InfrastructureStack.get_stack(
+            task.initiative,
+            stack_type,
+            env_type,
+        )
     
     def delete_resources(self, force=False):
         if not force:
@@ -1262,11 +1342,14 @@ class InfrastructureStack(BaseErieIronModel):
                 raise Exception(f"cannot destroy a production stack.  needs to be done manually")
         
         if not self.resources:
-            return
+            return self
         
         try:
             from erieiron_common.stack_manager import StackManager
-            StackManager(self, container_env=self.get_runtime_env()).destroy_stack()
+            StackManager(
+                self,
+                container_env=self.get_runtime_env()
+            ).init_workspace().destroy_stack()
         except Exception as e:
             logging.warning(f"Unable to delete stack {self.stack_name}:  {e}")
         
@@ -1337,7 +1420,7 @@ class Task(BaseErieIronModel):
     execution_start_time = models.DateTimeField(null=True, blank=True)
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
-
+    
     ui_first_phase = models.CharField(
         max_length=50,
         choices=TaskImplementationPhase.choices(),
@@ -1345,7 +1428,7 @@ class Task(BaseErieIronModel):
         blank=True,
         help_text="For React/React Native projects: tracks whether this task is UI-first phase or server phase"
     )
-
+    
     def __str__(self):
         return f"{self.description} - {self.id}"
     
@@ -1353,6 +1436,29 @@ class Task(BaseErieIronModel):
         d = self.__dict__
         
         return d
+    
+    def resolve_target_env_type(
+            self,
+            stack_type: InfrastructureStackType
+    ) -> EnvironmentType:
+        """
+        Central resolver for determining which stack a task should use.
+
+        Returns: (env_type, initiative_or_none)
+            - env_type: PRODUCTION or DEV
+            - initiative_or_none: Initiative to scope stack to, or None for business-level
+
+        Raises:
+            ValueError: If task configuration is incompatible with business stack_strategy
+        """
+        initiative = self.initiative
+        strategy = StackStrategy(initiative.business.stack_strategy)
+        is_prod_deploy = TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type)
+        
+        if strategy.requires_production_only() or is_prod_deploy:
+            return EnvironmentType.PRODUCTION
+        else:
+            return EnvironmentType.DEV
     
     def create_execution(self, input_data=None, iteration=None) -> "TaskExecution":
         with transaction.atomic():
@@ -1400,20 +1506,20 @@ class Task(BaseErieIronModel):
     def is_ui_first_phase(self):
         """Returns True if this task is in the UI + Mock API phase (no AWS deployment)"""
         return self.ui_first_phase == 'UI_MOCK_API'
-
+    
     def is_server_phase(self):
         """Returns True if this task is in the Server API phase (with AWS deployment)"""
         return self.ui_first_phase == 'SERVER_IMPLEMENTATION'
-
+    
     def allow_execution(self):
         b = self.initiative.business
         if Business.get_erie_iron_business().id == b.id:
             return True
-
+        
         # Check if initiative is green lit
         if not self.initiative.green_lit:
             return False
-
+        
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
     
     def create_self_driving_env(self, reset_code_dir=False) -> "SelfDrivingTask":
@@ -1859,9 +1965,8 @@ class SelfDrivingTaskIteration(BaseErieIronModel):
         )
     
     def has_error(self) -> bool:
-        return any(
-            ["error" in self.evaluation_json, "test_errors" in self.evaluation_json]
-        )
+        eval_json = (self.evaluation_json or {})
+        return any(s in eval_json for s in ["error", "test_errors"])
     
     def get_unit_test_errors(self) -> list[dict]:
         return common.ensure_list(common.get(self, ["evaluation_json", "test_errors"]))
@@ -2269,31 +2374,31 @@ class CodeVersion(BaseErieIronModel):
         return file_path
     
     def update_codebert_embedding(self):
-        path = self.code_file.file_path
+        ...
+        # path = self.code_file.file_path
         # logging.info(f"skipping update_codebert_embedding() for {path}")
-        return
         
-        from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
-        
-        logging.info(f"about to update embedding for {path}")
-        
-        CodeVersion.objects.filter(id=self.id).update(
-            codebert_embedding=get_codebert_embedding(self.code)
-        )
-        
-        self.refresh_from_db(fields=["codebert_embedding"])
-        self.codemethod_set.all().delete()
-        
-        ext = os.path.splitext(path)[1]
-        if ext in codegen_utils.LANGUAGE_NAMES:
-            for method_data in extract_methods(ext, self.code):
-                CodeMethod.objects.create(
-                    code_version=self,
-                    name=method_data["name"],
-                    parameters=method_data["parameters"],
-                    code=method_data["code"],
-                    codebert_embedding=get_codebert_embedding(method_data["code"]),
-                )
+        # from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
+        # 
+        # logging.info(f"about to update embedding for {path}")
+        # 
+        # CodeVersion.objects.filter(id=self.id).update(
+        #     codebert_embedding=get_codebert_embedding(self.code)
+        # )
+        # 
+        # self.refresh_from_db(fields=["codebert_embedding"])
+        # self.codemethod_set.all().delete()
+        # 
+        # ext = os.path.splitext(path)[1]
+        # if ext in codegen_utils.LANGUAGE_NAMES:
+        #     for method_data in extract_methods(ext, self.code):
+        #         CodeMethod.objects.create(
+        #             code_version=self,
+        #             name=method_data["name"],
+        #             parameters=method_data["parameters"],
+        #             code=method_data["code"],
+        #             codebert_embedding=get_codebert_embedding(method_data["code"]),
+        #         )
     
     def get_llm_message_data(self, include_diff=True) -> dict:
         code_file = self.code_file
