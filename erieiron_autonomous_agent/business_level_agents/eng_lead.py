@@ -234,14 +234,21 @@ def process_response(initiative, eng_lead_response):
     for task_data in eng_lead_response.get("tasks", []):
         task_id = task_data.get("task_id")
         
-        validated_ids = set(task_data.get("validated_requirements", []))
-        initiative_req_ids = set(str(req.id) for req in initiative.requirements.all())
-        invalid_ids = validated_ids - initiative_req_ids
-        if invalid_ids:
-            raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
+        # validated_ids = set(task_data.get("validated_requirements", []))
+        # initiative_req_ids = set(str(req.id) for req in initiative.requirements.all())
+        # invalid_ids = validated_ids - initiative_req_ids
+        # if invalid_ids:
+        #     raise ValueError(f"Task {task_data.get('task_id')} references invalid requirements: {invalid_ids}")
         
         existing_task = Task.objects.filter(id=task_id).first() if task_id else None
         
+        # Extract UI-first phase if present
+        ui_first_phase = task_data.get('ui_first_phase', None)
+
+        # Log UI-first detection
+        if ui_first_phase:
+            logging.info(f"Task {task_id} is UI-first phase: {ui_first_phase}")
+
         defaults = {
             "initiative": initiative,
             "status": TaskStatus.NOT_STARTED,
@@ -253,7 +260,8 @@ def process_response(initiative, eng_lead_response):
             "timeout_seconds": task_data.get("timeout_seconds"),
             "task_type": TaskType(task_data.get("task_type")),
             "input_fields": task_data.get("input_fields", {}),
-            "output_fields": task_data.get("output_fields", [])
+            "output_fields": task_data.get("output_fields", []),
+            "ui_first_phase": ui_first_phase
         }
         
         execution_start_time = task_data.get("execution_start_time")
@@ -293,6 +301,7 @@ def process_response(initiative, eng_lead_response):
             "task_type": task_data.get("task_type"),
             "input_fields": task_data.get("input_fields", {}),
             "output_fields": task_data.get("output_fields", []),
+            "ui_first_phase": ui_first_phase,
         }
         
         was_updated = any(

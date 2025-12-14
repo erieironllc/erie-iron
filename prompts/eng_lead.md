@@ -127,7 +127,7 @@ The Engineering Lead agent must create tasks at a level of abstraction suitable 
 ## High Level  
 - Always create a first task in each initiative that ensures the initiative is externally verifiable via an observable interface (e.g., HTTP endpoint or other suitable mechanism).  
     - The task must expose the initiative description at: `https://{{DomainName}}/_initiative/{{initiative_id}}`.  
-    - The endpoint must return the plain text description string of the initiative.  
+    - The endpoint must return the string "ACK" in the body with a 200 status 
     - As this is the first task, this task **must** not be blocked by other tasks
 - Aim for full autonomy – before assigning work to a human, explore every reasonable way to automate it. Manual DNS/SES steps are not permitted. Prefer Route53 automation; otherwise, return blocked with a precise infra boundary reason.  
 - Split mixed work – if only part of a task needs human help, break it into smaller tasks so the autonomous portion can run independently.  
@@ -149,11 +149,131 @@ The Engineering Lead agent must create tasks at a level of abstraction suitable 
 - Reference another task’s outputs in inputs as <task_id>: [<output_fields>].  
 - Avoid circular chains.
 
-## UI Work  
+## UI Work
 - Every engineering UI task must depend on a prior DESIGN_WEB_APPLICATION task.
 
-## Schema Discipline  
-- Use only the fields defined in the Task Schema, in canonical order.  
+## UI-First Development Rules for React/React Native
+
+When the initiative requirements or architecture mention **React**, **React Native**, **frontend UI**, **mobile app**, or **web interface** development, apply the UI-first workflow below.
+
+### React/React Native Detection
+Check for these indicators in requirements and architecture:
+- Keywords: "React", "React Native", "UI", "frontend", "mobile app", "web interface", "single page app", "SPA"
+- Framework mentions in architecture documents
+- If detected, activate two-phase task structure
+
+### Two-Phase Task Structure
+For initiatives with React/React Native UI, split work into two explicit phases:
+
+**Phase 1 Tasks: UI + Mock API (no AWS deployment)**
+- Task IDs **must** include `_ui_` infix (e.g., `task_ui_user_profile_screen`)
+- These tasks **must not** include any AWS infrastructure or deployment
+- All Phase 1 tasks **must** be completable on a Mac without backend services running
+- Set `ui_first_phase: "UI_MOCK_API"` in task JSON
+
+**Phase 2 Tasks: Server API (with AWS deployment)**
+- Task IDs **must** include `_server_` infix (e.g., `task_server_user_profile_api`)
+- These tasks implement the real backend API matching the Mock API contract
+- These tasks include AWS infrastructure and CloudFormation deployment
+- Phase 2 tasks **must** depend on corresponding Phase 1 tasks
+- Set `ui_first_phase: "SERVER_IMPLEMENTATION"` in task JSON
+
+### Phase 1 Task Generation Requirements
+
+When creating UI-first tasks, you **must** generate tasks in this order:
+
+1. **Mock API Contract Definition Task** (e.g., `task_ui_mock_api_contract_<feature>`)
+   - `task_type: DESIGN_WEB_APPLICATION`
+   - `ui_first_phase: "UI_MOCK_API"`
+   - Output: JSON schema file defining all API endpoints, request/response shapes, error states
+   - Location: `src/api/contracts/mock-api-contract-<feature>.json` (or similar)
+   - Must document: endpoint paths, HTTP methods, request bodies, response bodies, status codes, error scenarios
+   - This task has **no** dependencies
+   - Example completion criteria: "API contract documented with all endpoints, request/response examples, and error states"
+
+2. **Mock API Implementation Task** (e.g., `task_ui_mock_api_impl_<feature>`)
+   - `task_type: CODING_APPLICATION`
+   - `ui_first_phase: "UI_MOCK_API"`
+   - Implement in-process mock API (e.g., MSW for React, local JS objects for React Native)
+   - Must match the contract exactly
+   - Must support all states: success, loading, empty data, error conditions
+   - `depends_on: ["task_ui_mock_api_contract_<feature>"]`
+   - `requires_test: true` (tests verify mock returns expected shapes)
+   - Example completion criteria: "Mock API handlers implemented and return contract-compliant responses"
+
+3. **React/React Native UI Implementation Task** (e.g., `task_ui_components_<feature>`)
+   - `task_type: CODING_APPLICATION`
+   - `ui_first_phase: "UI_MOCK_API"`
+   - Implement screens/components using Mock API
+   - Include state management (minimal viable approach)
+   - Handle loading, empty, and error states
+   - `depends_on: ["task_ui_mock_api_impl_<feature>"]`
+   - `requires_test: true` (component tests using Mock API)
+   - Example completion criteria: "UI renders all states correctly using Mock API, tests pass without backend services"
+
+4. **UI Integration Tests Task** (e.g., `task_ui_integration_tests_<feature>`)
+   - `task_type: CODING_APPLICATION`
+   - `ui_first_phase: "UI_MOCK_API"`
+   - Write integration-style tests for user flows
+   - Tests **must** run without backend services (use Mock API)
+   - Use appropriate testing framework: Jest + React Testing Library / Detox for React Native
+   - `depends_on: ["task_ui_components_<feature>"]`
+   - `requires_test: true`
+   - Example completion criteria: "User flow tests pass on Mac without backend services running"
+
+### Phase 2 Task Generation Requirements
+
+After all Phase 1 tasks are defined, generate Phase 2 server tasks:
+
+1. **Server API Implementation Task** (e.g., `task_server_api_<feature>`)
+   - `task_type: CODING_APPLICATION`
+   - `ui_first_phase: "SERVER_IMPLEMENTATION"`
+   - Implement Django REST endpoints matching Mock API contract **exactly**
+   - Use contract as source-of-truth for request/response shapes
+   - Include Django models, serializers, views
+   - Include CloudFormation infrastructure (database, API Gateway if needed)
+   - `depends_on`: All Phase 1 UI tasks for this feature
+   - `requires_test: true` (server-side unit and integration tests)
+   - `validated_requirements`: [relevant requirement IDs]
+   - Example completion criteria: "Server API endpoints match Mock API contract, deployed to AWS, tests validate contract compliance"
+
+2. **API Adapter Task** (e.g., `task_server_api_adapter_<feature>`)
+   - `task_type: CODING_APPLICATION`
+   - `ui_first_phase: "SERVER_IMPLEMENTATION"`
+   - Create configurable adapter in UI code to switch between Mock and Real API
+   - Use environment variable or config file to toggle (e.g., `USE_MOCK_API=true/false`)
+   - `depends_on: ["task_server_api_<feature>"]`
+   - `requires_test: true`
+   - Example completion criteria: "UI can switch between Mock and Real API via configuration, both modes functional"
+
+3. **End-to-End Tests Task** (e.g., `task_server_e2e_tests_<feature>`)
+   - `task_type: CODING_APPLICATION`
+   - `ui_first_phase: "SERVER_IMPLEMENTATION"`
+   - Write E2E tests using real backend (Playwright, Cypress, or Detox)
+   - Tests run against deployed AWS environment
+   - `depends_on: ["task_server_api_adapter_<feature>"]`
+   - `requires_test: true`
+   - Example completion criteria: "E2E tests pass against deployed AWS environment"
+
+### Critical Constraints for Phase 1 Tasks
+
+- **NO AWS infrastructure** in Phase 1 task descriptions
+- **NO database migrations** in Phase 1 tasks (data is mocked)
+- **NO CloudFormation** in Phase 1 tasks
+- **NO deployment** language in Phase 1 task descriptions
+- Phase 1 `completion_criteria` **must** include: "Tests run on local Mac without backend services"
+- Phase 1 tasks **must not** include `execution_schedule` other than `NOT_APPLICABLE` or `ONCE`
+- Phase 1 `validated_requirements` may be empty for Mock API contract/implementation tasks, but UI component tasks should reference requirements
+
+### Task ID Naming Convention
+
+- Phase 1: `task_ui_<purpose>_<feature>` (e.g., `task_ui_mock_api_contract_user_profile`, `task_ui_components_dashboard`)
+- Phase 2: `task_server_<purpose>_<feature>` (e.g., `task_server_api_user_profile`, `task_server_e2e_tests_dashboard`)
+
+The `_ui_` and `_server_` infixes enable the Self Driving Coding agent to automatically detect which phase it's working in and adjust deployment behavior accordingly.
+
+## Schema Discipline
+- Use only the fields defined in the Task Schema, in canonical order.
 - No extra fields and no omissions.
 
 ---

@@ -39,7 +39,7 @@ from erieiron_common.stack_manager import StackManager
 
 
 def execute(
-        task_id: str, 
+        task_id: str,
         one_off_action: SdaInitialAction = None,
         restart=False
 ):
@@ -85,9 +85,7 @@ def execute(
                     plan_code_changes(config)
                     write_code(config)
                 
-                build_deploy_exec_iteration(
-                    config
-                )
+                build_deploy_exec_iteration(config)
                 
                 evaluate_iteration(
                     config
@@ -647,10 +645,10 @@ def build_container_image(
     )
     print(textwrap.dedent(f"""
     DUDE
-    
+
     building with
     {common.safe_join(container_build_cmd, ' ')}
-    
+
     """))
     
     config.log(f"\n\nstarting podman build with the command:\n{' '.join(container_build_cmd)}\n\n")
@@ -668,10 +666,14 @@ def build_container_image(
     if build_process.returncode != 0:
         handle_podman_build_failure(config, build_process.returncode)
     
-    push_image_to_ecr(
-        config,
-        container_image_tag
-    )
+    # Only push to ECR if requested (skip for UI-first phase)
+    if config.should_skip_aws_deployment():
+        config.log(f"✓ Skipping ECR push (UI-first phase - local testing only)")
+    else:
+        push_image_to_ecr(
+            config,
+            container_image_tag
+        )
     
     return container_image_tag
 
@@ -859,10 +861,10 @@ def get_stack_lambdas(config) -> list[dict]:
     lambdas = []
     
     for resource_definition in config.stack_manager.get_resource_definitions("aws_lambda_function"):
-        s3_key_ref = resource_definition['s3_key']
+        s3_key_ref = resource_definition.get('s3_key')
         resource_name = "todo"
         if s3_key_ref:
-            raise AgentBlocked('fix this')
+            raise BadPlan('s3_key is required', resource_definition)
         
         source_file = common.first(config.sandbox_root_dir.rglob(
             resource_definition['handler'].split(".")[0] + ".py"
@@ -1273,6 +1275,7 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.log(f"Tests are failing.  **review sysout logs for details**")
     except Exception as e:
         config.log(common.get_stack_trace_as_string(e))
+        raise BadPlan(str(e))
     finally:
         store_deploy_and_execution_logs(
             config,
@@ -1478,7 +1481,7 @@ def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
                 run_cypress_tests(config, container_image_tag, frontend_dir)
             except ExecutionException as e:
                 failing_tests.append(f"Cypress E2E tests failed. See logs above for details.")
-    
+        
         if not failing_tests:
             config.log("\n" + "=" * 80)
             config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY.  PROCEEDING TO BACKEND TESTS")
@@ -1703,7 +1706,12 @@ def build_iteration(config):
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
     
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) or config.current_iteration.version_number < 2:
+    if config.should_skip_aws_deployment():
+        required_build_steps = {
+            BuildStep.CONTAINERS.value: True,
+            BuildStep.LAMBDAS.value: False
+        }
+    elif TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) or config.current_iteration.version_number < 2:
         required_build_steps = {
             BuildStep.CONTAINERS.value: True,
             BuildStep.LAMBDAS.value: True
@@ -1721,20 +1729,17 @@ def build_iteration(config):
             reasoning_effort=LlmReasoningEffort.LOW
         ).json()
     
-    # TODO Take this out
-    required_build_steps = {
-        BuildStep.CONTAINERS.value: True,
-        BuildStep.LAMBDAS.value: False
-    }
-    
-    if required_build_steps.get(BuildStep.LAMBDAS.value):
+    if False and required_build_steps.get(BuildStep.LAMBDAS.value):
         lambda_datas = build_lambda_packages(
             config
         )
     else:
         lambda_datas = []
     
-    if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
+    if config.should_skip_aws_deployment():
+        previous_container_tag = None
+        tag_exists_in_ecr = False
+    elif TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
         previous_container_tag = None
         tag_exists_in_ecr = False
     else:

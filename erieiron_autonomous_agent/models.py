@@ -43,7 +43,7 @@ from erieiron_common.enums import (
     InfrastructureStackType,
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
-    CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning,
+    CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning, TaskImplementationPhase,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -1337,7 +1337,15 @@ class Task(BaseErieIronModel):
     execution_start_time = models.DateTimeField(null=True, blank=True)
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
-    
+
+    ui_first_phase = models.CharField(
+        max_length=50,
+        choices=TaskImplementationPhase.choices(),
+        null=True,
+        blank=True,
+        help_text="For React/React Native projects: tracks whether this task is UI-first phase or server phase"
+    )
+
     def __str__(self):
         return f"{self.description} - {self.id}"
     
@@ -1389,15 +1397,23 @@ class Task(BaseErieIronModel):
         ):
             PubSubManager.publish_id(PubSubMessageType.TASK_UPDATED, t.id)
     
+    def is_ui_first_phase(self):
+        """Returns True if this task is in the UI + Mock API phase (no AWS deployment)"""
+        return self.ui_first_phase == 'UI_MOCK_API'
+
+    def is_server_phase(self):
+        """Returns True if this task is in the Server API phase (with AWS deployment)"""
+        return self.ui_first_phase == 'SERVER_IMPLEMENTATION'
+
     def allow_execution(self):
         b = self.initiative.business
         if Business.get_erie_iron_business().id == b.id:
             return True
-        
+
         # Check if initiative is green lit
         if not self.initiative.green_lit:
             return False
-        
+
         return BusinessStatus.ACTIVE.eq(self.initiative.business.status)
     
     def create_self_driving_env(self, reset_code_dir=False) -> "SelfDrivingTask":

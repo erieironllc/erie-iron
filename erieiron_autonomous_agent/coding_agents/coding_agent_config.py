@@ -87,6 +87,10 @@ class CodingAgentConfig:
         self.log_f = None
         self.stop_tailing = None
         self.phase = SdaPhase.INIT
+
+        # UI-first phase tracking
+        self.is_ui_first_phase = self.task.is_ui_first_phase() if hasattr(self.task, 'is_ui_first_phase') else False
+        logging.info(f"Task {self.task.id} UI-first phase: {self.is_ui_first_phase}")
         
         # self.self_driving_task.test_file_path = Path(self.self_driving_task.test_file_path).relative_to(self.sandbox_root_dir)
         # self.self_driving_task.save()
@@ -137,6 +141,20 @@ class CodingAgentConfig:
         except Exception as e:
             logging.exception(e)
     
+    def should_skip_aws_deployment(self):
+        """
+        Returns True if AWS deployment should be skipped.
+        Deployment is skipped during UI-first phase (Phase 1).
+        """
+        return self.is_ui_first_phase
+
+    def should_run_tests_only(self):
+        """
+        Returns True if agent should build container and run tests, but NOT deploy to AWS.
+        This is the UI-first phase behavior.
+        """
+        return self.is_ui_first_phase
+
     def get_env_for_credentials_space(self, credential_space: CredentialsSpace):
         if CredentialsSpace.ERIE_IRON.eq(credential_space):
             stack = Business.get_erie_iron_business().infrastructurestack_set.first()

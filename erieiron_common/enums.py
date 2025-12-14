@@ -644,4 +644,9 @@ class CredentialsSpace(ErieEnum):
     TARGET_ACCOUNT = auto()
 
 
+class TaskImplementationPhase(ErieEnum):
+    UI_MOCK_API = auto()
+    SERVER_IMPLEMENTATION = auto()
+
+
 ERIE_IRON = auto()
