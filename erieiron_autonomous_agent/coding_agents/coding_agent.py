@@ -1263,9 +1263,8 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
     except NeedPlan as e:
         raise e
     except BadPlan as e:
-        config.log(f"Bad Plan: {e}")
+        raise e
     except AgentBlocked as e:
-        logging.exception(e)
         raise e
     except OpenTofuException as e:
         config.log(f"OpenTofu deployment error: {e}")
