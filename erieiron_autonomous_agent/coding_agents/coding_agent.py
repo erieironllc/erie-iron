@@ -51,7 +51,7 @@ def execute(
                 execute_one_off_action(config, one_off_action)
             return
     except AgentBlocked as agent_blocked:
-        logging.info(agent_blocked)
+        logging.exception(agent_blocked)
         handle_agent_blocked(task_id, agent_blocked)
         logging.info(f"Stopping - Agent Blocked")
         return
@@ -130,6 +130,7 @@ def execute(
                     )
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
+                logging.exception(agent_blocked)
                 try:
                     print("Current Stack Outputs")
                     for k, v in config.stack_manager.get_outputs().items():
