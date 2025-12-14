@@ -284,24 +284,24 @@ def on_reset_task_test(task_id):
         config.log("Skipping test regeneration for production deployment task")
         return config
     
-    if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
-        plan_initiative_tdd_code_changes(config)
-    else:
-        plan_task_tdd_code_changes(config)
-    
-    write_code(config)
+    write_tdd_test(config)
     
     return config
+
+
+def write_tdd_test(config: CodingAgentConfig):
+    plan_code_changes(config, write_tdd_test=True)
+    write_code(config)
 
 
 def get_guidance_msg(config: CodingAgentConfig):
     return config.guidance
 
 
-def plan_code_changes(config: CodingAgentConfig):
+def plan_code_changes(config: CodingAgentConfig, write_tdd_test=False):
     config.set_phase(SdaPhase.PLANNING)
     
-    if config.self_driving_task.initial_tests_pass and not config.self_driving_task.test_file_path:
+    if write_tdd_test:
         if TaskType.INITIATIVE_VERIFICATION.eq(config.task_type):
             planning_data = plan_initiative_tdd_code_changes(config)
         else:
@@ -497,6 +497,9 @@ def bootstrap_selfdriving_agent(task_id, restart) -> SelfDrivingTask:
         
         if not config.business.codefile_set.exists():
             config.git.mk_venv()
+        
+        if self_driving_task.test_file_path is None or not (config.sandbox_root_dir / self_driving_task.test_file_path).exists():
+            write_tdd_test(config)
         
         first_iteration = self_driving_task.selfdrivingtaskiteration_set.first()
         config.business.snapshot_code(first_iteration)
@@ -1170,12 +1173,8 @@ def run_jest_tests(
     run_generic_container_command(
         config=config,
         command=[
-            "npm", "test", "--",
-            "--ci",
-            "--forceExit",
-            "--runInBand",
-            "--detectOpenHandles",
-            "--coverage=false"
+            "sh", "-lc",
+            "npm ci && npm test -- --ci --forceExit --runInBand --detectOpenHandles --coverage=false"
         ],
         container_image_tag=container_image_tag,
         working_dir=work_dir
@@ -1245,18 +1244,18 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
-        config.stack_manager.init_workspace()
-        config.stack_manager.validate_stack()
+        config.stack_manager.init_workspace().validate_stack()
         
         container_image_tag, lambda_datas = build_iteration(
             config
         )
         
-        deploy_iteration(
-            config,
-            container_image_tag,
-            lambda_datas
-        )
+        if not config.is_ui_first_phase:
+            deploy_iteration(
+                config,
+                container_image_tag,
+                lambda_datas
+            )
         
         execute_iteration(
             config,
