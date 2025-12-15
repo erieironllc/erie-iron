@@ -770,7 +770,7 @@ const createJestConfig = nextJest({
 });
 
 const customJestConfig = {
-  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  setupFilesAfterEnv: ['<rootDir>/setup.js'],
   testEnvironment: 'jest-environment-jsdom',
   moduleNameMapper: {
     '^@/components/(.*)$': '<rootDir>/components/$1',
@@ -780,7 +780,7 @@ const customJestConfig = {
 module.exports = createJestConfig(customJestConfig);
 ```
 
-**jest.setup.js**:
+**setup.js**:
 ```javascript
 import '@testing-library/jest-dom';
 ```

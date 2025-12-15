@@ -66,15 +66,45 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
             
             # if we are writing a test (ie the plan defines tdd_test_file), then make sure the test was written
             if tdd_test_file:
-                if not (config.sandbox_root_dir / tdd_test_file).exists():
+                test_file_path = config.sandbox_root_dir / tdd_test_file
+                if not test_file_path.exists():
                     raise BadPlan(f"Failed to write a test file named `{tdd_test_file}`")
-                
+
+                # Validate test type matches the phase
+                is_python_test = tdd_test_file.endswith('.py')
+
+                # Check if it's a valid Jest test file
+                # Valid Jest tests are either:
+                # 1. Files with .test.js/jsx/ts/tsx extension (anywhere)
+                # 2. Files in __tests__/ directory with .js/jsx/ts/tsx extension
+                has_test_extension = any(tdd_test_file.endswith(ext) for ext in ['.test.js', '.test.jsx', '.test.ts', '.test.tsx'])
+                in_tests_dir = '__tests__' in tdd_test_file
+                has_js_extension = any(tdd_test_file.endswith(ext) for ext in ['.js', '.jsx', '.ts', '.tsx'])
+                is_js_test = has_test_extension or (in_tests_dir and has_js_extension)
+
+                if config.is_ui_first_phase:
+                    # UI-first phase requires React/Jest tests, not Django tests
+                    if is_python_test and not is_js_test:
+                        raise BadPlan(
+                            f"UI-first phase requires React/Jest tests, but test file `{tdd_test_file}` is a Python test. "
+                            f"Test file must be either:\n"
+                            f"  - In a __tests__/ directory with .js/.jsx/.ts/.tsx extension, or\n"
+                            f"  - Have a .test.js/.test.jsx/.test.ts/.test.tsx extension"
+                        )
+                    if not is_js_test:
+                        raise BadPlan(
+                            f"UI-first phase requires React/Jest tests with proper naming convention. "
+                            f"Test file `{tdd_test_file}` must be either:\n"
+                            f"  - In a __tests__/ directory with .js/.jsx/.ts/.tsx extension, or\n"
+                            f"  - Have a .test.js/.test.jsx/.test.ts/.test.tsx extension"
+                        )
+
                 with transaction.atomic():
                     SelfDrivingTask.objects.filter(id=config.self_driving_task.id).update(
                         test_file_path=tdd_test_file
                     )
                     config.self_driving_task.refresh_from_db(fields=["test_file_path"])
-            
+
             return changed_paths, metadata
         
         except AgentBlocked as e:

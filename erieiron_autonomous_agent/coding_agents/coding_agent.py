@@ -1168,17 +1168,50 @@ def run_jest_tests(
     config.log("=" * 80 + "\n")
     
     # Determine working directory relative to /app mount
-    work_dir = f"/app/{frontend_dir.relative_to(config.sandbox_root_dir)}" if frontend_dir != config.sandbox_root_dir else "/app"
+    if config.is_ui_first_phase:
+        subprocess.run(
+            ["npm", "install"],
+            env=config.runtime_env,
+            stdout=config.log_f,
+            cwd=frontend_dir,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=120,
+            check=False
+        )
+        
+        process = subprocess.Popen(
+            ["npm", "test", "--", "--ci", "--forceExit", "--runInBand", "--detectOpenHandles", "--coverage=false"],
+            env=config.runtime_env,
+            stdout=config.log_f,
+            cwd=frontend_dir,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        
+        while process.poll() is None:
+            time.sleep(2)
+        
+        return_code = process.returncode
+        if return_code == 0:
+            logging.info(f"\nCommand execution completed successfully (return code: {return_code})\n")
+        elif return_code == 137:
+            raise ExecutionException(f"\nCommand was killed with SIGKILL (exit code 137). Possible OOM.\n")
+        else:
+            raise FailingTestException(f"TEST FAILURE:  npm test failed.  see log output for details")
     
-    run_generic_container_command(
-        config=config,
-        command=[
-            "sh", "-lc",
-            "npm ci && npm test -- --ci --forceExit --runInBand --detectOpenHandles --coverage=false"
-        ],
-        container_image_tag=container_image_tag,
-        working_dir=work_dir
-    )
+    
+    else:
+        work_dir = f"/app/{frontend_dir.relative_to(config.sandbox_root_dir)}" if frontend_dir != config.sandbox_root_dir else "/app"
+        run_generic_container_command(
+            config=config,
+            command=[
+                "sh", "-lc",
+                "npm install && npm test -- --ci --forceExit --runInBand --detectOpenHandles --coverage=false"
+            ],
+            container_image_tag=container_image_tag,
+            working_dir=work_dir
+        )
     config.log("✅ Jest component tests PASSED\n")
 
 
@@ -1244,13 +1277,15 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
-        config.stack_manager.init_workspace().validate_stack()
-        
-        container_image_tag, lambda_datas = build_iteration(
-            config
-        )
-        
-        if not config.is_ui_first_phase:
+        if config.is_ui_first_phase:
+            container_image_tag = None
+        else:
+            config.stack_manager.init_workspace().validate_stack()
+            
+            container_image_tag, lambda_datas = build_iteration(
+                config
+            )
+            
             deploy_iteration(
                 config,
                 container_image_tag,
@@ -1441,7 +1476,10 @@ def detect_frontend_framework(config: CodingAgentConfig) -> dict[str, Any]:
     }
 
 
-def run_automated_tests(config: CodingAgentConfig, container_image_tag: str):
+def run_automated_tests(
+        config: CodingAgentConfig,
+        container_image_tag: str
+):
     import random
     import time
     random.seed(time.time())
@@ -1566,7 +1604,10 @@ def run_backend_tests(config: CodingAgentConfig, container_image_tag: str) -> li
     return failing_tests
 
 
-def run_frontend_tests(config: CodingAgentConfig, container_image_tag: str) -> list[Any]:
+def run_frontend_tests(
+        config: CodingAgentConfig,
+        container_image_tag: str
+) -> list[Any]:
     frontend_info = detect_frontend_framework(config)
     failing_tests = []
     
@@ -1601,7 +1642,7 @@ def run_frontend_tests(config: CodingAgentConfig, container_image_tag: str) -> l
             config.log("\n" + "=" * 80)
             config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY")
             config.log("=" * 80 + "\n")
-            
+    
     return failing_tests
 
 
@@ -2622,14 +2663,35 @@ def plan_task_tdd_code_changes(config: CodingAgentConfig):
     if task.debug_steps:
         goal_data['debug_steps'] = task.debug_steps
     
+    # Build test authoring instructions based on phase
+    if config.is_ui_first_phase:
+        test_instruction = textwrap.dedent("""
+            **You Must** create a plan to write a comprehensive test suite that asserts this task's behavior.
+
+            **For UI-First Phase - Multi-File Test Plan**:
+            - Create/update the test file in `__tests__/` directory (e.g., `__tests__/ComponentName.test.js`)
+            - Create/update `__tests__/setup.js` with mock API responses needed for this test
+            - The setup.js file should mock global fetch/axios with predefined responses for API endpoints used by this feature
+            - Tests must run standalone without server interaction
+            - All API mocks go in setup.js, NOT inline in the test file
+
+            **Important**: Your plan may include changes to BOTH the test file AND setup.js file.
+            This is Test Driven Development for UI-first phase.
+        """)
+    else:
+        test_instruction = textwrap.dedent("""
+            **You Must** create a plan to one-shot write a **single file**, comprehensive test suite that asserts this task's behavior.
+            This test suite will be used for Test Driven Development.
+        """)
+    
     return plan_tdd_code_changes(
         config,
         user_messages=[
             LlmMessage.user_from_data(
                 textwrap.dedent("""
                 **Parent Initiative**
-                
-                This 'parent initiative' data is for higher level context only. 
+
+                This 'parent initiative' data is for higher level context only.
                 - The test you write **only** needs to assert the task's 'GOAL' and 'acceptance_criteria'
                 - But, if in writing the test you identify that you need to know more context about the task, look at the parent_initiative data for that higher level context
             """),
@@ -2639,11 +2701,9 @@ def plan_task_tdd_code_changes(config: CodingAgentConfig):
                     "parent_initiative_user_documentation": initiative.user_documentation or "None"
                 }
             ),
+            LlmMessage.user(test_instruction),
             LlmMessage.user_from_data(
-                textwrap.dedent("""
-                **You Must** create a plan to one-shot write a **single file**, comprensive test suite that asserts this task's behavior.  
-                    - this test suite will be used for Test Driven Development**
-            """),
+                "Task to test",
                 goal_data
             )
         ]
@@ -2656,20 +2716,28 @@ def get_existing_test_context_messages(
         title: str = None
 ) -> list[LlmMessage]:
     title = title or textwrap.dedent(f"""
-        Existing automated tests that must continue to pass and should not be duplicated.  
-        New tests must complement the provided suites, avoid duplicating coverage, 
+        Existing automated tests that must continue to pass and should not be duplicated.
+        New tests must complement the provided suites, avoid duplicating coverage,
         and remain consistent so all tests can pass together.
     """)
     
     """Build context messages describing other automated tests to avoid duplication."""
     existing_test_entries: list[dict[str, str]] = []
     
+    # Query for both Python tests (.py) and JavaScript/TypeScript tests (.test.js, .test.jsx, .test.ts, .test.tsx)
+    from django.db.models import Q
+    
     code_version_map = {
         cv.code_file_id: cv
         for cv in CodeVersion.objects.filter(
-            task_iteration__self_driving_task__task__initiative_id=initiative.id,
-            code_file__file_path__startswith="test",
-            code_file__file_path__endswith=".py"
+            task_iteration__self_driving_task__task__initiative_id=initiative.id
+        ).filter(
+            Q(code_file__file_path__startswith="test", code_file__file_path__endswith=".py") |
+            Q(code_file__file_path__contains=".test.js") |
+            Q(code_file__file_path__contains=".test.jsx") |
+            Q(code_file__file_path__contains=".test.ts") |
+            Q(code_file__file_path__contains=".test.tsx") |
+            Q(code_file__file_path__contains="__tests__")
         ).order_by("task_iteration__version_number").select_related("code_file")
     }
     
@@ -2765,6 +2833,87 @@ You've spent ${config.self_driving_task.get_cost() :.2f} USD out of a max budget
     """)
 
 
+def get_ui_first_phase_context_msg(config: CodingAgentConfig) -> list[LlmMessage]:
+    """
+    Returns context message about UI-first phase and frontend framework when applicable.
+
+    This message informs the planner that:
+    1. This is UI-first phase (UI + Mock API, no AWS deployment)
+    2. What frontend framework is being used (React, React Native)
+    3. That tests should be Jest-based frontend tests, not Django backend tests
+    """
+    if not config.is_ui_first_phase:
+        return []
+    
+    frontend_info = detect_frontend_framework(config)
+    
+    if not frontend_info["has_frontend"]:
+        # UI-first phase but no frontend detected yet - provide guidance
+        return [LlmMessage.user(textwrap.dedent("""
+            ## UI-First Phase Context
+
+            This task is in **UI-First Phase** (UI + Mock API implementation, no AWS deployment).
+
+            When writing tests for UI-first phase:
+            - Tests should be Jest-based frontend tests (React Testing Library or React Native Testing Library)
+            - Tests should NOT be Django backend tests
+            - The `tdd_test_file` should be a JavaScript/TypeScript test file (e.g., `.test.js`, `.test.jsx`, `.test.ts`, `.test.tsx`)
+            - Tests should be placed in a `__tests__/` directory
+            - **CRITICAL**: Tests must run standalone without server interaction
+            - **Mock API Setup**: Create `__tests__/setup.js` file to configure all API mocks
+            - All mock API calls and responses MUST be defined in `setup.js`, not inline in test files
+            - Tests should validate UI behavior using the mocked API responses
+        """))]
+    
+    framework = frontend_info["framework"]
+    framework_name = "React Native" if framework == "react-native" else "React Web"
+    frontend_dir = frontend_info["frontend_dir"]
+    
+    # Compute relative path from sandbox root to frontend directory
+    frontend_rel_path = frontend_dir.relative_to(config.sandbox_root_dir)
+    tests_dir_path = frontend_rel_path / "__tests__"
+    
+    test_framework_guidance = ""
+    if framework == "react-native":
+        test_framework_guidance = textwrap.dedent(f"""
+            - Use Jest with React Native Testing Library
+            - Test file should use `.test.js` or `.test.tsx` extension
+            - Place test file in: `{tests_dir_path}/` directory
+            - Example path: `{tests_dir_path}/ComponentName.test.js`
+            - Tests should validate React Native component behavior
+            - **CRITICAL**: Tests must run standalone without server interaction
+            - **Mock API Setup**: Create `{tests_dir_path}/setup.js` file to configure all API mocks
+            - All mock API calls and responses MUST be defined in `{tests_dir_path}/setup.js`, not inline in test files
+            - Example: Mock global fetch in setup.js with predefined responses for all endpoints
+        """)
+    elif framework == "react":
+        test_framework_guidance = textwrap.dedent(f"""
+            - Use Jest with React Testing Library
+            - Test file should use `.test.js` or `.test.tsx` extension
+            - Place test file in: `{tests_dir_path}/` directory
+            - Example path: `{tests_dir_path}/ComponentName.test.js`
+            - Tests should validate React component rendering and user interactions
+            - **CRITICAL**: Tests must run standalone without server interaction
+            - **Mock API Setup**: Create `{tests_dir_path}/setup.js` file to configure all API mocks
+            - All mock API calls and responses MUST be defined in `{tests_dir_path}/setup.js`, not inline in test files
+            - Example: Mock global fetch in setup.js with predefined responses for all endpoints
+        """)
+    
+    return [LlmMessage.user(textwrap.dedent(f"""
+        ## UI-First Phase Context
+
+        This task is in **UI-First Phase** (UI + Mock API implementation, no AWS deployment).
+
+        **Detected Frontend Framework**: {framework_name}
+        **Frontend Directory**: {frontend_rel_path}/
+
+        **Test Requirements for UI-First Phase**:
+        {test_framework_guidance}
+
+        **Important**: Do NOT generate Django/Python backend tests. This is UI-first phase - tests must be frontend tests.
+    """))]
+
+
 def get_readonly_files_replacement(config: CodingAgentConfig) -> tuple[str, str]:
     parts = []
     
@@ -2818,6 +2967,9 @@ def plan_iterative_code_changes(config: CodingAgentConfig, goal_instructions=Non
             config.sandbox_root_dir
         ) if not iteration_to_modify.has_error() else [],
         get_guidance_msg(
+            config
+        ),
+        get_ui_first_phase_context_msg(
             config
         ),
         get_lessons_msg(

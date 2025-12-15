@@ -55,24 +55,24 @@ def validate(code_file_path: Path):
             raise CodeCompilationError(code, f"Django template syntax error: {e}")
     elif code_file_name.endswith(".tsx"):
         # TypeScript React validation using ESLint
-        run_eslint(code, ".tsx")
-    
+        run_eslint(code, ".tsx", original_filename=code_file_name)
+
     elif code_file_name.endswith(".ts"):
         # TypeScript validation using ESLint
-        run_eslint(code, ".ts")
-    
+        run_eslint(code, ".ts", original_filename=code_file_name)
+
     elif code_file_name.endswith(".jsx"):
         # React JSX validation using ESLint
-        run_eslint(code, ".jsx")
-    
+        run_eslint(code, ".jsx", original_filename=code_file_name)
+
     elif code_file_name.endswith(".js"):
         ctx = detect_js_context(code_file_path)
         if JavascriptContext.REACT.eq(ctx):
-            run_eslint(code, ".js")
+            run_eslint(code, ".js", original_filename=code_file_name)
         elif JavascriptContext.NODE.eq(ctx):
-            run_eslint(code, ".js", [LintRules.ALLOW_USED_VARS])
+            run_eslint(code, ".js", [LintRules.ALLOW_USED_VARS], original_filename=code_file_name)
         elif JavascriptContext.BARE.eq(ctx):
-            run_eslint(code, ".js", [LintRules.ALLOW_USED_VARS, LintRules.ALLOW_UNDEFINED_VARS])
+            run_eslint(code, ".js", [LintRules.ALLOW_USED_VARS, LintRules.ALLOW_UNDEFINED_VARS], original_filename=code_file_name)
         else:
             raise Exception(f"unhandled javascript context: {ctx}")
     
@@ -151,7 +151,8 @@ def validate_dockerfile(dockerfile_path):
 def run_eslint(
         code: str,
         file_extension: str,
-        rules: list[LintRules] = None
+        rules: list[LintRules] = None,
+        original_filename: str = None
 ) -> None:
     """
     Run ESLint on code content and raise CodeCompilationError if validation fails.
@@ -159,6 +160,8 @@ def run_eslint(
     Args:
         code: The source code to validate
         file_extension: File extension (.js, .jsx, .ts, .tsx) to determine parser
+        rules: Optional list of LintRules to apply
+        original_filename: Optional original filename to preserve test file patterns
 
     Raises:
         CodeCompilationError: If ESLint finds errors
@@ -166,13 +169,39 @@ def run_eslint(
     # Get the project root directory (where package.json and .eslint-flat-config.js are located)
     project_root = Path(os.getcwd())
     eslint_config = common.assert_exists(project_root / ".eslint-flat-config.js")
-    
-    # Create temporary file with appropriate extension
+
+    # Determine suffix and directory for temp file
+    # If original_filename indicates a test file, preserve that pattern in the temp filename
+    suffix = file_extension
+    temp_dir = str(project_root)
+
+    if original_filename:
+        lower_name = original_filename.lower()
+        # Check if this is a test file
+        is_in_tests_dir = '/__tests__/' in lower_name or lower_name.startswith('__tests__/')
+
+        if '.test.' in lower_name or '.spec.' in lower_name or is_in_tests_dir:
+            # Extract the pattern (e.g., ".test.js", ".spec.tsx")
+            if '.test.' in lower_name:
+                # Find the position of .test. and extract from there
+                test_idx = lower_name.rfind('.test.')
+                suffix = original_filename[test_idx:]
+            elif '.spec.' in lower_name:
+                spec_idx = lower_name.rfind('.spec.')
+                suffix = original_filename[spec_idx:]
+            elif is_in_tests_dir:
+                # For files in __tests__ directory, create temp file in __tests__ subdirectory
+                # This ensures the path matches the **/__tests__/**/*.js pattern
+                tests_dir = project_root / "__tests__"
+                tests_dir.mkdir(exist_ok=True)
+                temp_dir = str(tests_dir)
+
+    # Create temporary file with appropriate extension/suffix and directory
     with tempfile.NamedTemporaryFile(
             mode='w+',
-            suffix=file_extension,
+            suffix=suffix,
             delete=False,
-            dir=str(project_root)
+            dir=temp_dir
     ) as tmp:
         tmp_path = tmp.name
         try:

@@ -17,9 +17,9 @@ If any instruction conflicts, always prefer tasks that expose a user-facing or s
 - If an internal prerequisite truly cannot be bundled with the user-facing slice, add a short justification at the top of the task description explaining why, and explicitly link it as a dependency of the user-facing task it enables. Treat this as an uncommon exception.
 
 Engineering Lead tasks should focus solely on **functional or user-facing deliverables** that extend application behavior, ML logic, or system capabilities beyond these orchestration processes.
-**Never** create tasks for writing product specs, user flows, or acceptance criteria.  
-**Never** introduce hidden side effects or circular dependencies.  
-**Never** duplicate existing methods.  
+**Never** create tasks for writing product specs, user flows, or acceptance criteria.
+**Never** introduce hidden side effects or circular dependencies.
+**Never** duplicate existing methods. Research existing methods and utilities before planning new tasks. Prefer extending existing code with backwards-compatible changes over creating new implementations.
 **Never** over-engineer – use the simplest viable architecture.  
 **Never** define a new Dockerfile – all tasks must run in the existing container.  
 **Never** create separate test-only tasks. If a task requires testing, set the boolean field `requires_test: true`.  
@@ -180,46 +180,43 @@ For initiatives with React/React Native UI, split work into two explicit phases:
 
 ### Phase 1 Task Generation Requirements
 
-When creating UI-first tasks, you **must** generate tasks in this order:
+**IMPORTANT**: For Phase 1 UI tasks, create **one task per feature** that includes UI implementation, tests, AND mock API setup together. Do NOT create separate tasks for mock API implementation or testing.
 
-1. **Mock API Contract Definition Task** (e.g., `task_ui_mock_api_contract_<feature>`)
-   - `task_type: DESIGN_WEB_APPLICATION`
-   - `ui_first_phase: "UI_MOCK_API"`
-   - Output: JSON schema file defining all API endpoints, request/response shapes, error states
-   - Location: `src/api/contracts/mock-api-contract-<feature>.json` (or similar)
-   - Must document: endpoint paths, HTTP methods, request bodies, response bodies, status codes, error scenarios
-   - This task has **no** dependencies
-   - Example completion criteria: "API contract documented with all endpoints, request/response examples, and error states"
-
-2. **Mock API Implementation Task** (e.g., `task_ui_mock_api_impl_<feature>`)
+**UI Implementation Task** (e.g., `task_ui_user_profile`, `task_ui_dashboard`)
    - `task_type: CODING_APPLICATION`
    - `ui_first_phase: "UI_MOCK_API"`
-   - Implement in-process mock API (e.g., MSW for React, local JS objects for React Native)
-   - Must match the contract exactly
-   - Must support all states: success, loading, empty data, error conditions
-   - `depends_on: ["task_ui_mock_api_contract_<feature>"]`
-   - `requires_test: true` (tests verify mock returns expected shapes)
-   - Example completion criteria: "Mock API handlers implemented and return contract-compliant responses"
+   - `requires_test: true`
 
-3. **React/React Native UI Implementation Task** (e.g., `task_ui_components_<feature>`)
-   - `task_type: CODING_APPLICATION`
-   - `ui_first_phase: "UI_MOCK_API"`
-   - Implement screens/components using Mock API
+**Task Must Include All of the Following**:
+
+1. **UI Components/Screens**:
+   - Implement React/React Native screens and components for the feature
    - Include state management (minimal viable approach)
    - Handle loading, empty, and error states
-   - `depends_on: ["task_ui_mock_api_impl_<feature>"]`
-   - `requires_test: true` (component tests using Mock API)
-   - Example completion criteria: "UI renders all states correctly using Mock API, tests pass without backend services"
+   - Components must call API endpoints and render responses
 
-4. **UI Integration Tests Task** (e.g., `task_ui_integration_tests_<feature>`)
-   - `task_type: CODING_APPLICATION`
-   - `ui_first_phase: "UI_MOCK_API"`
-   - Write integration-style tests for user flows
-   - Tests **must** run without backend services (use Mock API)
-   - Use appropriate testing framework: Jest + React Testing Library / Detox for React Native
-   - `depends_on: ["task_ui_components_<feature>"]`
-   - `requires_test: true`
-   - Example completion criteria: "User flow tests pass on Mac without backend services running"
+2. **Mock API Setup** (`__tests__/setup.js`):
+   - Create/update `__tests__/setup.js` with mock API responses for this feature
+   - Mock global fetch/axios with predefined responses for all API endpoints used by this feature
+   - Must support all states: success, loading, empty data, error conditions
+   - Document API contract in comments: endpoint paths, HTTP methods, request/response shapes, status codes
+
+3. **Tests** (`__tests__/<ComponentName>.test.js`):
+   - Write comprehensive Jest tests in `__tests__/` directory
+   - Tests must use mocked APIs from setup.js (no inline mocking)
+   - Test component rendering, user interactions, and all UI states
+   - Tests must run standalone without backend services
+   - Configure jest.config.js to reference `__tests__/setup.js` in setupFilesAfterEnv
+
+**Example Task Description**:
+"Implement user profile screen with view/edit functionality. Create UI components that fetch user data from GET /api/users/:id and update via PUT /api/users/:id. Handle loading, error, and success states. Create __tests__/setup.js with mock API responses for both endpoints (success, 404, 500 cases). Write Jest tests that verify component renders correctly with mocked data, handles form submission, and displays errors. Tests must run on Mac without backend."
+
+**Example Completion Criteria**:
+"User profile screen renders with mock data, edit form updates state, error states display correctly, __tests__/setup.js contains mocks for GET/PUT /api/users/:id, all tests in __tests__/UserProfile.test.js pass standalone without server"
+
+**Dependencies**:
+- Phase 1 UI tasks typically have no dependencies (can run in parallel)
+- If tasks share API endpoints, document shared mocks in setup.js comments
 
 ### Phase 2 Task Generation Requirements
 
@@ -261,13 +258,21 @@ After all Phase 1 tasks are defined, generate Phase 2 server tasks:
 - **NO database migrations** in Phase 1 tasks (data is mocked)
 - **NO CloudFormation** in Phase 1 tasks
 - **NO deployment** language in Phase 1 task descriptions
+- **NO separate mock API tasks** - mock setup must be integrated into UI implementation tasks
+- **NO separate test-only tasks** - tests must be integrated into UI implementation tasks
+- **MUST use `__tests__/setup.js`** for all API mocks (no inline mocking in test files)
+- **MUST configure Jest** to load `__tests__/setup.js` via setupFilesAfterEnv
 - Phase 1 `completion_criteria` **must** include: "Tests run on local Mac without backend services"
+- Phase 1 `completion_criteria` **must** include: "Mock API configured in __tests__/setup.js"
+- Phase 1 `task_description` **must** explicitly mention creating/updating `__tests__/setup.js`
 - Phase 1 tasks **must not** include `execution_schedule` other than `NOT_APPLICABLE` or `ONCE`
-- Phase 1 `validated_requirements` may be empty for Mock API contract/implementation tasks, but UI component tasks should reference requirements
+- Phase 1 `validated_requirements` should reference the user-facing requirements being implemented
 
 ### Task ID Naming Convention
 
-- Phase 1: `task_ui_<purpose>_<feature>` (e.g., `task_ui_mock_api_contract_user_profile`, `task_ui_components_dashboard`)
+- Phase 1: `task_ui_<feature>` (e.g., `task_ui_user_profile`, `task_ui_dashboard`, `task_ui_settings_screen`)
+  - Simple feature-based naming since each task includes UI + tests + mocks
+  - Do NOT use `_mock_api_`, `_components_`, or `_tests_` suffixes
 - Phase 2: `task_server_<purpose>_<feature>` (e.g., `task_server_api_user_profile`, `task_server_e2e_tests_dashboard`)
 
 The `_ui_` and `_server_` infixes enable the Self Driving Coding agent to automatically detect which phase it's working in and adjust deployment behavior accordingly.

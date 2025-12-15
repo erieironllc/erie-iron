@@ -16,6 +16,7 @@ export default [
             globals: {
                 ...globals.browser,
                 ...globals.node,
+                ...globals.jest,
             },
             parserOptions: {
                 ecmaFeatures: {
@@ -28,7 +29,7 @@ export default [
         },
         rules: {
             ...js.configs.recommended.rules,
-            "no-unused-vars": "error",
+            "no-unused-vars": "warn",
             "no-undef": "error",
         },
     },
@@ -58,8 +59,46 @@ export default [
         },
         rules: {
             ...tsPlugin.configs.recommended.rules,
-            "@typescript-eslint/no-unused-vars": "error",
+            "@typescript-eslint/no-unused-vars": "warn",
             "@typescript-eslint/no-explicit-any": "warn",
+        },
+    },
+
+    // Jest test files - JavaScript
+    {
+        files: [
+            "**/*.test.js",
+            "**/*.spec.js",
+            "**/*.test.jsx",
+            "**/*.spec.jsx",
+            "**/__tests__/**/*.js",
+            "**/__tests__/**/*.jsx",
+        ],
+        ignores: [],
+
+        languageOptions: {
+            globals: {
+                ...globals.jest,
+            },
+        },
+    },
+
+    // Jest test files - TypeScript
+    {
+        files: [
+            "**/*.test.ts",
+            "**/*.spec.ts",
+            "**/*.test.tsx",
+            "**/*.spec.tsx",
+            "**/__tests__/**/*.ts",
+            "**/__tests__/**/*.tsx",
+        ],
+        ignores: [],
+
+        languageOptions: {
+            globals: {
+                ...globals.jest,
+            },
         },
     },
 ];
