@@ -32,7 +32,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
 from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, TaskImplementationPhase
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
@@ -456,8 +456,10 @@ def bootstrap_selfdriving_agent(task_id, restart) -> SelfDrivingTask:
     ).exists()
     
     Task.objects.filter(id=task.id).update(
+        ui_first_phase=TaskImplementationPhase.UI_MOCK_API,
         status=TaskStatus.IN_PROGRESS
     )
+    task.refresh_from_db(fields=["ui_first_phase", "status"])
     
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
     

@@ -38,7 +38,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -1887,28 +1887,31 @@ def _tab_available_llmrequests_consolidated(business: Business) -> bool:
 
 
 def _tab_context_llmrequests_consolidated(business: Business, active_sub_tab=None, request=None) -> dict:
+    logger.info(f"_tab_context_llmrequests_consolidated called for business {business.id}, active_sub_tab={active_sub_tab}")
+    active_sub_tab = active_sub_tab or "llm-spend"
+
     context = {
         "sub_tabs": {}
     }
-    
+
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _tab_available_llmrequests, _tab_context_llmrequests),
         ("llm-spend", "llm_spend", _tab_available_llm_spend, _tab_context_llm_spend),
     ]
-    
+
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         context["sub_tabs"][sub_tab_key] = {
             "available": availability_fn(business)
         }
-        
+
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(business, request=request))
             else:
                 context.update(context_fn(business))
-    
-    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+
+    context["active_sub_tab"] = active_sub_tab
     return context
 
 
@@ -1920,28 +1923,30 @@ def _initiative_tab_available_llmrequests_consolidated(initiative) -> bool:
 
 
 def _initiative_tab_context_llmrequests_consolidated(initiative, active_sub_tab=None, request=None) -> dict:
+    active_sub_tab = active_sub_tab or "llm-spend"
+
     context = {
         "sub_tabs": {}
     }
-    
+
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _initiative_tab_available_llmrequests, _initiative_tab_context_llmrequests),
         ("llm-spend", "llm_spend", _initiative_tab_available_llm_spend, _initiative_tab_context_llm_spend),
     ]
-    
+
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         context["sub_tabs"][sub_tab_key] = {
             "available": availability_fn(initiative)
         }
-        
+
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(initiative, request=request))
             else:
                 context.update(context_fn(initiative))
-    
-    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+
+    context["active_sub_tab"] = active_sub_tab
     return context
 
 
@@ -1953,28 +1958,30 @@ def _task_tab_available_llmrequests_consolidated(task, business, self_driving_ta
 
 
 def _task_tab_context_llmrequests_consolidated(task, active_sub_tab=None, request=None) -> dict:
+    active_sub_tab = active_sub_tab or "llm-spend"
+
     context = {
         "sub_tabs": {}
     }
-    
+
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _task_tab_available_llmrequests, _task_tab_context_llmrequests),
         ("llm-spend", "llm_spend", _task_tab_available_llm_spend, _task_tab_context_llm_spend),
     ]
-    
+
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         context["sub_tabs"][sub_tab_key] = {
             "available": availability_fn(task)
         }
-        
+
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(task, request=request))
             else:
                 context.update(context_fn(task))
-    
-    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+
+    context["active_sub_tab"] = active_sub_tab
     return context
 
 
@@ -2001,18 +2008,20 @@ def _portfolio_tab_available_llmrequests_consolidated(portfolio=None) -> bool:
 
 
 def _portfolio_tab_context_llmrequests_consolidated(portfolio=None, active_sub_tab=None, request=None) -> dict:
+    active_sub_tab = active_sub_tab or "llm-spend"
+
     context = {
         "sub_tabs": {}
     }
-    
+
     from erieiron_autonomous_agent.models import Business
     business = Business.get_erie_iron_business()
-    
+
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _portfolio_tab_available_llmrequests, _portfolio_tab_context_llmrequests),
         ("llm-spend", "llm_spend", _portfolio_tab_available_llm_spend, _portfolio_tab_context_llm_spend),
     ]
-    
+
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         if sub_tab_slug == "llm-spend":
             # For llm-spend, pass business instead of portfolio
@@ -2023,15 +2032,15 @@ def _portfolio_tab_context_llmrequests_consolidated(portfolio=None, active_sub_t
             context["sub_tabs"][sub_tab_key] = {
                 "available": availability_fn(portfolio)
             }
-        
+
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Portfolio llm-spend context function takes business and request parameter
                 context.update(context_fn(business, request=request))
             else:
                 context.update(context_fn(portfolio))
-    
-    context["active_sub_tab"] = active_sub_tab or "llm-spend"
+
+    context["active_sub_tab"] = active_sub_tab
     return context
 
 
@@ -2069,20 +2078,26 @@ def _build_business_tabs(business: Business) -> list[dict]:
 
 def view_business(request, business_id, tab='overview'):
     from erieiron_ui import tab_defitions
-    
+
     business = get_object_or_404(Business, pk=business_id)
     tab = (tab or 'overview').lower()
-    
+
+    logger.info(f"view_business called: business_id={business_id}, tab={tab}")
+
     if tab not in tab_defitions.BUSINESS_TAB_MAP:
+        logger.error(f"Tab {tab} not in BUSINESS_TAB_MAP")
         raise Http404
-    
+
     tabs = _build_business_tabs(business)
     tab_definition = tab_defitions.BUSINESS_TAB_MAP[tab]
-    
+
+    logger.info(f"Tab definition: template={tab_definition.get('template')}, has_context_fn={'context_fn' in tab_definition}")
+
     is_available = next((t for t in tabs if t['slug'] == tab), None)
     if not is_available or not is_available['available']:
+        logger.warning(f"Tab {tab} not available or not found in tabs list")
         raise Http404
-    
+
     context = {
         "business": business,
         "tabs": tabs,
@@ -2090,9 +2105,11 @@ def view_business(request, business_id, tab='overview'):
         "tab_template": tab_definition["template"],
     }
     if tab == 'llm-spend':
+        logger.info("Calling _tab_context_llm_spend")
         context.update(_tab_context_llm_spend(business, request=request))
     elif "context_fn" in tab_definition:
         context_fn = tab_definition["context_fn"]
+        logger.info(f"Calling context_fn: {context_fn.__name__}")
         fn_params = inspect.signature(context_fn).parameters
         if "request" in fn_params:
             context.update(context_fn(business, request=request))
@@ -3405,6 +3422,7 @@ def _task_tab_context_edit(task, business, self_driving_task: SelfDrivingTask) -
         "task_type_choices": TaskType.choices(),
         "task_role_choices": Role.choices() if hasattr(Role, 'choices') else [],
         "task_phase_choices": [],
+        "task_implementation_phase_choices": TaskImplementationPhase.choices(),
     }
 
 
@@ -4846,6 +4864,7 @@ def action_update_task(request, task_id):
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         completion_criteria = rget(request, 'completion_criteria', "").strip()
         requires_test = request.POST.get('requires_test') == 'on'
+        ui_first_phase = rget(request, 'ui_first_phase', '').strip()
         
         # Prepare update data
         update_data = {
@@ -4893,7 +4912,12 @@ def action_update_task(request, task_id):
                 return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['execution_start_time'] = None
-        
+
+        if ui_first_phase:
+            update_data['ui_first_phase'] = ui_first_phase
+        else:
+            update_data['ui_first_phase'] = None
+
         # Update the task
         Task.objects.filter(id=task_id).update(**update_data)
         

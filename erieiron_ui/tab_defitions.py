@@ -552,32 +552,14 @@ BUSINESS_TAB_MAP = {
     if "slug" in definition
 }
 
-# Also index sub-tabs
-for definition in BUSINESS_TAB_DEFINITIONS:
-    if "sub_tabs" in definition:
-        for sub in definition["sub_tabs"]:
-            BUSINESS_TAB_MAP[sub["slug"]] = sub
-
 TASK_TAB_MAP = {
     definition["slug"]: definition
     for definition in TASK_TAB_DEFINITIONS
     if "slug" in definition
 }
 
-# Also index sub-tabs
-for definition in TASK_TAB_DEFINITIONS:
-    if "sub_tabs" in definition:
-        for sub in definition["sub_tabs"]:
-            TASK_TAB_MAP[sub["slug"]] = sub
-
 ITERATION_TAB_MAP = {
     definition["slug"]: definition
     for definition in ITERATION_TAB_DEFINITIONS
     if "slug" in definition
 }
-
-# Also index sub-tabs
-for definition in ITERATION_TAB_DEFINITIONS:
-    if "sub_tabs" in definition:
-        for sub in definition["sub_tabs"]:
-            ITERATION_TAB_MAP[sub["slug"]] = sub

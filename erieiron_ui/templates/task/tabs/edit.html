@@ -84,6 +84,17 @@
                 </div>
 
                 <div class="mb-3">
+                    <label for="ui_first_phase" class="form-label">UI First Phase</label>
+                    <select name="ui_first_phase" id="ui_first_phase" class="form-select">
+                        <option value="">-- None --</option>
+                        {% for value, label in task_implementation_phase_choices %}
+                            <option value="{{ value }}"
+                                    {% if task.ui_first_phase == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mb-3">
                     <label for="execution_schedule" class="form-label">Execution Schedule</label>
                     <select name="execution_schedule" id="execution_schedule" class="form-select">
                         {% for value, label in task_execution_schedule_choices %}
