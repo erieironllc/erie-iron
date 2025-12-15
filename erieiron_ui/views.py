@@ -4864,7 +4864,7 @@ def action_update_task(request, task_id):
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         completion_criteria = rget(request, 'completion_criteria', "").strip()
         requires_test = request.POST.get('requires_test') == 'on'
-        ui_first_phase = rget(request, 'ui_first_phase', '').strip()
+        implementation_phase = rget(request, 'implementation_phase', '').strip()
         
         # Prepare update data
         update_data = {
@@ -4913,10 +4913,10 @@ def action_update_task(request, task_id):
         else:
             update_data['execution_start_time'] = None
 
-        if ui_first_phase:
-            update_data['ui_first_phase'] = ui_first_phase
+        if implementation_phase:
+            update_data['implementation_phase'] = implementation_phase
         else:
-            update_data['ui_first_phase'] = None
+            update_data['implementation_phase'] = None
 
         # Update the task
         Task.objects.filter(id=task_id).update(**update_data)

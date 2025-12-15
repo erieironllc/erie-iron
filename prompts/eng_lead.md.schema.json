@@ -100,7 +100,7 @@
             "enum": ["CODING_APPLICATION", "TASK_EXECUTION", "CODING_ML", "DESIGN_WEB_APPLICATION", "HUMAN_WORK"],
             "description": "High-level nature of the task"
           },
-          "ui_first_phase": {
+          "implementation_phase": {
             "type": ["string", "null"],
             "enum": ["UI_MOCK_API", "SERVER_IMPLEMENTATION", null],
             "description": "For React/React Native projects: UI_MOCK_API for Phase 1 tasks (no AWS), SERVER_IMPLEMENTATION for Phase 2 tasks (with AWS). Null for non-UI tasks."

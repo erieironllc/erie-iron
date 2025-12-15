@@ -169,14 +169,14 @@ For initiatives with React/React Native UI, split work into two explicit phases:
 - Task IDs **must** include `_ui_` infix (e.g., `task_ui_user_profile_screen`)
 - These tasks **must not** include any AWS infrastructure or deployment
 - All Phase 1 tasks **must** be completable on a Mac without backend services running
-- Set `ui_first_phase: "UI_MOCK_API"` in task JSON
+- Set `implementation_phase: "UI_MOCK_API"` in task JSON
 
 **Phase 2 Tasks: Server API (with AWS deployment)**
 - Task IDs **must** include `_server_` infix (e.g., `task_server_user_profile_api`)
 - These tasks implement the real backend API matching the Mock API contract
 - These tasks include AWS infrastructure and CloudFormation deployment
 - Phase 2 tasks **must** depend on corresponding Phase 1 tasks
-- Set `ui_first_phase: "SERVER_IMPLEMENTATION"` in task JSON
+- Set `implementation_phase: "SERVER_IMPLEMENTATION"` in task JSON
 
 ### Phase 1 Task Generation Requirements
 
@@ -184,7 +184,7 @@ For initiatives with React/React Native UI, split work into two explicit phases:
 
 **UI Implementation Task** (e.g., `task_ui_user_profile`, `task_ui_dashboard`)
    - `task_type: CODING_APPLICATION`
-   - `ui_first_phase: "UI_MOCK_API"`
+   - `implementation_phase: "UI_MOCK_API"`
    - `requires_test: true`
 
 **Task Must Include All of the Following**:
@@ -224,7 +224,7 @@ After all Phase 1 tasks are defined, generate Phase 2 server tasks:
 
 1. **Server API Implementation Task** (e.g., `task_server_api_<feature>`)
    - `task_type: CODING_APPLICATION`
-   - `ui_first_phase: "SERVER_IMPLEMENTATION"`
+   - `implementation_phase: "SERVER_IMPLEMENTATION"`
    - Implement Django REST endpoints matching Mock API contract **exactly**
    - Use contract as source-of-truth for request/response shapes
    - Include Django models, serializers, views
@@ -236,7 +236,7 @@ After all Phase 1 tasks are defined, generate Phase 2 server tasks:
 
 2. **API Adapter Task** (e.g., `task_server_api_adapter_<feature>`)
    - `task_type: CODING_APPLICATION`
-   - `ui_first_phase: "SERVER_IMPLEMENTATION"`
+   - `implementation_phase: "SERVER_IMPLEMENTATION"`
    - Create configurable adapter in UI code to switch between Mock and Real API
    - Use environment variable or config file to toggle (e.g., `USE_MOCK_API=true/false`)
    - `depends_on: ["task_server_api_<feature>"]`
@@ -245,7 +245,7 @@ After all Phase 1 tasks are defined, generate Phase 2 server tasks:
 
 3. **End-to-End Tests Task** (e.g., `task_server_e2e_tests_<feature>`)
    - `task_type: CODING_APPLICATION`
-   - `ui_first_phase: "SERVER_IMPLEMENTATION"`
+   - `implementation_phase: "SERVER_IMPLEMENTATION"`
    - Write E2E tests using real backend (Playwright, Cypress, or Detox)
    - Tests run against deployed AWS environment
    - `depends_on: ["task_server_api_adapter_<feature>"]`

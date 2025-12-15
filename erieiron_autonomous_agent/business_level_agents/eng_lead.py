@@ -254,11 +254,11 @@ def process_response(initiative, eng_lead_response):
         existing_task = Task.objects.filter(id=task_id).first() if task_id else None
         
         # Extract UI-first phase if present
-        ui_first_phase = task_data.get('ui_first_phase', None)
+        implementation_phase = task_data.get('implementation_phase', None)
 
         # Log UI-first detection
-        if ui_first_phase:
-            logging.info(f"Task {task_id} is UI-first phase: {ui_first_phase}")
+        if implementation_phase:
+            logging.info(f"Task {task_id} is UI-first phase: {implementation_phase}")
 
         defaults = {
             "initiative": initiative,
@@ -272,7 +272,7 @@ def process_response(initiative, eng_lead_response):
             "task_type": TaskType(task_data.get("task_type")),
             "input_fields": task_data.get("input_fields", {}),
             "output_fields": task_data.get("output_fields", []),
-            "ui_first_phase": ui_first_phase
+            "implementation_phase": implementation_phase
         }
         
         execution_start_time = task_data.get("execution_start_time")
@@ -312,7 +312,7 @@ def process_response(initiative, eng_lead_response):
             "task_type": task_data.get("task_type"),
             "input_fields": task_data.get("input_fields", {}),
             "output_fields": task_data.get("output_fields", []),
-            "ui_first_phase": ui_first_phase,
+            "implementation_phase": implementation_phase,
         }
         
         was_updated = any(
