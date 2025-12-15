@@ -1528,7 +1528,11 @@ def safe_read(path: Path) -> str:
         return path.read_text()
 
 
+
 def valid_file(path: Path) -> bool:
+    if path is None:
+        return False
+    
     try:
         assert_exists(path)
         return True
@@ -1566,7 +1570,7 @@ def normalize_relative_path(path: str | None) -> str:
     normalized = str(path).strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
-        
+    
     return normalized
 
 

@@ -500,7 +500,11 @@ def bootstrap_selfdriving_agent(task_id, restart) -> SelfDrivingTask:
         if not config.business.codefile_set.exists():
             config.git.mk_venv()
         
-        if self_driving_task.test_file_path is None or not (config.sandbox_root_dir / self_driving_task.test_file_path).exists():
+        if (
+                TaskType.CODING_APPLICATION.eq(task.task_type)
+                and
+                common.invalid_file(config.sandbox_root_dir, self_driving_task.test_file_path)
+        ):
             write_tdd_test(config)
         
         first_iteration = self_driving_task.selfdrivingtaskiteration_set.first()
