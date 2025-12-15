@@ -1421,7 +1421,7 @@ class Task(BaseErieIronModel):
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
     
-    ui_first_phase = models.CharField(
+    implementation_phase = models.CharField(
         max_length=50,
         choices=TaskImplementationPhase.choices(),
         null=True,
@@ -1505,11 +1505,11 @@ class Task(BaseErieIronModel):
     
     def is_ui_first_phase(self):
         """Returns True if this task is in the UI + Mock API phase (no AWS deployment)"""
-        return self.ui_first_phase == 'UI_MOCK_API'
+        return TaskImplementationPhase.UI_MOCK_API.eq(self.implementation_phase)
     
     def is_server_phase(self):
         """Returns True if this task is in the Server API phase (with AWS deployment)"""
-        return self.ui_first_phase == 'SERVER_IMPLEMENTATION'
+        return TaskImplementationPhase.SERVER_IMPLEMENTATION.eq(self.implementation_phase)
     
     def allow_execution(self):
         b = self.initiative.business

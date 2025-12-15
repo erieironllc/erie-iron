@@ -89,7 +89,7 @@ class CodingAgentConfig:
         self.phase = SdaPhase.INIT
         
         # UI-first phase tracking
-        self.is_ui_first_phase = self.task.is_ui_first_phase() if hasattr(self.task, 'is_ui_first_phase') else False
+        self.is_ui_first_phase = self.task.is_ui_first_phase()
         logging.info(f"Task {self.task.id} UI-first phase: {self.is_ui_first_phase}")
         
         # self.self_driving_task.test_file_path = Path(self.self_driving_task.test_file_path).relative_to(self.sandbox_root_dir)

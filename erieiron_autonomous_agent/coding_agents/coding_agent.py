@@ -456,10 +456,9 @@ def bootstrap_selfdriving_agent(task_id, restart) -> SelfDrivingTask:
     ).exists()
     
     Task.objects.filter(id=task.id).update(
-        ui_first_phase=TaskImplementationPhase.UI_MOCK_API,
         status=TaskStatus.IN_PROGRESS
     )
-    task.refresh_from_db(fields=["ui_first_phase", "status"])
+    task.refresh_from_db(fields=["status"])
     
     self_driving_task: SelfDrivingTask = task.create_self_driving_env()
     
