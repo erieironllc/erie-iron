@@ -1173,7 +1173,7 @@ def run_jest_tests(
     config.log("=" * 80 + "\n")
     
     # Determine working directory relative to /app mount
-    if config.is_ui_first_phase:
+    if True or config.is_ui_first_phase:
         subprocess.run(
             ["npm", "install"],
             env=config.runtime_env,

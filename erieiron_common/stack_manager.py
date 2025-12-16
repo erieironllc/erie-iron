@@ -269,6 +269,7 @@ class StackManager:
             *,
             input_data: str | None = None,
             timeout: int | None = None,
+            _lock_retry_attempted: bool = False,
     ) -> OpenTofuCommandResult:
         self.stage = stage
         workdir = str(self.workspace_dir)
@@ -319,14 +320,116 @@ class StackManager:
             if result.returncode in (2, 3):
                 logging.info(f"OpenTofu plan completed with changes (exit code {result.returncode}). Treating as success.")
             else:
-                raise OpenTofuCommandException(
+                error = OpenTofuCommandException(
                     f"OpenTofu command failed with exit code {result.returncode}",
                     result,
                 )
-        
+
+                # Check if this is a state lock error that can be resolved
+                if self._is_state_lock_error(error) and not _lock_retry_attempted:
+                    lock_id = self._extract_lock_id(error)
+                    lock_created_at = self._extract_lock_created_time(error)
+
+                    if lock_id and lock_created_at and self._is_lock_stale(lock_created_at):
+                        logging.warning(f"Detected stale state lock {lock_id}, attempting force unlock")
+                        if self._force_unlock(lock_id):
+                            logging.info("Lock removed, retrying command")
+                            # Retry the command once after successful unlock
+                            return self.run_tofu_command(
+                                stage, args,
+                                input_data=input_data,
+                                timeout=timeout,
+                                _lock_retry_attempted=True
+                            )
+                        else:
+                            logging.error("Failed to force unlock, raising original error")
+                    else:
+                        if not lock_id:
+                            logging.warning("Could not extract lock ID from error")
+                        elif not lock_created_at:
+                            logging.warning("Could not extract lock creation time from error")
+                        else:
+                            logging.info("Lock is not stale, raising original error")
+                elif self._is_state_lock_error(error) and _lock_retry_attempted:
+                    logging.error("Lock error persists after retry, giving up")
+
+                raise error
+
         logging.debug("OpenTofu command completed", extra=result.loggable_dict())
         return result
-    
+
+    def _is_state_lock_error(self, error: OpenTofuCommandException) -> bool:
+        """Check if the error is a state lock error."""
+        stderr = error.result.stderr or ""
+        return "Error acquiring the state lock" in stderr
+
+    def _extract_lock_id(self, error: OpenTofuCommandException) -> str | None:
+        """Extract the lock ID from a state lock error message."""
+        stderr = error.result.stderr or ""
+        match = re.search(r'ID:\s+([a-f0-9-]+)', stderr)
+        return match.group(1) if match else None
+
+    def _extract_lock_created_time(self, error: OpenTofuCommandException) -> datetime | None:
+        """Extract the lock creation time from error message."""
+        stderr = error.result.stderr or ""
+        match = re.search(r'Created:\s+([0-9-]+\s+[0-9:.]+\s+\+0000\s+UTC)', stderr)
+        if match:
+            time_str = match.group(1)
+            try:
+                # Parse format like "2025-12-14 18:53:56.668832 +0000 UTC"
+                dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f %z %Z")
+                return to_utc(dt)
+            except ValueError:
+                try:
+                    # Try without microseconds
+                    dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S %z %Z")
+                    return to_utc(dt)
+                except ValueError:
+                    return None
+        return None
+
+    def _is_lock_stale(self, lock_created_at: datetime, stale_threshold_hours: int = 1) -> bool:
+        """Check if a lock is stale based on creation time."""
+        if not lock_created_at:
+            return False
+        now = common.get_now()
+        age = now - lock_created_at
+        is_stale = age > timedelta(hours=stale_threshold_hours)
+        if is_stale:
+            logging.warning(f"Lock is stale: created {lock_created_at.isoformat()}, age {age}, threshold {stale_threshold_hours}h")
+        return is_stale
+
+    def _force_unlock(self, lock_id: str) -> bool:
+        """
+        Force unlock a stale OpenTofu state lock.
+        Returns True if unlock was successful, False otherwise.
+        """
+        try:
+            args = ["force-unlock", "-force", lock_id]
+            workdir = str(self.workspace_dir)
+            command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *args]
+            logging.warning(f"Force unlocking state lock {lock_id}: {command}")
+
+            completed_process = subprocess.run(
+                common.strings(command),
+                cwd=workdir,
+                text=True,
+                capture_output=True,
+                env=self.full_env,
+                timeout=30,
+                check=False,
+            )
+
+            if completed_process.returncode == 0:
+                logging.info(f"Successfully force-unlocked state lock {lock_id}")
+                return True
+            else:
+                logging.error(f"Failed to force-unlock state lock {lock_id}: {completed_process.stderr}")
+                return False
+        except Exception as e:
+            logging.exception(f"Exception while force-unlocking state lock {lock_id}: {e}")
+            return False
+
     def init_workspace(self) -> StackManager:
         if self._initialized:
             return self
