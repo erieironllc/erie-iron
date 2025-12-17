@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -22,7 +21,7 @@ from erieiron_public import agent_tools
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
-from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT, COUNT_TEST_RUNS_REQUIRED
+from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
@@ -32,7 +31,7 @@ from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
 from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, TaskImplementationPhase
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, IterationMode
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
@@ -672,7 +671,12 @@ def build_container_image(
     while build_process.poll() is None:
         time.sleep(1)
     
-    if build_process.returncode != 0:
+    if build_process.returncode == 0:
+        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+            docker_tag=container_image_tag
+        )
+        config.current_iteration.refresh_from_db(fields=["docker_tag"])
+    else:
         handle_podman_build_failure(config, build_process.returncode)
     
     # Only push to ECR if requested (skip for UI-first phase)
@@ -683,8 +687,6 @@ def build_container_image(
             config,
             container_image_tag
         )
-    
-    return container_image_tag
 
 
 def ensure_container_storage_capacity(
@@ -1076,26 +1078,21 @@ def push_image_to_ecr(
                 raise AgentBlocked(f"task {config.task.id} is failing to push {container_image_tag} to ECR. {e}")
     
     config.log(f"======== COMPLETED ECR Push to {full_image_uri}\n\n\n\n")
-    
-    return full_image_uri
 
 
 def run_django_container_command(
         config: CodingAgentConfig,
-        command_args: list[str],
-        container_image_tag: str
+        command_args: list[str]
 ) -> None:
     return run_generic_container_command(
         config,
-        ["python", "manage.py"] + command_args,
-        container_image_tag
+        ["python", "manage.py"] + command_args
     )
 
 
 def run_generic_container_command(
         config: CodingAgentConfig,
         command: list[str],
-        container_image_tag: str,
         working_dir: str = "/app"
 ) -> None:
     """
@@ -1104,9 +1101,10 @@ def run_generic_container_command(
     Args:
         config: CodingAgentConfig
         command: Full command to execute (e.g., ["npm", "test"])
-        container_image_tag: Container image tag
         working_dir: Working directory inside container
     """
+    container_image_tag = config.task.get_container_image_tag()
+    
     cmd = [
         "podman", "run", "--rm",
         "--memory", "4g",
@@ -1162,9 +1160,48 @@ def run_generic_container_command(
         raise ExecutionException(f"\nCommand execution failed with return code: {return_code}\n")
 
 
+def run_django_tests(
+        config: CodingAgentConfig,
+        run_locally: bool,
+        test_args: list[str] = None
+) -> bool:
+    # Prepare test command
+    config.dump_env_to_envrc()
+    env = os.environ.copy()
+    env.update(config.runtime_env)
+    db_path = config.sandbox_root_dir / "db.sqlite3"
+    env["DATABASE_URL"] = f"sqlite:///{db_path}"
+    
+    config.log("\n" + "=" * 80)
+    config.log("RUNNING DJANGO TESTS LOCALLY (VENV)")
+    config.log("=" * 80 + "\n")
+    config.log(f"Command: `python {' '.join(test_args)}`")
+    config.log(f"Working directory: {config.sandbox_root_dir}\n")
+    
+    if IterationMode.LOCAL_TESTS.eq(config.self_driving_task.iteration_mode):
+        try:
+            result = config.git.run_python(test_args, env)
+            if result.returncode == 0:
+                config.log("\n✅ LOCAL DJANGO TESTS PASSED\n")
+                return True
+            elif result.returncode == 137:
+                raise ExecutionException("Test process killed with SIGKILL (exit code 137). Possible OOM.")
+            else:
+                raise FailingTestException(f"\n❌ LOCAL DJANGO TESTS FAILED (exit code {result.returncode})\n")
+        except Exception as e:
+            logging.exception(e)
+            raise FailingTestException(f"\n❌ LOCAL DJANGO TESTS FAILED ({e})\n")
+    else:
+        run_django_container_command(
+            config=config,
+            command_args=["test", "--keepdb", "--noinput"]
+        )
+        
+        return True
+
+
 def run_jest_tests(
         config: CodingAgentConfig,
-        container_image_tag: str,
         frontend_dir: Path
 ) -> None:
     """Run Jest component tests."""
@@ -1204,8 +1241,6 @@ def run_jest_tests(
             raise ExecutionException(f"\nCommand was killed with SIGKILL (exit code 137). Possible OOM.\n")
         else:
             raise FailingTestException(f"TEST FAILURE:  npm test failed.  see log output for details")
-    
-    
     else:
         work_dir = f"/app/{frontend_dir.relative_to(config.sandbox_root_dir)}" if frontend_dir != config.sandbox_root_dir else "/app"
         run_generic_container_command(
@@ -1214,7 +1249,6 @@ def run_jest_tests(
                 "sh", "-lc",
                 "npm install && npm test -- --ci --forceExit --runInBand --detectOpenHandles --coverage=false"
             ],
-            container_image_tag=container_image_tag,
             working_dir=work_dir
         )
     config.log("✅ Jest component tests PASSED\n")
@@ -1222,7 +1256,6 @@ def run_jest_tests(
 
 def run_playwright_tests(
         config: CodingAgentConfig,
-        container_image_tag: str,
         frontend_dir: Path
 ) -> None:
     """Run Playwright E2E tests."""
@@ -1238,7 +1271,6 @@ def run_playwright_tests(
         run_generic_container_command(
             config=config,
             command=["npx", "playwright", "install", "--with-deps", "chromium"],
-            container_image_tag=container_image_tag,
             working_dir=work_dir
         )
     except ExecutionException as e:
@@ -1249,7 +1281,6 @@ def run_playwright_tests(
     run_generic_container_command(
         config=config,
         command=["npx", "playwright", "test"],
-        container_image_tag=container_image_tag,
         working_dir=work_dir
     )
     config.log("✅ Playwright E2E tests PASSED\n")
@@ -1257,7 +1288,6 @@ def run_playwright_tests(
 
 def run_cypress_tests(
         config: CodingAgentConfig,
-        container_image_tag: str,
         frontend_dir: Path
 ) -> None:
     """Run Cypress E2E tests."""
@@ -1270,39 +1300,84 @@ def run_cypress_tests(
     run_generic_container_command(
         config=config,
         command=["npx", "cypress", "run", "--headless", "--browser", "chrome"],
-        container_image_tag=container_image_tag,
         working_dir=work_dir
     )
     config.log("✅ Cypress E2E tests PASSED\n")
 
 
 def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
+    """
+    Main iteration orchestration with multi-stage execution:
+    1. Determine iteration mode based on build planner + current state
+    2. Execute appropriate stage: local tests, container tests, or AWS deployment
+    3. Transition to next mode if stage succeeds
+    """
     deployment_start_epoch = int(time.time())
+    
     try:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         
+        if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
+            lambda_datas = build_iteration(config)
+            deploy_iteration(config, lambda_datas)
+            return
+        
+        # UI-first phase: existing behavior (local container build, no AWS)
         if config.is_ui_first_phase:
+            config.log("UI-FIRST PHASE: Building locally, no AWS deployment")
             container_image_tag = None
+            execute_iteration(config)
+            return
+        
+        # Get build plan from LLM
+        config.stack_manager.init_workspace().validate_stack()
+        
+        if config.current_iteration.version_number < 2:
+            # First iteration: always build and deploy
+            build_plan = {
+                "LAMBDAS": True,
+                "CONTAINERS": True,
+                "RUN_TESTS_LOCALLY": False,
+                "RUN_TESTS_IN_CONTAINER": False,
+                "DEPLOY_TO_AWS": True,
+                "DB_MIGRATION_REQUIRED": False,
+                "STACK_TF_CHANGED": False,
+                "REASONING": "First iteration - full build and deployment"
+            }
         else:
-            config.stack_manager.init_workspace().validate_stack()
-            
-            container_image_tag, lambda_datas = build_iteration(
-                config
-            )
-            
-            deploy_iteration(
-                config,
-                container_image_tag,
-                lambda_datas
-            )
+            # Get build plan from LLM agent
+            build_plan = llm_chat(
+                "Plan Build Steps",
+                [
+                    get_sys_prompt("build_planner.md"),
+                    get_iteration_files_msg(config.current_iteration),
+                ],
+                output_schema="build_planner.md.schema.json",
+                model=LlmModel.OPENAI_GPT_5_NANO,
+                tag_entity=config.current_iteration,
+                reasoning_effort=LlmReasoningEffort.LOW
+            ).json()
         
-        execute_iteration(
-            config,
-            container_image_tag
-        )
+        config.log(f"\n{'=' * 80}")
+        config.log("BUILD PLAN:")
+        config.log(json.dumps(build_plan, indent=2))
+        config.log(f"{'=' * 80}\n")
         
-        config.log("Execution finished")
+        # Determine iteration mode
+        iteration_mode = determine_iteration_mode(config, build_plan)
+        update_iteration_mode(config, iteration_mode)
+        
+        if IterationMode.AWS_DEPLOYMENT.eq(iteration_mode):
+            # AWS MODE: Full build, push to ECR, deploy to AWS
+            config.log("\n☁️  EXECUTING: AWS Deployment\n")
+            lambda_datas = build_iteration(config)
+            deploy_iteration(config, lambda_datas)
+            
+        execute_iteration(config)
+        
+        config.log("Iteration execution finished")
+    
     except NeedPlan as e:
         raise e
     except BadPlan as e:
@@ -1312,18 +1387,13 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
     except OpenTofuException as e:
         config.log(f"OpenTofu deployment error: {e}")
     except FailingTestException as e:
-        config.log(f"Tests are failing.  **review sysout logs for details**")
+        config.log(f"Tests are failing. **review sysout logs for details**")
     except Exception as e:
         config.log(common.get_stack_trace_as_string(e))
         raise BadPlan(str(e))
     finally:
-        store_deploy_and_execution_logs(
-            config,
-            deployment_start_epoch
-        )
-        
+        store_deploy_and_execution_logs(config, deployment_start_epoch)
         exec_container_prune()
-        
         config.business.snapshot_code(config.current_iteration)
 
 
@@ -1365,10 +1435,7 @@ def store_deploy_and_execution_logs(
     config.current_iteration.save(update_fields=["log_content_deployment", "log_content_cloudwatch"])
 
 
-def execute_iteration(
-        config: CodingAgentConfig,
-        container_image_tag: str
-):
+def execute_iteration(config: CodingAgentConfig):
     config.set_phase(SdaPhase.EXECUTION)
     
     task = config.task
@@ -1378,11 +1445,10 @@ def execute_iteration(
     if TaskType.CODING_ML.eq(task_type):
         run_django_container_command(
             config=config,
-            command_args=self_driving_task.main_name,
-            container_image_tag=container_image_tag
+            command_args=self_driving_task.main_name
         )
         config.log_f.flush()  # Ensure ML execution logs are visible to tailing thread
-    elif task_type.eq(TaskType.PRODUCTION_DEPLOYMENT):
+    elif TaskType.PRODUCTION_DEPLOYMENT.eq(task_type):
         logging.info("Skipping automated test run for production deployment task")
         # TODO - is it possible to block until the new ECS task is running?
     elif TaskType.TASK_EXECUTION.eq(task_type) and TaskExecutionSchedule.ONCE.eq(task.execution_schedule):
@@ -1400,14 +1466,10 @@ def execute_iteration(
                 self_driving_task.main_name,
                 "--input_file", input_file,
                 "--output_file", output_file
-            ],
-            container_image_tag=container_image_tag
+            ]
         )
     elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION, TaskType.INITIATIVE_VERIFICATION]:
-        run_automated_tests(
-            config,
-            container_image_tag
-        )
+        run_automated_tests(config)
     else:
         logging.info(f"nothing to execute for task type {task_type}")
 
@@ -1481,50 +1543,39 @@ def detect_frontend_framework(config: CodingAgentConfig) -> dict[str, Any]:
     }
 
 
-def run_automated_tests(
-        config: CodingAgentConfig,
-        container_image_tag: str
-):
+def run_automated_tests(config: CodingAgentConfig):
     import random
     import time
     random.seed(time.time())
     
     config.dump_env_to_envrc()
     
-    failing_tests = run_frontend_tests(
-        config,
-        container_image_tag
-    )
+    failing_tests = run_frontend_tests(config)
     
     if not (config.should_skip_aws_deployment() or failing_tests):
-        failing_tests = run_backend_tests(
-            config,
-            container_image_tag
-        )
+        failing_tests = run_backend_tests(config)
     
     if failing_tests:
         raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
 
 
-def run_backend_tests(config: CodingAgentConfig, container_image_tag: str) -> list[Any]:
-    # try:
-    #     empty_stack_buckets(
-    #         config,
-    #         delete_bucket=False
-    #     )
-    # except Exception as e:
-    #     config.log(e)
-    #     raise AgentBlocked(f"unable to empty buckets for stack {config.task.id}")
+def run_backend_tests(config: CodingAgentConfig) -> list[Any]:
+    run_locally = config.task.get_container_image_tag() is None or config.should_run_locally()
     
-    test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
+    """Run backend tests locally in venv."""
     failing_tests = []
+    
+    # Get failing tests from previous iteration if any
+    test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
     failing_python_tests = [t for t in test_errors_blob if t.get("file_name", "").endswith(".py")] if test_errors_blob else []
+    
     if failing_python_tests:
+        # Parse specific failing tests (reuse existing logic)
         first_tests = llm_chat(
             "parse test failures",
             [
                 LlmMessage.sys(textwrap.dedent("""
-                    Parse the failing python tests from the supplied log output.  
+                    Parse the failing python tests from the supplied log output.
                     format the test name as fully qualified test_module.test_method
                     **important** only return the failing python (or django) tests
                     return a list of all failing tests using the following format
@@ -1552,66 +1603,120 @@ def run_backend_tests(config: CodingAgentConfig, container_image_tag: str) -> li
     else:
         first_tests = None
     
+    # Run specific failing tests first
     if first_tests:
-        config.log(f"Running task's automated test first: {first_tests}")
-        try:
-            run_django_container_command(
-                config=config,
-                command_args=["test", "--keepdb", "--noinput", *first_tests],
-                container_image_tag=container_image_tag
-            )
-            config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
-        except ExecutionException as e:
-            failing_tests.append(f"Some or all of {first_tests} failed. See logs above for details.")
+        config.log(f"Running specific tests first: {first_tests}")
+        if not run_django_tests(config, run_locally, first_tests):
+            failing_tests.append(f"Some or all of {first_tests} failed. See logs above.")
+            return failing_tests
+        config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
     
-    if failing_tests:
+    # Run full test suite
+    config.log("Running full Django test suite locally")
+    if not run_django_tests(config, run_locally):
+        failing_tests.append("Full test suite failed. See logs above for details.")
         return failing_tests
     
-    config.log(
-        "Running the test suite three times to detect flakiness. "
-        "If all three runs pass, tests are considered stable. "
-        "If some runs pass and some fail, tests are flaky. "
-        "If all runs fail, tests are broken."
-    )
-    results = []
-    for i in range(COUNT_TEST_RUNS_REQUIRED):
-        time.sleep(random.uniform(0.5, 1.5))
-        try:
-            run_django_container_command(
-                config=config,
-                command_args=["test", "--keepdb", "--noinput"],
-                container_image_tag=container_image_tag
-            )
-            config.log(f"Test suite PASS on run {i + 1} of 3.")
-            results.append(True)
-        except ExecutionException as e:
-            if i == 0:
-                raise FailingTestException(f"FIRST test run failed.  See logs above for details.")
-            else:
-                config.log(f"Test suite FAILED on run {i + 1} of 3. See logs above for details.")
-                results.append(False)
+    config.log("✅ ALL LOCAL DJANGO TESTS PASSED\n")
     
-    passes = sum(results)
-    if passes == COUNT_TEST_RUNS_REQUIRED:
-        config.log("ALL DJANGO BACKEND TESTS PASS ON ALL RUNS.  **SUCCESS**!!!")
-        
-        if not config.self_driving_task.initial_tests_pass:
-            config.self_driving_task.initial_tests_pass = True
-            config.self_driving_task.save()
-    elif passes == 0:
-        config.log("TESTS FAILED ON ALL RUNS")
-    else:
-        config.log(
-            "TESTS PASSED ON SOME RUNS BUT FAILED ON OTHERS. "
-            "This indicates flakiness. Please review the test code for flakiness risks and fix."
-        )
+    # Mark that tests passed locally - ready to transition to container mode
+    if not config.self_driving_task.initial_tests_pass:
+        config.self_driving_task.initial_tests_pass = True
+        config.self_driving_task.save()
     
     return failing_tests
 
 
-def run_frontend_tests(
+def determine_iteration_mode(
         config: CodingAgentConfig,
-        container_image_tag: str
+        build_plan: dict
+) -> IterationMode:
+    """
+    Determines which iteration mode to use based on:
+    - Current iteration_mode
+    - Build planner decisions
+    - Test pass status
+
+    State transitions:
+    - LOCAL_TESTS → CONTAINER_TESTS: When local tests pass AND (stack changed OR container needed)
+    - LOCAL_TESTS → AWS_DEPLOYMENT: When local tests pass AND deployment needed
+    - CONTAINER_TESTS → AWS_DEPLOYMENT: When container tests pass
+    - AWS_DEPLOYMENT → LOCAL_TESTS: After successful deployment (reset for next task iteration)
+
+    Args:
+        config: CodingAgentConfig
+        build_plan: Dict from build_planner.md with decision flags
+
+    Returns:
+        IterationMode enum value
+    """
+    current_mode = config.self_driving_task.iteration_mode
+    
+    # If UI-first phase, skip this entirely
+    if config.is_ui_first_phase:
+        return None
+    
+    # Force AWS deployment if stack.tf changed or DB migration required
+    if build_plan.get("STACK_TF_CHANGED") or build_plan.get("DB_MIGRATION_REQUIRED"):
+        config.log("Stack or DB changes detected - forcing AWS_DEPLOYMENT mode")
+        return IterationMode.AWS_DEPLOYMENT
+    
+    # If build planner says we can run tests locally, stay in LOCAL_TESTS
+    if build_plan.get("RUN_TESTS_LOCALLY"):
+        config.log("Only code/test changes - using LOCAL_TESTS mode")
+        return IterationMode.LOCAL_TESTS
+    
+    # If currently in LOCAL_TESTS and tests passed
+    if IterationMode.LOCAL_TESTS.eq(current_mode):
+        if config.self_driving_task.initial_tests_pass:
+            # Transition to container verification
+            config.log("Local tests passed - transitioning to CONTAINER_TESTS mode")
+            return IterationMode.CONTAINER_TESTS
+        else:
+            # Stay in local mode until tests pass
+            config.log("Staying in LOCAL_TESTS mode (tests not yet passing)")
+            return IterationMode.LOCAL_TESTS
+    
+    # If in CONTAINER_TESTS and build planner says deploy
+    if IterationMode.CONTAINER_TESTS.eq(current_mode):
+        if build_plan.get("DEPLOY_TO_AWS"):
+            config.log("Container tests ready - transitioning to AWS_DEPLOYMENT mode")
+            return IterationMode.AWS_DEPLOYMENT
+        else:
+            config.log("Staying in CONTAINER_TESTS mode")
+            return IterationMode.CONTAINER_TESTS
+    
+    # If in AWS_DEPLOYMENT, stay there until task completes
+    if IterationMode.AWS_DEPLOYMENT.eq(current_mode):
+        config.log("In AWS_DEPLOYMENT mode")
+        return IterationMode.AWS_DEPLOYMENT
+    
+    # Default: start with local tests
+    config.log("No mode set - defaulting to LOCAL_TESTS")
+    return IterationMode.LOCAL_TESTS
+
+
+def update_iteration_mode(config: CodingAgentConfig, new_mode: IterationMode):
+    """
+    Updates the iteration_mode in the database and logs the transition.
+
+    Args:
+        config: CodingAgentConfig
+        new_mode: New IterationMode to set
+    """
+    old_mode = config.self_driving_task.iteration_mode
+    
+    if old_mode != new_mode.value:
+        config.log(f"\n{'=' * 80}")
+        config.log(f"ITERATION MODE TRANSITION: {old_mode} → {new_mode.value}")
+        config.log(f"{'=' * 80}\n")
+        
+        config.self_driving_task.iteration_mode = new_mode.value
+        config.self_driving_task.save(update_fields=["iteration_mode"])
+
+
+def run_frontend_tests(
+        config: CodingAgentConfig
 ) -> list[Any]:
     frontend_info = detect_frontend_framework(config)
     failing_tests = []
@@ -1627,19 +1732,19 @@ def run_frontend_tests(
         
         if frontend_info["has_jest"]:
             try:
-                run_jest_tests(config, container_image_tag, frontend_dir)
+                run_jest_tests(config, frontend_dir)
             except ExecutionException as e:
                 failing_tests.append(f"Jest component tests failed. See logs above for details.")
         
         if frontend_info["has_playwright"]:
             try:
-                run_playwright_tests(config, container_image_tag, frontend_dir)
+                run_playwright_tests(config, frontend_dir)
             except ExecutionException as e:
                 failing_tests.append(f"Playwright E2E tests failed. See logs above for details.")
         
         if frontend_info["has_cypress"]:
             try:
-                run_cypress_tests(config, container_image_tag, frontend_dir)
+                run_cypress_tests(config, frontend_dir)
             except ExecutionException as e:
                 failing_tests.append(f"Cypress E2E tests failed. See logs above for details.")
         
@@ -1653,7 +1758,6 @@ def run_frontend_tests(
 
 def deploy_iteration(
         config: CodingAgentConfig,
-        container_image_tag: str,
         lambda_datas: list
 ) -> dict[str, Any]:
     config.set_phase(SdaPhase.DEPLOY)
@@ -1669,10 +1773,7 @@ def deploy_iteration(
             ingest_tofu_ouputs(config)
             rds_vals_in_env = True
             
-            manage_db(
-                config,
-                container_image_tag
-            )
+            manage_db(config)
             db_migrations_applied = True
         except BadPlan as e:
             logging.error(f"failed to apply db migrations. stack not ready")
@@ -1680,14 +1781,10 @@ def deploy_iteration(
             logging.error(f"failed to apply db migrations before deployment: {e}")
         
         if rds_vals_in_env:
-            validate_web_container(
-                config,
-                container_image_tag
-            )
+            validate_web_container(config)
     
     deploy_opentofu_stack(
         config=config,
-        container_image_tag=container_image_tag,
         lambda_datas=lambda_datas
     )
     
@@ -1695,10 +1792,7 @@ def deploy_iteration(
         if not config.stack_manager.get_db_is_running():
             raise Exception(f"RDS is not running after deployment")
         
-        manage_db(
-            config,
-            container_image_tag
-        )
+        manage_db(config)
     
     ensure_lb_alias_record(config)
 
@@ -1767,6 +1861,11 @@ def build_iteration(config):
     iteration = config.current_iteration
     task_execution = init_task_execution(iteration)
     
+    # LOCAL_TESTS mode: no container build needed
+    if config.should_run_locally():
+        config.log("LOCAL_TESTS mode: Skipping container build")
+        return None, []  # No container tag, no lambda packages
+    
     if config.should_skip_aws_deployment():
         required_build_steps = {
             BuildStep.CONTAINERS.value: True,
@@ -1819,17 +1918,12 @@ def build_iteration(config):
     else:
         docker_file = config.sandbox_root_dir / "Dockerfile"
         
-        container_image_tag = build_container_image(
+        build_container_image(
             config,
             docker_file
         )
     
-    SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-        docker_tag=container_image_tag
-    )
-    iteration.refresh_from_db(fields=["docker_tag"])
-    
-    return container_image_tag, lambda_datas
+    return lambda_datas
 
 
 def template_modified_this_iteration(
@@ -1868,7 +1962,7 @@ def is_lambdas_modified(config: CodingAgentConfig):
     )
 
 
-def manage_db(config: CodingAgentConfig, container_image_tag: str):
+def manage_db(config: CodingAgentConfig):
     # if (
     #         config.current_iteration.version_number > 1
     #         and not config.current_iteration.codeversion_set.filter(code_file__file_path__contains="models").exists()
@@ -1879,14 +1973,12 @@ def manage_db(config: CodingAgentConfig, container_image_tag: str):
     try:
         run_django_container_command(
             config=config,
-            command_args=["makemigrations", "--noinput"],
-            container_image_tag=container_image_tag
+            command_args=["makemigrations", "--noinput"]
         )
         
         run_django_container_command(
             config=config,
-            command_args=["migrate"],
-            container_image_tag=container_image_tag
+            command_args=["migrate"]
         )
     except Exception as e:
         logging.exception(e)
@@ -1896,10 +1988,7 @@ def manage_db(config: CodingAgentConfig, container_image_tag: str):
             raise DatabaseMigrationException(e)
 
 
-def validate_web_container(
-        config: CodingAgentConfig,
-        container_image_tag: str
-):
+def validate_web_container(config: CodingAgentConfig):
     import socket
     
     port = None
@@ -1924,7 +2013,7 @@ def validate_web_container(
                 "-v", f"{config.sandbox_root_dir}:/app",
                 "-w", "/app",
                 *build_env_flags(config.runtime_env),
-                container_image_tag
+                common.assert_not_empty(config.task.get_container_image_tag())
             ],
             stdout=config.log_f,
             stderr=subprocess.STDOUT,
@@ -3435,12 +3524,12 @@ def sync_stack_identity(
 def deploy_opentofu_stack(
         config: CodingAgentConfig,
         *,
-        container_image_tag: str,
         lambda_datas: list | None = None,
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stack = config.stack
     stack_manager = config.stack_manager
+    container_image_tag = config.task.get_container_image_tag()
     
     web_container_image = config.aws_interface.get_full_image_uri(
         config.ecr_repo_name,

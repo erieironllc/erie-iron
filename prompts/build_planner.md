@@ -1,66 +1,139 @@
-
-
 # Build Planner Prompt
 
-The **build_planner.md** prompt receives as input a list of files modified in the current iteration and outputs a data structure describing what needs to be rebuilt.
+Analyzes modified files to determine build, test, and deployment strategy.
 
-## Purpose
-The goal is to determine whether **LAMBDAS** or **CONTAINERS** need to be rebuilt based on which files have changed.
+## Input
+List of files modified in the current iteration.
 
-## Rules
+## Output
+JSON object with boolean flags for each build/test/deploy decision.
 
-1. **LAMBDAS**
-   - Must be rebuilt if *any* Lambda code has changed.
-   - Lambda code is typically found under directories such as:
-     ```
-     erieiron_lambda/
-     lambdas/
-     */lambda_*/
-     ```
-   - If no Lambda code was modified, set `LAMBDAS = false`.
+## Decision Logic
 
-2. **CONTAINERS**
-   - Must be rebuilt if *any code other than Lambda* or OpenTofu Terraform configuration files has changed.
-   - This includes:
-     - Core service code (e.g., web services, agents, utilities)
-     - Automated tests
-     - Any shared library code
-   - Containers should **not** be rebuilt if:
-     - Only Lambda code changed, or
-     - Only OpenTofu Terraform configurations changed (e.g., `.tf` files, related infrastructure scripts)
-   - If either of the above are true, set `CONTAINERS = false`.
+### 1. LAMBDAS
+- **True** if any Lambda code modified
+- Lambda paths: `erieiron_lambda/`, `lambdas/`, `*/lambda_*/`
+- **False** otherwise
 
-## Example Input
+### 2. CONTAINERS
+- **True** if any non-Lambda, non-Terraform code modified
+- Includes: Python files, tests, shared libraries, frontend code
+- **False** if only Lambda or Terraform files changed
 
+### 3. RUN_TESTS_LOCALLY
+- **True** if ONLY the following changed:
+  - Python files (*.py) excluding models.py
+  - Test files (*test*.py, tests/)
+  - No Terraform files (.tf)
+  - No Dockerfile changes
+- **False** if stack.tf, models.py, or Dockerfile changed
+
+### 4. RUN_TESTS_IN_CONTAINER
+- **True** if:
+  - CONTAINERS is true AND
+  - (Dockerfile changed OR first iteration after local tests pass)
+- **False** if only Python/test changes
+
+### 5. DEPLOY_TO_AWS
+- **True** if any of:
+  - stack.tf or any .tf files changed
+  - models.py changed (requires DB migration in deployed environment)
+  - Container tests passed (transition from CONTAINER_TESTS mode)
+- **False** if only local code/test changes
+
+### 6. DB_MIGRATION_REQUIRED
+- **True** if:
+  - models.py modified
+  - Any file in migrations/ directory modified
+- **False** otherwise
+
+### 7. STACK_TF_CHANGED
+- **True** if any .tf file modified (stack.tf, variables.tf, outputs.tf, etc.)
+- **False** otherwise
+
+### 8. REASONING
+- 1-2 sentence explanation of the decision
+- Example: "Only test files changed, can iterate locally. No deployment needed."
+
+## Example 1: Simple Code Change
+
+**Input:**
 ```json
 {
   "modified_files": [
-    "erieiron_lambda/user_auth/handler.py",
-    "erieiron_common/utils.py",
-    "opentofu/stacks/foundation/stack.tf"
+    "myapp/views.py",
+    "myapp/tests/test_views.py"
   ]
 }
 ```
 
-## Example Output
-
+**Output:**
 ```json
 {
-  "LAMBDAS": true,
-  "CONTAINERS": true
+  "LAMBDAS": false,
+  "CONTAINERS": true,
+  "RUN_TESTS_LOCALLY": true,
+  "RUN_TESTS_IN_CONTAINER": false,
+  "DEPLOY_TO_AWS": false,
+  "DB_MIGRATION_REQUIRED": false,
+  "STACK_TF_CHANGED": false,
+  "REASONING": "Only Python code and tests changed. Can iterate locally without container build or deployment."
 }
 ```
 
-## Logic Summary
+## Example 2: Model Change
 
-| Change Type | Affects LAMBDAS | Affects CONTAINERS |
-|--------------|-----------------|--------------------|
-| Lambda code changed | ✅ | ✅ (only if non-lambda files also changed) |
-| Only OpenTofu Terraform (.tf) changed | ❌ | ❌ |
-| Test or non-lambda code changed | ❌ | ✅ |
-| Mixed (lambda + other code) | ✅ | ✅ |
+**Input:**
+```json
+{
+  "modified_files": [
+    "myapp/models.py",
+    "myapp/tests/test_models.py"
+  ]
+}
+```
+
+**Output:**
+```json
+{
+  "LAMBDAS": false,
+  "CONTAINERS": true,
+  "RUN_TESTS_LOCALLY": false,
+  "RUN_TESTS_IN_CONTAINER": true,
+  "DEPLOY_TO_AWS": true,
+  "DB_MIGRATION_REQUIRED": true,
+  "STACK_TF_CHANGED": false,
+  "REASONING": "Models changed, requiring DB migration. Must build container and deploy to AWS to test migration."
+}
+```
+
+## Example 3: Stack Change
+
+**Input:**
+```json
+{
+  "modified_files": [
+    "opentofu/stacks/application/stack.tf",
+    "myapp/views.py"
+  ]
+}
+```
+
+**Output:**
+```json
+{
+  "LAMBDAS": false,
+  "CONTAINERS": true,
+  "RUN_TESTS_LOCALLY": false,
+  "RUN_TESTS_IN_CONTAINER": true,
+  "DEPLOY_TO_AWS": true,
+  "DB_MIGRATION_REQUIRED": false,
+  "STACK_TF_CHANGED": true,
+  "REASONING": "Stack.tf modified. Must deploy to AWS to apply infrastructure changes."
+}
+```
 
 ## Implementation Notes
-- This prompt should return a concise JSON-like data structure (not text explanations).
-- Case-insensitive matching for file paths is acceptable.
-- You may assume the caller provides normalized relative paths.
+- Return only the JSON structure, no additional explanation
+- Be conservative: when uncertain, choose the safer (more complete) build path
+- Consider file paths case-insensitively

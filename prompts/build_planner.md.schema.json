@@ -1,36 +1,51 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Build Planner Schema",
-  "description": "Validation schema for the build_planner.md prompt. Determines which components need to be rebuilt based on modified files.",
+  "description": "Determines build, test, and deployment strategy based on modified files",
   "type": "object",
   "properties": {
     "LAMBDAS": {
       "type": "boolean",
-      "description": "True if any Lambda code was modified in this iteration; false otherwise."
+      "description": "True if any Lambda code was modified"
     },
     "CONTAINERS": {
       "type": "boolean",
-      "description": "True if any code other than Lambda or OpenTofu Terraform configurations was modified; false otherwise."
+      "description": "True if any code other than Lambda or Terraform was modified"
+    },
+    "RUN_TESTS_LOCALLY": {
+      "type": "boolean",
+      "description": "True if only Python/test files changed and tests can run in local venv"
+    },
+    "RUN_TESTS_IN_CONTAINER": {
+      "type": "boolean",
+      "description": "True if container build is needed before running tests"
+    },
+    "DEPLOY_TO_AWS": {
+      "type": "boolean",
+      "description": "True if AWS deployment (ECR push + stack update) is required"
+    },
+    "DB_MIGRATION_REQUIRED": {
+      "type": "boolean",
+      "description": "True if models.py was modified and DB migration may be needed"
+    },
+    "STACK_TF_CHANGED": {
+      "type": "boolean",
+      "description": "True if stack.tf or any .tf files were modified"
+    },
+    "REASONING": {
+      "type": "string",
+      "description": "Brief explanation of the build strategy decision"
     }
   },
-  "required": ["LAMBDAS", "CONTAINERS"],
-  "additionalProperties": false,
-  "examples": [
-    {
-      "LAMBDAS": true,
-      "CONTAINERS": true
-    },
-    {
-      "LAMBDAS": true,
-      "CONTAINERS": false
-    },
-    {
-      "LAMBDAS": false,
-      "CONTAINERS": true
-    },
-    {
-      "LAMBDAS": false,
-      "CONTAINERS": false
-    }
-  ]
+  "required": [
+    "LAMBDAS",
+    "CONTAINERS",
+    "RUN_TESTS_LOCALLY",
+    "RUN_TESTS_IN_CONTAINER",
+    "DEPLOY_TO_AWS",
+    "DB_MIGRATION_REQUIRED",
+    "STACK_TF_CHANGED",
+    "REASONING"
+  ],
+  "additionalProperties": false
 }

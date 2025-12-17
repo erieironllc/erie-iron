@@ -1528,7 +1528,6 @@ def safe_read(path: Path) -> str:
         return path.read_text()
 
 
-
 def valid_file(path: Path) -> bool:
     if path is None:
         return False
@@ -1828,11 +1827,11 @@ def safe_join(string_list, delim=" "):
     return str(delim).join(strings(string_list))
 
 
-def run_cmd(cwd: Path, cmd: list[str]) -> subprocess.CompletedProcess:
+def run_cmd(cwd: Path, cmd: list[str], env: dict = None) -> subprocess.CompletedProcess:
     result = None
     
     try:
-        env = os.environ.copy()
+        env = env or os.environ.copy()
         result = subprocess.run(
             strings(cmd),
             env=env,
@@ -1881,9 +1880,9 @@ def random_string(length=16):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
-def assert_not_empty(s):
+def assert_not_empty(s, desc="value"):
     if not s:
-        raise ValueError("value is empty")
+        raise ValueError(f"{desc} is empty")
     return s
 
 

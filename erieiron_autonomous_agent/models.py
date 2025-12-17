@@ -43,6 +43,7 @@ from erieiron_common.enums import (
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
     CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning, TaskImplementationPhase,
+    IterationMode,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
@@ -1605,6 +1606,16 @@ class Task(BaseErieIronModel):
                 test_file_path=None,
                 initial_tests_pass=False
             )
+    
+    def get_container_image_tag(self) -> str:
+        last_iteration_with_container = SelfDrivingTaskIteration.objects.filter(
+            self_driving_task__task_id=self.id,
+            docker_tag__isnull=False
+        ).order_by(
+            "timestamp"
+        ).last()
+        
+        return last_iteration_with_container.docker_tag if last_iteration_with_container else None
 
 
 class TaskExecution(BaseErieIronModel):
@@ -1644,6 +1655,14 @@ class SelfDrivingTask(BaseErieIronModel):
         "Task", on_delete=models.SET_NULL, null=True, blank=True, db_index=True
     )
     initial_tests_pass = models.BooleanField(null=False, default=False)
+    iteration_mode = models.CharField(
+        max_length=50,
+        choices=IterationMode.choices(),
+        default=IterationMode.LOCAL_TESTS.value,
+        null=True,
+        blank=True,
+        help_text="Current execution stage: local tests, container tests, or AWS deployment"
+    )
     config_path = models.TextField(null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     latest_phase_change_at = models.DateTimeField(null=True)

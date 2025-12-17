@@ -15,7 +15,7 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
-from erieiron_common.enums import LlmModel, TaskType, ErieEnum, InfrastructureStackType, SdaPhase, CredentialsSpace
+from erieiron_common.enums import LlmModel, TaskType, ErieEnum, InfrastructureStackType, SdaPhase, CredentialsSpace, IterationMode
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.stack_manager import StackManager
 
@@ -151,7 +151,47 @@ class CodingAgentConfig:
         This is the UI-first phase behavior.
         """
         return self.is_ui_first_phase
-    
+
+    def should_run_locally(self):
+        """
+        Returns True if tests should run locally in venv (no container).
+        This is the fast iteration mode for code changes that don't require deployment.
+        """
+        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
+            return False
+        
+        if self.is_ui_first_phase:
+            return False  # UI phase doesn't use this mode
+
+        mode = self.self_driving_task.iteration_mode
+        return IterationMode.LOCAL_TESTS.eq(mode)
+
+    def should_build_container(self):
+        """
+        Returns True if container build is required this iteration.
+        """
+        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
+            return True
+        
+        if self.should_skip_aws_deployment():
+            return False  # UI phase builds locally but doesn't push
+
+        mode = self.self_driving_task.iteration_mode
+        return mode in [IterationMode.CONTAINER_TESTS.value, IterationMode.AWS_DEPLOYMENT.value]
+
+    def should_deploy_to_aws(self):
+        """
+        Returns True if AWS deployment (ECR push + stack update) is required.
+        """
+        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
+            return True
+        
+        if self.should_skip_aws_deployment():
+            return False
+
+        mode = self.self_driving_task.iteration_mode
+        return IterationMode.AWS_DEPLOYMENT.eq(mode)
+
     def get_env_for_credentials_space(self, credential_space: CredentialsSpace):
         if CredentialsSpace.ERIE_IRON.eq(credential_space):
             stack = Business.get_erie_iron_business().infrastructurestack_set.first()

@@ -680,4 +680,14 @@ class TaskImplementationPhase(ErieEnum):
     SERVER_IMPLEMENTATION = auto()
 
 
+class IterationMode(ErieEnum):
+    """
+    Tracks the execution stage within a coding task iteration.
+    Determines whether tests run locally, in container, or require AWS deployment.
+    """
+    LOCAL_TESTS = auto()       # Run tests locally in venv (fast iteration)
+    CONTAINER_TESTS = auto()   # Run tests in built container (pre-deployment verification)
+    AWS_DEPLOYMENT = auto()    # Full deployment with ECR push and AWS stack update
+
+
 ERIE_IRON = auto()

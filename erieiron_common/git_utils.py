@@ -21,6 +21,7 @@ class GitWrapper:
             source_root.mkdir(parents=True, exist_ok=True)
         
         self.source_root = source_root
+        self._venv_initialized = False
     
     def exec(self, *commands) -> 'GitWrapper':
         github_token = get_github_token()
@@ -89,14 +90,14 @@ class GitWrapper:
         )
         status_output = status_result.stdout.strip()
         has_local_changes = len(status_output) > 0
-
+        
         # Stash local changes if any
         if has_local_changes:
             self.exec("stash", "push", "-m", "auto-stash-before-pull")
-
+        
         # Perform a normal pull (no custom merge strategy)
         self.exec("pull", "--no-edit")
-
+        
         # Try to reapply stashed changes
         if has_local_changes:
             try:
@@ -107,7 +108,7 @@ class GitWrapper:
                 self.exec("checkout", "--ours", ".")
                 self.exec("add", ".")
                 # Do not drop the stash since it was not cleanly applied
-
+        
         return self
     
     def exists(self, repo_url):
@@ -176,8 +177,22 @@ class GitWrapper:
     def source_exists(self) -> bool:
         return (self.source_root / ".git").exists()
     
+    @property
+    def venv_path(self) -> Path:
+        return self.source_root / "venv"
+    
+    def run_python(self, python_cmd: list[str], env: dict = None) -> subprocess.CompletedProcess:
+        if not self._venv_initialized:
+            self.mk_venv()
+        
+        return run_cmd(
+            self.source_root,
+            [self.venv_path / "bin" / "python"] + common.ensure_list(python_cmd),
+            env
+        )
+    
     def mk_venv(self) -> Path:
-        venv_path = self.source_root / "venv"
+        venv_path = self.venv_path
         pip_executable = venv_path / "bin" / "pip" if os.name != "nt" else venv_path / "Scripts" / "pip.exe"
         
         if not pip_executable.exists():
@@ -218,6 +233,7 @@ class GitWrapper:
             [str(pip_executable), "install", "-r", "requirements.txt"]
         )
         
+        self._venv_initialized = True
         return venv_path
     
     @staticmethod
