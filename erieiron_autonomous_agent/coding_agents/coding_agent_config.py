@@ -34,6 +34,7 @@ class SdaInitialAction(ErieEnum):
     CODE = auto()
     PLAN = auto()
     DEPLOY = auto()
+    STACK_PUSH = auto()
     EVAL = auto()
 
 

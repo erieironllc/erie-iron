@@ -198,6 +198,13 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
         .first()
     )
     
+    if SdaInitialAction.STACK_PUSH.eq(one_off_action):
+        deploy_opentofu_stack(
+            config=config
+        )
+        evaluate_iteration(config)
+        return
+    
     if one_off_action in [SdaInitialAction.PLAN, SdaInitialAction.CODE]:
         config.current_iteration.log_content_coding = None
         config.current_iteration.save()
