@@ -24,12 +24,21 @@ CredentialsView = ErieView.extend({
         const $btn = $(event.currentTarget);
         const service = $btn.data('service');
         const serviceName = $btn.data('serviceName');
-        this.openEditModal(service, serviceName);
+        const isOverride = $btn.data('isOverride') === true;
+        this.openEditModal(service, serviceName, isOverride);
     },
 
-    openEditModal: function (service, serviceName) {
+    openEditModal: function (service, serviceName, isOverride) {
         this.$('#edit-credential-service').val(service);
-        this.$('#edit-service-name').text(serviceName);
+
+        if (isOverride) {
+            const entityLabel = this.entityType === 'business' ? 'business' : 'stack';
+            this.$('#edit-service-name').text(`Override ${serviceName} for this ${entityLabel}`);
+            this.$('#override-info-message').show();
+        } else {
+            this.$('#edit-service-name').text(serviceName);
+            this.$('#override-info-message').hide();
+        }
 
         // Fetch secret details
         this._setFormLoading(true);

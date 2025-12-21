@@ -1427,9 +1427,37 @@ BODY:
             return bool(response.get("imageDetails"))
         except Exception as e:
             logging.exception(e)
-        
+
         return False
-    
+
+    def get_latest_ecr_image_tag(self, repo_name: str) -> str:
+        """Get the most recently pushed image tag from an ECR repository"""
+        ecr_client = self.client("ecr")
+
+        response = ecr_client.describe_images(
+            repositoryName=repo_name,
+            filter={'tagStatus': 'TAGGED'}
+        )
+
+        if not response.get("imageDetails"):
+            raise Exception(f"No tagged images found in ECR repository: {repo_name}")
+
+        # Sort by imagePushedAt to get the most recent
+        sorted_images = sorted(
+            response["imageDetails"],
+            key=lambda x: x.get("imagePushedAt", datetime.datetime.min),
+            reverse=True
+        )
+
+        # Get the first tag from the most recent image
+        latest_image = sorted_images[0]
+        image_tags = latest_image.get("imageTags", [])
+
+        if not image_tags:
+            raise Exception(f"Most recent image in ECR repository {repo_name} has no tags")
+
+        return image_tags[0]
+
     def validate_security_group_rules(self, security_group_id: str, vpc_cidr: str) -> bool:
         """Validate that ALB can reach ECS tasks through security group rules"""
         ec2_client = self.client("ec2")

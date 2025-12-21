@@ -1083,7 +1083,6 @@ class InfrastructureStack(BaseErieIronModel):
             "DOMAIN_NAME": self.business.domain if EnvironmentType.PRODUCTION.eq(self.env_type) else self.initiative.domain,
             "STACK_NAME": self.stack_name,
             "STACK_IDENTIFIER": self.stack_namespace_token,
-            "LLM_API_KEYS_SECRET_ARN": settings.LLM_API_KEYS_SECRET_ARN,
             "TASK_NAMESPACE": self.stack_namespace_token,
             "BUILDAH_FORMAT": "docker",
             "PATH": os.getenv("PATH")
@@ -1609,7 +1608,7 @@ class Task(BaseErieIronModel):
     
     def get_container_image_tag(self) -> str:
         last_iteration_with_container = SelfDrivingTaskIteration.objects.filter(
-            self_driving_task__task_id=self.id,
+            self_driving_task__id=self.selfdrivingtask.id,
             docker_tag__isnull=False
         ).order_by(
             "timestamp"

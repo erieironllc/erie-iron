@@ -19,7 +19,7 @@ from erieiron_common.enums import LlmModel, TaskType, ErieEnum, InfrastructureSt
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.stack_manager import StackManager
 
-ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.31"
+ERIEIRON_PUBLIC_COMMON_VERSION = "v0.1.32"
 COUNT_TEST_RUNS_REQUIRED = 3
 TASK_DESC_CODE_WRITING = "code writing"
 LAMBDA_PACKAGES_BUCKET = 'erieiron-lambda-packages'

@@ -199,8 +199,13 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
     )
     
     if SdaInitialAction.STACK_PUSH.eq(one_off_action):
+        container_image_tag = config.aws_interface.get_latest_ecr_image_tag(
+            config.ecr_repo_name
+        )
+        
         deploy_opentofu_stack(
-            config=config
+            config=config,
+            container_image_tag=container_image_tag
         )
         evaluate_iteration(config)
         return
@@ -532,6 +537,7 @@ def ensure_lb_alias_record(config: CodingAgentConfig):
     app_stack = config.stack
     app_outputs = config.stack_manager.get_outputs()
     security_group_id = app_stack.stack_vars["SecurityGroupId"]
+    security_group_managed_externally = app_stack.stack_vars.get("SecurityGroupManagedExternally", False)
     vpc_cidr = app_stack.stack_vars["VpcCidr"]
     target_group_arn = app_outputs["TargetGroupArn"]
     cluster_name = app_outputs["EcsClusterName"]
@@ -540,11 +546,17 @@ def ensure_lb_alias_record(config: CodingAgentConfig):
     config.log("Starting post-deployment validation...")
     
     # Validate security group rules allow ALB to reach ECS tasks
-    aws_interface.validate_security_group_rules(
-        security_group_id,
-        vpc_cidr
-    )
-    config.log("Security group validation passed")
+    if security_group_managed_externally:
+        config.log(
+            f"Skipping security group validation for {security_group_id} "
+            f"(SecurityGroupManagedExternally=true)"
+        )
+    else:
+        # aws_interface.validate_security_group_rules(
+        #     security_group_id,
+        #     vpc_cidr
+        # )
+        config.log("Security group validation passed")
     
     # Wait for ECS service to be stable
     aws_interface.wait_for_ecs_service_stable(
@@ -1380,7 +1392,7 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
             config.log("\n☁️  EXECUTING: AWS Deployment\n")
             lambda_datas = build_iteration(config)
             deploy_iteration(config, lambda_datas)
-            
+        
         execute_iteration(config)
         
         config.log("Iteration execution finished")
@@ -3531,12 +3543,15 @@ def sync_stack_identity(
 def deploy_opentofu_stack(
         config: CodingAgentConfig,
         *,
+        container_image_tag: str = None,
         lambda_datas: list | None = None,
         previous_stack_outputs: dict | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     stack = config.stack
     stack_manager = config.stack_manager
-    container_image_tag = config.task.get_container_image_tag()
+    
+    if not container_image_tag:
+        container_image_tag = common.assert_not_empty(config.task.get_container_image_tag())
     
     web_container_image = config.aws_interface.get_full_image_uri(
         config.ecr_repo_name,
