@@ -684,7 +684,7 @@ def build_container_image(
         stdout=config.log_f,
         stderr=subprocess.STDOUT,
         text=True,
-        env=config.get_env_for_credentials_space(CredentialsSpace.ERIE_IRON)
+        env=config.get_env_for_credentials_space(CredentialsSpace.TARGET_ACCOUNT)
     )
     
     while build_process.poll() is None:
