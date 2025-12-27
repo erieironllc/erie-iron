@@ -52,3 +52,13 @@
 .code-file-tree__iteration a {
   margin-right: 0.5rem;
 }
+
+// Hover lift utility for clickable cards (per UI spec Section 12)
+.hover-lift {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba($primary, 0.25);
+}

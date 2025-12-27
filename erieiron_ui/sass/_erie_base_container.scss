@@ -1,3 +1,9 @@
+// Global focus-visible pattern for accessibility (per UI spec Section 5.3)
+*:focus-visible {
+  outline: 2px solid $primary;
+  outline-offset: 2px;
+}
+
 body {
   background-color: $body-bg;
   color: $body-color;
@@ -96,7 +102,7 @@ body {
   .code-container {
     padding: 1rem;
     background-color: $gray-100 !important;
-    color: $dark important;
+    color: $dark !important;
 
     code {
       color: $dark !important;
