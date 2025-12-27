@@ -153,9 +153,57 @@ class BusinessConversationManager:
         
         return changes
     
+    def suggest_conversation_title(self) -> Optional[str]:
+        """Suggest a new conversation title based on messages"""
+        messages = self.conversation.messages.all()
+
+        if messages.count() < 2:
+            return None
+
+        # Build conversation summary
+        conversation_text = []
+        for msg in messages[:10]:  # Only use first 10 messages to keep context manageable
+            conversation_text.append(f"{msg.role.upper()}: {msg.content[:200]}")
+
+        prompt = f"""Review this business conversation and suggest a concise, descriptive title (3-6 words).
+
+Current title: "{self.conversation.title}"
+
+Conversation:
+{chr(10).join(conversation_text)}
+
+Only suggest a new title if the conversation topic has changed significantly from the current title.
+If the current title is still appropriate, respond with "KEEP_CURRENT".
+Otherwise, respond with just the new title (no quotes, no explanation).
+
+New title:"""
+
+        response = system_agent_llm_interface.llm_chat(
+            tag_entity=self.conversation.business,
+            description=f"Conversation title suggestion for {self.conversation.business.name}",
+            messages=[LlmMessage.user(prompt)],
+            model=LlmModel.OPENAI_GPT_5_MINI,
+            verbosity=LlmVerbosity.LOW
+        )
+
+        suggested_title = response.text.strip()
+
+        if suggested_title == "KEEP_CURRENT" or not suggested_title:
+            return None
+
+        # Remove quotes if present
+        suggested_title = suggested_title.strip('"\'')
+
+        # Limit length
+        if len(suggested_title) > 100:
+            suggested_title = suggested_title[:97] + "..."
+
+        logger.info(f"Suggested title for conversation {self.conversation.id}: {suggested_title}")
+        return suggested_title
+
     def generate_response(self, model: Optional[LlmModel] = LlmModel.OPENAI_GPT_5_1) -> tuple[ConversationMessage, list[ConversationChange]]:
         """Generate assistant response using LLM"""
-        
+
         # Call LLM using system_agent_llm_interface
         logger.info(f"Generating response for conversation {self.conversation.id} using {model}")
         response = system_agent_llm_interface.llm_chat(
@@ -169,19 +217,26 @@ class BusinessConversationManager:
             model=model,
             verbosity=LlmVerbosity.MEDIUM
         )
-        
+
         assistant_msg = ConversationMessage.objects.create(
             conversation=self.conversation,
             role='assistant',
             content=response.text,
             llm_request_id=response.llm_request_id
         )
-        
+
         self.conversation.updated_at = timezone.now()
         self.conversation.save()
-        
+
         changes = self.parse_change_proposals(response.text, assistant_msg)
-        
+
+        # Suggest and update conversation title if appropriate
+        suggested_title = self.suggest_conversation_title()
+        if suggested_title and suggested_title != self.conversation.title:
+            logger.info(f"Updating conversation title from '{self.conversation.title}' to '{suggested_title}'")
+            self.conversation.title = suggested_title
+            self.conversation.save()
+
         logger.info(f"Generated response with {len(changes)} change proposals for conversation {self.conversation.id}")
         return assistant_msg, changes
     

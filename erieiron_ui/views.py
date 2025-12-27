@@ -1703,9 +1703,19 @@ def _tab_context_bug_report(business: Business) -> dict:
 
 def _tab_context_conversation(business: Business) -> dict:
     conversations = business.conversations.all().order_by('-updated_at')[:20]
-    
+
+    # Load the most recent conversation's messages for initial render
+    current_conversation = None
+    current_messages = []
+
+    if conversations.exists():
+        current_conversation = conversations.first()
+        current_messages = list(current_conversation.messages.all().order_by('created_at'))
+
     return {
-        "conversations": conversations
+        "conversations": conversations,
+        "current_conversation": current_conversation,
+        "current_messages": current_messages
     }
 
 
@@ -6178,8 +6188,12 @@ def business_conversation_message(request, conversation_id):
     # Generate response
     try:
         assistant_msg, changes = manager.generate_response()
-        
+
+        # Reload conversation to get updated title
+        conversation.refresh_from_db()
+
         return JsonResponse({
+            'conversation_title': conversation.title,
             'user_message': {
                 'id': str(user_msg.id),
                 'content': user_msg.content,

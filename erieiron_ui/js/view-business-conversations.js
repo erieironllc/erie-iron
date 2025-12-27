@@ -7,21 +7,73 @@ BusinessConversationsView = ErieView.extend({
         'keypress [data-role="message-input"]': 'handleKeyPress',
         'click [data-action="approve-change"]': 'handleApproveChange',
         'click [data-action="decline-change"]': 'handleDeclineChange',
-        'click .conversation-item': 'handleConversationClick'
+        'change [data-role="conversation-select"]': 'handleConversationSelect'
     },
 
     init_view: function () {
-        console.log("DUDE");
+        console.log("Initializing BusinessConversationsView");
         this.businessId = this.$el.data('businessId');
-        this.conversationId = null;
+        this.conversationId = this.$el.data('conversationId') || null;
         this.messages = [];
         this.$messageInput = this.$('[data-role="message-input"]');
         this.$messagesContainer = this.$('[data-role="messages-container"]');
         this.$sendBtn = this.$('[data-action="send-message"]');
         this.$newConversationBtn = this.$('[data-action="new-conversation"]');
 
-        // Load most recent conversation or create new one
-        this.loadMostRecentConversation();
+        // Check if messages are already server-rendered
+        const $existingMessages = this.$messagesContainer.find('.conversation-message');
+
+        if ($existingMessages.length > 0 && this.conversationId) {
+            // Messages are already rendered server-side
+            console.log('Messages already rendered server-side, count:', $existingMessages.length);
+
+            // Scroll to the last message's timestamp after layout is complete
+            const self = this;
+            const $lastMessage = $existingMessages.last();
+            if ($lastMessage.length > 0) {
+                const lastMessageId = $lastMessage.data('messageId');
+                console.log('Scrolling to last message:', lastMessageId);
+
+                // Scroll to last message using scrollIntoView
+                setTimeout(function() {
+                    // Get the last message element
+                    const $lastMsg = $lastMessage;
+
+                    if ($lastMsg && $lastMsg.length > 0) {
+                        console.log('Scrolling to last message using scrollIntoView');
+
+                        // Scroll the last message into view at the bottom of the container
+                        $lastMsg[0].scrollIntoView({
+                            behavior: 'auto',
+                            block: 'end',
+                            inline: 'nearest'
+                        });
+
+                        console.log('ScrollIntoView called on message:', lastMessageId);
+
+                        // Also try scrolling to bottom manually as backup
+                        setTimeout(function() {
+                            // const container = self.$messagesContainer[0];
+                            // Scroll up a bit from the very bottom to clear the input box
+                            // container.scrollTop = container.scrollTop - 150;
+                            // console.log('Adjusted scroll position to clear input box, scrollTop:', container.scrollTop);
+                        }, 100);
+                    }
+                }, 500);
+            }
+        } else {
+            // Check URL hash for conversation ID (e.g., #conversation=uuid)
+            const urlParams = new URLSearchParams(window.location.hash.substring(1));
+            const conversationIdFromUrl = urlParams.get('conversation');
+
+            if (conversationIdFromUrl) {
+                console.log('Loading conversation from URL:', conversationIdFromUrl);
+                this.loadConversation(conversationIdFromUrl);
+            } else if (!this.conversationId) {
+                // Load most recent conversation only if not already loaded
+                this.loadMostRecentConversation();
+            }
+        }
     },
 
     refresh: function () {
@@ -30,27 +82,49 @@ BusinessConversationsView = ErieView.extend({
 
     loadMostRecentConversation: function () {
         const self = this;
-        const $firstConversation = this.$('.conversation-item').first();
+        const $conversationSelect = this.$('[data-role="conversation-select"]');
 
-        if ($firstConversation.length > 0) {
-            // Load the first conversation in the list (most recent)
-            const conversationId = $firstConversation.data('conversationId');
+        // Check if dropdown has any conversation options (excluding the placeholder)
+        const $options = $conversationSelect.find('option[value!=""]');
+
+        console.log('loadMostRecentConversation: found', $options.length, 'conversation(s)');
+
+        if ($options.length > 0) {
+            // Load the first conversation option (most recent)
+            const conversationId = $options.first().val();
+            console.log('Loading most recent conversation:', conversationId);
+            $conversationSelect.val(conversationId);
             self.loadConversation(conversationId);
         } else {
-            // No conversations exist, create a new one
-            self.createNewConversation();
+            // No conversations exist - do NOT create one automatically
+            // Just leave the empty state message
+            console.log('No conversations available');
+            self.$messageInput.prop('disabled', true);
+            self.$sendBtn.prop('disabled', true);
         }
     },
 
     loadConversation: function (conversationId) {
         const self = this;
 
+        console.log('loadConversation called for ID:', conversationId);
+
         erie_server().exec_server_get(
-            `/api/conversation/${conversationId}/detail/`,
-            {},
+            `/api/conversation/${conversationId}/`,
             (response) => {
+                console.log('Conversation loaded successfully:', response);
+                console.log('Number of messages:', response.messages ? response.messages.length : 0);
+
                 self.conversationId = conversationId;
                 self.messages = response.messages || [];
+
+                // Set lastAddedMessageId to the last message so we scroll to it
+                if (self.messages.length > 0) {
+                    const lastMessage = self.messages[self.messages.length - 1];
+                    self.lastAddedMessageId = lastMessage.id;
+                    console.log('Setting scroll target to last message:', lastMessage.id);
+                }
+
                 self.renderMessages();
                 self.updateActiveConversation();
                 self.$messageInput.prop('disabled', false);
@@ -58,19 +132,21 @@ BusinessConversationsView = ErieView.extend({
             },
             (xhr) => {
                 console.error('Failed to load conversation:', xhr);
-                self.showStatus('Failed to load conversation', 'danger');
-                // Fall back to creating a new conversation
-                self.createNewConversation();
+                console.error('Error status:', xhr.status);
+                console.error('Error response:', xhr.responseText);
+                self.showStatus('Failed to load conversation. Please try another conversation or create a new one.', 'danger');
+
+                // Do NOT automatically create a new conversation - let the user decide
+                self.$messageInput.prop('disabled', true);
+                self.$sendBtn.prop('disabled', true);
             }
         );
     },
 
     updateActiveConversation: function () {
-        // Remove active class from all conversation items
-        this.$('.conversation-item').removeClass('active');
-        // Add active class to the current conversation
+        // Update dropdown to show current conversation
         if (this.conversationId) {
-            this.$('.conversation-item[data-conversation-id="' + this.conversationId + '"]').addClass('active');
+            this.$('[data-role="conversation-select"]').val(this.conversationId);
         }
     },
 
@@ -159,6 +235,11 @@ BusinessConversationsView = ErieView.extend({
                     });
                 }
 
+                // Update conversation title in dropdown if it changed
+                if (response.conversation_title && response.conversation_title !== self.getConversationTitle()) {
+                    self.updateConversationTitle(response.conversation_title);
+                }
+
                 // Re-enable input
                 self.$messageInput.prop('disabled', false);
                 self.$sendBtn.prop('disabled', false);
@@ -178,6 +259,7 @@ BusinessConversationsView = ErieView.extend({
 
     addMessageToUI: function (message) {
         this.messages.push(message);
+        this.lastAddedMessageId = message.id;
         this.renderMessages();
     },
 
@@ -216,8 +298,34 @@ BusinessConversationsView = ErieView.extend({
             self.$messagesContainer.append($msgDiv);
         });
 
-        // Scroll to bottom
-        this.$messagesContainer.scrollTop(this.$messagesContainer[0].scrollHeight);
+        // Scroll to the last added message (specifically to its timestamp)
+        if (this.lastAddedMessageId) {
+            this.scrollToMessage(this.lastAddedMessageId);
+            this.lastAddedMessageId = null; // Clear after scrolling
+        } else {
+            // Fallback to scrolling to bottom
+            this.$messagesContainer.scrollTop(this.$messagesContainer[0].scrollHeight);
+        }
+    },
+
+    scrollToMessage: function (messageId) {
+        const $message = this.$('.conversation-message[data-message-id="' + messageId + '"]');
+        if ($message.length > 0) {
+            const $timestamp = $message.find('.message-timestamp');
+            const container = this.$messagesContainer[0];
+
+            // Scroll to the timestamp element (last element in the message)
+            if ($timestamp.length > 0) {
+                const timestampOffset = $timestamp.offset().top;
+                const containerOffset = this.$messagesContainer.offset().top;
+                const scrollPosition = container.scrollTop + timestampOffset - containerOffset - 20; // 20px padding from top
+
+                // Smooth scroll to the timestamp
+                this.$messagesContainer.animate({
+                    scrollTop: scrollPosition
+                }, 300);
+            }
+        }
     },
 
     addChangeProposalToUI: function (change) {
@@ -356,7 +464,7 @@ BusinessConversationsView = ErieView.extend({
             .attr('data-role', 'loading-indicator');
 
         const $spinner = $('<div>').addClass('spinner');
-        const $text = $('<div>').addClass('loading-text').text('AI is thinking...');
+        const $text = $('<div>').addClass('loading-text').text('thinking...');
 
         $loading.append($spinner, $text);
         this.$messagesContainer.append($loading);
@@ -369,11 +477,25 @@ BusinessConversationsView = ErieView.extend({
         this.$('[data-role="loading-indicator"]').remove();
     },
 
-    handleConversationClick: function (e) {
-        e.preventDefault();
-        const conversationId = $(e.currentTarget).data('conversationId');
+    handleConversationSelect: function (e) {
+        const conversationId = $(e.currentTarget).val();
         if (conversationId && conversationId !== this.conversationId) {
             this.loadConversation(conversationId);
+        }
+    },
+
+    getConversationTitle: function () {
+        const $select = this.$('[data-role="conversation-select"]');
+        const $option = $select.find('option[value="' + this.conversationId + '"]');
+        return $option.text();
+    },
+
+    updateConversationTitle: function (newTitle) {
+        const $select = this.$('[data-role="conversation-select"]');
+        const $option = $select.find('option[value="' + this.conversationId + '"]');
+        if ($option.length > 0) {
+            $option.text(newTitle);
+            console.log('Updated conversation title to:', newTitle);
         }
     },
 
