@@ -24,6 +24,13 @@
                     {% endif %}
                 </select>
                 <button type="button"
+                        class="btn btn-danger btn-sm"
+                        data-action="delete-conversation"
+                        title="Delete Conversation"
+                        {% if not current_conversation %}disabled{% endif %}>
+                    <i class="bi bi-trash"></i>
+                </button>
+                <button type="button"
                         class="btn btn-primary btn-sm"
                         data-action="new-conversation"
                         title="New Conversation">
@@ -67,7 +74,10 @@
                             <div class="conversation-message message-{{ msg.role }}" data-message-id="{{ msg.id }}">
                                 <div class="message-role">{% if msg.role == 'user' %}You{% else %}AI Assistant{% endif %}</div>
                                 <div class="message-content">{{ msg.content|strip_propose_change_markers|linebreaks }}</div>
-                                <div class="message-timestamp">{{ msg.created_at|naturaltime }}</div>
+                                <div class="message-header">
+                                    <div class="message-timestamp">{{ msg.created_at|naturaltime }}</div>
+                                    <button class="btn btn-sm copy-btn bi bi-copy" data-target=".message-content" title="Copy message to clipboard"></button>
+                                </div>
                             </div>
 
                             {% if msg.id in message_changes %}
@@ -113,9 +123,9 @@
                             })();
                         </script>
                     {% else %}
-                        <div class="text-center py-4" style="color: #9CA3AF;">
-                            <p>No messages yet. Start a conversation about your business!</p>
-                        </div>
+{#                        <div class="text-center py-4" style="color: #9CA3AF;">#}
+{#                            <p>No messages yet. Start a conversation about your business!</p>#}
+{#                        </div>#}
                     {% endif %}
                 </div>
 

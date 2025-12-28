@@ -6244,11 +6244,11 @@ def business_conversation_detail(request, conversation_id):
     """Get full conversation history"""
     from erieiron_autonomous_agent.models import BusinessConversation
     from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
-    
+
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
-    
+
     manager = BusinessConversationManager(conversation)
-    
+
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'business_id': str(conversation.business.id),
@@ -6258,6 +6258,23 @@ def business_conversation_detail(request, conversation_id):
         'created_at': conversation.created_at.isoformat(),
         'updated_at': conversation.updated_at.isoformat(),
         'messages': manager.get_full_conversation()
+    })
+
+
+@require_http_methods(["POST"])
+def business_conversation_delete(request, conversation_id):
+    """Delete a conversation and all associated messages and changes"""
+    from erieiron_autonomous_agent.models import BusinessConversation
+
+    conversation = get_object_or_404(BusinessConversation, id=conversation_id)
+    business_id = conversation.business.id
+
+    logger.info(f"Deleting conversation {conversation_id} for business {business_id}")
+    conversation.delete()
+
+    return JsonResponse({
+        'success': True,
+        'business_id': str(business_id)
     })
 
 

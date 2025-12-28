@@ -248,11 +248,40 @@
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
 
+    .message-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+
+      .copy-btn {
+        opacity: 0;
+        transition: opacity 0.15s ease;
+        color: #9CA3AF; // $text-muted-color
+        background: none;
+        border: none;
+        padding: 0.25rem;
+        font-size: 0.875rem;
+
+        &:hover {
+          color: #EAEAEA; // $light
+          transform: scale(1.05);
+        }
+
+        &:active {
+          transform: scale(0.95);
+        }
+      }
+    }
+
+    &:hover .message-header .copy-btn {
+      opacity: 1;
+    }
+
     .message-role {
       font-weight: 600;
       font-size: 0.875rem;
       color: #EAEAEA; // $light
-      margin-bottom: 0.5rem;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }

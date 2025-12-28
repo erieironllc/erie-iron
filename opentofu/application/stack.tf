@@ -62,7 +62,7 @@ variable "WebContainerCpu" {
 variable "WebContainerMemory" {
   description = "Fargate task memory in MiB."
   type        = number
-  default     = 1024
+  default     = 2048
 }
 
 variable "WebDesiredCount" {

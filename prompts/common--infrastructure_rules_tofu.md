@@ -526,7 +526,7 @@ yaml.safe_load(Path(<path to yaml>).read_text())  # ❌ Forbidden
     Description: "Fargate task CPU units for the web service."
   WebContainerMemory:
     Type: Number
-    Default: 1024
+    Default: 2048
     Description: "task memory (MiB) for the web service."
   WebDesiredCount:
     Type: Number

@@ -111,6 +111,7 @@ urlpatterns = [
     path('api/business/<uuid:business_id>/conversations/', views.business_conversations_list, name='business_conversations_list'),
     path('api/business/<uuid:business_id>/conversations/create/', views.business_conversation_create, name='business_conversation_create'),
     path('api/conversation/<uuid:conversation_id>/', views.business_conversation_detail, name='business_conversation_detail'),
+    path('api/conversation/<uuid:conversation_id>/delete/', views.business_conversation_delete, name='business_conversation_delete'),
     path('api/conversation/<uuid:conversation_id>/message/', views.business_conversation_message, name='business_conversation_message'),
     path('api/conversation/<uuid:conversation_id>/changes/', views.conversation_changes_list, name='conversation_changes_list'),
     path('api/conversation/change/<uuid:change_id>/approve/', views.conversation_change_approve, name='conversation_change_approve'),

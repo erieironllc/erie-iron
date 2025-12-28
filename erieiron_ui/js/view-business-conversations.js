@@ -3,6 +3,7 @@ BusinessConversationsView = ErieView.extend({
 
     events: {
         'click [data-action="new-conversation"]': 'createNewConversation',
+        'click [data-action="delete-conversation"]': 'handleDeleteConversation',
         'click [data-action="send-message"]': 'handleSendMessage',
         'keypress [data-role="message-input"]': 'handleKeyPress',
         'click [data-action="approve-change"]': 'handleApproveChange',
@@ -142,6 +143,42 @@ BusinessConversationsView = ErieView.extend({
         );
     },
 
+    handleDeleteConversation: function (e) {
+        if (e) e.preventDefault();
+
+        if (!this.conversationId) {
+            return;
+        }
+
+        const conversationTitle = this.getConversationTitle();
+
+        if (!confirm(`Are you sure you want to delete the conversation "${conversationTitle}"? This action cannot be undone.`)) {
+            return;
+        }
+
+        const self = this;
+        const $deleteBtn = this.$('[data-action="delete-conversation"]');
+
+        $deleteBtn.prop('disabled', true);
+
+        erie_server().exec_server_post(
+            `/api/conversation/${this.conversationId}/delete/`,
+            {},
+            (response) => {
+                self.showStatus('Conversation deleted - reloading page...', 'success');
+
+                setTimeout(function () {
+                    window.location.reload();
+                }, 1000);
+            },
+            (xhr) => {
+                console.error('Failed to delete conversation:', xhr);
+                self.showStatus('Failed to delete conversation', 'danger');
+                $deleteBtn.prop('disabled', false);
+            }
+        );
+    },
+
     handleSendMessage: function (e) {
         e.preventDefault();
 
@@ -234,9 +271,19 @@ BusinessConversationsView = ErieView.extend({
             .addClass('message-' + message.role)
             .attr('data-message-id', message.id);
 
+        const $header = $('<div>')
+            .addClass('message-header');
+
         const $role = $('<div>')
             .addClass('message-role')
             .text(message.role === 'user' ? 'You' : 'AI Assistant');
+
+        const $copyBtn = $('<button>')
+            .addClass('btn btn-sm copy-btn bi bi-copy')
+            .attr('data-target', '.message-content')
+            .attr('title', 'Copy message to clipboard');
+
+        $header.append($role, $copyBtn);
 
         const $content = $('<div>')
             .addClass('message-content')
@@ -246,7 +293,7 @@ BusinessConversationsView = ErieView.extend({
             .addClass('message-timestamp')
             .text(formatTimestamp(message.created_at));
 
-        $msgDiv.append($role, $content, $timestamp);
+        $msgDiv.append($header, $content, $timestamp);
 
         console.log('[BusinessConversations] Message element created');
         console.log('[BusinessConversations] Classes:', $msgDiv.attr('class'));
@@ -267,11 +314,6 @@ BusinessConversationsView = ErieView.extend({
         this.$messagesContainer.empty();
 
         if (this.messages.length === 0) {
-            this.$messagesContainer.html(
-                '<div class="text-muted text-center py-4">' +
-                '<p>No messages yet. Start a conversation about your business!</p>' +
-                '</div>'
-            );
             return;
         }
 
@@ -281,9 +323,19 @@ BusinessConversationsView = ErieView.extend({
                 .addClass('message-' + msg.role)
                 .attr('data-message-id', msg.id);
 
+            const $header = $('<div>')
+                .addClass('message-header');
+
             const $role = $('<div>')
                 .addClass('message-role')
                 .text(msg.role === 'user' ? 'You' : 'AI Assistant');
+
+            const $copyBtn = $('<button>')
+                .addClass('btn btn-sm copy-btn bi bi-copy')
+                .attr('data-target', '.message-content')
+                .attr('title', 'Copy message to clipboard');
+
+            $header.append($role, $copyBtn);
 
             const $content = $('<div>')
                 .addClass('message-content')
@@ -293,10 +345,10 @@ BusinessConversationsView = ErieView.extend({
                 .addClass('message-timestamp')
                 .text(formatTimestamp(msg.created_at));
 
-            $msgDiv.append($role, $content, $timestamp);
+            $msgDiv.append($header, $content, $timestamp);
             self.$messagesContainer.append($msgDiv);
         });
-        
+
         this.scrollToEnd();
     },
 
