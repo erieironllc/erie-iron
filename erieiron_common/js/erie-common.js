@@ -592,6 +592,28 @@ function escapeHtml(unsafe) {
         .replace(/'/g, "&#039;");
 }
 
+function renderMarkdown(text) {
+    if (!text) return '';
+
+    // Strip [PROPOSE_CHANGE]...[/PROPOSE_CHANGE] markers (matching Django template filter)
+    text = text.replace(/\[PROPOSE_CHANGE\][\s\S]*?\[\/PROPOSE_CHANGE\]/g, '').trim();
+
+    // Simple markdown rendering - just basics
+    text = text
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, '<code>$1</code>');
+
+    // Mimic Django's linebreaks filter: wrap paragraphs in <p> tags and convert single newlines to <br>
+    // Split on double newlines to get paragraphs
+    const paragraphs = text.split(/\n\n+/);
+    return paragraphs.map(para => {
+        // Convert single newlines within paragraphs to <br>
+        const withBreaks = para.replace(/\n/g, '<br>');
+        return '<p>' + withBreaks + '</p>';
+    }).join('\n');
+}
+
 function highlight_keyword(text, keyword) {
     text = String(text)
     keyword = String(keyword)
@@ -951,6 +973,26 @@ function get_current_time_formated() {
     const minutes = String(now.getMinutes()).padStart(2, '0');
 
     return `${month}/${day}/${year} ${hours}:${minutes}`;
+}
+
+function formatDate(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+
+    return date.toLocaleDateString();
+}
+
+function formatTimestamp(isoString) {
+    const date = new Date(isoString);
+    return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
 }
 
 function millis_to_hh_mm_ss(millis) {

@@ -1,4 +1,5 @@
 {% load humanize %}
+{% load erieiron_common_tags %}
 <div class="tab-pane-content">
     <div id="business-conversations-root"
          class="business-conversations"
@@ -35,25 +36,79 @@
 
         <div class="conversation-layout">
             <div class="conversation-container">
+                <!-- Change History Section -->
+            <!-- removing for now
+                <div class="change-history-section" data-role="change-history-section">
+                    <button type="button"
+                            class="btn btn-link w-100 text-start d-flex justify-content-between align-items-center"
+                            data-action="toggle-change-history"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#change-history-content">
+                        <span>
+                            <i class="bi bi-clock-history"></i>
+                            <span data-role="change-history-title">Change History</span>
+                            <span class="badge bg-primary ms-2" data-role="change-count">0</span>
+                        </span>
+                        <i class="bi bi-chevron-down" data-role="chevron"></i>
+                    </button>
+                    <div class="collapse" id="change-history-content">
+                        <div class="change-history-list" data-role="change-history-list">
+                            <div class="text-center py-3 text-muted" data-role="no-changes-message">
+                                <small>No changes yet</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                -->
+
                 <div class="messages-container" data-role="messages-container" id="messages-container-{{ business.id }}">
                     {% if current_messages %}
                         {% for msg in current_messages %}
                             <div class="conversation-message message-{{ msg.role }}" data-message-id="{{ msg.id }}">
                                 <div class="message-role">{% if msg.role == 'user' %}You{% else %}AI Assistant{% endif %}</div>
-                                <div class="message-content">{{ msg.content|linebreaks }}</div>
+                                <div class="message-content">{{ msg.content|strip_propose_change_markers|linebreaks }}</div>
                                 <div class="message-timestamp">{{ msg.created_at|naturaltime }}</div>
                             </div>
+
+                            {% if msg.id in message_changes %}
+                                {% for change in message_changes|get_item:msg.id %}
+                                    <div class="change-proposal alert alert-warning" data-change-id="{{ change.id }}">
+                                        <h5 class="alert-heading"><i class="bi bi-lightbulb"></i> Change Proposal: {{ change.change_type }}</h5>
+                                        <p class="mb-2">{{ change.change_description }}</p>
+                                        <details class="mb-3">
+                                            <summary>View technical details</summary>
+                                            <pre class="bg-light p-2 rounded" style="font-size: 0.85rem">{{ change.change_details|format_json }}</pre>
+                                        </details>
+                                        <div class="d-flex gap-2">
+                                            <button class="btn btn-success btn-sm"
+                                                    data-action="approve-change"
+                                                    data-change-id="{{ change.id }}">
+                                                <i class="bi bi-check-circle"></i> Approve & Apply
+                                            </button>
+                                            <button class="btn btn-secondary btn-sm"
+                                                    data-action="decline-change"
+                                                    data-change-id="{{ change.id }}">
+                                                <i class="bi bi-x-circle"></i> Decline
+                                            </button>
+                                        </div>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
                         {% endfor %}
                         <script>
-                            // Scroll immediately when DOM is ready
+                            // Scroll after DOM layout is complete
                             (function() {
                                 var container = document.getElementById('messages-container-{{ business.id }}');
                                 if (container) {
-                                    // Scroll to bottom minus clearance for input
-                                    setTimeout(function() {
-                                        container.scrollTop = container.scrollHeight - container.clientHeight - 150;
-                                        console.log('[INLINE] Scrolled to:', container.scrollTop);
-                                    }, 100);
+                                    // Use requestAnimationFrame to ensure layout is complete
+                                    requestAnimationFrame(function() {
+                                        // Double RAF to ensure paint is complete
+                                        requestAnimationFrame(function() {
+                                            // Scroll to bottom minus clearance for input
+                                            container.scrollTop = container.scrollHeight - container.clientHeight - 150;
+                                            console.log('[INLINE] Scrolled to:', container.scrollTop, 'scrollHeight:', container.scrollHeight);
+                                        });
+                                    });
                                 }
                             })();
                         </script>

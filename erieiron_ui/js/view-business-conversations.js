@@ -7,7 +7,8 @@ BusinessConversationsView = ErieView.extend({
         'keypress [data-role="message-input"]': 'handleKeyPress',
         'click [data-action="approve-change"]': 'handleApproveChange',
         'click [data-action="decline-change"]': 'handleDeclineChange',
-        'change [data-role="conversation-select"]': 'handleConversationSelect'
+        'change [data-role="conversation-select"]': 'handleConversationSelect',
+        'click [data-action="toggle-change-history"]': 'handleToggleChangeHistory'
     },
 
     init_view: function () {
@@ -15,52 +16,20 @@ BusinessConversationsView = ErieView.extend({
         this.businessId = this.$el.data('businessId');
         this.conversationId = this.$el.data('conversationId') || null;
         this.messages = [];
+        this.changes = [];
         this.$messageInput = this.$('[data-role="message-input"]');
         this.$messagesContainer = this.$('[data-role="messages-container"]');
         this.$sendBtn = this.$('[data-action="send-message"]');
         this.$newConversationBtn = this.$('[data-action="new-conversation"]');
+        this.$changeHistoryList = this.$('[data-role="change-history-list"]');
+        this.$changeCount = this.$('[data-role="change-count"]');
 
         // Check if messages are already server-rendered
         const $existingMessages = this.$messagesContainer.find('.conversation-message');
 
         if ($existingMessages.length > 0 && this.conversationId) {
-            // Messages are already rendered server-side
-            console.log('Messages already rendered server-side, count:', $existingMessages.length);
-
-            // Scroll to the last message's timestamp after layout is complete
-            const self = this;
-            const $lastMessage = $existingMessages.last();
-            if ($lastMessage.length > 0) {
-                const lastMessageId = $lastMessage.data('messageId');
-                console.log('Scrolling to last message:', lastMessageId);
-
-                // Scroll to last message using scrollIntoView
-                setTimeout(function() {
-                    // Get the last message element
-                    const $lastMsg = $lastMessage;
-
-                    if ($lastMsg && $lastMsg.length > 0) {
-                        console.log('Scrolling to last message using scrollIntoView');
-
-                        // Scroll the last message into view at the bottom of the container
-                        $lastMsg[0].scrollIntoView({
-                            behavior: 'auto',
-                            block: 'end',
-                            inline: 'nearest'
-                        });
-
-                        console.log('ScrollIntoView called on message:', lastMessageId);
-
-                        // Also try scrolling to bottom manually as backup
-                        setTimeout(function() {
-                            // const container = self.$messagesContainer[0];
-                            // Scroll up a bit from the very bottom to clear the input box
-                            // container.scrollTop = container.scrollTop - 150;
-                            // console.log('Adjusted scroll position to clear input box, scrollTop:', container.scrollTop);
-                        }, 100);
-                    }
-                }, 500);
-            }
+            this.loadChangeHistory();
+            this.scrollToEnd();
         } else {
             // Check URL hash for conversation ID (e.g., #conversation=uuid)
             const urlParams = new URLSearchParams(window.location.hash.substring(1));
@@ -74,10 +43,6 @@ BusinessConversationsView = ErieView.extend({
                 this.loadMostRecentConversation();
             }
         }
-    },
-
-    refresh: function () {
-        this.renderMessages();
     },
 
     loadMostRecentConversation: function () {
@@ -118,17 +83,14 @@ BusinessConversationsView = ErieView.extend({
                 self.conversationId = conversationId;
                 self.messages = response.messages || [];
 
-                // Set lastAddedMessageId to the last message so we scroll to it
-                if (self.messages.length > 0) {
-                    const lastMessage = self.messages[self.messages.length - 1];
-                    self.lastAddedMessageId = lastMessage.id;
-                    console.log('Setting scroll target to last message:', lastMessage.id);
-                }
-
                 self.renderMessages();
                 self.updateActiveConversation();
                 self.$messageInput.prop('disabled', false);
                 self.$sendBtn.prop('disabled', false);
+
+                // Load change history for this conversation
+                self.loadChangeHistory();
+                this.scrollToEnd();
             },
             (xhr) => {
                 console.error('Failed to load conversation:', xhr);
@@ -258,9 +220,46 @@ BusinessConversationsView = ErieView.extend({
     },
 
     addMessageToUI: function (message) {
+        console.log('[BusinessConversations] addMessageToUI called with:', message);
+
         this.messages.push(message);
         this.lastAddedMessageId = message.id;
-        this.renderMessages();
+
+        // Remove "no messages" placeholder if it exists
+        this.$messagesContainer.find('.text-muted.text-center').remove();
+
+        // Append the new message directly instead of re-rendering all messages
+        const $msgDiv = $('<div>')
+            .addClass('conversation-message')
+            .addClass('message-' + message.role)
+            .attr('data-message-id', message.id);
+
+        const $role = $('<div>')
+            .addClass('message-role')
+            .text(message.role === 'user' ? 'You' : 'AI Assistant');
+
+        const $content = $('<div>')
+            .addClass('message-content')
+            .html(renderMarkdown(message.content));
+
+        const $timestamp = $('<div>')
+            .addClass('message-timestamp')
+            .text(formatTimestamp(message.created_at));
+
+        $msgDiv.append($role, $content, $timestamp);
+
+        console.log('[BusinessConversations] Message element created');
+        console.log('[BusinessConversations] Classes:', $msgDiv.attr('class'));
+        console.log('[BusinessConversations] Full HTML:', $msgDiv[0].outerHTML);
+        console.log('[BusinessConversations] Parent container classes:', this.$messagesContainer.attr('class'));
+        console.log('[BusinessConversations] Parent container parent classes:', this.$messagesContainer.parent().attr('class'));
+
+        this.$messagesContainer.append($msgDiv);
+
+        console.log('[BusinessConversations] Message appended to container');
+        console.log('[BusinessConversations] Computed styles:', window.getComputedStyle($msgDiv[0]));
+
+        this.scrollToEnd();
     },
 
     renderMessages: function () {
@@ -288,24 +287,17 @@ BusinessConversationsView = ErieView.extend({
 
             const $content = $('<div>')
                 .addClass('message-content')
-                .html(self.renderMarkdown(msg.content));
+                .html(renderMarkdown(msg.content));
 
             const $timestamp = $('<div>')
                 .addClass('message-timestamp')
-                .text(self.formatTimestamp(msg.created_at));
+                .text(formatTimestamp(msg.created_at));
 
             $msgDiv.append($role, $content, $timestamp);
             self.$messagesContainer.append($msgDiv);
         });
-
-        // Scroll to the last added message (specifically to its timestamp)
-        if (this.lastAddedMessageId) {
-            this.scrollToMessage(this.lastAddedMessageId);
-            this.lastAddedMessageId = null; // Clear after scrolling
-        } else {
-            // Fallback to scrolling to bottom
-            this.$messagesContainer.scrollTop(this.$messagesContainer[0].scrollHeight);
-        }
+        
+        this.scrollToEnd();
     },
 
     scrollToMessage: function (messageId) {
@@ -412,6 +404,9 @@ BusinessConversationsView = ErieView.extend({
                 );
 
                 self.showStatus('Change approved and applied successfully!', 'success');
+
+                // Reload change history to show the newly applied change
+                self.loadChangeHistory();
             },
             (xhr) => {
                 console.error('Failed to approve change:', xhr);
@@ -444,19 +439,6 @@ BusinessConversationsView = ErieView.extend({
         );
     },
 
-    renderMarkdown: function (text) {
-        // Simple markdown rendering - just basics
-        return text
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/`(.+?)`/g, '<code>$1</code>')
-            .replace(/\n/g, '<br>');
-    },
-
-    formatTimestamp: function (isoString) {
-        const date = new Date(isoString);
-        return date.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-    },
 
     showLoadingIndicator: function () {
         const $loading = $('<div>')
@@ -512,5 +494,157 @@ BusinessConversationsView = ErieView.extend({
                 $(this).addClass('d-none');
             });
         }, 5000);
-    }
+    },
+
+    loadChangeHistory: function () {
+        const self = this;
+
+        if (!this.conversationId) {
+            return;
+        }
+
+        console.log('Loading change history for conversation:', this.conversationId);
+
+        erie_server().exec_server_get(
+            `/api/conversation/${this.conversationId}/changes/`,
+            (response) => {
+                console.log('Change history loaded:', response);
+                self.changes = response.changes || [];
+                self.renderChangeHistory();
+            },
+            (xhr) => {
+                console.error('Failed to load change history:', xhr);
+            }
+        );
+    },
+
+    renderChangeHistory: function () {
+        const self = this;
+
+        this.$changeCount.text(this.changes.length);
+
+        if (this.changes.length === 0) {
+            this.$changeHistoryList.html(
+                '<div class="text-center py-3 text-muted" data-role="no-changes-message">' +
+                '<small>No changes yet</small>' +
+                '</div>'
+            );
+            return;
+        }
+
+        this.$changeHistoryList.empty();
+
+        this.changes.forEach(function (change) {
+            const $changeCard = self.buildChangeHistoryCard(change);
+            self.$changeHistoryList.append($changeCard);
+        });
+    },
+
+    buildChangeHistoryCard: function (change) {
+        const self = this;
+        const $card = $('<div>').addClass('change-history-card');
+
+        const statusClass = change.applied ? 'applied' : (change.approved ? 'approved' : 'pending');
+        $card.addClass('status-' + statusClass);
+
+        const $header = $('<div>').addClass('change-card-header');
+
+        const $typeAndStatus = $('<div>').addClass('d-flex justify-content-between align-items-start mb-2');
+
+        const $type = $('<div>').addClass('change-type');
+        const typeIcon = this.getChangeTypeIcon(change.change_type);
+        $type.html(`<i class="bi ${typeIcon}"></i> ${this.formatChangeType(change.change_type)}`);
+
+        const $status = $('<div>').addClass('change-status');
+        if (change.applied) {
+            $status.html('<span class="badge bg-success"><i class="bi bi-check-circle-fill"></i> Applied</span>');
+        } else if (change.approved) {
+            $status.html('<span class="badge bg-info"><i class="bi bi-check-circle"></i> Approved</span>');
+        } else {
+            $status.html('<span class="badge bg-warning"><i class="bi bi-clock"></i> Pending</span>');
+        }
+
+        $typeAndStatus.append($type, $status);
+        $header.append($typeAndStatus);
+
+        const $description = $('<div>').addClass('change-description').text(change.change_description);
+        $header.append($description);
+
+        const $meta = $('<div>').addClass('change-meta mt-2');
+        const createdDate = new Date(change.created_at);
+        $meta.append(`<small class="text-muted"><i class="bi bi-calendar"></i> ${formatDate(createdDate)}</small>`);
+
+        if (change.applied_at) {
+            const appliedDate = new Date(change.applied_at);
+            $meta.append(` <small class="text-muted ms-2"><i class="bi bi-check-circle"></i> Applied ${formatDate(appliedDate)}</small>`);
+        }
+
+        $header.append($meta);
+        $card.append($header);
+
+        if (change.resulting_tasks && change.resulting_tasks.length > 0) {
+            const $tasks = $('<div>').addClass('change-tasks mt-2');
+            const $tasksHeader = $('<small>').addClass('text-muted d-block mb-1').html('<strong>Resulting Tasks:</strong>');
+            $tasks.append($tasksHeader);
+
+            const $tasksList = $('<ul>').addClass('mb-0');
+            change.resulting_tasks.forEach(function (task) {
+                const $taskItem = $('<li>').addClass('small');
+                $taskItem.html(`<a href="#" class="text-decoration-none">${escapeHtml(task.name)}</a> <span class="text-muted">(${task.status})</span>`);
+                $tasksList.append($taskItem);
+            });
+            $tasks.append($tasksList);
+            $card.append($tasks);
+        }
+
+        if (change.change_details && Object.keys(change.change_details).length > 0) {
+            const $details = $('<details>').addClass('change-details mt-2');
+            const $summary = $('<summary>').addClass('small').text('View technical details');
+            const $detailsContent = $('<pre>').addClass('small mt-1').text(JSON.stringify(change.change_details, null, 2));
+            $details.append($summary, $detailsContent);
+            $card.append($details);
+        }
+
+        return $card;
+    },
+
+    getChangeTypeIcon: function (changeType) {
+        const icons = {
+            'business_plan': 'bi-file-text',
+            'architecture': 'bi-diagram-3',
+            'infrastructure': 'bi-server',
+            'initiative': 'bi-flag',
+            'task': 'bi-check2-square'
+        };
+        return icons[changeType] || 'bi-file-text';
+    },
+
+    formatChangeType: function (changeType) {
+        const types = {
+            'business_plan': 'Business Plan',
+            'architecture': 'Architecture',
+            'infrastructure': 'Infrastructure',
+            'initiative': 'New Initiative',
+            'task': 'New Task'
+        };
+        return types[changeType] || changeType;
+    },
+
+    handleToggleChangeHistory: function (e) {
+        const $chevron = this.$('[data-role="chevron"]');
+        const isExpanded = $('#change-history-content').hasClass('show');
+
+        if (isExpanded) {
+            $chevron.removeClass('bi-chevron-up').addClass('bi-chevron-down');
+        } else {
+            $chevron.removeClass('bi-chevron-down').addClass('bi-chevron-up');
+        }
+    },
+    
+    scrollToEnd() {
+        // const el_to_scroll_to = $(".conversation-message,.change-proposal").last();
+        setTimeout(() => {
+            this.$messagesContainer.scrollTop(this.$messagesContainer[0].scrollHeight + 200);
+        }, 500);
+    },
 });

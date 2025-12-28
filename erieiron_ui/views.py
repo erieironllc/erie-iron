@@ -1702,20 +1702,38 @@ def _tab_context_bug_report(business: Business) -> dict:
 
 
 def _tab_context_conversation(business: Business) -> dict:
+    from erieiron_autonomous_agent.models import ConversationChange
+
     conversations = business.conversations.all().order_by('-updated_at')[:20]
 
     # Load the most recent conversation's messages for initial render
     current_conversation = None
     current_messages = []
+    message_changes = {}
 
     if conversations.exists():
         current_conversation = conversations.first()
-        current_messages = list(current_conversation.messages.all().order_by('created_at'))
+        messages = current_conversation.messages.all().order_by('created_at')
+        current_messages = list(messages)
+
+        # Load all pending change proposals for these messages
+        message_ids = [msg.id for msg in current_messages]
+        changes = ConversationChange.objects.filter(
+            message_id__in=message_ids,
+            approved=False
+        ).select_related('message')
+
+        # Group changes by message ID
+        for change in changes:
+            if change.message_id not in message_changes:
+                message_changes[change.message_id] = []
+            message_changes[change.message_id].append(change)
 
     return {
         "conversations": conversations,
         "current_conversation": current_conversation,
-        "current_messages": current_messages
+        "current_messages": current_messages,
+        "message_changes": message_changes
     }
 
 
@@ -6196,11 +6214,13 @@ def business_conversation_message(request, conversation_id):
             'conversation_title': conversation.title,
             'user_message': {
                 'id': str(user_msg.id),
+                'role': 'user',
                 'content': user_msg.content,
                 'created_at': user_msg.created_at.isoformat()
             },
             'assistant_message': {
                 'id': str(assistant_msg.id),
+                'role': 'assistant',
                 'content': assistant_msg.content,
                 'created_at': assistant_msg.created_at.isoformat(),
                 'changes': [
@@ -6268,10 +6288,10 @@ def business_conversations_list(request, business_id):
 def conversation_changes_list(request, conversation_id):
     """List all change proposals for a conversation"""
     from erieiron_autonomous_agent.models import BusinessConversation
-    
+
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
-    changes = conversation.changes.all()
-    
+    changes = conversation.changes.select_related('message').prefetch_related('resulting_tasks')
+
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'changes': [
@@ -6281,8 +6301,18 @@ def conversation_changes_list(request, conversation_id):
                 'change_description': c.change_description,
                 'change_details': c.change_details,
                 'approved': c.approved,
+                'approved_at': c.approved_at.isoformat() if c.approved_at else None,
                 'applied': c.applied,
-                'created_at': c.created_at.isoformat()
+                'applied_at': c.applied_at.isoformat() if c.applied_at else None,
+                'created_at': c.created_at.isoformat(),
+                'resulting_tasks': [
+                    {
+                        'id': str(task.id),
+                        'name': task.name,
+                        'status': task.status
+                    }
+                    for task in c.resulting_tasks.all()
+                ]
             }
             for c in changes
         ]

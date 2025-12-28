@@ -501,3 +501,27 @@ def not_val(value):
 def sanitize_html(value):
     """Remove potentially dangerous HTML before rendering."""
     return strip_tags(value or "")
+
+
+@register.filter(name="strip_propose_change_markers")
+def strip_propose_change_markers(value):
+    """Remove [PROPOSE_CHANGE]...[/PROPOSE_CHANGE] markers from message content."""
+    import re
+    if not value:
+        return value
+    pattern = re.compile(r'\[PROPOSE_CHANGE\].*?\[/PROPOSE_CHANGE\]', re.DOTALL)
+    return pattern.sub('', value).strip()
+
+
+@register.filter(name="get_item")
+def get_item(dictionary, key):
+    """Get item from dictionary using key."""
+    return dictionary.get(key, [])
+
+
+@register.filter(name="format_json")
+def format_json(value):
+    """Format JSON object as pretty-printed string."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, indent=2, cls=ErieIronJSONEncoder)

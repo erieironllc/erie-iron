@@ -22,8 +22,8 @@
     position: relative;
     display: flex;
     gap: 0;
-    height: calc(100vh - 280px); // Changed from min-height to fixed height
-    max-height: calc(100vh - 280px); // Add max-height to constrain
+    height: calc(100vh - 230px); // Changed from min-height to fixed height
+    max-height: calc(100vh - 230px); // Add max-height to constrain
     border: 1px solid rgba(59, 130, 246, 0.12); // $primary with opacity
     border-radius: 0.5rem;
     overflow: hidden;
@@ -36,6 +36,171 @@
     flex: 1;
     background-color: #2A2A38; // $body-bg
     position: relative;
+  }
+
+  .change-history-section {
+    background-color: rgba(30, 30, 46, 0.6); // $dark with opacity
+    border-bottom: 1px solid rgba(59, 130, 246, 0.12); // $primary with opacity
+
+    button[data-action="toggle-change-history"] {
+      color: #EAEAEA; // $light
+      text-decoration: none;
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+
+      &:hover {
+        background-color: rgba(59, 130, 246, 0.1); // $primary with opacity
+        color: #fdfaf6; // $white
+      }
+
+      &:focus {
+        box-shadow: none;
+      }
+
+      i.bi-clock-history {
+        margin-right: 0.5rem;
+      }
+
+      i.bi-chevron-down,
+      i.bi-chevron-up {
+        transition: transform 0.2s ease;
+      }
+    }
+
+    .change-history-list {
+      padding: 0.75rem 1rem;
+      max-height: 300px;
+      overflow-y: auto;
+
+      &::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: rgba(18, 18, 18, 0.3);
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: rgba(156, 163, 175, 0.4);
+        border-radius: 3px;
+
+        &:hover {
+          background: rgba(156, 163, 175, 0.6);
+        }
+      }
+    }
+
+    .change-history-card {
+      background-color: rgba(42, 42, 56, 0.6); // $body-bg with opacity
+      border: 1px solid rgba(59, 130, 246, 0.2); // $primary with opacity
+      border-radius: 0.375rem;
+      padding: 0.875rem;
+      margin-bottom: 0.75rem;
+      animation: fadeIn 0.3s ease-in;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+
+      &.status-applied {
+        border-left: 3px solid #2a9d4a; // $success
+        background-color: rgba(42, 157, 74, 0.08);
+      }
+
+      &.status-approved {
+        border-left: 3px solid #3B82F6; // $primary
+        background-color: rgba(59, 130, 246, 0.08);
+      }
+
+      &.status-pending {
+        border-left: 3px solid #f26b00; // $warning
+        background-color: rgba(242, 107, 0, 0.08);
+      }
+
+      .change-card-header {
+        .change-type {
+          font-weight: 600;
+          font-size: 0.875rem;
+          color: #EAEAEA; // $light
+
+          i {
+            margin-right: 0.375rem;
+            color: #3B82F6; // $primary
+          }
+        }
+
+        .change-description {
+          color: #EAEAEA; // $light
+          font-size: 0.875rem;
+          line-height: 1.5;
+          margin-top: 0.5rem;
+        }
+
+        .change-meta {
+          font-size: 0.75rem;
+          color: #9CA3AF; // $text-muted-color
+
+          i {
+            margin-right: 0.25rem;
+          }
+        }
+      }
+
+      .change-tasks {
+        background-color: rgba(30, 30, 46, 0.4);
+        border-radius: 0.25rem;
+        padding: 0.5rem 0.75rem;
+
+        ul {
+          padding-left: 1.25rem;
+          margin-bottom: 0;
+          list-style-type: disc;
+
+          li {
+            color: #EAEAEA; // $light
+            margin-bottom: 0.25rem;
+
+            a {
+              color: #3B82F6; // $primary
+
+              &:hover {
+                color: #60a5fa; // lighter blue
+                text-decoration: underline;
+              }
+            }
+
+            .text-muted {
+              color: #9CA3AF !important;
+            }
+          }
+        }
+      }
+
+      .change-details {
+        summary {
+          cursor: pointer;
+          color: #9CA3AF; // $text-muted-color
+          font-weight: 500;
+          user-select: none;
+
+          &:hover {
+            color: #EAEAEA; // $light
+          }
+        }
+
+        pre {
+          background-color: #EAEAEA; // Light background for code per UI spec
+          color: #1E1E2E; // $dark
+          padding: 0.5rem;
+          border-radius: 0.25rem;
+          font-size: 0.75rem;
+          max-height: 200px;
+          overflow-y: auto;
+          margin-bottom: 0;
+        }
+      }
+    }
   }
 
   .messages-container {
