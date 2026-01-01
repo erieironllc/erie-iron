@@ -163,11 +163,34 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "OauthGoogleSecretArn" {
+  description = "ARN of USER_SUPPLIED secret containing Google OAuth credentials (client_id, client_secret). Managed via Erie Iron UI, passed by coding_agent."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "MobileAppScheme" {
+  description = "Custom URL scheme for mobile app OAuth callbacks (e.g., 'myapp')"
+  type        = string
+  default     = ""
+}
+
+data "aws_secretsmanager_secret_version" "google_oauth" {
+  count     = var.OauthGoogleSecretArn != "" ? 1 : 0
+  secret_id = var.OauthGoogleSecretArn
+}
+
 locals {
-  retain_resources     = lower(coalesce(var.DeletePolicy, "delete")) == "retain"
-  hosted_zone_provided = length(trim(var.DomainHostedZoneId, " ")) > 0
-  database_name        = "appdb"
+  retain_resources      = lower(coalesce(var.DeletePolicy, "delete")) == "retain"
+  hosted_zone_provided  = length(trim(var.DomainHostedZoneId, " ")) > 0
+  database_name         = "appdb"
   foundation_identifier = coalesce(var.FoundationStackIdentifier, var.StackIdentifier)
+
+  google_oauth_creds   = var.OauthGoogleSecretArn != "" ? jsondecode(data.aws_secretsmanager_secret_version.google_oauth[0].secret_string) : {}
+  google_client_id     = try(local.google_oauth_creds.client_id, "")
+  google_client_secret = try(local.google_oauth_creds.client_secret, "")
 
   base_tags = merge(
     {
@@ -176,7 +199,7 @@ locals {
     },
     var.tags
   )
-  
+
   foundation_tags = merge(
     {
       Name            = "${local.foundation_identifier}"
@@ -336,8 +359,8 @@ resource "aws_iam_role_policy" "web_execution_assume_target" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = "sts:AssumeRole"
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
         Resource = "arn:aws:iam::*:role/ErieIronTargetAccountAgentRole"
       }
     ]
@@ -396,9 +419,9 @@ resource "aws_iam_role_policy" "web_llm_api_keys" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "AllowReadLlmApiKeys"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "AllowReadLlmApiKeys"
+        Effect = "Allow"
+        Action = [
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ]
@@ -412,6 +435,21 @@ resource "aws_iam_role_policy" "web_llm_api_keys" {
   }
 }
 
+resource "aws_iam_role_policy" "web_cognito_secret" {
+  name = "${var.StackIdentifier}-web-cognito-secret"
+  role = aws_iam_role.web_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "AllowReadCognitoSecret"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = aws_secretsmanager_secret.cognito_config.arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "web_websocket" {
   name = "${var.StackIdentifier}-web-websocket"
   role = aws_iam_role.web_task.id
@@ -420,9 +458,9 @@ resource "aws_iam_role_policy" "web_websocket" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowApiGatewayManagement"
-        Effect = "Allow"
-        Action = "execute-api:ManageConnections"
+        Sid      = "AllowApiGatewayManagement"
+        Effect   = "Allow"
+        Action   = "execute-api:ManageConnections"
         Resource = "${aws_apigatewayv2_api.websocket.execution_arn}/*/*/@connections/*"
       },
       {
@@ -472,7 +510,7 @@ resource "aws_ecs_task_definition" "web" {
           protocol      = "tcp"
         }
       ]
-      environment = [
+      environment = concat([
         { name = "ALLOWED_HOSTS", value = "*" },
         { name = "RDS_SECRET_ARN", value = aws_db_instance.primary.master_user_secret[0].secret_arn },
         { name = "ERIEIRON_ENV", value = var.ErieIronEnv },
@@ -483,8 +521,9 @@ resource "aws_ecs_task_definition" "web" {
         { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
         { name = "DOMAIN_NAME", value = var.DomainName },
         { name = "CLIENT_MESSAGE_WEBSOCKET_ENDPOINT", value = replace(replace(aws_apigatewayv2_stage.websocket.invoke_url, "wss://", ""), "ws://", "") },
-        { name = "CLIENT_MESSAGE_DYNAMO_TABLE", value = aws_dynamodb_table.websocket_connections.name }
-      ]
+        { name = "CLIENT_MESSAGE_DYNAMO_TABLE", value = aws_dynamodb_table.websocket_connections.name },
+        { name = "COGNITO_SECRET_ARN", value = aws_secretsmanager_secret.cognito_config.arn }
+      ])
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -660,14 +699,135 @@ resource "aws_security_group_rule" "ecs_ingress" {
 }
 
 # ============================================================================
+# Cognito Authentication Infrastructure
+# ============================================================================
+
+resource "aws_cognito_user_pool" "main" {
+  name = "${var.StackIdentifier}-user-pool"
+
+  auto_verified_attributes = ["email"]
+  username_attributes      = ["email"]
+
+  password_policy {
+    minimum_length    = 8
+    require_lowercase = true
+    require_uppercase = true
+    require_numbers   = true
+    require_symbols   = false
+  }
+
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "verified_email"
+      priority = 1
+    }
+  }
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-user-pool"
+  })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_cognito_user_pool_domain" "main" {
+  domain       = var.StackIdentifier
+  user_pool_id = aws_cognito_user_pool.main.id
+}
+
+resource "aws_cognito_user_pool_client" "main" {
+  name         = "${var.StackIdentifier}-client"
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  generate_secret                      = false
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_scopes                 = ["email", "openid", "profile"]
+
+  callback_urls = compact([
+    "https://${var.DomainName}/oauth/cognito/callback",
+    var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : null
+  ])
+
+  logout_urls = [
+    "https://${var.DomainName}/login/"
+  ]
+
+  supported_identity_providers = compact([
+    "COGNITO",
+    local.google_client_id != "" ? "Google" : null
+  ])
+
+  explicit_auth_flows = [
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_SRP_AUTH"
+  ]
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-cognito-client"
+  })
+}
+
+resource "aws_cognito_identity_provider" "google" {
+  count         = local.google_client_id != "" ? 1 : 0
+  user_pool_id  = aws_cognito_user_pool.main.id
+  provider_name = "Google"
+  provider_type = "Google"
+
+  provider_details = {
+    client_id                     = local.google_client_id
+    client_secret                 = local.google_client_secret
+    authorize_scopes              = "email openid profile"
+    attributes_url                = "https://people.googleapis.com/v1/people/me?personFields="
+    attributes_url_add_attributes = "true"
+    authorize_url                 = "https://accounts.google.com/o/oauth2/v2/auth"
+    oidc_issuer                   = "https://accounts.google.com"
+    token_request_method          = "POST"
+    token_url                     = "https://www.googleapis.com/oauth2/v4/token"
+  }
+
+  attribute_mapping = {
+    email    = "email"
+    username = "sub"
+    name     = "name"
+  }
+}
+
+resource "aws_secretsmanager_secret" "cognito_config" {
+  name = "${var.StackIdentifier}/cognito-config"
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-cognito-config"
+  })
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "cognito_config" {
+  secret_id = aws_secretsmanager_secret.cognito_config.id
+
+  secret_string = jsonencode({
+    userPoolId  = aws_cognito_user_pool.main.id
+    clientId    = aws_cognito_user_pool_client.main.id
+    domain      = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+    region      = data.aws_region.current.name
+    redirectUri = "https://${var.DomainName}/oauth/cognito/callback"
+  })
+}
+
+# ============================================================================
 # WebSocket Infrastructure
 # ============================================================================
 
 # DynamoDB table for WebSocket connection tracking
 resource "aws_dynamodb_table" "websocket_connections" {
-  name           = "${var.StackIdentifier}-websocket-connections"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "connection_id"
+  name         = "${var.StackIdentifier}-websocket-connections"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "connection_id"
 
   attribute {
     name = "connection_id"
@@ -759,7 +919,7 @@ data "archive_file" "websocket_connect" {
   output_path = "${path.module}/.terraform/lambda-connect.zip"
 
   source {
-    content = <<-EOT
+    content  = <<-EOT
 import json
 import boto3
 import os
@@ -822,7 +982,7 @@ data "archive_file" "websocket_disconnect" {
   output_path = "${path.module}/.terraform/lambda-disconnect.zip"
 
   source {
-    content = <<-EOT
+    content  = <<-EOT
 import json
 import boto3
 import os
@@ -1048,4 +1208,26 @@ output "WebSocketConnectionsTableName" {
 output "WebSocketConnectionsTableArn" {
   description = "DynamoDB table ARN for WebSocket connection tracking."
   value       = aws_dynamodb_table.websocket_connections.arn
+}
+
+# Cognito outputs
+output "CognitoUserPoolId" {
+  description = "Cognito User Pool ID"
+  value       = aws_cognito_user_pool.main.id
+}
+
+output "CognitoClientId" {
+  description = "Cognito App Client ID"
+  value       = aws_cognito_user_pool_client.main.id
+}
+
+output "CognitoDomain" {
+  description = "Cognito hosted UI domain"
+  value       = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+}
+
+output "CognitoSecretArn" {
+  description = "ARN of the Cognito config secret"
+  value       = aws_secretsmanager_secret.cognito_config.arn
+  sensitive   = true
 }

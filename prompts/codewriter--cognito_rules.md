@@ -4,15 +4,9 @@ When the task requires Cognito user authentication, you must add the following r
 
 ### Required Variables
 
-Add these variables if not already present:
+Add this variable if not already present:
 
 ```hcl
-variable "EnableCognito" {
-  description = "Whether to provision Cognito User Pool for authentication"
-  type        = bool
-  default     = false
-}
-
 variable "MobileAppScheme" {
   description = "Custom URL scheme for mobile app OAuth callbacks (e.g., 'myapp')"
   type        = string
@@ -20,9 +14,11 @@ variable "MobileAppScheme" {
 }
 ```
 
+**Note**: Cognito is now always enabled. The `EnableCognito` variable has been removed.
+
 ### Cognito User Pool Resources
 
-Add these resources (conditionally created when `EnableCognito = true`):
+Add these resources (always created):
 
 ```hcl
 locals {
@@ -35,7 +31,6 @@ locals {
 }
 
 resource "aws_cognito_user_pool" "main" {
-  count = var.EnableCognito ? 1 : 0
   name  = "${var.StackIdentifier}-user-pool"
   tags = local.base_tags
 
@@ -63,25 +58,23 @@ resource "aws_cognito_user_pool" "main" {
 }
 
 resource "aws_cognito_user_pool_domain" "main" {
-  count        = var.EnableCognito ? 1 : 0
   domain       = var.StackIdentifier
-  user_pool_id = aws_cognito_user_pool.main[0].id
+  user_pool_id = aws_cognito_user_pool.main.id
 }
 
 resource "aws_cognito_user_pool_client" "main" {
-  count        = var.EnableCognito ? 1 : 0
   name         = "${var.StackIdentifier}-client"
-  user_pool_id = aws_cognito_user_pool.main[0].id
+  user_pool_id = aws_cognito_user_pool.main.id
 
   generate_secret                      = false
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_scopes                 = ["email", "openid", "profile"]
 
-  callback_urls = [
+  callback_urls = compact([
     "https://${var.DomainName}/oauth/cognito/web/callback",
     var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : null
-  ]
+  ])
 
   supported_identity_providers = ["COGNITO"]
 
@@ -92,33 +85,28 @@ resource "aws_cognito_user_pool_client" "main" {
 }
 ```
 
-### Mobile App Config Secret
+### Cognito Config Secret
 
 The secret must be created in OpenTofu to ensure atomicity with Cognito resources:
 
 ```hcl
-resource "aws_secretsmanager_secret" "mobile_app_config" {
-  count = var.EnableCognito ? 1 : 0
-  name  = "${var.StackIdentifier}/mobile-app-config"
+resource "aws_secretsmanager_secret" "cognito_config" {
+  name  = "${var.StackIdentifier}/cognito-config"
 
   lifecycle {
     prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
   }
 }
 
-resource "aws_secretsmanager_secret_version" "mobile_app_config" {
-  count     = var.EnableCognito ? 1 : 0
-  secret_id = aws_secretsmanager_secret.mobile_app_config[0].id
+resource "aws_secretsmanager_secret_version" "cognito_config" {
+  secret_id = aws_secretsmanager_secret.cognito_config.id
 
   secret_string = jsonencode({
-    cognito = {
-      region         = data.aws_region.current.name
-      userPoolId     = aws_cognito_user_pool.main[0].id
-      clientId       = aws_cognito_user_pool_client.main[0].id
-      domain         = "https://${aws_cognito_user_pool_domain.main[0].domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
-      redirectUri    = var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : ""
-      webRedirectUri = "https://${var.DomainName}/oauth/cognito/web/callback"
-    }
+    userPoolId  = aws_cognito_user_pool.main.id
+    clientId    = aws_cognito_user_pool_client.main.id
+    domain      = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+    region      = data.aws_region.current.name
+    redirectUri = "https://${var.DomainName}/oauth/cognito/callback"
   })
 }
 ```
@@ -129,7 +117,6 @@ Grant the ECS task role permission to read the Cognito secret:
 
 ```hcl
 resource "aws_iam_role_policy" "web_cognito_secret" {
-  count = var.EnableCognito ? 1 : 0
   name  = "${var.StackIdentifier}-web-cognito-secret"
   role  = aws_iam_role.web_task.id
 
@@ -139,7 +126,7 @@ resource "aws_iam_role_policy" "web_cognito_secret" {
       Sid      = "AllowReadCognitoSecret"
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_secretsmanager_secret.mobile_app_config[0].arn
+      Resource = aws_secretsmanager_secret.cognito_config.arn
     }]
   })
 }
@@ -153,7 +140,7 @@ Add to the container's environment array:
 # In aws_ecs_task_definition.web.container_definitions environment list:
 {
   name  = "COGNITO_SECRET_ARN"
-  value = var.EnableCognito ? aws_secretsmanager_secret.mobile_app_config[0].arn : ""
+  value = aws_secretsmanager_secret.cognito_config.arn
 }
 ```
 
@@ -164,22 +151,22 @@ Add these outputs for orchestration visibility:
 ```hcl
 output "CognitoUserPoolId" {
   description = "Cognito User Pool ID"
-  value       = var.EnableCognito ? aws_cognito_user_pool.main[0].id : null
+  value       = aws_cognito_user_pool.main.id
 }
 
 output "CognitoClientId" {
   description = "Cognito App Client ID"
-  value       = var.EnableCognito ? aws_cognito_user_pool_client.main[0].id : null
+  value       = aws_cognito_user_pool_client.main.id
 }
 
 output "CognitoDomain" {
   description = "Cognito hosted UI domain"
-  value       = var.EnableCognito ? "https://${aws_cognito_user_pool_domain.main[0].domain}.auth.${data.aws_region.current.name}.amazoncognito.com" : null
+  value       = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
 }
 
 output "CognitoSecretArn" {
-  description = "ARN of the mobile app config secret containing Cognito settings"
-  value       = var.EnableCognito ? aws_secretsmanager_secret.mobile_app_config[0].arn : null
+  description = "ARN of the Cognito config secret containing Cognito settings"
+  value       = aws_secretsmanager_secret.cognito_config.arn
   sensitive   = true
 }
 ```

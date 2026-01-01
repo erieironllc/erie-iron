@@ -6,6 +6,7 @@ urlpatterns = [
     path("", views.view_portfolio, name="view_home"),
     path("login/", views.view_login, name="view_login"),
     path("logout/", views.action_logout, name="action_logout"),
+    path("oauth/cognito/callback", views.oauth_cognito_callback, name="oauth_cognito_callback"),
     path("health/", views.healthcheck, name="health"),
     
     path("portfolio/", views.view_portfolio, name="view_portfolio"),

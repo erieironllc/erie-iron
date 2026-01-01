@@ -44,10 +44,6 @@ S3_CACHE_DIR = config('S3_CACHE_DIR', default=tempfile.mkdtemp(), cast=str)
 S3_CACHE_MAX_DISK_USAGE = config('S3_CACHE_MAX_DISK_USAGE', default=70, cast=int)
 HF_MODEL_CACHE_S3_URI = config('HF_MODEL_CACHE_S3_URI', default=None)
 
-COGNITO_USER_POOL_ID = config("COGNITO_USER_POOL_ID")
-COGNITO_CLIENT_ID = config("COGNITO_CLIENT_ID")
-COGNITO_DOMAIN = config("COGNITO_DOMAIN", default="https://login.collaya.com")
-
 DISABLE_EMAIL_SEND = config('DISABLE_EMAIL_SEND', default=False, cast=bool)
 CLIENT_MESSAGE_WEBSOCKET_ENDPOINT = os.getenv('CLIENT_MESSAGE_WEBSOCKET_ENDPOINT')
 CLIENT_MESSAGE_DYNAMO_TABLE = os.getenv('CLIENT_MESSAGE_DYNAMO_TABLE')
@@ -56,14 +52,14 @@ MESSAGE_QUEUE_ENV = config('MESSAGE_QUEUE_ENV', default=None, cast=str)
 MESSAGE_TYPES = os.getenv("MESSAGE_TYPES", config('MESSAGE_TYPES', default=None, cast=str))
 BUCKETS = settings_utils.get_buckets(config)
 
-
-SIMPLE_AUTH_ALLOWED_EMAIL = os.getenv("SIMPLE_AUTH_ALLOWED_EMAIL", "jj@erieironllc.com,sach.nanda@gmail.com")
-SIMPLE_AUTH_ALLOWED_PASSWORD = os.getenv("SIMPLE_AUTH_ALLOWED_PASSWORD", "change_th1s_p@ssword")
-SIMPLE_AUTH_COOKIE_NAME = "erieiron_ui_auth_token"
-SIMPLE_AUTH_JWT_SECRET = SECRET_KEY
-SIMPLE_AUTH_TOKEN_TTL_SECONDS = 12 * 60 * 60  # 12 hours
-SIMPLE_AUTH_LOGIN_URL = "/login/"
-SIMPLE_AUTH_LOGOUT_URL = "/logout/"
+# DEPRECATED: Simple auth replaced by Cognito
+# SIMPLE_AUTH_ALLOWED_EMAIL = os.getenv("SIMPLE_AUTH_ALLOWED_EMAIL", "jj@erieironllc.com,sach.nanda@gmail.com")
+# SIMPLE_AUTH_ALLOWED_PASSWORD = os.getenv("SIMPLE_AUTH_ALLOWED_PASSWORD", "change_th1s_p@ssword")
+# SIMPLE_AUTH_COOKIE_NAME = "erieiron_ui_auth_token"
+# SIMPLE_AUTH_JWT_SECRET = SECRET_KEY
+# SIMPLE_AUTH_TOKEN_TTL_SECONDS = 12 * 60 * 60  # 12 hours
+# SIMPLE_AUTH_LOGIN_URL = "/login/"
+# SIMPLE_AUTH_LOGOUT_URL = "/logout/"
 
 DOMAIN_CONTACT_INFO = {
     "FirstName": "ErieIron",
@@ -133,7 +129,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    "erieiron_ui.middleware.SimpleAuthMiddleware",
+    "erieiron_ui.middleware.CognitoAuthMiddleware",  # Replaced SimpleAuthMiddleware
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 

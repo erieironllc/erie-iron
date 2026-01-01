@@ -159,44 +159,158 @@ def _credentials_match(email: str, password: str) -> bool:
 
 
 def view_login(request):
-    next_param = request.GET.get("next") or request.POST.get("next")
-    
-    if getattr(request, "simple_auth_authenticated", False):
+    """Login page that redirects to Cognito Hosted UI for Google sign-in."""
+    next_param = request.GET.get("next") or ""
+
+    # If already authenticated via Cognito, redirect to destination
+    if getattr(request, "cognito_authenticated", False):
         destination = _resolve_post_login_redirect(request, next_param)
         return HttpResponseRedirect(destination)
-    
-    context = {
-        "page_title": "Sign in • ErieIron",
-        "next": next_param or "",
-        "prefill_email": request.POST.get("email", "").strip(),
+
+    # Build Cognito Hosted UI URL for Google sign-in
+    from urllib.parse import urlencode
+    from erieiron_common import view_utils
+    from django.http import HttpResponse
+
+    cognito_domain = view_utils.get_cognito_domain()
+    cognito_client_id = view_utils.get_cognito_client_id()
+
+    # Fail fast if Cognito is not configured
+    if not cognito_domain or not cognito_client_id:
+        return HttpResponse(
+            "Cognito authentication is not configured. "
+            "Set COGNITO_SECRET_ARN or COGNITO_DOMAIN/COGNITO_CLIENT_ID/COGNITO_USER_POOL_ID environment variables.",
+            status=500
+        )
+
+    callback_url = request.build_absolute_uri(reverse("oauth_cognito_callback"))
+
+    params = {
+        "client_id": cognito_client_id,
+        "response_type": "code",
+        "scope": "email openid profile",
+        "redirect_uri": callback_url,
     }
-    
-    if request.method == "POST":
-        email = (request.POST.get("email") or "").strip()
-        password = request.POST.get("password") or ""
-        
-        if _credentials_match(email, password):
-            token = _build_simple_auth_token(email)
-            destination = _resolve_post_login_redirect(request, next_param)
-            response = HttpResponseRedirect(destination)
+
+    # Store next param in session for after OAuth callback
+    if next_param:
+        request.session["post_login_redirect"] = next_param
+
+    # Redirect directly to Cognito Hosted UI with Google identity provider
+    # Users can also choose username/password on Cognito Hosted UI if configured
+    cognito_login_url = f"{cognito_domain}/oauth2/authorize?{urlencode(params)}"
+
+    return HttpResponseRedirect(cognito_login_url)
+
+
+def oauth_cognito_callback(request):
+    """OAuth callback handler that exchanges auth code for Cognito tokens."""
+    code = request.GET.get("code")
+    error = request.GET.get("error")
+
+    if error:
+        messages.error(request, f"Authentication failed: {error}")
+        return HttpResponseRedirect(reverse("view_login"))
+
+    if not code:
+        messages.error(request, "Missing authorization code from Cognito")
+        return HttpResponseRedirect(reverse("view_login"))
+
+    try:
+        from erieiron_common import view_utils
+        from erieiron_common.models import Person
+
+        # Exchange code for tokens
+        token_response = view_utils.get_cognito_tokens_from_authcode(code)
+        id_token = token_response.get("id_token")
+        access_token = token_response.get("access_token")
+        refresh_token = token_response.get("refresh_token")
+
+        if not id_token:
+            messages.error(request, "Failed to obtain ID token from Cognito")
+            return HttpResponseRedirect(reverse("view_login"))
+
+        # Parse ID token to get user info
+        user_data = view_utils.parse_session_token(id_token)
+        cognito_sub = user_data.get("sub")
+        email = user_data.get("email")
+
+        if not cognito_sub or not email:
+            messages.error(request, "Invalid user data from Cognito")
+            return HttpResponseRedirect(reverse("view_login"))
+
+        # Create or update Person record
+        person = Person.getOrCreateFromCognitoUserData(user_data)
+
+        # Get redirect destination from session or default to home
+        next_param = request.session.pop("post_login_redirect", None)
+        destination = _resolve_post_login_redirect(request, next_param)
+
+        # Set Cognito tokens in cookies
+        response = HttpResponseRedirect(destination)
+        cookie_max_age = 12 * 3600  # 12 hours
+
+        response.set_cookie(
+            "cognito_id_token",
+            id_token,
+            max_age=cookie_max_age,
+            httponly=True,
+            secure=not settings.DEBUG,
+            samesite="Lax",
+        )
+
+        if access_token:
             response.set_cookie(
-                settings.SIMPLE_AUTH_COOKIE_NAME,
-                token,
-                max_age=settings.SIMPLE_AUTH_TOKEN_TTL_SECONDS,
+                "cognito_access_token",
+                access_token,
+                max_age=cookie_max_age,
                 httponly=True,
                 secure=not settings.DEBUG,
                 samesite="Lax",
             )
-            return response
-        
-        messages.error(request, "Invalid email or password.")
-    
-    return render(request, "login.html", context)
+
+        if refresh_token:
+            response.set_cookie(
+                "cognito_refresh_token",
+                refresh_token,
+                max_age=30 * 24 * 3600,  # 30 days
+                httponly=True,
+                secure=not settings.DEBUG,
+                samesite="Lax",
+            )
+
+        return response
+
+    except Exception as exc:
+        _LOG.exception(f"OAuth callback failed: {exc}")
+        messages.error(request, "Authentication failed. Please try again.")
+        return HttpResponseRedirect(reverse("view_login"))
 
 
 def action_logout(request):
-    response = HttpResponseRedirect(reverse("view_login"))
-    response.delete_cookie(settings.SIMPLE_AUTH_COOKIE_NAME)
+    """Logout handler that clears Cognito session and redirects to Cognito logout."""
+    from erieiron_common import view_utils
+
+    # Build Cognito logout URL
+    cognito_domain = view_utils.get_cognito_domain()
+    logout_redirect = request.build_absolute_uri(reverse("view_login"))
+
+    from urllib.parse import urlencode
+    params = {
+        "client_id": view_utils.get_cognito_client_id(),
+        "logout_uri": logout_redirect,
+    }
+
+    cognito_logout_url = f"{cognito_domain}/logout?{urlencode(params)}"
+
+    # Redirect to Cognito logout endpoint
+    response = HttpResponseRedirect(cognito_logout_url)
+
+    # Clear all Cognito cookies
+    response.delete_cookie("cognito_id_token")
+    response.delete_cookie("cognito_access_token")
+    response.delete_cookie("cognito_refresh_token")
+
     return response
 
 

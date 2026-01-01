@@ -16,6 +16,7 @@ from jwt import PyJWKClient
 from pygments.formatters.html import HtmlFormatter
 
 import settings
+from erieiron_public import agent_tools
 from erieiron_common import common, models, runtime_config
 from erieiron_common.common import build_absolute_uri
 from erieiron_common.enums import PersonAuthStatus, Role
@@ -328,7 +329,27 @@ def redirect(redirect_url, cookies=None):
 
 
 def get_cognito_domain():
-    return settings.COGNITO_DOMAIN
+    """
+    Get Cognito domain from agent_tools configuration.
+    """
+    config = agent_tools.get_cognito_config()
+    return config['domain']
+
+
+def get_cognito_client_id():
+    """
+    Get Cognito client ID from agent_tools configuration.
+    """
+    config = agent_tools.get_cognito_config()
+    return config['clientId']
+
+
+def get_cognito_user_pool_id():
+    """
+    Get Cognito user pool ID from agent_tools configuration.
+    """
+    config = agent_tools.get_cognito_config()
+    return config['userPoolId']
 
 
 def get_cognito_tokens_from_authcode(code):
@@ -339,24 +360,24 @@ def get_cognito_tokens_from_authcode(code):
         },
         data={
             'grant_type': 'authorization_code',
-            'client_id': settings.COGNITO_CLIENT_ID,
+            'client_id': get_cognito_client_id(),
             'code': code,
             'redirect_uri': build_absolute_uri("cognito_auth_callback")
         }
     )
-    
+
     if response.status_code != 200:
         raise Exception(
             f"failed to fetch cognito tokens: {response.status_code}:  {response.text}"
         )
-    
+
     return response.json()
 
 
 def refresh_cognito_tokens(refresh_token):
     data = {
         'grant_type': 'refresh_token',
-        'client_id': settings.COGNITO_CLIENT_ID,
+        'client_id': get_cognito_client_id(),
         'refresh_token': refresh_token
     }
     
@@ -379,20 +400,23 @@ def refresh_cognito_tokens(refresh_token):
 def parse_session_token(id_token):
     if common.is_empty(id_token):
         return None
-    
+
     if settings.DEBUG or runtime_config.RuntimeConfig.instance().get_bool("TEMP_USE_JWT_DECODER"):
+        user_pool_id = get_cognito_user_pool_id()
+        client_id = get_cognito_client_id()
+
         issuer = (
             f"https://cognito-idp.{settings.AWS_DEFAULT_REGION_NAME}.amazonaws.com/"
-            f"{settings.COGNITO_USER_POOL_ID}"
+            f"{user_pool_id}"
         )
-        
+
         jwks_client = PyJWKClient(f"{issuer}/.well-known/jwks.json")
         signing_key = jwks_client.get_signing_key_from_jwt(id_token).key
         return jwt.decode(
             id_token,
             signing_key,
             algorithms=["RS256"],
-            audience=settings.COGNITO_CLIENT_ID,
+            audience=client_id,
             issuer=issuer,
         )
     else:
