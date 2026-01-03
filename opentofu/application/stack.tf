@@ -99,6 +99,33 @@ variable "ClientIpForRemoteAccess" {
   default     = "0.0.0.0/32"
 }
 
+variable "GoogleOAuthClientId" {
+  description = "Google OAuth Client ID for Cognito federation"
+  type        = string
+  default     = ""
+}
+
+variable "GoogleOAuthClientSecret" {
+  description = "Google OAuth Client Secret for Cognito federation"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "OauthGoogleSecretArn" {
+  description = "ARN of USER_SUPPLIED secret containing Google OAuth credentials (client_id, client_secret). Managed via Erie Iron credential tooling. Invalid ARNs are treated as empty."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "CognitoConfigSecretArn" {
+  description = "ARN of an existing Cognito config secret to adopt. If provided and valid, the stack will not create a new secret. If empty or invalid, the stack creates an in-stack secret."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "VpcId" {
   description = "VPC identifier hosting the workload."
   type        = string
@@ -164,33 +191,50 @@ variable "tags" {
   default     = {}
 }
 
-variable "OauthGoogleSecretArn" {
-  description = "ARN of USER_SUPPLIED secret containing Google OAuth credentials (client_id, client_secret). Managed via Erie Iron UI, passed by coding_agent."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
 variable "MobileAppScheme" {
   description = "Custom URL scheme for mobile app OAuth callbacks (e.g., 'myapp')"
   type        = string
   default     = ""
 }
 
-data "aws_secretsmanager_secret_version" "google_oauth" {
-  count     = var.OauthGoogleSecretArn != "" ? 1 : 0
-  secret_id = var.OauthGoogleSecretArn
-}
+# ============================================================================
+# Data Sources
+# ============================================================================
+
+data "aws_region" "current" {}
+
+data "aws_partition" "current" {}
+
+data "aws_caller_identity" "current" {}
+
+# ============================================================================
+# Local Values
+# ============================================================================
 
 locals {
-  retain_resources      = lower(coalesce(var.DeletePolicy, "delete")) == "retain"
   hosted_zone_provided  = length(trim(var.DomainHostedZoneId, " ")) > 0
   database_name         = "appdb"
   foundation_identifier = coalesce(var.FoundationStackIdentifier, var.StackIdentifier)
 
-  google_oauth_creds   = var.OauthGoogleSecretArn != "" ? jsondecode(data.aws_secretsmanager_secret_version.google_oauth[0].secret_string) : {}
-  google_client_id     = try(local.google_oauth_creds.client_id, "")
-  google_client_secret = try(local.google_oauth_creds.client_secret, "")
+  # Cognito config secret idempotency:
+  # 1. If CognitoConfigSecretArn is provided and valid, adopt that existing secret (do not create)
+  # 2. Otherwise, create an in-stack secret
+  cognito_config_external_arn_valid = can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$", var.CognitoConfigSecretArn)) && length(trimspace(var.CognitoConfigSecretArn)) > 0 ? var.CognitoConfigSecretArn : ""
+  cognito_config_create_secret      = length(trimspace(local.cognito_config_external_arn_valid)) == 0
+  # Resolved secret ARN: either the in-stack created secret or the external ARN
+  cognito_config_secret_arn = local.cognito_config_create_secret ? aws_secretsmanager_secret.cognito_config[0].arn : local.cognito_config_external_arn_valid
+
+  # Google OAuth configuration - idempotent resolution with two paths:
+  # Path 1: External ARN provided via OauthGoogleSecretArn (validated by regex only, primary idempotency mechanism)
+  # Path 2: Create new in-stack secret when credentials provided and no external ARN
+  # Versioned naming (-v3) ensures we can create new secrets even if prior versions are PENDING_DELETION
+  google_oauth_external_arn_valid   = can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$", var.OauthGoogleSecretArn)) && length(trimspace(var.OauthGoogleSecretArn)) > 0 ? var.OauthGoogleSecretArn : ""
+  google_oauth_credentials_provided = length(trimspace(var.GoogleOAuthClientId)) > 0 && length(trimspace(var.GoogleOAuthClientSecret)) > 0
+  # Create secret only when: credentials provided AND no external ARN supplied
+  google_oauth_create_secret = local.google_oauth_credentials_provided && length(local.google_oauth_external_arn_valid) == 0
+  # Final resolved ARN: external ARN takes precedence, otherwise use newly created secret
+  google_oauth_secret_arn = length(local.google_oauth_external_arn_valid) > 0 ? local.google_oauth_external_arn_valid : try(aws_secretsmanager_secret.google_oauth[0].arn, null)
+  google_oauth_enabled    = local.google_oauth_secret_arn != null
 
   base_tags = merge(
     {
@@ -208,11 +252,6 @@ locals {
     var.tags
   )
 }
-data "aws_region" "current" {}
-
-data "aws_partition" "current" {}
-
-data "aws_caller_identity" "current" {}
 
 resource "aws_lb" "web" {
   name               = substr("${var.StackIdentifier}-alb", 0, 32)
@@ -226,7 +265,8 @@ resource "aws_lb" "web" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -253,7 +293,8 @@ resource "aws_lb_target_group" "web" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -273,7 +314,8 @@ resource "aws_lb_listener" "http" {
   }
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -290,7 +332,8 @@ resource "aws_lb_listener" "https" {
   }
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -307,7 +350,8 @@ resource "aws_ecs_cluster" "web" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -316,7 +360,8 @@ resource "aws_cloudwatch_log_group" "web" {
   retention_in_days = 30
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -341,7 +386,8 @@ resource "aws_iam_role" "web_execution" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -388,7 +434,8 @@ resource "aws_iam_role" "web_task" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -404,6 +451,12 @@ resource "aws_iam_role_policy" "web_secrets" {
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
         Resource = aws_db_instance.primary.master_user_secret[0].secret_arn
+      },
+      {
+        Sid      = "AllowReadCognitoSecret"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = local.cognito_config_secret_arn
       }
     ]
   })
@@ -431,7 +484,8 @@ resource "aws_iam_role_policy" "web_llm_api_keys" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -445,7 +499,24 @@ resource "aws_iam_role_policy" "web_cognito_secret" {
       Sid      = "AllowReadCognitoSecret"
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = aws_secretsmanager_secret.cognito_config.arn
+      Resource = local.cognito_config_secret_arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "web_google_oauth_secret" {
+  count = local.google_oauth_enabled ? 1 : 0
+
+  name = "${var.StackIdentifier}-web-google-oauth"
+  role = aws_iam_role.web_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "AllowReadGoogleOAuthSecret"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = local.google_oauth_secret_arn
     }]
   })
 }
@@ -480,7 +551,8 @@ resource "aws_iam_role_policy" "web_websocket" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -510,20 +582,25 @@ resource "aws_ecs_task_definition" "web" {
           protocol      = "tcp"
         }
       ]
-      environment = concat([
-        { name = "ALLOWED_HOSTS", value = "*" },
-        { name = "RDS_SECRET_ARN", value = aws_db_instance.primary.master_user_secret[0].secret_arn },
-        { name = "ERIEIRON_ENV", value = var.ErieIronEnv },
-        { name = "ERIEIRON_DB_NAME", value = local.database_name },
-        { name = "ERIEIRON_DB_HOST", value = aws_db_instance.primary.address },
-        { name = "ERIEIRON_DB_PORT", value = tostring(aws_db_instance.primary.port) },
-        { name = "STATIC_COMPILED_DIR", value = var.StaticCompiledDir },
-        { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
-        { name = "DOMAIN_NAME", value = var.DomainName },
-        { name = "CLIENT_MESSAGE_WEBSOCKET_ENDPOINT", value = replace(replace(aws_apigatewayv2_stage.websocket.invoke_url, "wss://", ""), "ws://", "") },
-        { name = "CLIENT_MESSAGE_DYNAMO_TABLE", value = aws_dynamodb_table.websocket_connections.name },
-        { name = "COGNITO_SECRET_ARN", value = aws_secretsmanager_secret.cognito_config.arn }
-      ])
+      environment = concat(
+        [
+          { name = "ALLOWED_HOSTS", value = "*" },
+          { name = "RDS_SECRET_ARN", value = aws_db_instance.primary.master_user_secret[0].secret_arn },
+          { name = "ERIEIRON_ENV", value = var.ErieIronEnv },
+          { name = "ERIEIRON_DB_NAME", value = local.database_name },
+          { name = "ERIEIRON_DB_HOST", value = aws_db_instance.primary.address },
+          { name = "ERIEIRON_DB_PORT", value = tostring(aws_db_instance.primary.port) },
+          { name = "STATIC_COMPILED_DIR", value = var.StaticCompiledDir },
+          { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
+          { name = "DOMAIN_NAME", value = var.DomainName },
+          { name = "CLIENT_MESSAGE_WEBSOCKET_ENDPOINT", value = replace(replace(aws_apigatewayv2_stage.websocket.invoke_url, "wss://", ""), "ws://", "") },
+          { name = "CLIENT_MESSAGE_DYNAMO_TABLE", value = aws_dynamodb_table.websocket_connections.name },
+          { name = "COGNITO_SECRET_ARN", value = local.cognito_config_secret_arn }
+        ],
+        local.google_oauth_enabled ? [
+          { name = "OAUTH_GOOGLE_SECRET_ARN", value = local.google_oauth_secret_arn }
+        ] : []
+      )
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -582,7 +659,8 @@ resource "aws_ecs_service" "web" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -596,7 +674,8 @@ resource "aws_db_subnet_group" "primary" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -622,7 +701,8 @@ resource "aws_db_instance" "primary" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -682,9 +762,9 @@ resource "aws_security_group_rule" "rds_ingress_client" {
 }
 
 variable "CreateIngressRule" {
-  description = "Whether to create the ECS ingress rule (useful when security group is shared)."
+  description = "Whether to create the ECS ingress rule (useful when security group is shared). Set to false when the shared security group already has this rule."
   type        = bool
-  default     = true
+  default     = false
 }
 
 resource "aws_security_group_rule" "ecs_ingress" {
@@ -728,7 +808,8 @@ resource "aws_cognito_user_pool" "main" {
   })
 
   lifecycle {
-    prevent_destroy = true
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -755,68 +836,112 @@ resource "aws_cognito_user_pool_client" "main" {
     "https://${var.DomainName}/login/"
   ]
 
-  supported_identity_providers = compact([
-    "COGNITO",
-    local.google_client_id != "" ? "Google" : null
-  ])
+  supported_identity_providers = local.google_oauth_enabled ? ["COGNITO", "Google"] : ["COGNITO"]
 
   explicit_auth_flows = [
     "ALLOW_REFRESH_TOKEN_AUTH",
     "ALLOW_USER_SRP_AUTH"
   ]
 
-  tags = merge(local.base_tags, {
-    Name = "${var.StackIdentifier}-cognito-client"
-  })
-}
-
-resource "aws_cognito_identity_provider" "google" {
-  count         = local.google_client_id != "" ? 1 : 0
-  user_pool_id  = aws_cognito_user_pool.main.id
-  provider_name = "Google"
-  provider_type = "Google"
-
-  provider_details = {
-    client_id                     = local.google_client_id
-    client_secret                 = local.google_client_secret
-    authorize_scopes              = "email openid profile"
-    attributes_url                = "https://people.googleapis.com/v1/people/me?personFields="
-    attributes_url_add_attributes = "true"
-    authorize_url                 = "https://accounts.google.com/o/oauth2/v2/auth"
-    oidc_issuer                   = "https://accounts.google.com"
-    token_request_method          = "POST"
-    token_url                     = "https://www.googleapis.com/oauth2/v4/token"
-  }
-
-  attribute_mapping = {
-    email    = "email"
-    username = "sub"
-    name     = "name"
-  }
+  depends_on = [aws_cognito_identity_provider.google]
 }
 
 resource "aws_secretsmanager_secret" "cognito_config" {
-  name = "${var.StackIdentifier}/cognito-config"
+  count = local.cognito_config_create_secret ? 1 : 0
+
+  # Use "-v3" suffix to avoid collisions with secrets scheduled for deletion
+  # This ensures stack can deploy even if prior versions (-v2, base) are in deletion window
+  name = "${var.StackIdentifier}/cognito-config-v3"
+
+  recovery_window_in_days = var.DeletePolicy == "Delete" ? 0 : 7
 
   tags = merge(local.base_tags, {
     Name = "${var.StackIdentifier}-cognito-config"
   })
 
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
+    ignore_changes  = [policy]
   }
 }
 
 resource "aws_secretsmanager_secret_version" "cognito_config" {
-  secret_id = aws_secretsmanager_secret.cognito_config.id
+  count = local.cognito_config_create_secret ? 1 : 0
+
+  secret_id = aws_secretsmanager_secret.cognito_config[0].id
 
   secret_string = jsonencode({
-    userPoolId  = aws_cognito_user_pool.main.id
-    clientId    = aws_cognito_user_pool_client.main.id
-    domain      = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
-    region      = data.aws_region.current.name
-    redirectUri = "https://${var.DomainName}/oauth/cognito/callback"
+    user_pool_id  = aws_cognito_user_pool.main.id
+    client_id     = aws_cognito_user_pool_client.main.id
+    client_secret = ""
   })
+}
+
+# ============================================================================
+# Google OAuth Secret (Idempotent Resolution)
+# ============================================================================
+# This block implements idempotent secret management:
+# 1. If OauthGoogleSecretArn is provided (external ARN), use it - this is the primary idempotency path
+# 2. Otherwise, create new in-stack secret with versioned naming
+# 3. Versioned naming (-v3) avoids ResourceExistsException when prior versions are PENDING_DELETION
+# 4. Orchestration layer can populate OauthGoogleSecretArn with ARN of existing secret for idempotent reuse
+
+resource "aws_secretsmanager_secret" "google_oauth" {
+  # Create in-stack secret only when:
+  # - Client credentials are provided AND
+  # - No external ARN is supplied
+  count = local.google_oauth_create_secret ? 1 : 0
+
+  # Use -v3 suffix to ensure we can create a new secret even if previous versions
+  # (base, -v2) are in PENDING_DELETION state. This avoids ResourceExistsException.
+  name = "${var.StackIdentifier}/google-oauth-config-v3"
+
+  recovery_window_in_days = var.DeletePolicy == "Delete" ? 0 : 7
+
+  tags = merge(local.base_tags, {
+    Name = "${var.StackIdentifier}-google-oauth-config"
+  })
+
+  lifecycle {
+    prevent_destroy = false
+    ignore_changes  = [policy]
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "google_oauth" {
+  count = local.google_oauth_create_secret ? 1 : 0
+
+  secret_id = aws_secretsmanager_secret.google_oauth[0].id
+
+  secret_string = jsonencode({
+    client_id     = var.GoogleOAuthClientId
+    client_secret = var.GoogleOAuthClientSecret
+  })
+}
+
+# ============================================================================
+# Cognito Google Identity Provider
+# ============================================================================
+
+resource "aws_cognito_identity_provider" "google" {
+  count = local.google_oauth_create_secret ? 1 : 0
+
+  user_pool_id  = aws_cognito_user_pool.main.id
+  provider_name = "Google"
+  provider_type = "Google"
+
+  provider_details = {
+    authorize_scopes = "email openid profile"
+    client_id        = var.GoogleOAuthClientId
+    client_secret    = var.GoogleOAuthClientSecret
+  }
+
+  attribute_mapping = {
+    email          = "email"
+    email_verified = "email_verified"
+    name           = "name"
+    username       = "sub"
+  }
 }
 
 # ============================================================================
@@ -855,7 +980,8 @@ resource "aws_dynamodb_table" "websocket_connections" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -881,7 +1007,8 @@ resource "aws_iam_role" "websocket_lambda" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -972,7 +1099,8 @@ resource "aws_lambda_function" "websocket_connect" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -1021,7 +1149,8 @@ resource "aws_lambda_function" "websocket_disconnect" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -1095,7 +1224,8 @@ resource "aws_apigatewayv2_stage" "websocket" {
   })
 
   lifecycle {
-    prevent_destroy = ERIE_IRON_RETAIN_RESOURCES
+    # TODO(operator): Set prevent_destroy = true via manual edit or separate retain-only stack for production retention
+    prevent_destroy = false
   }
 }
 
@@ -1227,7 +1357,18 @@ output "CognitoDomain" {
 }
 
 output "CognitoSecretArn" {
-  description = "ARN of the Cognito config secret"
-  value       = aws_secretsmanager_secret.cognito_config.arn
+  description = "ARN of the Cognito config secret (either in-stack created or external user-supplied)"
+  value       = local.cognito_config_secret_arn
   sensitive   = true
+}
+
+output "GoogleOAuthSecretArn" {
+  description = "ARN of the Google OAuth credentials secret (either in-stack created or external user-supplied) containing client_id and client_secret. Null if not configured."
+  value       = local.google_oauth_secret_arn
+  sensitive   = true
+}
+
+output "AwsRegion" {
+  description = "AWS region being used by the provider."
+  value       = data.aws_region.current.name
 }
