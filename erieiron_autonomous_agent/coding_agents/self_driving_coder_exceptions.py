@@ -4,6 +4,12 @@ from collections import defaultdict
 from erieiron_common import common
 
 
+class CodeCompilationError(Exception):
+    def __init__(self, code_str, *args):
+        super().__init__(*args)
+        self.code_str = code_str
+
+
 class CodeReviewException(Exception):
     def __init__(self, review_data):
         self.bad_plan = review_data.get("plan_quality", []) != "VALID"

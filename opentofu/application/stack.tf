@@ -803,6 +803,16 @@ resource "aws_cognito_user_pool" "main" {
     }
   }
 
+  schema {
+    name                = "picture"
+    attribute_data_type = "String"
+    mutable             = true
+    string_attribute_constraints {
+      min_length = 1
+      max_length = 2048
+    }
+  }
+
   tags = merge(local.base_tags, {
     Name = "${var.StackIdentifier}-user-pool"
   })
@@ -829,6 +839,7 @@ resource "aws_cognito_user_pool_client" "main" {
 
   callback_urls = compact([
     "https://${var.DomainName}/oauth/cognito/callback",
+    "http://localhost:8024/oauth/cognito/callback",
     var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : null
   ])
 
@@ -842,6 +853,16 @@ resource "aws_cognito_user_pool_client" "main" {
     "ALLOW_REFRESH_TOKEN_AUTH",
     "ALLOW_USER_SRP_AUTH"
   ]
+
+  refresh_token_validity = 30
+  access_token_validity  = 60
+  id_token_validity      = 60
+
+  token_validity_units {
+    refresh_token = "days"
+    access_token  = "minutes"
+    id_token      = "minutes"
+  }
 
   depends_on = [aws_cognito_identity_provider.google]
 }
@@ -871,9 +892,13 @@ resource "aws_secretsmanager_secret_version" "cognito_config" {
   secret_id = aws_secretsmanager_secret.cognito_config[0].id
 
   secret_string = jsonencode({
-    user_pool_id  = aws_cognito_user_pool.main.id
-    client_id     = aws_cognito_user_pool_client.main.id
-    client_secret = ""
+    user_pool_id        = aws_cognito_user_pool.main.id
+    client_id           = aws_cognito_user_pool_client.main.id
+    client_secret       = ""
+    region              = data.aws_region.current.name
+    domain              = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${data.aws_region.current.name}.amazoncognito.com"
+    web_redirect_uri    = "https://${var.DomainName}/oauth/cognito/callback"
+    mobile_redirect_uri = var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : ""
   })
 }
 
@@ -941,6 +966,9 @@ resource "aws_cognito_identity_provider" "google" {
     email_verified = "email_verified"
     name           = "name"
     username       = "sub"
+    given_name     = "given_name"
+    family_name    = "family_name"
+    picture        = "picture"
   }
 }
 

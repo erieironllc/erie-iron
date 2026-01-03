@@ -40,8 +40,6 @@ MESSAGE_HANDLER_MAX_RETRIES = 3
 
 subscribers = defaultdict(set)
 
-os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
-warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 
 class ThreadShutdownException(Exception):
     pass
@@ -142,7 +140,6 @@ class ManagedThread(threading.Thread):
             on_init=None,
             on_destroy=None
     ):
-        os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
         super().__init__(
             target=self.target,
             name=f"managed_thread-{uuid.uuid4()}",

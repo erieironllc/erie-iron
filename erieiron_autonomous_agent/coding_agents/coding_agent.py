@@ -7,15 +7,12 @@ import subprocess
 import textwrap
 import time
 import traceback
-from collections import defaultdict
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from django.db import transaction
 from django.db.models import Func
-from django.db.models import Q
-from django.db.models.expressions import RawSQL
 from erieiron_public import agent_tools
 
 import settings
@@ -24,14 +21,12 @@ from erieiron_autonomous_agent.coding_agents.code_writer import write_code
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import Business, CodeVersion, CodeMethod, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
+from erieiron_autonomous_agent.models import Business, CodeVersion, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
-from erieiron_autonomous_agent.tests.test_shared_vpc_metadata import business
-from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
 from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, BuildStep, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, IterationMode
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, IterationMode, BuildStep
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
@@ -60,12 +55,6 @@ def execute(
         self_driving_task.get_git().pull()
         
         with CodingAgentConfig(self_driving_task) as config:
-            with config.cloud_account.assume_role() as aws:
-                aws.client('secretsmanager').delete_secret(
-                    SecretId='z69f8/mobile-app-config',
-                    ForceDeleteWithoutRecovery=True
-                )
-            
             try:
                 if config.budget and config.self_driving_task.get_cost() > config.budget:
                     logging.info(f"Stopping - hit the max budget ${config.budget :.2f}")
@@ -97,35 +86,33 @@ def execute(
                 config.log(retryable_execution_exception)
                 with transaction.atomic():
                     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                        log_content_execution=f"""
-    Execution Failed with 
-    {retryable_execution_exception}
-    {traceback.format_exc()}
-            
-    planning data:
-    We should just try again - should be fixed next time around
+                        log_content_execution=textwrap.dedent(f"""
+                            Execution Failed with 
+                            {retryable_execution_exception}
+                            {traceback.format_exc()}
+                                    
+                            planning data:
+                            We should just try again - should be fixed next time around
 
-    full logs:
-    {config.get_log_content()}
-                        """
-                    )
+                            full logs:
+                            {config.get_log_content()}
+                        """))
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except BadPlan as bad_plan_exception:
                 config.log(bad_plan_exception)
                 with transaction.atomic():
                     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-                        log_content_execution=f"""
-    Planning agent produced a bad plan:
-    {bad_plan_exception}
-    {traceback.format_exc()}
+                        log_content_execution=textwrap.dedent(f"""
+                            Planning agent produced a bad plan:
+                            {bad_plan_exception}
+                            {traceback.format_exc()}
 
-    planning data:
-    {json.dumps(bad_plan_exception.plan_data, indent=4)}
+                            planning data:
+                            {json.dumps(bad_plan_exception.plan_data, indent=4)}
 
-    full logs:
-    {config.get_log_content()}
-                        """
-                    )
+                            full logs:
+                            {config.get_log_content()}
+                        """))
                 config.current_iteration.refresh_from_db(fields=["log_content_execution"])
             except AgentBlocked as agent_blocked:
                 logging.exception(agent_blocked)
@@ -203,7 +190,7 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
             config.ecr_repo_name
         )
         
-        deploy_opentofu_stack(
+        deploy_stack(
             config=config,
             container_image_tag=container_image_tag
         )
@@ -227,6 +214,8 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
     elif SdaInitialAction.PLAN.eq(one_off_action):
         # config.iteration_to_modify.strategic_unblocking_json = get_strategic_unblocking_data(config)
         # config.iteration_to_modify.save()
+        extract_exceptions(config, config.iteration_to_modify)
+        
         plan_code_changes(config)
         write_code(config)
     
@@ -268,6 +257,7 @@ def handle_goal_achieved(config):
         package_ml_artifacts(config)
     
     try:
+        common.quietly_delete(config.sandbox_root_dir / "artifacts")
         config.git.add_commit_push(
             f"task {config.task.id}: {config.task.description}"
         )
@@ -407,7 +397,6 @@ def get_strategic_unblocking_data(config: CodingAgentConfig):
                 config,
                 for_planning=True
             ),
-            get_relevant_code_files(config),
             get_docs_msg(
                 config
             ),
@@ -628,10 +617,11 @@ def ensure_lb_alias_record(config: CodingAgentConfig):
     config.log(f"Ensured Route53 alias for {domain_name} targets {dns_name}")
 
 
-def build_container_image(
-        config: CodingAgentConfig,
-        container_file: Path
-) -> str:
+def build_container(config: CodingAgentConfig) -> str:
+    config.set_phase(SdaPhase.BUILD)
+    
+    container_file = config.sandbox_root_dir / "Dockerfile"
+    
     exec_container_prune()
     ensure_container_storage_capacity(config)
     
@@ -690,22 +680,16 @@ def build_container_image(
     while build_process.poll() is None:
         time.sleep(1)
     
-    if build_process.returncode == 0:
-        SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
-            docker_tag=container_image_tag
-        )
-        config.current_iteration.refresh_from_db(fields=["docker_tag"])
-    else:
+    if build_process.returncode != 0:
         handle_podman_build_failure(config, build_process.returncode)
     
-    # Only push to ECR if requested (skip for UI-first phase)
-    if config.should_skip_aws_deployment():
-        config.log(f"✓ Skipping ECR push (UI-first phase - local testing only)")
-    else:
-        push_image_to_ecr(
-            config,
-            container_image_tag
-        )
+    if config.stack_manager.get_db_is_running():
+        validate_web_container(config)
+    
+    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+        docker_tag=container_image_tag
+    )
+    config.current_iteration.refresh_from_db(fields=["docker_tag"])
 
 
 def ensure_container_storage_capacity(
@@ -841,7 +825,7 @@ def build_env_flags(env):
     return env_flags
 
 
-def build_lambda_packages(config: CodingAgentConfig, ) -> list[dict]:
+def build_lambdas(config: CodingAgentConfig, ) -> list[dict]:
     s3 = config.aws_interface.client("s3")
     
     lambda_datas = get_stack_lambdas(config)
@@ -1009,10 +993,9 @@ def get_infrastructure_yaml_code(config, cf_template: InfrastructureStackType):
     return infrastructure_code_version.code if infrastructure_code_version else None
 
 
-def push_image_to_ecr(
-        config: CodingAgentConfig,
-        container_image_tag: str
-):
+def push_to_ecr(config: CodingAgentConfig):
+    container_image_tag = config.task.get_container_image_tag()
+    
     region = config.env_type.get_aws_region()
     ecr_client = config.aws_interface.client("ecr")
     repo_name = config.ecr_repo_name
@@ -1336,62 +1319,30 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
     try:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
+        task_execution = init_task_execution(config.current_iteration)
         
-        if TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
-            lambda_datas = build_iteration(config)
-            deploy_iteration(config, lambda_datas)
-            return
-        
-        # UI-first phase: existing behavior (local container build, no AWS)
-        if config.is_ui_first_phase:
-            config.log("UI-FIRST PHASE: Building locally, no AWS deployment")
-            container_image_tag = None
-            execute_iteration(config)
-            return
-        
-        # Get build plan from LLM
-        config.stack_manager.init_workspace().validate_stack()
-        
-        if config.current_iteration.version_number < 2:
-            # First iteration: always build and deploy
-            build_plan = {
-                "LAMBDAS": True,
-                "CONTAINERS": True,
-                "RUN_TESTS_LOCALLY": False,
-                "RUN_TESTS_IN_CONTAINER": False,
-                "DEPLOY_TO_AWS": True,
-                "DB_MIGRATION_REQUIRED": False,
-                "STACK_TF_CHANGED": False,
-                "REASONING": "First iteration - full build and deployment"
-            }
-        else:
-            # Get build plan from LLM agent
-            build_plan = llm_chat(
-                "Plan Build Steps",
-                [
-                    get_sys_prompt("build_planner.md"),
-                    get_iteration_files_msg(config.current_iteration),
-                ],
-                output_schema="build_planner.md.schema.json",
-                model=LlmModel.OPENAI_GPT_5_NANO,
-                tag_entity=config.current_iteration,
-                reasoning_effort=LlmReasoningEffort.LOW
-            ).json()
-        
-        config.log(f"\n{'=' * 80}")
-        config.log("BUILD PLAN:")
-        config.log(json.dumps(build_plan, indent=2))
-        config.log(f"{'=' * 80}\n")
-        
-        # Determine iteration mode
-        iteration_mode = determine_iteration_mode(config, build_plan)
+        build_plan = config.get_build_plan(reset=True)
+        iteration_mode = determine_iteration_mode(config)
         update_iteration_mode(config, iteration_mode)
+        lambda_datas = []
         
-        if IterationMode.AWS_DEPLOYMENT.eq(iteration_mode):
-            # AWS MODE: Full build, push to ECR, deploy to AWS
-            config.log("\n☁️  EXECUTING: AWS Deployment\n")
-            lambda_datas = build_iteration(config)
-            deploy_iteration(config, lambda_datas)
+        if build_plan.get(BuildStep.BUILD_CONTAINER):
+            build_container(config)
+        
+        if build_plan.get(BuildStep.BUILD_LAMBDAS):
+            lambda_datas = build_lambdas(config)
+        
+        if build_plan.get(BuildStep.PUSH_TO_ECR):
+            push_to_ecr(config)
+        
+        if IterationMode.AWS_DEPLOYMENT.eq(iteration_mode) or build_plan.get(BuildStep.DEPLOY_TO_AWS):
+            deploy_stack(
+                config=config,
+                lambda_datas=lambda_datas
+            )
+        
+        if build_plan.get(BuildStep.MIGRATE_DATABASE):
+            migrate_database(config)
         
         execute_iteration(config)
         
@@ -1401,6 +1352,11 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         raise e
     except BadPlan as e:
         raise e
+    except MissingStackPerms as e:
+        logging.exception(e)
+        raise AgentBlocked({
+            "missing_perms": e.missing_permissions
+        })
     except AgentBlocked as e:
         raise e
     except OpenTofuException as e:
@@ -1433,7 +1389,7 @@ def store_deploy_and_execution_logs(
             "stdout": run_result.stdout,
         })
         
-        if run_result.stderr:
+        if run_result.returncode not in [0, 2, 3]:
             deployment_errors.append({
                 "stage": run_result.stage,
                 "command": run_result.command,
@@ -1567,19 +1523,29 @@ def run_automated_tests(config: CodingAgentConfig):
     import time
     random.seed(time.time())
     
+    build_plan = config.get_build_plan()
     config.dump_env_to_envrc()
     
-    failing_tests = run_frontend_tests(config)
+    failing_tests = []
     
-    if not (config.should_skip_aws_deployment() or failing_tests):
-        failing_tests = run_backend_tests(config)
+    # Run frontend tests if flag is set
+    if not build_plan.get(BuildStep.RUN_FRONTEND_TESTS):
+        config.log("RUN_FRONTEND_TESTS=false: Skipping frontend tests")
+    else:
+        failing_tests = run_frontend_tests(config)
+    
+    # Run backend tests if flag is set
+    if not build_plan.get(BuildStep.RUN_BACKEND_TESTS):
+        config.log("RUN_BACKEND_TESTS=false: Skipping backend tests")
+    elif not (not build_plan.get(BuildStep.DEPLOY_TO_AWS) or failing_tests):
+        failing_tests = run_backend_tests(config, build_plan)
     
     if failing_tests:
         raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
 
 
-def run_backend_tests(config: CodingAgentConfig) -> list[Any]:
-    run_locally = config.task.get_container_image_tag() is None or config.should_run_locally()
+def run_backend_tests(config: CodingAgentConfig, build_plan: dict) -> list[Any]:
+    run_locally = config.task.get_container_image_tag() is None or build_plan.get(BuildStep.RUN_TESTS_LOCALLY, False)
     
     """Run backend tests locally in venv."""
     failing_tests = []
@@ -1646,10 +1612,7 @@ def run_backend_tests(config: CodingAgentConfig) -> list[Any]:
     return failing_tests
 
 
-def determine_iteration_mode(
-        config: CodingAgentConfig,
-        build_plan: dict
-) -> IterationMode:
+def determine_iteration_mode(config: CodingAgentConfig) -> IterationMode:
     """
     Determines which iteration mode to use based on:
     - Current iteration_mode
@@ -1664,7 +1627,6 @@ def determine_iteration_mode(
 
     Args:
         config: CodingAgentConfig
-        build_plan: Dict from build_planner.md with decision flags
 
     Returns:
         IterationMode enum value
@@ -1673,15 +1635,16 @@ def determine_iteration_mode(
     
     # If UI-first phase, skip this entirely
     if config.is_ui_first_phase:
-        return None
+        return IterationMode.LOCAL_TESTS
     
     # Force AWS deployment if stack.tf changed or DB migration required
-    if build_plan.get("STACK_TF_CHANGED") or build_plan.get("DB_MIGRATION_REQUIRED"):
+    build_plan = config.get_build_plan()
+    if build_plan.get(BuildStep.UPDATE_STACK_TF) or build_plan.get(BuildStep.MIGRATE_DATABASE):
         config.log("Stack or DB changes detected - forcing AWS_DEPLOYMENT mode")
         return IterationMode.AWS_DEPLOYMENT
     
     # If build planner says we can run tests locally, stay in LOCAL_TESTS
-    if build_plan.get("RUN_TESTS_LOCALLY"):
+    if build_plan.get(BuildStep.RUN_TESTS_LOCALLY):
         config.log("Only code/test changes - using LOCAL_TESTS mode")
         return IterationMode.LOCAL_TESTS
     
@@ -1698,7 +1661,7 @@ def determine_iteration_mode(
     
     # If in CONTAINER_TESTS and build planner says deploy
     if IterationMode.CONTAINER_TESTS.eq(current_mode):
-        if build_plan.get("DEPLOY_TO_AWS"):
+        if build_plan.get(BuildStep.DEPLOY_TO_AWS):
             config.log("Container tests ready - transitioning to AWS_DEPLOYMENT mode")
             return IterationMode.AWS_DEPLOYMENT
         else:
@@ -1775,47 +1738,6 @@ def run_frontend_tests(
     return failing_tests
 
 
-def deploy_iteration(
-        config: CodingAgentConfig,
-        lambda_datas: list
-) -> dict[str, Any]:
-    config.set_phase(SdaPhase.DEPLOY)
-    task = config.task
-    
-    config.stack_manager.validate_stack()
-    
-    db_migrations_applied = False
-    rds_vals_in_env = False
-    if config.stack_manager.get_db_is_running():
-        try:
-            # if db is running before deploy, do the upgrade before deployment.  otherwise we'll do the database upgrade after deploy
-            ingest_tofu_ouputs(config)
-            rds_vals_in_env = True
-            
-            manage_db(config)
-            db_migrations_applied = True
-        except BadPlan as e:
-            logging.error(f"failed to apply db migrations. stack not ready")
-        except Exception as e:
-            logging.error(f"failed to apply db migrations before deployment: {e}")
-        
-        if rds_vals_in_env:
-            validate_web_container(config)
-    
-    deploy_opentofu_stack(
-        config=config,
-        lambda_datas=lambda_datas
-    )
-    
-    if not db_migrations_applied:
-        if not config.stack_manager.get_db_is_running():
-            raise Exception(f"RDS is not running after deployment")
-        
-        manage_db(config)
-    
-    ensure_lb_alias_record(config)
-
-
 def ingest_tofu_ouputs(config: CodingAgentConfig):
     """Populate runtime_env with the OpenTofu outputs required by the runtime."""
     outputs = config.stack_manager.get_outputs()
@@ -1863,88 +1785,6 @@ def ingest_tofu_ouputs(config: CodingAgentConfig):
         ]))
 
 
-def get_iteration_files_msg(current_iteration):
-    modified_files = list(current_iteration.codeversion_set.all())
-    if modified_files:
-        return LlmMessage.user_from_data(
-            "Modified Files", [
-                cv.code_file.file_path
-                for cv in modified_files
-            ], "modified_file")
-    else:
-        return "No files modified during this iteration"
-
-
-def build_iteration(config):
-    config.set_phase(SdaPhase.BUILD)
-    iteration = config.current_iteration
-    task_execution = init_task_execution(iteration)
-    
-    # LOCAL_TESTS mode: no container build needed
-    if config.should_run_locally():
-        config.log("LOCAL_TESTS mode: Skipping container build")
-        return None, []  # No container tag, no lambda packages
-    
-    if config.should_skip_aws_deployment():
-        required_build_steps = {
-            BuildStep.CONTAINERS.value: True,
-            BuildStep.LAMBDAS.value: False
-        }
-    elif TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type) or config.current_iteration.version_number < 2:
-        required_build_steps = {
-            BuildStep.CONTAINERS.value: True,
-            BuildStep.LAMBDAS.value: True
-        }
-    else:
-        required_build_steps = llm_chat(
-            "Plan Build Steps",
-            [
-                get_sys_prompt("build_planner.md"),
-                get_iteration_files_msg(config.current_iteration),
-            ],
-            output_schema="build_planner.md.schema.json",
-            model=LlmModel.OPENAI_GPT_5_NANO,
-            tag_entity=config.current_iteration,
-            reasoning_effort=LlmReasoningEffort.LOW
-        ).json()
-    
-    if False and required_build_steps.get(BuildStep.LAMBDAS.value):
-        lambda_datas = build_lambda_packages(
-            config
-        )
-    else:
-        lambda_datas = []
-    
-    if config.should_skip_aws_deployment():
-        previous_container_tag = None
-        tag_exists_in_ecr = False
-    elif TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type):
-        previous_container_tag = None
-        tag_exists_in_ecr = False
-    else:
-        previous_container_tag = config.current_iteration.docker_tag or config.iteration_to_modify.docker_tag
-        tag_exists_in_ecr = config.aws_interface.tag_exists_in_ecr(
-            config.ecr_repo_name,
-            previous_container_tag,
-            config.env_type.get_aws_region()
-        )
-    
-    if (
-            tag_exists_in_ecr and
-            (previous_container_tag and not required_build_steps.get(BuildStep.CONTAINERS.value))
-    ):
-        container_image_tag = previous_container_tag
-    else:
-        docker_file = config.sandbox_root_dir / "Dockerfile"
-        
-        build_container_image(
-            config,
-            docker_file
-        )
-    
-    return lambda_datas
-
-
 def template_modified_this_iteration(
         config: CodingAgentConfig,
         cloudformation_template: InfrastructureStackType
@@ -1981,14 +1821,12 @@ def is_lambdas_modified(config: CodingAgentConfig):
     )
 
 
-def manage_db(config: CodingAgentConfig):
-    # if (
-    #         config.current_iteration.version_number > 1
-    #         and not config.current_iteration.codeversion_set.filter(code_file__file_path__contains="models").exists()
-    # ):
-    #     logging.info("models not changed in current iteration")
-    #     return
+def migrate_database(config: CodingAgentConfig):
+    if not config.stack_manager.get_db_is_running():
+        logging.info("skipping database migration - database is not running")
+        return
     
+    ingest_tofu_ouputs(config)
     try:
         run_django_container_command(
             config=config,
@@ -2008,6 +1846,7 @@ def manage_db(config: CodingAgentConfig):
 
 
 def validate_web_container(config: CodingAgentConfig):
+    ingest_tofu_ouputs(config)
     import socket
     
     port = None
@@ -2127,24 +1966,6 @@ def assert_tests_green(config: CodingAgentConfig):
         })
 
 
-def compute_goal_achievement_gate(config: CodingAgentConfig, ) -> tuple[bool, str]:
-    iteration = config.current_iteration
-    
-    if not iteration.log_content_deployment:
-        return False, "OpenTofu plan/apply logs were not captured. You may not declare goal complete."
-    
-    if common.get(iteration.log_content_deployment, "deployment_errors") and "No deployment errors" not in common.first(common.get(iteration.log_content_deployment, "deployment_errors")):
-        return False, "OpenTofu plan/apply reported errors. Resolve them before declaring success."
-    
-    if config.current_iteration.version_number == 1:
-        return False, "We have not written any code yet for this task"
-    
-    if not config.self_driving_task.test_file_path:
-        return False, "this task does not yet have an automated test.  Need to write an automated test and make it pass before allowing goal achieved"
-    
-    return True, "we've written code and it deployed successfully"
-
-
 def evaluate_iteration(
         config: CodingAgentConfig
 ):
@@ -2155,8 +1976,7 @@ def evaluate_iteration(
         subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
     
-    deployment_errors = common.get(iteration.log_content_deployment, "deployment_errors")
-    runtime_errors = common.get(iteration.log_content_cloudwatch, "errors")
+    runtime_errors, deployment_errors, error_analysis = extract_exceptions(config, iteration)
     
     if (
             TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type)
@@ -2165,20 +1985,8 @@ def evaluate_iteration(
     ):
         raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
     
-    iteration.exceptions = llm_chat(
-        "Error Extraction",
-        [
-            get_sys_prompt("log_parser_tofu.md"),
-            LlmMessage.user_from_data("Logs", {
-                "Deployment Errors": deployment_errors,
-                "Runtime Errors (cloudwatch)": runtime_errors,
-                "Runtime Logs (other)": iteration.log_content_execution or ""
-            })
-        ],
-        model=LlmModel.OPENAI_GPT_5_MINI,
-        tag_entity=config.current_iteration
-    ).text
-    iteration.save()
+    allow_goal_achieved = error_analysis.get('allow_goal_achieved', False)
+    goal_achieved_reason = error_analysis.get('allow_goal_achieved_justification', 'No justification provided')
     
     goal_achieved_critera = textwrap.dedent(f"""
         **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
@@ -2208,10 +2016,6 @@ def evaluate_iteration(
        **Do not infer cross-iteration state:**
        - Base this determination only on the current iteration's logs and test results; ignore earlier iterations.
     """)
-    
-    allow_goal_achieved, goal_achieved_reason = compute_goal_achievement_gate(
-        config
-    )
     
     eval_data = llm_chat(
         "Iteration Summarizer",
@@ -2366,6 +2170,40 @@ def evaluate_iteration(
     )
     
     return eval_data
+
+
+def extract_exceptions(
+        config: CodingAgentConfig,
+        iteration: SelfDrivingTaskIteration
+):
+    deployment_errors = common.get(iteration.log_content_deployment, "deployment_errors")
+    runtime_errors = common.get(iteration.log_content_cloudwatch, "errors")
+    
+    error_analysis = llm_chat(
+        "Error Extraction",
+        [
+            get_sys_prompt("log_parser_tofu.md"),
+            LlmMessage.user_from_data("Context", {
+                "deployment_logs_exist": bool(iteration.log_content_deployment),
+                "version_number": config.current_iteration.version_number if TaskType.PRODUCTION_DEPLOYMENT.neq(config.task_type) else 100,
+                "test_file_exists": bool(config.self_driving_task.test_file_path) if TaskType.PRODUCTION_DEPLOYMENT.neq(config.task_type) else True
+            }),
+            LlmMessage.user_from_data("Logs", {
+                "Deployment Errors": deployment_errors,
+                "Runtime Errors (cloudwatch)": runtime_errors,
+                "Runtime Logs (other)": iteration.log_content_execution or ""
+            })
+        ],
+        model=LlmModel.OPENAI_GPT_5_MINI,
+        tag_entity=config.current_iteration,
+        output_schema="log_parser_tofu.md.schema.json"
+    ).json()
+    
+    # Extract values from error analysis
+    iteration.exceptions = error_analysis.get('exceptions', '')
+    iteration.save()
+    
+    return runtime_errors, deployment_errors, error_analysis
 
 
 def get_logs_msg(config, iteration):
@@ -3258,38 +3096,19 @@ def get_docs_msg(config) -> list[LlmMessage]:
 def get_goal_msg(config, description):
     task = config.self_driving_task.task
     
-    goal = textwrap.dedent(f"""
-        ## YOUR GOAL
-        Write code to implement and/or deploy this task:
-        '''
-        {task.description}
-        '''
-        
-        ## Acceptance Criteria
-        {task.completion_criteria}
-        
-        ## Risk Notes (FYI)
-        {task.risk_notes}
-    """)
+    d = {
+        "PRIMARY_OBJECTIVE": "achieving the `GOAL` is the **primary objective** of this code iteration",
+        "previous_iteration_errors": common.get(config.iteration_to_modify, "exceptions", default_val="none"),
+        "domain_name": textwrap.dedent(f"""
+                Note:  the domain name is dynamic and may change between test runs.  
+                - the current domain name is `{config.initiative.domain}`
+                - previous test failures might reference a different domain. As the domain name is dynamic, this is expected and not a cause for concern
+            """)
+    }
     
-    if task.debug_steps:
-        goal += f"""
-        
-        ## Manual Debugging Steps (FYI)
-        {task.debug_steps}
-        """
     test_errors = config.iteration_to_modify.get_unit_test_errors() if config.iteration_to_modify else []
     
-    previous_logs = {}
-    if config.iteration_to_modify:
-        previous_logs = common.get(config.iteration_to_modify, ["cloudformation_logs", "stacks"]) or {}
-    
-    has_deployment_error = any(
-        isinstance(stack_log, Mapping) and stack_log.get("error")
-        for stack_log in previous_logs.values()
-    )
-    
-    if has_deployment_error:
+    if not common.get(config.iteration_to_modify, ["log_content_deployment", "deployment_successful"]):
         goal = textwrap.dedent(f"""
             The previous iteration failed at the OpenTofu deployment stage.   
 
@@ -3305,225 +3124,35 @@ def get_goal_msg(config, description):
             
             Your GOAL is to **MAKE THE FAILING TESTS PASS**
         """)
-    
-    d = {
-        "PRIMARY_OBJECTIVE": "achieving this goal is the primary objective of this code iteration",
-        "GOAL": goal
-    }
-    
-    if test_errors:
-        d["failing_tests"] = test_errors
-        d["domain_name"] = textwrap.dedent(f"""
-            Note:  the domain name is dynamic and may change between test runs.  
-            - the current domain name is `{config.initiative.domain}`
-            - previous test failures might reference a different domain. As the domain name is dynamic, this is expected and not a cause for concern
+        
+        if test_errors:
+            d["failing_tests"] = test_errors
+    else:
+        goal = textwrap.dedent(f"""
+            ## YOUR GOAL
+            Write code to implement and/or deploy this task:
+            '''
+            {task.description}
+            '''
+
+            ## Acceptance Criteria
+            {task.completion_criteria}
+
+            ## Risk Notes (FYI)
+            {task.risk_notes}
         """)
     
-    return LlmMessage.user_from_data(description, d)
+    if task.debug_steps:
+        goal += f"""
 
-
-def get_relevant_code_files(
-        config: CodingAgentConfig,
-        paths: list = None
-) -> list[LlmMessage]:
-    current_iteration = config.current_iteration
-    iteration_to_modify = config.iteration_to_modify
-    files = []
+        ## Manual Debugging Steps (FYI)
+        {task.debug_steps}
+        """
     
-    if paths is not None:
-        paths = common.strings(common.filter_none(paths))
-        for path in set(paths):
-            if path.startswith("/"):
-                absolute_path = Path(path)
-            else:
-                absolute_path = config.sandbox_root_dir / path
-            
-            if not absolute_path.exists():
-                logging.info(f"{absolute_path} does not exist, skipping")
-                continue
-            
-            relative_path = absolute_path.relative_to(config.sandbox_root_dir)
-            code_file = CodeFile.get(
-                config.business,
-                relative_path
-            )
-            
-            code_version = code_file.get_version(iteration_to_modify, default_to_latest=True)
-            if not code_version:
-                try:
-                    code_version = CodeFile.init_from_codefile(current_iteration, relative_path)
-                except Exception as e:
-                    config.log(f"failed to fetch {relative_path}")
-                    config.log(e)
-                    continue
-            
-            if code_version and code_version.code:
-                files.append(code_version.get_llm_message_data())
-    else:
-        required_files = [
-            config.self_driving_task.test_file_path,
-            InfrastructureStackType.APPLICATION.get_opentofu_config(),
-            "core/views.py",
-            "core/urls.py",
-            "core/models.py",
-            "requirements.txt"
-        ]
-        
-        iteration_code_files = set()
-        iteration_code_versions = []
-        for f in common.filter_none(required_files):
-            iteration_code_versions.append(
-                CodeFile.get(
-                    business=config.business,
-                    relative_path=f
-                ).get_version_for_iteration(
-                    iteration_to_modify
-                )
-            )
-        
-        iteration_code_versions += list(CodeVersion.objects.filter(
-            task_iteration=iteration_to_modify
-        ).exclude(
-            id__in=[cv.id for cv in iteration_code_versions]
-        ))
-        
-        for code_version in iteration_code_versions:
-            iteration_code_files.add(code_version.code_file_id)
-            
-            file_path = code_version.code_file.file_path
-            code = code_version.code
-            was_modified = code_version.task_iteration_id == iteration_to_modify.id
-            
-            if code:
-                files.append(code_version.get_llm_message_data())
-        
-        # Step 1: Get the structured retrieval cues from the LLM
-        cues = llm_chat(
-            "Find relavant code",
-            [
-                get_sys_prompt("codefinder.md"),
-                LlmMessage.user(config.self_driving_task.task.get_work_desc())
-            ],
-            model=LlmModel.OPENAI_GPT_5_MINI,
-            tag_entity=config.current_iteration,
-            output_schema="codefinder.md.schema.json",
-            code_response=True
-        ).json()
-        
-        semantic_query = cues.get("semantic_query_sentence") or config.self_driving_task.task.get_work_desc()
-        prompt_embedding = get_codebert_embedding(semantic_query).tolist()
-        
-        # Use a similarity threshold instead of top-k results
-        # Lower similarity scores indicate higher similarity (cosine distance)
-        # 0.3 is a reasonable threshold for similar code
-        similarity_threshold = 0.3
-        
-        # For Python and JavaScript files, retrieve CodeMethod models for more granular search
-        # For other file types, retrieve CodeVersion objects at the file level
-        
-        # First get code methods for Python and JavaScript files
-        erie_common_code_methods = (
-            CodeMethod.objects
-            .select_related("code_version", "code_version__code_file")
-            .filter(
-                code_version__code_file__business=config.business,
-            )
-            .filter(
-                Q(code_version__code_file__file_path__endswith=".py") |
-                Q(code_version__code_file__file_path__endswith=".js")
-            )
-            .exclude(
-                Q(code_version__code_file__file_path__startswith="env/") |
-                Q(code_version__code_file__file_path__startswith="venv/")
-            )
-            .annotate(
-                similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
-            )
-            .filter(similarity__lte=similarity_threshold)
-            .order_by("similarity")
-        )
-        
-        # Find additional code methods that aren't from existing code files
-        additional_code_methods = (
-            CodeMethod.objects
-            .select_related("code_version", "code_version__code_file")
-            .filter(
-                code_version__code_file__business=config.business,
-            )
-            .filter(
-                Q(code_version__code_file__file_path__endswith=".py") |
-                Q(code_version__code_file__file_path__endswith=".js")
-            )
-            .exclude(
-                Q(code_version__code_file__file_path__startswith="env/") |
-                Q(code_version__code_file__file_path__startswith="venv/")
-            )
-            .exclude(code_version__code_file__id__in=iteration_code_files)
-            .annotate(
-                similarity=RawSQL("erieiron_codemethod.codebert_embedding <-> %s::vector", [prompt_embedding])
-            )
-            .filter(similarity__lte=similarity_threshold)
-            .order_by("similarity")
-        )
-        
-        # Keep track of which code files we've already included to ensure only latest version per file
-        processed_code_files = set()
-        methods_by_file = defaultdict(list)
-        for code_method in set(list(erie_common_code_methods) + list(additional_code_methods)):
-            code_file = code_method.code_version.code_file
-            if code_file.id in processed_code_files:
-                continue
-            methods_by_file[code_file].append(code_method)
-        
-        for code_file, methods in methods_by_file.items():
-            processed_code_files.add(code_file.id)
-            grouped_code = "\n\n".join([
-                f"# Method: {method.name}\n{method.code}" for method in methods
-            ])
-            files.append({
-                "file_path": code_file.file_path,
-                "source": "imported_package",
-                "code": grouped_code,
-                "note": f"The following methods from an imported package may be referenced but not modified: {[m.name for m in methods]}"
-            })
-        
-        # Then get code versions for other file types (excluding Python and JavaScript)
-        # Also exclude files that are already included from previous iteration or code methods above
-        all_excluded_code_files = set(iteration_code_files) | processed_code_files
-        
-        code_versions_query = (
-            CodeVersion.objects
-            .exclude(code_file__id__in=all_excluded_code_files)
-            .filter(code_file__business=config.business)
-            .exclude(
-                Q(code_file__file_path__endswith=".py") |
-                Q(code_file__file_path__endswith=".js")
-            )
-            .annotate(
-                similarity=RawSQL("codebert_embedding <-> %s::vector", [prompt_embedding])
-            )
-            .filter(similarity__lte=similarity_threshold)
-            .order_by("similarity")
-        )
-        
-        # Ensure only latest version per code file
-        latest_code_versions = {}
-        for cv in code_versions_query:
-            code_file_id = cv.code_file.id
-            if code_file_id not in latest_code_versions or cv.id > latest_code_versions[code_file_id].id:
-                latest_code_versions[code_file_id] = cv
-        
-        code_versions = list(latest_code_versions.values())
-        
-        for code_version in code_versions:
-            if code_version.code:
-                files.append(code_version.get_llm_message_data())
-    
-    files_unique = {
-        f.get("file_path"): f
-        for f in files
-    }
-    return LlmMessage.user_from_data("Relevant Code Files", files_unique.values())
+    return LlmMessage.user_from_data(description, {
+        "GOAL": goal,
+        **d
+    })
 
 
 def sync_stack_identity(
@@ -3540,15 +3169,17 @@ def sync_stack_identity(
         cloudformation_params["StackIdentifier"] = stack_application.stack_namespace_token
 
 
-def deploy_opentofu_stack(
+def deploy_stack(
         config: CodingAgentConfig,
         *,
         container_image_tag: str = None,
-        lambda_datas: list | None = None,
-        previous_stack_outputs: dict | None = None
+        lambda_datas: list | None = None
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    config.set_phase(SdaPhase.DEPLOY)
+    
     stack = config.stack
     stack_manager = config.stack_manager
+    stack_manager.validate_stack()
     
     if not container_image_tag:
         container_image_tag = common.assert_not_empty(config.task.get_container_image_tag())
@@ -3570,8 +3201,7 @@ def deploy_opentofu_stack(
         stack,
         web_container_image=web_container_image,
         ecr_arn=ecr_arn,
-        lambda_datas=lambda_datas,
-        previous_stack_outputs=previous_stack_outputs
+        lambda_datas=lambda_datas
     )
     
     config.stack_manager.set_stack_vars(tfvars_payload)
@@ -3598,92 +3228,12 @@ def deploy_opentofu_stack(
         
         stack.resources = stack_manager.get_resources()
         stack.save()
-    except MissingStackPerms as missing_perms_exception:
-        logging.exception(missing_perms_exception)
-        raise missing_perms_exception
+        
+        ensure_lb_alias_record(config)
     except OpenTofuCommandException as open_tofu_exception:
-        # Enhanced error logging and context
-        logging.error(f"[DEPLOY_DEBUG] OpenTofu command failed during {stack_manager.stage} stage")
-        logging.error(f"[DEPLOY_DEBUG] Command: {' '.join(open_tofu_exception.result.command)}")
-        logging.error(f"[DEPLOY_DEBUG] Exit code: {open_tofu_exception.result.returncode}")
-        logging.error(f"[DEPLOY_DEBUG] Stdout: {open_tofu_exception.result.stdout}")
-        logging.error(f"[DEPLOY_DEBUG] Stderr: {open_tofu_exception.result.stderr}")
+        open_tofu_exception.log_error()
         
-        # Debug: Re-verify AWS credentials during error to help diagnose permission issues
-        try:
-            caller_identity = stack_manager.stack.cloud_account.get_service_client('sts').get_caller_identity()
-            logging.error(f"[DEPLOY_DEBUG] AWS credentials at time of error: {caller_identity}")
-        except Exception as cred_error:
-            logging.error(f"[DEPLOY_DEBUG] Failed to verify AWS credentials during error: {cred_error}")
-        
-        # Parse stderr for common permission error patterns and provide troubleshooting hints
-        troubleshooting_hints = []
-        stderr_lower = open_tofu_exception.result.stderr.lower() if open_tofu_exception.result.stderr else ""
-        
-        if "accessdenied" in stderr_lower or "unauthorized" in stderr_lower:
-            troubleshooting_hints.append("PERMISSION_ISSUE: Check IAM role permissions in target account")
-            
-            if "ssm" in stderr_lower and "describeparameters" in stderr_lower:
-                troubleshooting_hints.append("SSM_ISSUE: Add 'ssm:DescribeParameters' permission with global resource access")
-            
-            if "secretsmanager" in stderr_lower and "create" in stderr_lower:
-                troubleshooting_hints.append("SECRETS_ISSUE: Add comprehensive Secrets Manager permissions for RDS secret creation")
-            
-            if "route53" in stderr_lower and "hostedzone" in stderr_lower:
-                troubleshooting_hints.append("ROUTE53_ISSUE: Hosted zone may be in different account or need cross-account permissions")
-            
-            if "kms" in stderr_lower:
-                troubleshooting_hints.append("KMS_ISSUE: Add KMS permissions for encryption operations or check key policies")
-        
-        if "bucket" in stderr_lower and "exist" in stderr_lower:
-            troubleshooting_hints.append("S3_ISSUE: Check if S3 bucket exists and is accessible")
-        
-        if "dynamodb" in stderr_lower and "lock" in stderr_lower:
-            troubleshooting_hints.append("LOCK_ISSUE: Check DynamoDB table for OpenTofu state locking")
-        
-        # [DEPLOY_DEBUG] Enhanced DNS/networking error detection
-        if "no such host" in stderr_lower or "dial tcp" in stderr_lower:
-            troubleshooting_hints.append("DNS_ISSUE: Cannot resolve AWS service endpoints - check DNS configuration")
-            
-            # Additional network debugging when DNS errors occur
-            try:
-                import socket
-                aws_region = config.env_type.get_aws_region()
-                ecs_endpoint = f"ecs.{aws_region}.amazonaws.com"
-                try:
-                    ip = socket.gethostbyname(ecs_endpoint)
-                    logging.error(f"[DEPLOY_DEBUG] DNS resolution works from Python: {ecs_endpoint} -> {ip}")
-                    troubleshooting_hints.append("DNS_MISMATCH: Python can resolve DNS but OpenTofu cannot - environment issue")
-                except socket.gaierror as dns_err:
-                    logging.error(f"[DEPLOY_DEBUG] DNS resolution also fails from Python: {dns_err}")
-                    troubleshooting_hints.append("DNS_SYSTEM: System-wide DNS resolution failure")
-            except Exception as dns_debug_err:
-                logging.error(f"[DEPLOY_DEBUG] DNS debugging failed: {dns_debug_err}")
-        
-        if "ecs" in stderr_lower and ("create" in stderr_lower or "cluster" in stderr_lower):
-            troubleshooting_hints.append("ECS_SPECIFIC: ECS cluster creation failed - may be VPC/network configuration issue")
-            
-            # Check if we're in a VPC context that might affect outbound connections
-            try:
-                vpc_id = tfvars_payload.get('VpcId')
-                if vpc_id:
-                    logging.error(f"[DEPLOY_DEBUG] Stack uses VPC: {vpc_id} - check NAT Gateway and routing")
-                    troubleshooting_hints.append(f"VPC_CONTEXT: Using VPC {vpc_id} - verify NAT Gateway and route tables")
-            except Exception:
-                pass
-        
-        error_payload = {
-            "message": str(open_tofu_exception),
-            "stderr": open_tofu_exception.result.stderr,
-            "stdout": open_tofu_exception.result.stdout,
-            "command": " ".join(open_tofu_exception.result.command),
-            "stage": stack_manager.stage,
-            "troubleshooting_hints": troubleshooting_hints,
-        }
-        
-        # Enhanced error logging with troubleshooting hints
-        if troubleshooting_hints:
-            logging.error(f"[DEPLOY_DEBUG] Troubleshooting hints: {troubleshooting_hints}")
+        error_payload = open_tofu_exception.extract_error_payload()
         
         stack_manager.record(
             stack_manager.stage,
@@ -3703,8 +3253,7 @@ def build_tfvars_payload(
         *,
         web_container_image: str | None,
         ecr_arn: str | None,
-        lambda_datas: list | None,
-        previous_stack_outputs: dict | None = None
+        lambda_datas: list | None
 ) -> dict[str, Any]:
     stack_variables = config.stack_manager.get_stack_variables()
     
@@ -3738,8 +3287,6 @@ def build_tfvars_payload(
             secrets_key
         )
     }
-    
-    # No previous_stack_outputs logic needed since everything is in one stack now
     
     if ecr_arn:
         payload["ECRRepositoryArn"] = ecr_arn
@@ -3840,10 +3387,9 @@ def get_admin_credentials(
     admin_secrets_key = f"{secrets_key}/appadmin"
     
     try:
-        creds = aws_secrets_client.get_secret_value(SecretId=admin_secrets_key)
-        if isinstance(creds, str):
-            creds = json.loads(creds)
-    except Exception:
+        secret_value_response = aws_secrets_client.get_secret_value(SecretId=admin_secrets_key)
+        creds = json.loads(secret_value_response['SecretString'])
+    except aws_secrets_client.exceptions.ResourceNotFoundException:
         creds = set_secret(aws_secrets_client, admin_secrets_key, {
             "AdminPassword": common.random_string(20)
         })

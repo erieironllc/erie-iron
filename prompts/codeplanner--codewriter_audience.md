@@ -23,20 +23,13 @@ Return a JSON object with five top-level keys:
 ```json
 {
   "implementation_directive": {
-    "objective": "One clear sentence describing what needs to be achieved",
-    "high_level_approach": "2-4 sentence strategy for how to accomplish it",
+    "objective": "One clear sentence describing what needs to be achieved with this iterations coding",
+    "high_level_approach": "2-4 sentence strategy for how to accomplish the objective",
     "key_constraints": ["constraint1", "constraint2"],
     "success_criteria": "How you'll know it worked"
   },
 
-  "required_rule_contexts": [
-    "infrastructure_rules",
-    "lambda_rules",
-    "django_rules",
-    "test_rules",
-    "ui_rules",
-    "security_rules"
-  ],
+  "required_rule_contexts": ["<one or more rules contexts...>"],
 
   "required_credentials": [],
 
@@ -57,6 +50,56 @@ Return a JSON object with five top-level keys:
 ```
 Only lesson_ids should be returned in `relevant_lessons`, never lesson_value.
 
+### Field Guidance: `objective`
+
+The `objective` field must describe **the goal of this specific iteration's code execution** - what the coding agent needs to accomplish when it runs.
+
+**For first iterations or iterations without prior errors:**
+- The objective should align closely with the task description
+- Focus on the feature, enhancement, or capability being built
+- Example: "Implement user authentication flow with email/password login and session management"
+
+**For retry iterations (previous iteration had errors, test failures, or deployment issues):**
+- The objective must be to **fix those errors**
+- Be specific about what failed and needs correction
+- Example: "Fix the AttributeError in user_service.py:45 where session.user_id is accessed before session initialization"
+
+**For iterations with test failures:**
+- **CRITICAL**: Treat test failures as authoritative indicators of incorrect application code
+- The objective should strongly bias toward fixing the application code to satisfy the test
+- Only target test code for fixes if you have high certainty the test itself is wrong (e.g., test uses deprecated API, test has obvious logical error, test contradicts documented requirements)
+- Example (application fix): "Fix login endpoint to return 401 status code instead of 500 when credentials are invalid, as required by test_invalid_login"
+- Example (rare test fix): "Correct test_user_deletion to use the updated soft-delete API instead of the deprecated hard-delete endpoint"
+
+The objective should be concrete, measurable, and focused on the immediate coding work - not architectural philosophy or future enhancements.
+
+### Field Guidance: `high_level_approach`
+
+The `high_level_approach` field provides tactical guidance on **how** to accomplish the objective. This should be 2-4 sentences of concrete direction.
+
+**Good approaches include:**
+- Specific files or modules to modify
+- Key architectural patterns to follow
+- Important sequencing or dependencies (e.g., "First update the schema, then modify the API layer")
+- Critical implementation decisions (e.g., "Use async/await pattern for database calls")
+- Debugging strategies for error fixes (e.g., "Add logging to trace the session lifecycle")
+
+**Examples:**
+
+*For new feature:*
+"Modify auth/service.py to add a login() method that validates credentials against the User model. Update routes.py to add a POST /api/login endpoint that calls this service. Use bcrypt for password comparison and create JWT tokens for authenticated sessions."
+
+*For error fix:*
+"The error occurs because session initialization happens in the middleware but user_service.py attempts to access session.user_id during request parsing. Move the session.user_id access to after the middleware chain completes, or add a null check with early return."
+
+*For test failure:*
+"The test expects a 401 response but the code currently returns 500 because authentication failures raise uncaught exceptions. Wrap the credential validation in a try/except block in auth/routes.py and return Response(status=401) when AuthenticationError is caught."
+
+**Avoid:**
+- Vague platitudes ("follow best practices", "ensure quality")
+- Restatement of the objective without tactical details
+- Implementation minutiae better left to the coding agent (exact variable names, specific line-by-line changes)
+
 ### Test Authoring Mode
 
 When the planner is explicitly asked to write an automated test, it must engage Test Authoring Mode.
@@ -74,21 +117,45 @@ Rules for Test Authoring Mode:
 
 ## Rules Context Categories
 
-When determining `required_rule_contexts`, include:
+When determining `required_rule_contexts`, **be selective and precise**. Each context adds significant prompt content. Only include contexts that are directly relevant to the implementation directive. Over-supplying contexts clutters the downstream coding prompt and reduces focus.
 
-- **infrastructure_rules**: For any CloudFormation/OpenTofu/AWS resource changes
-- **lambda_rules**: For AWS Lambda function code or configuration
-- **django_rules**: For Django models, views, settings, or ORM changes  
-- **test_rules**: For test file modifications or test behavior changes
-- **ui_rules**: For HTML templates, CSS, JavaScript, or frontend changes
-- **database_rules**: For schema changes, migrations, or database connectivity
-- **security_rules**: For credentials, IAM, secrets, or authentication changes
-- **ses_email_rules**: For SES configuration, email sending, or receipt rules
-- **s3_storage_rules**: For S3 bucket configuration or object operations
-- **sqs_queue_rules**: For SQS queue operations or event processing
-- **cognito_rules**: For Cognito User Pool, App Client, Domain, and mobile app config secret provisioning
-- **react_native_rules**: For React Native UI with cross-platform mobile and web support using react-native-web (web-only deployment)
-- **react_web_rules**: For Next.js React web applications without mobile requirements (static export mode)
+**CRITICAL**: Include a context **if and only if** the implementation directive requires modifying files or behavior governed by that context. Do not include contexts preemptively or "just in case."
+
+Include these contexts only when the described condition applies:
+
+- **infrastructure_rules**: **Required** when modifying CloudFormation templates, OpenTofu configurations, or AWS resource definitions. Do NOT include for application code that merely uses existing infrastructure.
+
+- **lambda_rules**: **Required** when modifying AWS Lambda handler code, Lambda configuration, or Lambda-specific patterns. Do NOT include for generic Python code that happens to run in Lambda.
+
+- **python_rules**: **Required** when modifying general-purpose Python code (business logic, utilities, libraries). Do NOT include when django_rules or lambda_rules already covers the Python work.
+
+- **javascript_rules**: **Required** when modifying general-purpose JavaScript/TypeScript code or Node.js backend logic. Do NOT include when ui_rules, react_native_rules, or react_web_rules already covers the JS work.
+
+- **sql_rules**: **Required** when writing raw SQL queries, stored procedures, or database-specific SQL logic. Do NOT include for ORM-based database work (use django_rules instead).
+
+- **django_rules**: **Required** when modifying Django models, views, serializers, settings, middleware, or ORM queries. Do NOT include for non-Django Python code.
+
+- **test_rules**: **Required** when writing or modifying test files (unit tests, integration tests, acceptance tests). Do NOT include when only fixing code that happens to be tested.
+
+- **ui_rules**: **Required** when modifying HTML templates, CSS stylesheets, or vanilla JavaScript frontend code in a traditional web application. Do NOT include for React-based UIs (use react_native_rules or react_web_rules instead).
+
+- **database_rules**: **Required** when creating migrations, altering schemas, modifying database connectivity, or changing database configuration. Do NOT include for routine ORM queries.
+
+- **security_rules**: **Required** when modifying credential handling, IAM policies, secrets management, authentication flows, or authorization logic. Do NOT include unless security is a core concern of the change.
+
+- **ses_email_rules**: **Required** when configuring SES sending, receipt rules, email templates, or DKIM/SPF settings. Do NOT include for code that merely sends emails using existing SES setup.
+
+- **s3_storage_rules**: **Required** when configuring S3 buckets, bucket policies, lifecycle rules, or implementing S3-specific object operations. Do NOT include for routine file uploads using existing S3 configuration.
+
+- **sqs_queue_rules**: **Required** when creating/modifying SQS queues, queue policies, or implementing queue-based event processing patterns. Do NOT include for code that merely sends messages to existing queues.
+
+- **cognito_rules**: **Required** when configuring Cognito User Pools, App Clients, Identity Pools, Cognito Domains, or provisioning mobile app configuration secrets. Do NOT include for application code that uses existing Cognito authentication.
+
+- **react_native_rules**: **Required** when modifying React Native UI code for cross-platform mobile and web applications using react-native-web (web-only deployment). Do NOT include for non-React or server-side React rendering.
+
+- **react_web_rules**: **Required** when modifying Next.js React web applications without mobile requirements (static export mode). Do NOT include for React Native or traditional web UIs.
+
+**Validation Rule**: Before finalizing `required_rule_contexts`, verify each included context maps to specific files or behaviors mentioned in the implementation directive. Remove any context that does not have a clear, direct connection to the work being performed.
 
 ## Directive Quality Standards
 
@@ -153,4 +220,12 @@ When evaluator or diagnostic context proposes a remediation (for example, “pro
 
 ## Output validation / Quality checks
 
-Require a validation/preflight before finalizing output: compare the assembled required_rule_contexts list against the set of service names and high-risk features detected in the inputs. If any detected service does not have a matching rule context included, automatically add it and record which input triggered the addition. Fail the output generation if the checklist is not satisfied.
+Before finalizing output, perform these validation steps:
+
+1. **Context Necessity Check**: For each item in `required_rule_contexts`, verify there is explicit evidence in the implementation directive that justifies its inclusion. Remove any context that cannot be traced to specific work described in the directive.
+
+2. **Context Completeness Check**: Compare the assembled `required_rule_contexts` list against the service names and high-risk features detected in the inputs (error messages, file paths, infrastructure components). If any detected service lacks a matching rule context, automatically add it and record which input triggered the addition.
+
+3. **Context Minimalism Check**: If more than 4 contexts are included, re-evaluate whether some can be consolidated or removed. Multiple contexts should only occur when the task genuinely spans multiple technology domains.
+
+Fail the output generation if the checklist is not satisfied or if contexts cannot be justified from the implementation directive.

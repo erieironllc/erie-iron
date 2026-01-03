@@ -10,15 +10,17 @@ JSON object with boolean flags for each build/test/deploy decision.
 
 ## Decision Logic
 
-### 1. LAMBDAS
+### 1. BUILD_LAMBDAS
 - **True** if any Lambda code modified
 - Lambda paths: `erieiron_lambda/`, `lambdas/`, `*/lambda_*/`
 - **False** otherwise
 
-### 2. CONTAINERS
-- **True** if any non-Lambda, non-Terraform code modified
-- Includes: Python files, tests, shared libraries, frontend code
-- **False** if only Lambda or Terraform files changed
+### 2. BUILD_CONTAINER
+- **True** if container build is needed:
+  - Any application code changed (Python files, frontend code, etc.)
+  - Dockerfile changed
+  - Dependencies changed (requirements.txt, package.json)
+- **False** if only .tf files, docs, or test files changed (and DEPLOY_TO_AWS is false)
 
 ### 3. RUN_TESTS_LOCALLY
 - **True** if ONLY the following changed:
@@ -30,7 +32,7 @@ JSON object with boolean flags for each build/test/deploy decision.
 
 ### 4. RUN_TESTS_IN_CONTAINER
 - **True** if:
-  - CONTAINERS is true AND
+  - BUILD_CONTAINER is true AND
   - (Dockerfile changed OR first iteration after local tests pass)
 - **False** if only Python/test changes
 
@@ -41,17 +43,35 @@ JSON object with boolean flags for each build/test/deploy decision.
   - Container tests passed (transition from CONTAINER_TESTS mode)
 - **False** if only local code/test changes
 
-### 6. DB_MIGRATION_REQUIRED
+### 6. MIGRATE_DATABASE
 - **True** if:
   - models.py modified
   - Any file in migrations/ directory modified
 - **False** otherwise
 
-### 7. STACK_TF_CHANGED
+### 7. UPDATE_STACK_TF
 - **True** if any .tf file modified (stack.tf, variables.tf, outputs.tf, etc.)
 - **False** otherwise
 
-### 8. REASONING
+### 8. PUSH_TO_ECR
+- **True** if ECR push is needed:
+  - Application code or Dockerfile changed
+  - Container needs to be deployed to AWS
+- **False** if only test files, .tf files, or docs changed
+
+### 9. RUN_BACKEND_TESTS
+- **True** if backend tests should be executed:
+  - Any backend code changed (*.py files)
+  - Backend dependencies changed
+- **False** if only frontend files or .tf files changed
+
+### 10. RUN_FRONTEND_TESTS
+- **True** if frontend tests should be executed:
+  - Any frontend code changed (*.js, *.scss, templates/)
+  - Frontend dependencies changed
+- **False** if only backend Python files or .tf files changed
+
+### 11. REASONING
 - 1-2 sentence explanation of the decision
 - Example: "Only test files changed, can iterate locally. No deployment needed."
 
@@ -70,13 +90,16 @@ JSON object with boolean flags for each build/test/deploy decision.
 **Output:**
 ```json
 {
-  "LAMBDAS": false,
-  "CONTAINERS": true,
+  "BUILD_LAMBDAS": false,
+  "BUILD_CONTAINER": false,
   "RUN_TESTS_LOCALLY": true,
   "RUN_TESTS_IN_CONTAINER": false,
   "DEPLOY_TO_AWS": false,
-  "DB_MIGRATION_REQUIRED": false,
-  "STACK_TF_CHANGED": false,
+  "MIGRATE_DATABASE": false,
+  "UPDATE_STACK_TF": false,
+  "PUSH_TO_ECR": false,
+  "RUN_BACKEND_TESTS": true,
+  "RUN_FRONTEND_TESTS": false,
   "REASONING": "Only Python code and tests changed. Can iterate locally without container build or deployment."
 }
 ```
@@ -96,13 +119,16 @@ JSON object with boolean flags for each build/test/deploy decision.
 **Output:**
 ```json
 {
-  "LAMBDAS": false,
-  "CONTAINERS": true,
+  "BUILD_LAMBDAS": false,
+  "BUILD_CONTAINER": true,
   "RUN_TESTS_LOCALLY": false,
   "RUN_TESTS_IN_CONTAINER": true,
   "DEPLOY_TO_AWS": true,
-  "DB_MIGRATION_REQUIRED": true,
-  "STACK_TF_CHANGED": false,
+  "MIGRATE_DATABASE": true,
+  "UPDATE_STACK_TF": false,
+  "PUSH_TO_ECR": true,
+  "RUN_BACKEND_TESTS": true,
+  "RUN_FRONTEND_TESTS": false,
   "REASONING": "Models changed, requiring DB migration. Must build container and deploy to AWS to test migration."
 }
 ```
@@ -122,14 +148,75 @@ JSON object with boolean flags for each build/test/deploy decision.
 **Output:**
 ```json
 {
-  "LAMBDAS": false,
-  "CONTAINERS": true,
+  "BUILD_LAMBDAS": false,
+  "BUILD_CONTAINER": false,
+  "RUN_TESTS_LOCALLY": false,
+  "RUN_TESTS_IN_CONTAINER": false,
+  "DEPLOY_TO_AWS": true,
+  "MIGRATE_DATABASE": false,
+  "UPDATE_STACK_TF": true,
+  "PUSH_TO_ECR": false,
+  "RUN_BACKEND_TESTS": true,
+  "RUN_FRONTEND_TESTS": false,
+  "REASONING": "Stack.tf modified. Must deploy to AWS to apply infrastructure changes. Container unchanged so no rebuild or ECR push needed."
+}
+```
+
+## Example 4: Frontend Only Change
+
+**Input:**
+```json
+{
+  "modified_files": [
+    "myapp/static/js/app.js",
+    "myapp/templates/dashboard.html"
+  ]
+}
+```
+
+**Output:**
+```json
+{
+  "BUILD_LAMBDAS": false,
+  "BUILD_CONTAINER": true,
   "RUN_TESTS_LOCALLY": false,
   "RUN_TESTS_IN_CONTAINER": true,
   "DEPLOY_TO_AWS": true,
-  "DB_MIGRATION_REQUIRED": false,
-  "STACK_TF_CHANGED": true,
-  "REASONING": "Stack.tf modified. Must deploy to AWS to apply infrastructure changes."
+  "MIGRATE_DATABASE": false,
+  "UPDATE_STACK_TF": false,
+  "PUSH_TO_ECR": true,
+  "RUN_BACKEND_TESTS": false,
+  "RUN_FRONTEND_TESTS": true,
+  "REASONING": "Only frontend files changed. Need container build and deploy for template changes but can skip backend tests."
+}
+```
+
+## Example 5: Documentation Only Change
+
+**Input:**
+```json
+{
+  "modified_files": [
+    "README.md",
+    "docs/architecture.md"
+  ]
+}
+```
+
+**Output:**
+```json
+{
+  "BUILD_LAMBDAS": false,
+  "BUILD_CONTAINER": false,
+  "RUN_TESTS_LOCALLY": false,
+  "RUN_TESTS_IN_CONTAINER": false,
+  "DEPLOY_TO_AWS": false,
+  "MIGRATE_DATABASE": false,
+  "UPDATE_STACK_TF": false,
+  "PUSH_TO_ECR": false,
+  "RUN_BACKEND_TESTS": false,
+  "RUN_FRONTEND_TESTS": false,
+  "REASONING": "Only documentation changed. No build, test, or deployment needed."
 }
 ```
 
@@ -137,3 +224,4 @@ JSON object with boolean flags for each build/test/deploy decision.
 - Return only the JSON structure, no additional explanation
 - Be conservative: when uncertain, choose the safer (more complete) build path
 - Consider file paths case-insensitively
+- Execution control flags enable fine-grained optimization while maintaining safety

@@ -12,7 +12,6 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta, datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -24,52 +23,10 @@ from erieiron_autonomous_agent.models import InfrastructureStack, Business
 from erieiron_common import aws_utils
 from erieiron_common import common
 from erieiron_common.date_utils import to_utc
-from erieiron_common.enums import InfrastructureStackType, EnvironmentType
+from erieiron_common.enums import InfrastructureStackType, EnvironmentType, OpenTofuErrorType
 from erieiron_common.opentofu_helpers import OpenTofuVariable, OpenTofuCommandResult, OpenTofuCommandException, OpenTofuException, MissingStackPerms
 
 DEFAULT_TOFU_STATE_BUCKET = "erieiron-opentofu-state"
-
-
-class ApplyErrorType(Enum):
-    """Classification of apply command errors for handling strategy."""
-    SUCCESS = "success"
-    DUPLICATE_IDEMPOTENT = "duplicate_idempotent"
-    HARD_ERROR_WITH_DUPLICATE = "hard_error_with_duplicate"
-    MISSING_PERMISSIONS = "missing_permissions"
-    TRANSIENT_ERROR = "transient_error"
-    PERMANENT_ERROR = "permanent_error"
-
-
-# Known duplicate/idempotent error messages that can be treated as success
-KNOWN_DUPLICATE_MSGS = {
-    "InvalidPermission.Duplicate",
-    "InvalidChangeBatch",
-    "AlreadyExists",
-}
-
-# Error indicators that should never be treated as idempotent success
-HARD_ERROR_INDICATORS = {
-    "AccessDenied",
-    "UnauthorizedOperation",
-    "Forbidden",
-    "is not authorized to perform",
-    "does not have permission to perform",
-    "StatusCode: 403",
-    "Error: creating",
-    "Error: updating",
-}
-
-# Permissions-related error patterns that indicate missing AWS permissions
-PERMISSIONS_ERROR_PATTERNS = [
-    "AccessDenied",
-    "UnauthorizedOperation",
-    "Forbidden",
-    "StatusCode: 403",
-    "is not authorized to perform",
-    "User: arn:aws:sts::",
-    "does not have permission to perform",
-    "InsufficientCapabilitiesException",
-]
 
 # Resources that should be retained (not destroyed) when destroying the stack.
 RESOURCE_TYPS_TO_RETAIN_ON_DESTROY = {
@@ -314,91 +271,62 @@ class StackManager:
             stderr=completed_process.stderr or "",
         )
         
-        self.record(stage, result)
-        if result.returncode != 0:
-            # Allow return codes 2 and 3 for plan stage (indicate "changes pending" or "changes present")
-            if result.returncode in (2, 3):
-                logging.info(f"OpenTofu plan completed with changes (exit code {result.returncode}). Treating as success.")
-            else:
-                error = OpenTofuCommandException(
-                    f"OpenTofu command failed with exit code {result.returncode}",
-                    result,
+        if result.returncode in (0, 2, 3):
+            self.record(stage, result)
+            return result
+        
+        error = OpenTofuCommandException(
+            f"OpenTofu command failed with exit code {result.returncode}",
+            result,
+        )
+        
+        if not error.is_state_lock_error():
+            raise error
+        
+        if _lock_retry_attempted:
+            logging.error("Lock error persists after retry, giving up")
+            raise error
+        
+        lock_id = error.extract_lock_id()
+        lock_created_at = error.extract_lock_created_time()
+        lock_is_stale = self._is_lock_stale(lock_created_at)
+        
+        if lock_id and lock_created_at and lock_is_stale:
+            logging.warning(f"Detected stale state lock {lock_id}, attempting force unlock")
+            if self._force_unlock(lock_id):
+                logging.info("Lock removed, retrying command")
+                # Retry the command once after successful unlock
+                return self.run_tofu_command(
+                    stage, args,
+                    input_data=input_data,
+                    timeout=timeout,
+                    _lock_retry_attempted=True
                 )
-
-                # Check if this is a state lock error that can be resolved
-                if self._is_state_lock_error(error) and not _lock_retry_attempted:
-                    lock_id = self._extract_lock_id(error)
-                    lock_created_at = self._extract_lock_created_time(error)
-
-                    if lock_id and lock_created_at and self._is_lock_stale(lock_created_at):
-                        logging.warning(f"Detected stale state lock {lock_id}, attempting force unlock")
-                        if self._force_unlock(lock_id):
-                            logging.info("Lock removed, retrying command")
-                            # Retry the command once after successful unlock
-                            return self.run_tofu_command(
-                                stage, args,
-                                input_data=input_data,
-                                timeout=timeout,
-                                _lock_retry_attempted=True
-                            )
-                        else:
-                            logging.error("Failed to force unlock, raising original error")
-                    else:
-                        if not lock_id:
-                            logging.warning("Could not extract lock ID from error")
-                        elif not lock_created_at:
-                            logging.warning("Could not extract lock creation time from error")
-                        else:
-                            logging.info("Lock is not stale, raising original error")
-                elif self._is_state_lock_error(error) and _lock_retry_attempted:
-                    logging.error("Lock error persists after retry, giving up")
-
-                raise error
-
-        logging.debug("OpenTofu command completed", extra=result.loggable_dict())
-        return result
-
-    def _is_state_lock_error(self, error: OpenTofuCommandException) -> bool:
-        """Check if the error is a state lock error."""
-        stderr = error.result.stderr or ""
-        return "Error acquiring the state lock" in stderr
-
-    def _extract_lock_id(self, error: OpenTofuCommandException) -> str | None:
-        """Extract the lock ID from a state lock error message."""
-        stderr = error.result.stderr or ""
-        match = re.search(r'ID:\s+([a-f0-9-]+)', stderr)
-        return match.group(1) if match else None
-
-    def _extract_lock_created_time(self, error: OpenTofuCommandException) -> datetime | None:
-        """Extract the lock creation time from error message."""
-        stderr = error.result.stderr or ""
-        match = re.search(r'Created:\s+([0-9-]+\s+[0-9:.]+\s+\+0000\s+UTC)', stderr)
-        if match:
-            time_str = match.group(1)
-            try:
-                # Parse format like "2025-12-14 18:53:56.668832 +0000 UTC"
-                dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f %z %Z")
-                return to_utc(dt)
-            except ValueError:
-                try:
-                    # Try without microseconds
-                    dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S %z %Z")
-                    return to_utc(dt)
-                except ValueError:
-                    return None
-        return None
-
-    def _is_lock_stale(self, lock_created_at: datetime, stale_threshold_hours: int = 1) -> bool:
+            else:
+                logging.error("Failed to force unlock, raising original error")
+        else:
+            if not lock_id:
+                logging.warning("Could not extract lock ID from error")
+            elif not lock_created_at:
+                logging.warning("Could not extract lock creation time from error")
+            else:
+                logging.info("Lock is not stale, raising original error")
+        
+        raise error
+    
+    def _is_lock_stale(self, lock_created_at: datetime, stale_threshold_minutes: int = 10) -> bool:
         """Check if a lock is stale based on creation time."""
         if not lock_created_at:
             return False
         now = common.get_now()
         age = now - lock_created_at
-        is_stale = age > timedelta(hours=stale_threshold_hours)
+        is_stale = age > timedelta(minutes=stale_threshold_minutes)
+        
         if is_stale:
-            logging.warning(f"Lock is stale: created {lock_created_at.isoformat()}, age {age}, threshold {stale_threshold_hours}h")
+            logging.warning(f"Lock is stale: created {lock_created_at.isoformat()}, age {age}, threshold {stale_threshold_minutes} mins")
+        
         return is_stale
-
+    
     def _force_unlock(self, lock_id: str) -> bool:
         """
         Force unlock a stale OpenTofu state lock.
@@ -409,7 +337,7 @@ class StackManager:
             workdir = str(self.workspace_dir)
             command = [settings.TOFU_BIN, f"-chdir={self.module_dir}", *args]
             logging.warning(f"Force unlocking state lock {lock_id}: {command}")
-
+            
             completed_process = subprocess.run(
                 common.strings(command),
                 cwd=workdir,
@@ -419,7 +347,7 @@ class StackManager:
                 timeout=30,
                 check=False,
             )
-
+            
             if completed_process.returncode == 0:
                 logging.info(f"Successfully force-unlocked state lock {lock_id}")
                 return True
@@ -429,7 +357,7 @@ class StackManager:
         except Exception as e:
             logging.exception(f"Exception while force-unlocking state lock {lock_id}: {e}")
             return False
-
+    
     def init_workspace(self) -> StackManager:
         if self._initialized:
             return self
@@ -482,7 +410,8 @@ class StackManager:
                     return self
                 except OpenTofuCommandException as e2:
                     logging.exception(e2)
-                    raise self
+                    e2.log_error()
+                    raise e2
         
         raise self
     
@@ -537,95 +466,13 @@ class StackManager:
             if temp_dir:
                 temp_dir.cleanup()
     
-    def _classify_apply_error(self, error: OpenTofuCommandException) -> ApplyErrorType:
-        """Classify an apply command error for appropriate handling strategy."""
-        stderr = error.result.stderr or ""
-        stdout = error.result.stdout or ""
-        combined = f"{stderr}\n{stdout}"
-        
-        # Check for permissions-related errors
-        if any(pattern in combined for pattern in PERMISSIONS_ERROR_PATTERNS):
-            return ApplyErrorType.MISSING_PERMISSIONS
-        
-        # Check for known duplicate/idempotent errors
-        duplicate_token: str | None = None
-        for msg in KNOWN_DUPLICATE_MSGS:
-            if msg in combined:
-                duplicate_token = msg
-                break
-        
-        if duplicate_token is not None:
-            # Pure duplicate?
-            if "InvalidPermission.Duplicate" in combined:
-                return ApplyErrorType.DUPLICATE_IDEMPOTENT
-            
-            # Otherwise check for real hard errors
-            if any(indicator in combined for indicator in HARD_ERROR_INDICATORS):
-                return ApplyErrorType.HARD_ERROR_WITH_DUPLICATE
-            
-            return ApplyErrorType.DUPLICATE_IDEMPOTENT
-        
-        return ApplyErrorType.TRANSIENT_ERROR
-    
-    def _extract_missing_permissions(self, error: OpenTofuCommandException) -> list[str]:
-        """Extract specific missing permissions from OpenTofu error output."""
-        stderr = error.result.stderr or ""
-        stdout = error.result.stdout or ""
-        combined = f"{stderr}\n{stdout}"
-        
-        missing_permissions = []
-        
-        # Common patterns for AWS permission errors
-        import re
-        
-        # Pattern 1: "is not authorized to perform: <action>"
-        pattern1 = re.findall(r'is not authorized to perform[:\s]+([a-zA-Z0-9:*_-]+)', combined, re.IGNORECASE)
-        missing_permissions.extend(pattern1)
-        
-        # Pattern 2: "does not have permission to perform: <action>"
-        pattern2 = re.findall(r'does not have permission to perform[:\s]+([a-zA-Z0-9:*_-]+)', combined, re.IGNORECASE)
-        missing_permissions.extend(pattern2)
-        
-        # Pattern 3: Direct action mentions in access denied errors
-        access_denied_lines = [line for line in combined.split('\n') if 'AccessDenied' in line or 'UnauthorizedOperation' in line]
-        for line in access_denied_lines:
-            # Extract AWS actions from context (common AWS API patterns)
-            # noinspection RegExpUnnecessaryNonCapturingGroup
-            aws_actions = re.findall(r'([a-z][a-zA-Z0-9]*:[a-zA-Z][a-zA-Z0-9]*(?:\*)?)', line)
-            missing_permissions.extend(aws_actions)
-        
-        # Pattern 4: CloudFormation capability errors
-        if 'InsufficientCapabilitiesException' in combined:
-            missing_permissions.append('iam:CreateRole')
-            missing_permissions.append('iam:AttachRolePolicy')
-            missing_permissions.append('iam:DetachRolePolicy')
-            missing_permissions.append('iam:DeleteRole')
-        
-        # Deduplicate while preserving order
-        seen = set()
-        unique_permissions = []
-        for perm in missing_permissions:
-            if perm and perm not in seen:
-                unique_permissions.append(perm)
-                seen.add(perm)
-        
-        # Normalize AWS-style capitalization
-        def normalize(perm: str) -> str:
-            if ":" not in perm:
-                return perm
-            svc, action = perm.split(":", 1)
-            parts = re.split(r'[^a-zA-Z0-9]', action)
-            normalized_action = "".join(part.capitalize() for part in parts if part)
-            return f"{svc.lower()}:{normalized_action}"
-        
-        return [normalize(p) for p in unique_permissions]
-    
     def _create_synthetic_success_result(
             self,
-            original_error: OpenTofuCommandException,
-            outputs: dict[str, Any],
-            duplicate_token: str
+            original_error: OpenTofuCommandException
     ) -> OpenTofuCommandResult:
+        duplicate_token = original_error.get_duplicate_token()
+        outputs = self.get_outputs()
+        
         """Create a synthetic success result for handled duplicate errors."""
         synthetic_result = OpenTofuCommandResult(
             command=original_error.result.command,
@@ -699,44 +546,11 @@ class StackManager:
         
         return result
     
-    def _handle_duplicate_success(self, error: OpenTofuCommandException, timeout: int | None) -> OpenTofuCommandResult:
-        """Handle duplicate error as idempotent success."""
-        stderr = error.result.stderr or ""
-        stdout = error.result.stdout or ""
-        combined = f"{stderr}\n{stdout}"
+    def _handle_duplicate_success(self, error: OpenTofuCommandException) -> OpenTofuCommandResult:
+        synthetic_result = self._create_synthetic_success_result(error)
         
-        # Find the duplicate token for logging
-        duplicate_token = next(
-            (msg for msg in KNOWN_DUPLICATE_MSGS if msg in combined),
-            "unknown"
-        )
-        
-        logging.debug(
-            "OpenTofu apply encountered known duplicate/exists error; "
-            "attempting to treat as idempotent success if state is healthy",
-            extra={
-                "duplicate_token": duplicate_token,
-                "command": " ".join(shlex.quote(part) for part in error.result.command),
-                "workspace": self.get_workspace_name(),
-            },
-        )
-        
-        # Try to read outputs from state. If this succeeds, treat as success
-        try:
-            outputs = self.get_outputs(timeout=timeout)
-        except OpenTofuCommandException as outputs_exc:
-            logging.warning(
-                "Duplicate/exists apply error encountered, but failed to read "
-                "outputs from state; treating as failure",
-                extra={
-                    "duplicate_token": duplicate_token,
-                    "outputs_error": str(outputs_exc),
-                },
-            )
-            raise error
-        
-        synthetic_result = self._create_synthetic_success_result(error, outputs, duplicate_token)
         self.record("apply", synthetic_result)
+        
         return synthetic_result
     
     def _create_fallback_error(self, args: list[str]) -> OpenTofuCommandException:
@@ -784,22 +598,16 @@ class StackManager:
             
             except OpenTofuCommandException as error:
                 last_exc = error
-                error_type = self._classify_apply_error(error)
+                error_type = error.classify_apply_error()
                 
-                if error_type == ApplyErrorType.HARD_ERROR_WITH_DUPLICATE:
-                    stderr = error.result.stderr or ""
-                    stdout = error.result.stdout or ""
-                    logging.error(
-                        "Duplicate error detected alongside real AWS failures; treating as hard failure.",
-                        extra={
-                            "stderr": stderr,
-                            "stdout": stdout,
-                        },
-                    )
+                # Special-case: AWS Secrets Manager secret scheduled for deletion
+                stderr = error.result.stderr or ""
+                if error_type == OpenTofuErrorType.SECRET_NEEDS_RESTORATION:
+                    self.stack_restore_secret(error, auto_approve, retry_backoff_seconds)
+                elif error_type == OpenTofuErrorType.PERMANENT_ERROR:
                     raise error
-                
-                if error_type == ApplyErrorType.MISSING_PERMISSIONS:
-                    missing_permissions = self._extract_missing_permissions(error)
+                elif error_type == OpenTofuErrorType.MISSING_PERMISSIONS:
+                    missing_permissions = error.extract_missing_permissions()
                     stderr = error.result.stderr or ""
                     stdout = error.result.stdout or ""
                     
@@ -822,8 +630,8 @@ class StackManager:
                         error.result
                     )
                 
-                if error_type == ApplyErrorType.DUPLICATE_IDEMPOTENT:
-                    self.apply_command_results = self._handle_duplicate_success(error, timeout)
+                elif error_type == OpenTofuErrorType.DUPLICATE_IDEMPOTENT:
+                    self.apply_command_results = self._handle_duplicate_success(error)
                     return self.apply_command_results.extra["outputs"]
                 
                 if not self._should_retry_apply(error, attempt, max_attempts):
@@ -1009,7 +817,7 @@ class StackManager:
         has_retained_resources: True if any resources in state match RESOURCES_TO_RETAIN_ON_DESTROY.
         """
         resources_to_retain = set(
-            common.ensure_list(RESOURCES_TO_RETAIN_ON_DESTROY) 
+            common.ensure_list(RESOURCES_TO_RETAIN_ON_DESTROY)
             + common.ensure_list(self.stack.imported_shared_resources)
         )
         
@@ -1026,17 +834,17 @@ class StackManager:
                 if r_type in RESOURCE_TYPS_TO_RETAIN_ON_DESTROY:
                     has_retained = True
                     continue
-                    
+                
                 r_name = res.get("name", "")
                 base_id = f"{r_type}.{r_name}" if r_type and r_name else ""
                 if base_id in resources_to_retain:
                     has_retained = True
                     continue
-                    
+                
                 address = res.get("address") or base_id
                 if address:
                     targets.append(address)
-                    
+            
             for child in module.get("child_modules", []):
                 walk_module(child)
         
@@ -1739,3 +1547,60 @@ class StackManager:
             payload['error'] = error
         
         return payload
+    
+    def stack_restore_secret(self, error: OpenTofuCommandException, auto_approve: bool, retry_backoff_seconds):
+        stderr = error.result.stderr
+        
+        secret_name = None
+        
+        # Attempt to extract secret name from error text
+        match = re.search(r"secret \(([^)]+)\)", stderr)
+        if match:
+            secret_name = match.group(1)
+        
+        if not secret_name:
+            return  None
+        
+        logging.warning(
+            f"Detected Secrets Manager tombstone for '{secret_name}'. "
+            f"Attempting automatic recovery."
+        )
+        
+        try:
+            sm = self.cloud_account.get_service_client("secretsmanager")
+            sm.restore_secret(SecretId=secret_name)
+            logging.info(
+                f"Successfully restored secret '{secret_name}' from scheduled deletion."
+            )
+            # Retry apply once after restore
+            return self.apply(
+                auto_approve=auto_approve,
+                retries=0,
+                retry_backoff_seconds=retry_backoff_seconds,
+            )
+        except Exception as restore_exc:
+            logging.warning(
+                f"Failed to restore secret '{secret_name}', attempting state removal.",
+                exc_info=restore_exc,
+            )
+            
+            # Option B: remove resource from state
+            try:
+                self.run_tofu_command(
+                    "state_rm",
+                    ["state", "rm", f"aws_secretsmanager_secret.{secret_name.split('/')[-1]}"],
+                )
+                logging.info(
+                    f"Removed secret '{secret_name}' from OpenTofu state."
+                )
+                return self.apply(
+                    auto_approve=auto_approve,
+                    retries=0,
+                    retry_backoff_seconds=retry_backoff_seconds,
+                )
+            except Exception as state_exc:
+                logging.error(
+                    f"Failed to recover from Secrets Manager tombstone for '{secret_name}'.",
+                    exc_info=state_exc,
+                )
+                raise error

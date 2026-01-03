@@ -271,9 +271,9 @@ class PubSubMessageType(ErieEnum):
     SELF_DRIVING_CODER_REQUESTED = auto()
     SELF_DRIVING_CODER_UPDATED = auto()
     SELF_DRIVING_CODER_COMPLETED = auto()
-
+    
     LLM_REQUEST = auto()
-
+    
     RESET_TASK_TEST = auto()
     INITIATIVE_ARCHITECTURE_GENERATION_REQUESTED = auto()
     INITIATIVE_TASKS_GENERATION_REQUESTED = auto()
@@ -593,7 +593,7 @@ class InfrastructureStackType(ErieEnum):
     FOUNDATION = auto()
     APPLICATION = auto()
     TARGET_ACCOUNT_BOOTSTRAP = auto()
-
+    
     def get_opentofu_config(self) -> str:
         if InfrastructureStackType.FOUNDATION.eq(self):
             logging.warning(f"{InfrastructureStackType.FOUNDATION} is deprecated")
@@ -617,15 +617,15 @@ class StackStrategy(ErieEnum):
     SINGLE_STACK = 'single_stack'
     PROD_AND_DEV = 'prod_and_dev'
     PER_INITIATIVE = 'per_initiative'
-
+    
     def allows_dev_stack(self) -> bool:
         """Returns True if this strategy allows a business-level dev stack."""
         return self == StackStrategy.PROD_AND_DEV
-
+    
     def allows_initiative_stacks(self) -> bool:
         """Returns True if this strategy allows initiative-scoped stacks."""
         return self == StackStrategy.PER_INITIATIVE
-
+    
     def requires_production_only(self) -> bool:
         """Returns True if all work must happen in production stack."""
         return self == StackStrategy.SINGLE_STACK
@@ -636,10 +636,6 @@ class InitiativeNames(ErieEnum):
     BOOTSTRAP_ENVS = "Bootstrap Business"
     BOOTSTRAP_ENVS_LEGACY = "BOOTSTRAP_ENVS"
 
-
-class BuildStep(ErieEnum):
-    LAMBDAS = auto()
-    CONTAINERS = auto()
 
 
 class PublicPrivate(ErieEnum):
@@ -675,9 +671,31 @@ class CredentialsSpace(ErieEnum):
     TARGET_ACCOUNT = auto()
 
 
+class OpenTofuErrorType(ErieEnum):
+    DUPLICATE_IDEMPOTENT = "duplicate_idempotent"
+    HARD_ERROR_WITH_DUPLICATE = "hard_error_with_duplicate"
+    MISSING_PERMISSIONS = "missing_permissions"
+    TRANSIENT_ERROR = "transient_error"
+    PERMANENT_ERROR = "permanent_error"
+    SECRET_NEEDS_RESTORATION = "secret_needs_restoration"
+
+
 class TaskImplementationPhase(ErieEnum):
     UI_MOCK_API = auto()
     SERVER_IMPLEMENTATION = auto()
+
+
+class BuildStep(ErieEnum):
+    BUILD_CONTAINER = auto()
+    BUILD_LAMBDAS = auto()
+    RUN_BACKEND_TESTS = auto()
+    RUN_FRONTEND_TESTS = auto()
+    RUN_TESTS_IN_CONTAINER = auto()
+    RUN_TESTS_LOCALLY = auto()
+    MIGRATE_DATABASE = auto()
+    PUSH_TO_ECR = auto()
+    UPDATE_STACK_TF = auto()
+    DEPLOY_TO_AWS = auto()
 
 
 class IterationMode(ErieEnum):
@@ -685,9 +703,9 @@ class IterationMode(ErieEnum):
     Tracks the execution stage within a coding task iteration.
     Determines whether tests run locally, in container, or require AWS deployment.
     """
-    LOCAL_TESTS = auto()       # Run tests locally in venv (fast iteration)
-    CONTAINER_TESTS = auto()   # Run tests in built container (pre-deployment verification)
-    AWS_DEPLOYMENT = auto()    # Full deployment with ECR push and AWS stack update
+    LOCAL_TESTS = auto()  # Run tests locally in venv (fast iteration)
+    CONTAINER_TESTS = auto()  # Run tests in built container (pre-deployment verification)
+    AWS_DEPLOYMENT = auto()  # Full deployment with ECR push and AWS stack update
 
 
 ERIE_IRON = auto()

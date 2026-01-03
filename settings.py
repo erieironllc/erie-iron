@@ -10,7 +10,6 @@ from erieiron_common import settings_utils
 from erieiron_public import agent_tools
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
 
 BASE_DIR = Path(__file__).resolve().parent
 config = settings_utils.get_config()

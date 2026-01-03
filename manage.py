@@ -7,9 +7,6 @@ from pathlib import Path
 
 import settings
 
-os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
-warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
-
 tf_plugin_cache = Path(os.path.expanduser("~/.terraform.d/plugin-cache"))
 tf_plugin_cache.mkdir(parents=True, exist_ok=True)
 os.environ["TF_PLUGIN_CACHE_DIR"] = str(tf_plugin_cache)

@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "exceptions",
+    "allow_goal_achieved",
+    "allow_goal_achieved_justification",
+    "has_blocking_errors",
+    "has_warnings_only",
+    "error_classification"
+  ],
+  "properties": {
+    "exceptions": {
+      "type": "string",
+      "description": "CRITICAL FIELD - The full extracted error text with complete stack traces, OpenTofu failures, and test errors. This is used downstream when writing code for the next iteration. Should include: full Python stack traces, OpenTofu diagnostic messages, AWS auth errors, test failure details. This is the same content currently stored in iteration.exceptions."
+    },
+    "allow_goal_achieved": {
+      "type": "boolean",
+      "description": "Whether logs contain blocking errors that prevent goal achievement. True if only warnings are present or no errors. False if blocking errors exist."
+    },
+    "allow_goal_achieved_justification": {
+      "type": "string",
+      "description": "Explanation for the allow_goal_achieved decision, detailing why the gate was blocked or allowed."
+    },
+    "has_blocking_errors": {
+      "type": "boolean",
+      "description": "True if blocking errors exist in logs (deployment failures, runtime errors, test failures). False otherwise."
+    },
+    "has_warnings_only": {
+      "type": "boolean",
+      "description": "True if only warnings exist with no blocking errors. False if there are blocking errors or no issues at all."
+    },
+    "error_classification": {
+      "type": "object",
+      "required": [
+        "deployment_errors",
+        "runtime_errors",
+        "warnings",
+        "test_failures"
+      ],
+      "properties": {
+        "deployment_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of deployment error summaries (OpenTofu plan/apply failures, build errors, etc.)"
+        },
+        "runtime_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of runtime error summaries (CloudWatch errors, execution failures, etc.)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of warning summaries (non-blocking issues that don't prevent goal achievement)"
+        },
+        "test_failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of test failure summaries with filenames and failure reasons"
+        }
+      },
+      "description": "Structured breakdown of error types for easier consumption by downstream agents"
+    }
+  }
+}

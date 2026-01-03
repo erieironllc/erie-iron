@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import textwrap
 import traceback
 from pathlib import Path
 
@@ -318,7 +319,7 @@ def get_sys_prompt(
     
     messages = []
     for f in common.ensure_list(file_name):
-        msg = (PROMPTS_DIR / f).read_text()
+        msg = textwrap.dedent((PROMPTS_DIR / f).read_text())
         for look_for_str, replace_with_str in common.ensure_list(replacements):
             msg = msg.replace(look_for_str, replace_with_str)
         messages.append(msg)

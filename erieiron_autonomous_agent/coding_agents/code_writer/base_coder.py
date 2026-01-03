@@ -19,12 +19,11 @@ from erieiron_autonomous_agent.coding_agents.coding_agent_config import (
     CodingAgentConfig,
     TASK_DESC_CODE_WRITING
 )
-from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import BadPlan, CodeCompilationError
 from erieiron_autonomous_agent.models import (
     LlmRequest,
     SelfDrivingTaskIteration, CodeFile, AgentLesson,
 )
-from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
 from erieiron_common import common
 from erieiron_common.enums import LlmReasoningEffort, LlmVerbosity, LlmMessageType, LlmCreativity, EnvironmentType
 
@@ -297,6 +296,7 @@ class BaseCoder(ABC):
             
             # Build prompt
             prompt_text = self._build_prompt(
+                tdd_test_file,
                 business_context,
                 readonly_lines,
                 code_file_summary_lines,
@@ -400,6 +400,7 @@ class BaseCoder(ABC):
     
     def _build_prompt(
             self,
+            tdd_test_file: str,
             business_context: Dict,
             readonly_lines: List[str],
             code_file_summary_lines: List[str],
@@ -411,48 +412,47 @@ class BaseCoder(ABC):
         task = business_context["task"]
         
         # Reference prompts (common across all coders)
-        reference_prompts = {
+        reference_prompts = [
             "prompts/common--general_coding_rules.md",
-            "prompts/codewriter--common.md"
-        }
+        ]
         
         for rule_context in self.planning_data.get("required_rule_contexts"):
             if rule_context == "infrastructure_rules":
-                reference_prompts.add("prompts/common--agent_provided_functionality_tofu.md")
-                reference_prompts.add("prompts/common--infrastructure_rules_tofu.md")
-                reference_prompts.add("prompts/common--credentials_architecture_tofu.md")
-                reference_prompts.add("prompts/codewriter--aws_cloudformation_coder_tofu.md")
+                reference_prompts.append("prompts/common--agent_provided_functionality_tofu.md")
+                reference_prompts.append("prompts/common--infrastructure_rules_tofu.md")
+                reference_prompts.append("prompts/common--credentials_architecture_tofu.md")
+                reference_prompts.append("prompts/codewriter--aws_cloudformation_coder_tofu.md")
             elif rule_context == "lambda_rules":
-                reference_prompts.add("prompts/codewriter--lambda_coder.md")
+                reference_prompts.append("prompts/codewriter--lambda_coder.md")
             elif rule_context == "python_rules":
-                reference_prompts.add("prompts/codewriter--python_rules.md")
+                reference_prompts.append("prompts/codewriter--python_coder.md")
             elif rule_context == "javascript_rules":
-                reference_prompts.add("prompts/codewriter--javascript_coder.md")
+                reference_prompts.append("prompts/codewriter--javascript_coder.md")
             elif rule_context == "sql_rules":
-                reference_prompts.add("prompts/codewriter--sql_coder.md")
+                reference_prompts.append("prompts/codewriter--sql_coder.md")
             elif rule_context == "django_rules":
-                reference_prompts.add("prompts/codewriter--django_rules.md")
+                reference_prompts.append("prompts/codewriter--django_rules.md")
             elif rule_context == "test_rules":
-                reference_prompts.add("prompts/codewriter--python_tdd_task.md")
+                reference_prompts.append("prompts/codewriter--python_tdd_task.md")
             elif rule_context == "ui_rules":
-                reference_prompts.add("prompts/codewriter--javascript_coder.md")
-                reference_prompts.add("prompts/codewriter--css_coder.md")
+                reference_prompts.append("prompts/codewriter--javascript_coder.md")
+                reference_prompts.append("prompts/codewriter--css_coder.md")
             elif rule_context == "security_rules":
-                reference_prompts.add("prompts/codewriter--security_rules.md")
+                reference_prompts.append("prompts/codewriter--security_rules.md")
             elif rule_context == "database_rules":
-                reference_prompts.add("prompts/codewriter--database_rules.md")
+                reference_prompts.append("prompts/codewriter--database_rules.md")
             elif rule_context == "ses_email_rules":
-                reference_prompts.add("prompts/codewriter--ses_rules.md")
+                reference_prompts.append("prompts/codewriter--ses_rules.md")
             elif rule_context == "s3_storage_rules":
-                reference_prompts.add("prompts/codewriter--s3_rules.md")
+                reference_prompts.append("prompts/codewriter--s3_rules.md")
             elif rule_context == "sqs_queue_rules":
-                reference_prompts.add("prompts/codewriter--sqs_rules.md")
+                reference_prompts.append("prompts/codewriter--sqs_rules.md")
             elif rule_context == "cognito_rules":
-                reference_prompts.add("prompts/codewriter--cognito_rules.md")
+                reference_prompts.append("prompts/codewriter--cognito_rules.md")
             elif rule_context == "react_native_rules":
-                reference_prompts.add("prompts/codewriter--react_native.md")
+                reference_prompts.append("prompts/codewriter--react_native.md")
             elif rule_context == "react_web_rules":
-                reference_prompts.add("prompts/codewriter--react_web.md")
+                reference_prompts.append("prompts/codewriter--react_web.md")
             else:
                 self.config.log(f"ERROR:  unhandled required_rule_contexts value {rule_context}")
         
@@ -486,7 +486,7 @@ class BaseCoder(ABC):
             """ + "\n".join(readonly_lines)))
         
         # Add reference prompts
-        for path in reference_prompts:
+        for path in dict.fromkeys(reference_prompts):
             try:
                 content = Path(path).read_text()
                 prompt_parts.append(textwrap.dedent(f"""
@@ -502,6 +502,11 @@ class BaseCoder(ABC):
         
         # Add development plan and execution checklist
         prompt_parts.extend(self._get_final_prompt_sections(artifact_paths))
+        
+        if tdd_test_file:
+            prompt_parts.append(f"""
+            **required file**  when you are finished coding, a test file named `{tdd_test_file}` **must exist**.  this file shall contain the Test Driven Development assertions related to this task
+            """)
         
         return "\n\n".join(part.strip() for part in prompt_parts if part)
     

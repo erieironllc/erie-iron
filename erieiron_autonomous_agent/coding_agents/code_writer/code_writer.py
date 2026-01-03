@@ -42,10 +42,9 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
         Other exceptions: As raised by the underlying coders
     """
     
-    # Define coders in order of preference
     tdd_test_file = common.get(config.current_iteration, ["planning_json", "tdd_test_file"])
     
-    if config.is_stagnating:
+    if False and config.is_stagnating:
         coders = reversed(CODERS)
     else:
         coders = CODERS
@@ -59,7 +58,10 @@ def write_code(config: CodingAgentConfig) -> Tuple[List[Path], Dict]:
             changed_paths, metadata = coder.execute_coding()
             
             # Add coder info to metadata
-            config.log(f"{coder_name} coder execution completed successfully")
+            config.log(f"{coder_name} coder execution completed successfully.  modified files:")
+            for p in changed_paths:
+                config.log(f"\t- {p}")
+            
             metadata["successful_coder"] = coder_name.lower()
             metadata["attempts_made"] = len(errors) + 1
             metadata["failed_coders"] = [e["coder"] for e in errors]

@@ -187,10 +187,9 @@
 
 
                     <pre class="d-none" id="div_full_prompt">
-                        {% for inp_msg in llm_request.input_messages %}
-                            ==== Message Role: {{ inp_msg.role }} =========================================
+                        {% for inp_msg in llm_request.input_messages %}==== Message Role: {{ inp_msg.role }} =========================================
 
-                            {{ inp_msg.content }}
+{{ inp_msg.content }}
                         {% endfor %}
 
                         ==== Response from {{ llm_request.llm_model }} ================================

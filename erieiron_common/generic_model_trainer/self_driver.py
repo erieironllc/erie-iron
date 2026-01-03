@@ -12,12 +12,11 @@ from typing import Tuple, List
 from django.utils import timezone
 
 import settings
-from ekko_common import common
-from ekko_common.aws_utils import get_aws_interface
-from ekko_common.codegen_utils import lint_and_format, CodeCompilationError
-from ekko_common.enums import LlmModel, LlmRole, LlmMessageType, S3Bucket
-from ekko_common.llm_apis import llm_interface
-from ekko_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, CODE_MODELS_IN_ORDER, LlmResponse
+from erieiron_common import common
+from erieiron_common.aws_utils import get_aws_interface
+from erieiron_common.enums import LlmModel, LlmRole, LlmMessageType, S3Bucket
+from erieiron_common.llm_apis import llm_interface
+from erieiron_common.llm_apis.llm_interface import LlmMessage, MODEL_TO_MAX_TOKENS, CODE_MODELS_IN_ORDER, LlmResponse
 
 DONE = "done"
 COUNT_FULL_LOGS_IN_CONTEXT = 2

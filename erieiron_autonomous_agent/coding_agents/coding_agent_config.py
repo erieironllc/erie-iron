@@ -13,8 +13,10 @@ from django.utils import timezone
 
 from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
+from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import sanitize_aws_name
+from erieiron_common.enums import BuildStep, LlmReasoningEffort
 from erieiron_common.enums import LlmModel, TaskType, ErieEnum, InfrastructureStackType, SdaPhase, CredentialsSpace, IterationMode
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.stack_manager import StackManager
@@ -87,6 +89,7 @@ class CodingAgentConfig:
         self.log_path: Path = None
         self.log_f = None
         self.stop_tailing = None
+        self._build_plan = None
         self.phase = SdaPhase.INIT
         
         # UI-first phase tracking
@@ -139,60 +142,130 @@ class CodingAgentConfig:
         except Exception as e:
             logging.exception(e)
     
-    def should_skip_aws_deployment(self):
-        """
-        Returns True if AWS deployment should be skipped.
-        Deployment is skipped during UI-first phase (Phase 1).
-        """
-        return self.is_ui_first_phase
+    def get_build_plan(self, reset=False):
+        if reset or not self._build_plan:
+            self._generate_build_plan()
+        
+        return self._build_plan
     
-    def should_run_tests_only(self):
-        """
-        Returns True if agent should build container and run tests, but NOT deploy to AWS.
-        This is the UI-first phase behavior.
-        """
-        return self.is_ui_first_phase
-
-    def should_run_locally(self):
-        """
-        Returns True if tests should run locally in venv (no container).
-        This is the fast iteration mode for code changes that don't require deployment.
-        """
-        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
-            return False
+    def _generate_build_plan(self):
+        if self.current_iteration.version_number < 2:
+            previous_container_tag = self.task.get_container_image_tag()
+            tag_exists_in_ecr = previous_container_tag and self.aws_interface.tag_exists_in_ecr(
+                self.ecr_repo_name,
+                previous_container_tag,
+                self.env_type.get_aws_region()
+            )
+            
+            steps = []
+            if not tag_exists_in_ecr:
+                steps = steps + [
+                    BuildStep.BUILD_CONTAINER,
+                    BuildStep.PUSH_TO_ECR
+                ]
+                
+            steps.append(BuildStep.DEPLOY_TO_AWS)
+            return self.set_build_plan(steps)
         
+        modified_files = list(self.current_iteration.codeversion_set.all())
+        if modified_files:
+            modified_files_msg = LlmMessage.user_from_data(
+                "Modified Files", [
+                    cv.code_file.file_path
+                    for cv in modified_files
+                ], "modified_file")
+        else:
+            modified_files_msg = "No files modified during this iteration"
+        
+        # Get build plan from LLM agent
+        build_plan = llm_chat(
+            "Plan Build Steps",
+            [
+                get_sys_prompt("build_planner.md"),
+                modified_files_msg
+            ],
+            output_schema="build_planner.md.schema.json",
+            model=LlmModel.OPENAI_GPT_5_NANO,
+            tag_entity=self.current_iteration,
+            reasoning_effort=LlmReasoningEffort.LOW
+        ).json()
+        
+        return self.set_build_plan(build_plan)
+    
+    def set_build_plan(self, build_plan: dict):
+        if isinstance(build_plan, dict):
+            self._build_plan = build_plan
+        else:
+            self._build_plan = {
+                BuildStep(k): True
+                for k in common.ensure_list(build_plan)
+            }
+        
+        self.log_build_plan()
+        return self._build_plan
+    
+    def get_default_build_plan(self, ops=None, reasoning="Default build plan"):
+        base_plan = {
+            "REASONING": reasoning,
+            BuildStep.BUILD_CONTAINER: True,
+            BuildStep.PUSH_TO_ECR: True,
+            BuildStep.RUN_BACKEND_TESTS: True,
+            BuildStep.RUN_FRONTEND_TESTS: True,
+            BuildStep.BUILD_LAMBDAS: True,
+            BuildStep.RUN_TESTS_LOCALLY: False,
+            BuildStep.RUN_TESTS_IN_CONTAINER: False,
+            BuildStep.DEPLOY_TO_AWS: True,
+            BuildStep.MIGRATE_DATABASE: False,
+            BuildStep.UPDATE_STACK_TF: False
+        }
+        
+        # Production deployment: always build and deploy regardless of file changes
+        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
+            base_plan[BuildStep.BUILD_CONTAINER] = True
+            base_plan[BuildStep.DEPLOY_TO_AWS] = True
+            base_plan[BuildStep.RUN_TESTS_LOCALLY] = False
+            return base_plan
+        
+        # UI-first phase: build locally but don't deploy to AWS
         if self.is_ui_first_phase:
-            return False  # UI phase doesn't use this mode
-
-        mode = self.self_driving_task.iteration_mode
-        return IterationMode.LOCAL_TESTS.eq(mode)
-
-    def should_build_container(self):
-        """
-        Returns True if container build is required this iteration.
-        """
-        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
-            return True
+            base_plan[BuildStep.DEPLOY_TO_AWS] = False
+            base_plan[BuildStep.PUSH_TO_ECR] = False
+            return base_plan
         
-        if self.should_skip_aws_deployment():
-            return False  # UI phase builds locally but doesn't push
-
-        mode = self.self_driving_task.iteration_mode
-        return mode in [IterationMode.CONTAINER_TESTS.value, IterationMode.AWS_DEPLOYMENT.value]
-
-    def should_deploy_to_aws(self):
-        """
-        Returns True if AWS deployment (ECR push + stack update) is required.
-        """
-        if TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type):
-            return True
+        # Apply iteration mode adjustments
+        mode = self.self_driving_task.iteration_mode if self.self_driving_task else None
         
-        if self.should_skip_aws_deployment():
-            return False
-
-        mode = self.self_driving_task.iteration_mode
-        return IterationMode.AWS_DEPLOYMENT.eq(mode)
-
+        if IterationMode.LOCAL_TESTS.eq(mode):
+            # LOCAL_TESTS mode: run tests locally, no container build
+            base_plan[BuildStep.BUILD_CONTAINER] = False
+            base_plan[BuildStep.RUN_TESTS_LOCALLY] = True
+            base_plan[BuildStep.DEPLOY_TO_AWS] = False
+        
+        elif IterationMode.CONTAINER_TESTS.eq(mode):
+            # CONTAINER_TESTS mode: build container and run tests, but don't deploy yet
+            base_plan[BuildStep.BUILD_CONTAINER] = True
+            base_plan[BuildStep.DEPLOY_TO_AWS] = False
+        
+        elif IterationMode.AWS_DEPLOYMENT.eq(mode):
+            # AWS_DEPLOYMENT mode: build container and deploy
+            base_plan[BuildStep.BUILD_CONTAINER] = True
+            base_plan[BuildStep.DEPLOY_TO_AWS] = True
+        
+        if ops:
+            base_plan.update(ops)
+        
+        return base_plan
+    
+    def log_build_plan(self):
+        plan = self._build_plan
+        
+        self.log(f"\n{'=' * 80}")
+        self.log(f"BUILD PLAN ({plan.get('REASONING', '')}):")
+        for k in sorted(plan):
+            if plan[k] and k != "REASONING":
+                self.log(f"\t* {k}")
+        self.log(f"{'=' * 80}\n")
+    
     def get_env_for_credentials_space(self, credential_space: CredentialsSpace):
         if CredentialsSpace.ERIE_IRON.eq(credential_space):
             stack = Business.get_erie_iron_business().infrastructurestack_set.first()
@@ -302,6 +375,8 @@ class CodingAgentConfig:
     def cleanup_iteration(self):
         self.close_log()
         self.current_iteration = self.previous_iteration = self.iteration_to_modify = self.log_path = self.log_f = self.stop_tailing = None
+        common.quietly_delete(self.sandbox_root_dir / "artifacts")
+        
     
     def start_log_tail_thread(self):
         # Start a background thread to tail the logfile contents to logging.info()

@@ -15,7 +15,7 @@ from typing import Tuple, Optional, Any
 import boto3
 from django.db import models, transaction
 from django.db.models import Sum, Q, QuerySet
-from django.db.models.signals import pre_delete, post_save
+from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from pgvector.django import VectorField
@@ -2391,33 +2391,6 @@ class CodeVersion(BaseErieIronModel):
         
         return file_path
     
-    def update_codebert_embedding(self):
-        ...
-        # path = self.code_file.file_path
-        # logging.info(f"skipping update_codebert_embedding() for {path}")
-        
-        # from erieiron_autonomous_agent.utils.codegen_utils import get_codebert_embedding
-        # 
-        # logging.info(f"about to update embedding for {path}")
-        # 
-        # CodeVersion.objects.filter(id=self.id).update(
-        #     codebert_embedding=get_codebert_embedding(self.code)
-        # )
-        # 
-        # self.refresh_from_db(fields=["codebert_embedding"])
-        # self.codemethod_set.all().delete()
-        # 
-        # ext = os.path.splitext(path)[1]
-        # if ext in codegen_utils.LANGUAGE_NAMES:
-        #     for method_data in extract_methods(ext, self.code):
-        #         CodeMethod.objects.create(
-        #             code_version=self,
-        #             name=method_data["name"],
-        #             parameters=method_data["parameters"],
-        #             code=method_data["code"],
-        #             codebert_embedding=get_codebert_embedding(method_data["code"]),
-        #         )
-    
     def get_llm_message_data(self, include_diff=True) -> dict:
         code_file = self.code_file
         d = {
@@ -2438,28 +2411,6 @@ class CodeMethod(BaseErieIronModel):
     code = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     codebert_embedding = VectorField(dimensions=768, null=True)
-
-
-@receiver(post_save, sender=CodeVersion)
-def update_codebert_embedding_on_save(
-        sender, instance, created, update_fields, **kwargs
-):
-    """
-    Automatically update CodeBERT embeddings when a CodeVersion is created or when the code field changes.
-    """
-    # Always update embeddings for new instances
-    if created:
-        instance.update_codebert_embedding()
-        return
-    
-    # For existing instances, check if the code field was updated
-    if update_fields is None:
-        # update_fields is None means all fields were potentially updated
-        # In this case, we'll update the embedding to be safe
-        instance.update_codebert_embedding()
-    elif "code" in update_fields:
-        # The code field was explicitly updated
-        instance.update_codebert_embedding()
 
 
 @receiver(pre_delete, sender=SelfDrivingTaskIteration)

@@ -4,13 +4,13 @@
   "description": "Determines build, test, and deployment strategy based on modified files",
   "type": "object",
   "properties": {
-    "LAMBDAS": {
+    "BUILD_LAMBDAS": {
       "type": "boolean",
       "description": "True if any Lambda code was modified"
     },
-    "CONTAINERS": {
+    "BUILD_CONTAINER": {
       "type": "boolean",
-      "description": "True if any code other than Lambda or Terraform was modified"
+      "description": "True if container build is needed (application code, Dockerfile, or dependencies changed)"
     },
     "RUN_TESTS_LOCALLY": {
       "type": "boolean",
@@ -24,13 +24,25 @@
       "type": "boolean",
       "description": "True if AWS deployment (ECR push + stack update) is required"
     },
-    "DB_MIGRATION_REQUIRED": {
+    "MIGRATE_DATABASE": {
       "type": "boolean",
       "description": "True if models.py was modified and DB migration may be needed"
     },
-    "STACK_TF_CHANGED": {
+    "UPDATE_STACK_TF": {
       "type": "boolean",
       "description": "True if stack.tf or any .tf files were modified"
+    },
+    "PUSH_TO_ECR": {
+      "type": "boolean",
+      "description": "True if container should be pushed to ECR (application code or Dockerfile changed)"
+    },
+    "RUN_BACKEND_TESTS": {
+      "type": "boolean",
+      "description": "True if backend tests should be executed (backend Python code changed)"
+    },
+    "RUN_FRONTEND_TESTS": {
+      "type": "boolean",
+      "description": "True if frontend tests should be executed (frontend JS/CSS/templates changed)"
     },
     "REASONING": {
       "type": "string",
@@ -38,13 +50,16 @@
     }
   },
   "required": [
-    "LAMBDAS",
-    "CONTAINERS",
+    "BUILD_LAMBDAS",
+    "BUILD_CONTAINER",
     "RUN_TESTS_LOCALLY",
     "RUN_TESTS_IN_CONTAINER",
     "DEPLOY_TO_AWS",
-    "DB_MIGRATION_REQUIRED",
-    "STACK_TF_CHANGED",
+    "MIGRATE_DATABASE",
+    "UPDATE_STACK_TF",
+    "PUSH_TO_ECR",
+    "RUN_BACKEND_TESTS",
+    "RUN_FRONTEND_TESTS",
     "REASONING"
   ],
   "additionalProperties": false

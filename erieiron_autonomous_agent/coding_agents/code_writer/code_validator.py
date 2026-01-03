@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from erieiron_autonomous_agent.utils.codegen_utils import CodeCompilationError
+from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import CodeCompilationError
 from erieiron_common import common, ErieEnum
 
 

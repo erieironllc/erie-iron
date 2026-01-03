@@ -13,9 +13,7 @@ from pathlib import Path
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
 
 tf_plugin_cache = Path(os.path.expanduser("~/.terraform.d/plugin-cache"))
 tf_plugin_cache.mkdir(parents=True, exist_ok=True)

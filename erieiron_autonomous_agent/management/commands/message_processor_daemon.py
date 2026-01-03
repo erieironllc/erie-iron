@@ -21,9 +21,6 @@ from erieiron_common.message_queue.pubsub_manager import pubsub_workflow, PubSub
 from erieiron_common.models import PubSubHanderInstanceProcess, PubSubHanderInstance, PubSubMessage
 
 
-os.environ["TREE_SITTER_SKIP_VENDOR"] = "1"
-warnings.filterwarnings("ignore", category=FutureWarning, module="tree_sitter")
-
 @pubsub_workflow
 def add_noop_handlers(pubsub_manager: PubSubManager):
     # this is here to suppress the 'No consumer' messages

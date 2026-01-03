@@ -11,6 +11,25 @@ When writing or modifying a Lambda, these rules **must** be followed.  If you di
 
 ---
 
+## Lambda Code and Deployment Strategy
+
+When planning Lambda-based functionality, follow these rules:
+- All Lambda source files must be written to standalone `.py` files in the `./lambda/` directory. One function per file.
+- You are responsible for planning the **Lambda application code only** — including its file path, handler implementation, and required PyPI dependencies.
+- The deploy manager agent will handle packaging and uploading the Lambda to S3. **Do not** plan any packaging or deployment logic.
+- When planning infrastructure edits related to Lambda deployment:
+  - Do **not** embed code using `ZipFile`, `InlineCode`, or `CodeUri` in the CloudFormation templates. Lambdas live in `infrastructure-application.yaml`.
+  - Each Lambda must be defined using the `Code.S3Bucket` and `Code.S3Key` fields.
+  - The `S3Bucket` must be hardcoded (`erieiron-lambda-packages`).
+  - The `S3Key` must be passed in via a CloudFormation `Parameter`.  **never** hardcode S3 keys.
+- Each Lambda resource in `infrastructure-application.yaml` **must** include a `Metadata` section with the field `SourceFile` set to the full relative path of the Lambda `.py` file (e.g., `lambda/my_handler.py`). 
+    - This is used during deployment to associate Lambda resources with their source files.
+- For every Lambda, you must emit a `dependencies` list that includes **only** the PyPI packages required by that file.
+- Treat Lambda pachaging as an external orchestration concern, not an application concern.
+
+---
+
+
 ### Dependency Awareness
 - The following pypi packages are available at runtime:
 <included_dependencies>

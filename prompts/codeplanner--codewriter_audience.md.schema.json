@@ -21,8 +21,14 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "objective": { "type": "string" },
-        "high_level_approach": { "type": "string" },
+        "objective": {
+          "type": "string",
+          "description": "The goal of this specific iteration's code execution. For first iterations: align with task description. For retry iterations: focus on fixing specific errors. For test failures: bias toward fixing application code to satisfy tests (only fix tests if certain they are wrong)."
+        },
+        "high_level_approach": {
+          "type": "string",
+          "description": "2-4 sentence tactical guidance on how to accomplish the objective. Include specific files/modules to modify, architectural patterns, sequencing/dependencies, and key implementation decisions. Avoid vague platitudes and excessive implementation minutiae."
+        },
         "key_constraints": {
           "type": "array",
           "items": { "type": "string" }
