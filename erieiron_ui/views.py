@@ -189,7 +189,7 @@ def view_login(request):
     protocol = "http" if settings.DEBUG else "https"
     host = request.get_host()
     callback_url = f"{protocol}://{host}{callback_path}"
-    logging.info(f"DEBUG: Cognito callback_url being sent: {callback_url}")
+    logging.info(f"DEBUG ({settings.DEBUG}): Cognito callback_url being sent: {callback_url}")
     
     params = {
         "client_id": cognito_client_id,
