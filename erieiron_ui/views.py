@@ -160,7 +160,7 @@ def _credentials_match(email: str, password: str) -> bool:
 
 
 def view_login(request):
-    """Login page that redirects to Cognito Hosted UI for Google sign-in."""
+    """Login page that renders a sign-in button for Cognito Hosted UI."""
     next_param = request.GET.get("next") or ""
 
     # If already authenticated via Cognito, redirect to destination
@@ -199,11 +199,10 @@ def view_login(request):
     if next_param:
         request.session["post_login_redirect"] = next_param
 
-    # Redirect directly to Cognito Hosted UI with Google identity provider
-    # Users can also choose username/password on Cognito Hosted UI if configured
+    # Build Cognito login URL and pass to template
     cognito_login_url = f"{cognito_domain}/oauth2/authorize?{urlencode(params)}"
 
-    return HttpResponseRedirect(cognito_login_url)
+    return render(request, "login.html", {"cognito_login_url": cognito_login_url})
 
 
 # @ratelimit(key='ip', rate='5/m', method='POST')

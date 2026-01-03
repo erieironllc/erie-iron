@@ -55,11 +55,10 @@
         </div>
 
         <div class="text-center">
-            <div class="spinner-border text-primary mb-3" role="status">
-                <span class="visually-hidden">Redirecting...</span>
-            </div>
-            <p class="text-muted">Redirecting to secure sign-in...</p>
-            <p class="text-muted small">You'll be able to sign in with your Google account.</p>
+            <a href="{{ cognito_login_url }}" class="btn login-btn btn-lg w-100 py-3 fw-semibold">
+                Sign In
+            </a>
+            <p class="text-muted small mt-3">You'll be able to sign in with your Google account.</p>
         </div>
     </div>
 </div>
