@@ -329,7 +329,8 @@ def redirect(redirect_url, cookies=None):
 
 
 def get_cognito_domain():
-    return common.assert_not_empty(os.environ.get("COGNITO_DOMAIN"), "COGNITO_DOMAIN from env")
+    config = agent_tools.get_cognito_config()
+    return config['domain']
 
 
 def get_cognito_client_id():

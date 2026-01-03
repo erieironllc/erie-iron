@@ -26,7 +26,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_http_methods
-from django_ratelimit.decorators import ratelimit
+# from django_ratelimit.decorators import ratelimit
 
 import settings
 from erieiron_autonomous_agent import system_agent_llm_interface
@@ -191,8 +191,9 @@ def view_login(request):
         "response_type": "code",
         "scope": "email openid profile",
         "redirect_uri": callback_url,
-        "identity_provider": "Google",
     }
+
+    # TODO: Add "identity_provider": "Google" after OpenTofu stack is deployed with updated supported_identity_providers
 
     # Store next param in session for after OAuth callback
     if next_param:
@@ -205,8 +206,8 @@ def view_login(request):
     return HttpResponseRedirect(cognito_login_url)
 
 
-@ratelimit(key='ip', rate='5/m', method='POST')
-@ratelimit(key='ip', rate='5/m', method='GET')
+# @ratelimit(key='ip', rate='5/m', method='POST')
+# @ratelimit(key='ip', rate='5/m', method='GET')
 def oauth_cognito_callback(request):
     """OAuth callback handler that exchanges auth code for Cognito tokens."""
     from django.contrib.auth import login as django_login

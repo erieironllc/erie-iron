@@ -683,13 +683,13 @@ def build_container(config: CodingAgentConfig) -> str:
     if build_process.returncode != 0:
         handle_podman_build_failure(config, build_process.returncode)
     
-    if config.stack_manager.get_db_is_running():
-        validate_web_container(config)
-    
     SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
         docker_tag=container_image_tag
     )
     config.current_iteration.refresh_from_db(fields=["docker_tag"])
+    
+    if config.stack_manager.get_db_is_running():
+        validate_web_container(config)
 
 
 def ensure_container_storage_capacity(
