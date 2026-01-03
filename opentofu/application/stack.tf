@@ -849,11 +849,10 @@ resource "aws_cognito_user_pool_client" "main" {
     "https://${var.DomainName}/login/"
   ]
 
-  supported_identity_providers = local.google_oauth_enabled ? ["COGNITO", "Google"] : ["COGNITO"]
+  supported_identity_providers = local.google_oauth_enabled ? ["Google"] : []
 
   explicit_auth_flows = [
-    "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_SRP_AUTH"
+    "ALLOW_REFRESH_TOKEN_AUTH"
   ]
 
   read_attributes = [

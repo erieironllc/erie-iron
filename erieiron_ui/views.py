@@ -191,6 +191,7 @@ def view_login(request):
         "response_type": "code",
         "scope": "email openid profile",
         "redirect_uri": callback_url,
+        "identity_provider": "Google",
     }
 
     # Store next param in session for after OAuth callback
