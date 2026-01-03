@@ -186,10 +186,10 @@ def view_login(request):
 
     # Build callback URL with explicit protocol based on DEBUG setting
     callback_path = reverse("oauth_cognito_callback")
-    protocol = "http" if settings.DEBUG else "https"
+    protocol = "http" if common.parse_bool(settings.DEBUG) else "https"
     host = request.get_host()
     callback_url = f"{protocol}://{host}{callback_path}"
-    logging.info(f"DEBUG ({settings.DEBUG}): Cognito callback_url being sent: {callback_url}")
+    logging.info(f"DEBUG ({common.parse_bool(settings.DEBUG)}): Cognito callback_url being sent: {callback_url}")
     
     params = {
         "client_id": cognito_client_id,
