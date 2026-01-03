@@ -839,7 +839,9 @@ resource "aws_cognito_user_pool_client" "main" {
 
   callback_urls = compact([
     "https://${var.DomainName}/oauth/cognito/callback",
-    "http://localhost:8024/oauth/cognito/callback",
+    "http://localhost:8021/oauth/cognito/callback",
+    "http://localhost:8022/oauth/cognito/callback",
+    "http://localhost:8023/oauth/cognito/callback",
     var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : null
   ])
 
@@ -852,6 +854,23 @@ resource "aws_cognito_user_pool_client" "main" {
   explicit_auth_flows = [
     "ALLOW_REFRESH_TOKEN_AUTH",
     "ALLOW_USER_SRP_AUTH"
+  ]
+
+  read_attributes = [
+    "email",
+    "email_verified",
+    "name",
+    "given_name",
+    "family_name",
+    "picture"
+  ]
+
+  write_attributes = [
+    "email",
+    "name",
+    "given_name",
+    "family_name",
+    "picture"
   ]
 
   refresh_token_validity = 30

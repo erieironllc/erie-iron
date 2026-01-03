@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta, datetime
@@ -2578,6 +2579,61 @@ class ConversationChange(BaseErieIronModel):
     resulting_tasks = models.ManyToManyField('Task', blank=True,
                                              help_text="Tasks created to implement this change")
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         ordering = ['-created_at']
+
+
+class OAuthAccount(models.Model):
+    """
+    Links external OAuth provider accounts (e.g., Cognito/Google) to Django users.
+
+    When a user authenticates via Cognito, we create an OAuthAccount record
+    that maps their Cognito 'sub' claim to a Django User. This allows:
+    - Multiple OAuth providers per user (future extensibility)
+    - Tracking when users last authenticated
+    - Storing raw OAuth profile data for debugging
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='oauth_accounts',
+        help_text="Django user linked to this OAuth account"
+    )
+
+    provider = models.CharField(
+        max_length=64,
+        help_text="OAuth provider name (e.g., 'cognito-google')"
+    )
+
+    external_id = models.CharField(
+        max_length=255,
+        help_text="Provider's unique user ID (e.g., Cognito 'sub' claim)"
+    )
+
+    raw_profile = models.JSONField(
+        default=dict,
+        help_text="Raw OAuth claims/profile data from provider"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'erieiron_oauth_account'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['provider', 'external_id'],
+                name='unique_oauth_provider_external_id'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['provider', 'external_id']),
+            models.Index(fields=['user']),
+        ]
+
+    def __str__(self):
+        return f"{self.provider}:{self.external_id} -> User {self.user_id}"

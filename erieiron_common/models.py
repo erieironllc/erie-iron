@@ -41,6 +41,15 @@ class Person(BaseErieIronModel):
     role = models.TextField(choices=Role.choices(), default=Role.FREE_USER.value)
     server_root = models.TextField(null=True)
     last_updated = models.DateTimeField(null=True)
+
+    django_user = models.OneToOneField(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='person',
+        help_text="Django User for authentication (linked via OAuthAccount)"
+    )
     
     cookie_consent = models.CharField(
         max_length=10,
@@ -103,10 +112,10 @@ class Person(BaseErieIronModel):
             return self.name
     
     @staticmethod
-    def getOrCreateFromCognitoUserData(user_data) -> 'Person':
+    def getOrCreateFromCognitoUserData(user_data, django_user=None) -> 'Person':
         cognito_sub = common.get(user_data, 'sub')
         assert cognito_sub
-        
+
         if Person.objects.filter(cognito_sub=cognito_sub).exists():
             p = Person.objects.get(cognito_sub=cognito_sub)
             p.name = common.get(user_data, 'name')
@@ -117,7 +126,11 @@ class Person(BaseErieIronModel):
                 name=common.get(user_data, 'name'),
                 email=common.get(user_data, 'email')
             )
-        
+
+        # Link to Django User if provided
+        if django_user:
+            p.django_user = django_user
+
         p.save()
         return p
     

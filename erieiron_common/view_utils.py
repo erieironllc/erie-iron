@@ -329,11 +329,7 @@ def redirect(redirect_url, cookies=None):
 
 
 def get_cognito_domain():
-    """
-    Get Cognito domain from agent_tools configuration.
-    """
-    config = agent_tools.get_cognito_config()
-    return config['domain']
+    return common.assert_not_empty(os.environ.get("COGNITO_DOMAIN"), "COGNITO_DOMAIN from env")
 
 
 def get_cognito_client_id():
@@ -341,7 +337,7 @@ def get_cognito_client_id():
     Get Cognito client ID from agent_tools configuration.
     """
     config = agent_tools.get_cognito_config()
-    return config['clientId']
+    return config['client_id']
 
 
 def get_cognito_user_pool_id():
@@ -349,7 +345,7 @@ def get_cognito_user_pool_id():
     Get Cognito user pool ID from agent_tools configuration.
     """
     config = agent_tools.get_cognito_config()
-    return config['userPoolId']
+    return config['user_pool_id']
 
 
 def get_cognito_tokens_from_authcode(code):

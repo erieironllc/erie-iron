@@ -27,7 +27,7 @@ class HealthCheckBypassMiddleware:
 
 
 class CognitoAuthMiddleware:
-    """Cognito JWT authentication middleware with Google federation support."""
+    """Middleware that authenticates requests using Django session + Person model."""
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -44,46 +44,52 @@ class CognitoAuthMiddleware:
         self._static_prefix = f"/{settings.STATIC_URL.lstrip('/')}"
 
     def __call__(self, request):
+        # Initialize attributes
         request.cognito_authenticated = False
         request.cognito_email = None
         request.cognito_sub = None
         request.cognito_user = None
+        request.person = None
 
-        # Check for Cognito ID token in cookie
-        id_token = request.COOKIES.get("cognito_id_token")
-        if id_token:
-            try:
-                from erieiron_common import view_utils
-
-                payload = view_utils.parse_session_token(id_token)
-                if payload:
-                    request.cognito_email = payload.get("email")
-                    request.cognito_sub = payload.get("sub")
-                    request.cognito_authenticated = bool(request.cognito_email and request.cognito_sub)
-
-                    # Link to Person model if authenticated
-                    if request.cognito_authenticated:
-                        try:
-                            from erieiron_common.models import Person
-                            request.cognito_user = Person.objects.filter(cognito_sub=request.cognito_sub).first()
-                        except Exception as user_exc:
-                            _LOG.warning(f"Could not fetch Person for cognito_sub={request.cognito_sub}: {user_exc}")
-            except Exception as exc:
-                _LOG.exception(f"Failed to parse Cognito ID token: {exc}")
-
-        if request.cognito_authenticated or self._is_public_path(request.path):
+        # Skip auth for public paths
+        if self._is_public_path(request.path):
             return self.get_response(request)
 
-        # Redirect to login
-        login_path = "/login/"
-        target = request.get_full_path()
-        redirect_url = f"{login_path}?next={quote(target, safe='/#:?=&%')}"
+        # Use Django's session-based authentication
+        if request.user.is_authenticated:
+            # Load Person from session
+            person_id = request.session.get('person_id')
+            if person_id:
+                from erieiron_common.models import Person
+                try:
+                    request.person = Person.objects.get(id=person_id)
+                    request.cognito_user = request.person  # Backward compatibility
+                    request.cognito_authenticated = True
+                    request.cognito_email = request.person.email
+                    request.cognito_sub = request.person.cognito_sub
+                except Person.DoesNotExist:
+                    _LOG.warning(f"Person {person_id} not found for authenticated user {request.user.email}")
+            else:
+                # Try to find Person by django_user FK
+                from erieiron_common.models import Person
+                try:
+                    request.person = Person.objects.get(django_user=request.user)
+                    request.cognito_user = request.person  # Backward compatibility
+                    request.session['person_id'] = str(request.person.id)
+                    request.cognito_authenticated = True
+                    request.cognito_email = request.person.email
+                    request.cognito_sub = request.person.cognito_sub
+                except Person.DoesNotExist:
+                    pass
 
-        response = HttpResponseRedirect(redirect_url)
-        response.delete_cookie("cognito_id_token")
-        response.delete_cookie("cognito_access_token")
-        response.delete_cookie("cognito_refresh_token")
-        return response
+        # Redirect to login if not authenticated
+        if not request.cognito_authenticated:
+            login_path = "/login/"
+            target = request.get_full_path()
+            redirect_url = f"{login_path}?next={quote(target, safe='/#:?=&%')}"
+            return HttpResponseRedirect(redirect_url)
+
+        return self.get_response(request)
 
     def _is_public_path(self, path: str) -> bool:
         if not path:
