@@ -253,6 +253,8 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    # Trust X-Forwarded-Proto header from load balancer for HTTPS detection
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 LOGGING = settings_utils.get_logging(debug_sql_statements=False)
 logging.config.dictConfig(LOGGING)

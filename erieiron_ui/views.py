@@ -185,7 +185,8 @@ def view_login(request):
         )
 
     callback_url = request.build_absolute_uri(reverse("oauth_cognito_callback"))
-
+    logging.info(f"DEBUG: Cognito callback_url being sent: {callback_url}")
+    
     params = {
         "client_id": cognito_client_id,
         "response_type": "code",

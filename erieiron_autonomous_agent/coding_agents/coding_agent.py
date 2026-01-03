@@ -709,7 +709,7 @@ def ensure_container_storage_capacity(
         f"Detected low disk space for podman storage at {storage_path} ({free_gb:.2f} GiB free). Running aggressive prune."
     )
     
-    exec_container_prune(aggressive=True)
+    exec_container_prune()
     
     free_gb_after_prune = _get_free_space_gb(storage_path)
     if free_gb_after_prune >= min_free_gb:
@@ -1973,7 +1973,7 @@ def evaluate_iteration(
     
     log_output = config.set_phase(SdaPhase.EVALUATE)
     if "no space left on device" in common.default_str(log_output).lower():
-        subprocess.run(["podman", "system", "prune", "-a", "-f"], check=True)
+        exec_container_prune(aggressive=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
     
     runtime_errors, deployment_errors, error_analysis = extract_exceptions(config, iteration)
