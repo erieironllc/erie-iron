@@ -622,7 +622,6 @@ def build_container(config: CodingAgentConfig) -> str:
     
     container_file = config.sandbox_root_dir / "Dockerfile"
     
-    exec_container_prune()
     ensure_container_storage_capacity(config)
     
     current_iteration = config.current_iteration
@@ -709,7 +708,7 @@ def ensure_container_storage_capacity(
         f"Detected low disk space for podman storage at {storage_path} ({free_gb:.2f} GiB free). Running aggressive prune."
     )
     
-    exec_container_prune()
+    exec_container_prune(aggressive=True)
     
     free_gb_after_prune = _get_free_space_gb(storage_path)
     if free_gb_after_prune >= min_free_gb:

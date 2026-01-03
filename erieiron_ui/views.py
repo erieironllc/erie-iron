@@ -184,7 +184,11 @@ def view_login(request):
             status=500
         )
 
-    callback_url = request.build_absolute_uri(reverse("oauth_cognito_callback"))
+    # Build callback URL with explicit protocol based on DEBUG setting
+    callback_path = reverse("oauth_cognito_callback")
+    protocol = "http" if settings.DEBUG else "https"
+    host = request.get_host()
+    callback_url = f"{protocol}://{host}{callback_path}"
     logging.info(f"DEBUG: Cognito callback_url being sent: {callback_url}")
     
     params = {
@@ -227,7 +231,11 @@ def oauth_cognito_callback(request):
         return HttpResponseRedirect(reverse("view_login"))
 
     # Exchange code for tokens using cognito_manager
-    callback_url = request.build_absolute_uri(reverse("oauth_cognito_callback"))
+    # Build callback URL with explicit protocol based on DEBUG setting
+    callback_path = reverse("oauth_cognito_callback")
+    protocol = "http" if settings.DEBUG else "https"
+    host = request.get_host()
+    callback_url = f"{protocol}://{host}{callback_path}"
     tokens = cognito_manager.exchange_code_for_tokens(code, callback_url)
     id_token = tokens.get("id_token")
 
