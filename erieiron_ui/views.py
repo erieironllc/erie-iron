@@ -26,12 +26,9 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_http_methods
-# from django_ratelimit.decorators import ratelimit
 
 import settings
 from erieiron_autonomous_agent import system_agent_llm_interface
-from erieiron_autonomous_agent.business_level_agents import eng_lead
-from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
@@ -45,6 +42,8 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, request_llm_async, get_current_user
+
+# from django_ratelimit.decorators import ratelimit
 
 logger = logging.getLogger(__name__)
 
@@ -162,20 +161,20 @@ def _credentials_match(email: str, password: str) -> bool:
 def view_login(request):
     """Login page that renders a sign-in button for Cognito Hosted UI."""
     next_param = request.GET.get("next") or ""
-
+    
     # If already authenticated via Cognito, redirect to destination
     if getattr(request, "cognito_authenticated", False):
         destination = _resolve_post_login_redirect(request, next_param)
         return HttpResponseRedirect(destination)
-
+    
     # Build Cognito Hosted UI URL for Google sign-in
     from urllib.parse import urlencode
     from erieiron_common import view_utils
     from django.http import HttpResponse
-
+    
     cognito_domain = view_utils.get_cognito_domain()
     cognito_client_id = view_utils.get_cognito_client_id()
-
+    
     # Fail fast if Cognito is not configured
     if not cognito_domain or not cognito_client_id:
         return HttpResponse(
@@ -183,11 +182,11 @@ def view_login(request):
             "Set COGNITO_SECRET_ARN or COGNITO_DOMAIN/COGNITO_CLIENT_ID/COGNITO_USER_POOL_ID environment variables.",
             status=500
         )
-
+    
     # Build callback URL with explicit protocol based on DEBUG setting
     callback_path = reverse("oauth_cognito_callback")
-    protocol = "http" if common.parse_bool(settings.DEBUG) else "https"
     host = request.get_host()
+    protocol = "http" if any(host.lower().startswith(s) for s in ["localhost", "127.0.0.1", "dev."]) else "https"
     callback_url = f"{protocol}://{host}{callback_path}"
     logging.info(f"DEBUG ({common.parse_bool(settings.DEBUG)}): Cognito callback_url being sent: {callback_url}")
     
@@ -197,16 +196,16 @@ def view_login(request):
         "scope": "email openid profile",
         "redirect_uri": callback_url,
     }
-
+    
     # TODO: Add "identity_provider": "Google" after OpenTofu stack is deployed with updated supported_identity_providers
-
+    
     # Store next param in session for after OAuth callback
     if next_param:
         request.session["post_login_redirect"] = next_param
-
+    
     # Build Cognito login URL and pass to template
     cognito_login_url = f"{cognito_domain}/oauth2/authorize?{urlencode(params)}"
-
+    
     return render(request, "login.html", {"cognito_login_url": cognito_login_url})
 
 
@@ -217,19 +216,19 @@ def oauth_cognito_callback(request):
     from django.contrib.auth import login as django_login
     from erieiron_autonomous_agent import cognito_manager
     from erieiron_common.models import Person
-
+    
     code = request.GET.get("code")
     error = request.GET.get("error")
-
+    
     if error:
-        _LOG.error(f"OAuth error: {error}")
+        logging.error(f"OAuth error: {error}")
         messages.error(request, f"Authentication failed: {error}")
         return HttpResponseRedirect(reverse("view_login"))
-
+    
     if not code:
         messages.error(request, "Missing authorization code from Cognito")
         return HttpResponseRedirect(reverse("view_login"))
-
+    
     # Exchange code for tokens using cognito_manager
     # Build callback URL with explicit protocol based on DEBUG setting
     callback_path = reverse("oauth_cognito_callback")
@@ -238,30 +237,30 @@ def oauth_cognito_callback(request):
     callback_url = f"{protocol}://{host}{callback_path}"
     tokens = cognito_manager.exchange_code_for_tokens(code, callback_url)
     id_token = tokens.get("id_token")
-
+    
     if not id_token:
         messages.error(request, "Failed to obtain ID token from Cognito")
         return HttpResponseRedirect(reverse("view_login"))
-
+    
     # Authenticate Django User and create OAuthAccount using cognito_manager
     django_user = cognito_manager.authenticate_user_from_id_token(id_token)
-
+    
     # Parse ID token for Person sync (cognito_manager already validated it)
     user_data = cognito_manager.verify_and_parse_id_token(id_token)
-
+    
     # Create or update Person record (Erie Iron's primary user entity)
     person = Person.getOrCreateFromCognitoUserData(user_data, django_user=django_user)
-
+    
     # Log in the Django user to create session
     django_login(request, django_user)
-
+    
     # Get redirect destination from session or default to home
     next_param = request.session.pop("post_login_redirect", None)
     destination = _resolve_post_login_redirect(request, next_param)
-
+    
     # Store Person ID in session for middleware to use
     request.session['person_id'] = str(person.id)
-
+    
     # Redirect to destination (no cookies needed - using Django session)
     return HttpResponseRedirect(destination)
 
@@ -271,14 +270,14 @@ def action_logout(request):
     from django.contrib.auth import logout as django_logout
     from erieiron_common import view_utils
     from urllib.parse import urlencode
-
+    
     # Clear Django session
     django_logout(request)
-
+    
     # Build Cognito logout URL to clear Cognito session
     cognito_domain = view_utils.get_cognito_domain()
     logout_redirect = request.build_absolute_uri(reverse("view_login"))
-
+    
     if cognito_domain:
         params = {
             "client_id": view_utils.get_cognito_client_id(),
@@ -1794,32 +1793,32 @@ def _tab_context_bug_report(business: Business) -> dict:
 
 def _tab_context_conversation(business: Business) -> dict:
     from erieiron_autonomous_agent.models import ConversationChange
-
+    
     conversations = business.conversations.all().order_by('-updated_at')[:20]
-
+    
     # Load the most recent conversation's messages for initial render
     current_conversation = None
     current_messages = []
     message_changes = {}
-
+    
     if conversations.exists():
         current_conversation = conversations.first()
         messages = current_conversation.messages.all().order_by('created_at')
         current_messages = list(messages)
-
+        
         # Load all pending change proposals for these messages
         message_ids = [msg.id for msg in current_messages]
         changes = ConversationChange.objects.filter(
             message_id__in=message_ids,
             approved=False
         ).select_related('message')
-
+        
         # Group changes by message ID
         for change in changes:
             if change.message_id not in message_changes:
                 message_changes[change.message_id] = []
             message_changes[change.message_id].append(change)
-
+    
     return {
         "conversations": conversations,
         "current_conversation": current_conversation,
@@ -2008,28 +2007,28 @@ def _tab_available_llmrequests_consolidated(business: Business) -> bool:
 def _tab_context_llmrequests_consolidated(business: Business, active_sub_tab=None, request=None) -> dict:
     logger.info(f"_tab_context_llmrequests_consolidated called for business {business.id}, active_sub_tab={active_sub_tab}")
     active_sub_tab = active_sub_tab or "llm-spend"
-
+    
     context = {
         "sub_tabs": {}
     }
-
+    
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _tab_available_llmrequests, _tab_context_llmrequests),
         ("llm-spend", "llm_spend", _tab_available_llm_spend, _tab_context_llm_spend),
     ]
-
+    
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         context["sub_tabs"][sub_tab_key] = {
             "available": availability_fn(business)
         }
-
+        
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(business, request=request))
             else:
                 context.update(context_fn(business))
-
+    
     context["active_sub_tab"] = active_sub_tab
     return context
 
@@ -2043,28 +2042,28 @@ def _initiative_tab_available_llmrequests_consolidated(initiative) -> bool:
 
 def _initiative_tab_context_llmrequests_consolidated(initiative, active_sub_tab=None, request=None) -> dict:
     active_sub_tab = active_sub_tab or "llm-spend"
-
+    
     context = {
         "sub_tabs": {}
     }
-
+    
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _initiative_tab_available_llmrequests, _initiative_tab_context_llmrequests),
         ("llm-spend", "llm_spend", _initiative_tab_available_llm_spend, _initiative_tab_context_llm_spend),
     ]
-
+    
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         context["sub_tabs"][sub_tab_key] = {
             "available": availability_fn(initiative)
         }
-
+        
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(initiative, request=request))
             else:
                 context.update(context_fn(initiative))
-
+    
     context["active_sub_tab"] = active_sub_tab
     return context
 
@@ -2078,28 +2077,28 @@ def _task_tab_available_llmrequests_consolidated(task, business, self_driving_ta
 
 def _task_tab_context_llmrequests_consolidated(task, active_sub_tab=None, request=None) -> dict:
     active_sub_tab = active_sub_tab or "llm-spend"
-
+    
     context = {
         "sub_tabs": {}
     }
-
+    
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _task_tab_available_llmrequests, _task_tab_context_llmrequests),
         ("llm-spend", "llm_spend", _task_tab_available_llm_spend, _task_tab_context_llm_spend),
     ]
-
+    
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         context["sub_tabs"][sub_tab_key] = {
             "available": availability_fn(task)
         }
-
+        
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Special handling for LLM spend which requires request parameter
                 context.update(context_fn(task, request=request))
             else:
                 context.update(context_fn(task))
-
+    
     context["active_sub_tab"] = active_sub_tab
     return context
 
@@ -2128,19 +2127,19 @@ def _portfolio_tab_available_llmrequests_consolidated(portfolio=None) -> bool:
 
 def _portfolio_tab_context_llmrequests_consolidated(portfolio=None, active_sub_tab=None, request=None) -> dict:
     active_sub_tab = active_sub_tab or "llm-spend"
-
+    
     context = {
         "sub_tabs": {}
     }
-
+    
     from erieiron_autonomous_agent.models import Business
     business = Business.get_erie_iron_business()
-
+    
     sub_tabs_config = [
         ("llmrequests", "llmrequests", _portfolio_tab_available_llmrequests, _portfolio_tab_context_llmrequests),
         ("llm-spend", "llm_spend", _portfolio_tab_available_llm_spend, _portfolio_tab_context_llm_spend),
     ]
-
+    
     for sub_tab_slug, sub_tab_key, availability_fn, context_fn in sub_tabs_config:
         if sub_tab_slug == "llm-spend":
             # For llm-spend, pass business instead of portfolio
@@ -2151,14 +2150,14 @@ def _portfolio_tab_context_llmrequests_consolidated(portfolio=None, active_sub_t
             context["sub_tabs"][sub_tab_key] = {
                 "available": availability_fn(portfolio)
             }
-
+        
         if active_sub_tab == sub_tab_slug:
             if sub_tab_slug == "llm-spend":
                 # Portfolio llm-spend context function takes business and request parameter
                 context.update(context_fn(business, request=request))
             else:
                 context.update(context_fn(portfolio))
-
+    
     context["active_sub_tab"] = active_sub_tab
     return context
 
@@ -2197,26 +2196,26 @@ def _build_business_tabs(business: Business) -> list[dict]:
 
 def view_business(request, business_id, tab='overview'):
     from erieiron_ui import tab_defitions
-
+    
     business = get_object_or_404(Business, pk=business_id)
     tab = (tab or 'overview').lower()
-
+    
     logger.info(f"view_business called: business_id={business_id}, tab={tab}")
-
+    
     if tab not in tab_defitions.BUSINESS_TAB_MAP:
         logger.error(f"Tab {tab} not in BUSINESS_TAB_MAP")
         raise Http404
-
+    
     tabs = _build_business_tabs(business)
     tab_definition = tab_defitions.BUSINESS_TAB_MAP[tab]
-
+    
     logger.info(f"Tab definition: template={tab_definition.get('template')}, has_context_fn={'context_fn' in tab_definition}")
-
+    
     is_available = next((t for t in tabs if t['slug'] == tab), None)
     if not is_available or not is_available['available']:
         logger.warning(f"Tab {tab} not available or not found in tabs list")
         raise Http404
-
+    
     context = {
         "business": business,
         "tabs": tabs,
@@ -4178,12 +4177,12 @@ def action_resolve_task(request, task_id):
 
 def action_task_regenerate_test(request, task_id):
     task = get_object_or_404(Task, pk=task_id)
-
+    
     PubSubManager.publish_id(
         PubSubMessageType.RESET_TASK_TEST,
         task_id
     )
-
+    
     messages.info(request, 'Test regeneration started. You will be notified when complete.')
     return redirect(reverse('view_task_tab', args=['testcode', task_id]))
 
@@ -4332,50 +4331,50 @@ def action_business_define_ui_design_spec(request, business_id):
 
 def action_business_regenerate_architecture(request, business_id):
     business = get_object_or_404(Business, pk=business_id)
-
+    
     PubSubManager.publish_id(
         PubSubMessageType.BUSINESS_ARCHITECTURE_GENERATION_REQUESTED,
         business_id
     )
-
+    
     messages.info(request, 'Business architecture regeneration started. You will be notified when complete.')
     return redirect(reverse('view_business_tab', args=['architecture', business_id]))
 
 
 def action_initiative_regenerate_architecture(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-
+    
     PubSubManager.publish_id(
         PubSubMessageType.INITIATIVE_ARCHITECTURE_GENERATION_REQUESTED,
         initiative_id
     )
-
+    
     messages.info(request, 'Initiative architecture regeneration started. You will be notified when complete.')
     return redirect(reverse('view_initiative_tab', args=['architecture', initiative_id]))
 
 
 def action_initiative_regenerate_user_documentation(request, initiative_id):
     initiative = get_object_or_404(Initiative, pk=initiative_id)
-
+    
     PubSubManager.publish_id(
         PubSubMessageType.INITIATIVE_USER_DOCUMENTATION_GENERATION_REQUESTED,
         initiative_id
     )
-
+    
     messages.info(request, 'User documentation regeneration started. You will be notified when complete.')
     return redirect(reverse('view_initiative_tab', args=['user-documentation', initiative_id]))
 
 
 def action_initiative_regenerate_tasks(request, initiative_id):
     initiative: Initiative = get_object_or_404(Initiative, pk=initiative_id)
-
+    
     initiative.tasks.all().delete()
-
+    
     PubSubManager.publish_id(
         PubSubMessageType.INITIATIVE_TASKS_GENERATION_REQUESTED,
         initiative_id
     )
-
+    
     messages.info(request, 'Task regeneration started. You will be notified when complete.')
     return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
 
@@ -4490,16 +4489,16 @@ def action_submit_bug_report(request, business_id):
 def action_submit_bug_report_initiative(request, initiative_id):
     if request.method != 'POST':
         raise Exception()
-
+    
     person = get_current_user(request)
     initiative = get_object_or_404(Initiative, id=initiative_id)
-
+    
     bug_description = rget(request, 'bug_description', '').strip()
-
+    
     if not bug_description:
         messages.error(request, 'Please provide a bug description.')
         return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
-
+    
     try:
         request_llm_async(
             person=person,
@@ -4517,7 +4516,7 @@ def action_submit_bug_report_initiative(request, initiative_id):
                 "bug_description": bug_description
             }
         )
-
+        
         messages.info(request, 'Processing bug report...')
         return redirect(reverse('view_initiative_tab', args=['bug-report', initiative_id]))
     
@@ -5031,12 +5030,12 @@ def action_update_task(request, task_id):
                 return redirect(reverse('view_task_tab', args=['edit', task_id]))
         else:
             update_data['execution_start_time'] = None
-
+        
         if implementation_phase:
             update_data['implementation_phase'] = implementation_phase
         else:
             update_data['implementation_phase'] = None
-
+        
         # Update the task
         Task.objects.filter(id=task_id).update(**update_data)
         
@@ -5330,7 +5329,7 @@ def action_destroy_stack(request, stack_id):
             f'Failed to destroy infrastructure resources for stack "{stack_display}": {exc}'
         )
         return redirect(reverse('view_business_tab', args=['infrastructure-stacks', business_id]))
-
+    
     try:
         stack.delete()
         messages.success(request, f'Stack "{stack_display}" destroyed successfully.')
@@ -6297,10 +6296,10 @@ def business_conversation_message(request, conversation_id):
     # Generate response
     try:
         assistant_msg, changes = manager.generate_response()
-
+        
         # Reload conversation to get updated title
         conversation.refresh_from_db()
-
+        
         return JsonResponse({
             'conversation_title': conversation.title,
             'user_message': {
@@ -6335,11 +6334,11 @@ def business_conversation_detail(request, conversation_id):
     """Get full conversation history"""
     from erieiron_autonomous_agent.models import BusinessConversation
     from erieiron_autonomous_agent.business_conversation_manager import BusinessConversationManager
-
+    
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
-
+    
     manager = BusinessConversationManager(conversation)
-
+    
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'business_id': str(conversation.business.id),
@@ -6356,13 +6355,13 @@ def business_conversation_detail(request, conversation_id):
 def business_conversation_delete(request, conversation_id):
     """Delete a conversation and all associated messages and changes"""
     from erieiron_autonomous_agent.models import BusinessConversation
-
+    
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
     business_id = conversation.business.id
-
+    
     logger.info(f"Deleting conversation {conversation_id} for business {business_id}")
     conversation.delete()
-
+    
     return JsonResponse({
         'success': True,
         'business_id': str(business_id)
@@ -6396,10 +6395,10 @@ def business_conversations_list(request, business_id):
 def conversation_changes_list(request, conversation_id):
     """List all change proposals for a conversation"""
     from erieiron_autonomous_agent.models import BusinessConversation
-
+    
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
     changes = conversation.changes.select_related('message').prefetch_related('resulting_tasks')
-
+    
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'changes': [
@@ -6853,7 +6852,7 @@ def stack_credential_secret_update(request, stack_id, credential_service_name):
         stack.credential_arns = {}
     stack.credential_arns[credential_service.value] = arn
     stack.save(update_fields=["credential_arns"])
-
+    
     return JsonResponse({"success": True, "arn": arn})
 
 
@@ -6867,14 +6866,14 @@ def action_submit_bug_report_initiative_completion(request):
         llm_response = body.get('llm_response', {})
         initiative_id = body.get('initiative_id')
         bug_description = body.get('bug_description')
-
+        
         if llm_response.get('error'):
             logging.error(f"LLM error processing bug report: {llm_response['error']}")
             return {"success": False, "error": llm_response['error']}
-
+        
         parsed_data = llm_response.get('json', {})
         initiative = Initiative.objects.get(id=initiative_id)
-
+        
         Task.objects.create(
             id=f"task_bug_report_{initiative.business.service_token}_{common.gen_random_token(8)}",
             initiative=initiative,
@@ -6884,9 +6883,9 @@ def action_submit_bug_report_initiative_completion(request):
             risk_notes=parsed_data.get('risk_notes', ''),
             completion_criteria=parsed_data.get('completion_criteria', ['Bug is reproduced and fixed'])
         )
-
+        
         return {"success": True, "task_created": True}
-
+    
     except Exception as e:
         logging.exception(e)
         return {"success": False, "error": str(e)}

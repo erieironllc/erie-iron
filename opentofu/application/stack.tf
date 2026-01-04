@@ -866,7 +866,7 @@ resource "aws_cognito_user_pool_client" "main" {
     "http://127.0.0.1:8024/login/"
   ])
 
-  supported_identity_providers = local.google_oauth_enabled ? ["Google"] : []
+  supported_identity_providers = local.google_oauth_enabled ? ["Google"] : ["COGNITO"]
 
   explicit_auth_flows = [
     "ALLOW_REFRESH_TOKEN_AUTH"
