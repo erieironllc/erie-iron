@@ -13,7 +13,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BASE_DIR = Path(__file__).resolve().parent
 config = settings_utils.get_config()
-DEBUG = config.get("DEBUG", True)
+DEBUG = str(config.get("DEBUG", "True")).lower().strip() == "true"
 
 VALIDATION_PORT = 8006
 TIME_ZONE = 'America/Los_Angeles'
