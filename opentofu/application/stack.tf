@@ -839,31 +839,17 @@ resource "aws_cognito_user_pool_client" "main" {
 
   callback_urls = compact([
     "https://${var.DomainName}/oauth/cognito/callback",
-    "http://localhost:8000/oauth/cognito/callback",
     "http://localhost:8021/oauth/cognito/callback",
     "http://localhost:8022/oauth/cognito/callback",
     "http://localhost:8023/oauth/cognito/callback",
-    "http://localhost:8024/oauth/cognito/callback",
-    "http://127.0.0.1:8000/oauth/cognito/callback",
-    "http://127.0.0.1:8021/oauth/cognito/callback",
-    "http://127.0.0.1:8022/oauth/cognito/callback",
-    "http://127.0.0.1:8023/oauth/cognito/callback",
-    "http://127.0.0.1:8024/oauth/cognito/callback",
     var.MobileAppScheme != "" ? "${var.MobileAppScheme}://oauth/cognito/callback" : null
   ])
 
   logout_urls = compact([
     "https://${var.DomainName}/login/",
-    "http://localhost:8000/login/",
     "http://localhost:8021/login/",
     "http://localhost:8022/login/",
-    "http://localhost:8023/login/",
-    "http://localhost:8024/login/",
-    "http://127.0.0.1:8000/login/",
-    "http://127.0.0.1:8021/login/",
-    "http://127.0.0.1:8022/login/",
-    "http://127.0.0.1:8023/login/",
-    "http://127.0.0.1:8024/login/"
+    "http://localhost:8023/login/"
   ])
 
   supported_identity_providers = local.google_oauth_enabled ? ["Google"] : ["COGNITO"]
