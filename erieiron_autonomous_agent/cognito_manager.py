@@ -19,6 +19,7 @@ from django.db import transaction
 
 import boto3
 from erieiron_autonomous_agent.models import OAuthAccount
+from erieiron_common import common
 
 User = get_user_model()
 
@@ -62,7 +63,6 @@ def _get_cognito_config() -> Dict[str, Any]:
     secretsmanager = boto3.client('secretsmanager')
     response = secretsmanager.get_secret_value(SecretId=secret_arn)
     config = json.loads(response['SecretString'])
-    config['domain'] = os.getenv("COGNITO_DOMAIN")
 
     _config_cache['data'] = config
     _config_cache['expires'] = now + 300  # 5 minutes
@@ -235,8 +235,9 @@ def exchange_code_for_tokens(
         requests.HTTPError: If token exchange fails
     """
     config = _get_cognito_config()
-
-    token_url = f"{config['domain']}/oauth2/token"
+    
+    cognito_domain = common.assert_not_empty(config['domain'], 'cognito config domain')
+    token_url = f"{cognito_domain}/oauth2/token"
 
     data = {
         'grant_type': 'authorization_code',
