@@ -137,6 +137,35 @@ class Person(BaseErieIronModel):
     def get_auth_status(self) -> PersonAuthStatus:
         return PersonAuthStatus.ALL_GOOD
 
+    def get_accessible_businesses(self):
+        if self.is_admin():
+            from erieiron_autonomous_agent.models import Business
+            return Business.objects.all()
+        else:
+            return [assoc.business for assoc in self.business_associations.select_related('business').all()]
+
+    def has_business_access(self, business):
+        if self.is_admin():
+            return True
+        return self.business_associations.filter(business=business).exists()
+
+
+class PersonBusinessAssociation(BaseErieIronModel):
+    person = models.ForeignKey(Person, on_delete=models.CASCADE, related_name='business_associations')
+    business = models.ForeignKey('erieiron_autonomous_agent.Business', on_delete=models.CASCADE, related_name='person_associations')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'erieiron_personbusinessassociation'
+        unique_together = [['person', 'business']]
+        indexes = [
+            models.Index(fields=['person']),
+            models.Index(fields=['business']),
+        ]
+
+    def __str__(self):
+        return f"{self.person.email} -> {self.business.name}"
+
 
 class Project(BaseErieIronModel):
     NEW_PROJECT_NAME = "New Project"

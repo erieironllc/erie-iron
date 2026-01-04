@@ -1,0 +1,191 @@
+{% load erieiron_common_tags %}
+
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h2>User: {{ person.email }}</h2>
+                    <p class="text-muted mb-0">{{ person.name|default:"No name set" }}</p>
+                </div>
+                <a href="{% url 'view_admin_users' %}" class="btn btn-secondary">
+                    <i class="bi bi-arrow-left"></i> Back to Users
+                </a>
+            </div>
+
+            <!-- Role Management Card -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Role Management</h5>
+                </div>
+                <div class="card-body">
+                    <form id="role-update-form">
+                        {% csrf_token %}
+                        <div class="row align-items-end">
+                            <div class="col-md-6">
+                                <label for="role-select" class="form-label">Current Role</label>
+                                <select id="role-select" class="form-select" name="role">
+                                    {% for role in available_roles %}
+                                        <option value="{{ role.value }}" {% if role.value == person.role %}selected{% endif %}>
+                                            {{ role.label }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <button type="submit" class="btn btn-primary" id="update-role-btn">
+                                    Update Role
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Business Access Management Card -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Business Access</h5>
+                </div>
+                <div class="card-body">
+                    <!-- Current Access -->
+                    <h6>Current Access</h6>
+                    {% if associations %}
+                        <div class="list-group mb-4">
+                            {% for assoc in associations %}
+                                <div class="list-group-item d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>{{ assoc.business.name }}</strong>
+                                        <br>
+                                        <small class="text-muted">Granted: {{ assoc.created_at|date:"M d, Y H:i" }}</small>
+                                    </div>
+                                    <button class="btn btn-sm btn-danger remove-access-btn"
+                                            data-association-id="{{ assoc.id }}"
+                                            data-business-name="{{ assoc.business.name }}">
+                                        <i class="bi bi-trash"></i> Remove
+                                    </button>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="text-muted">No business access granted yet.</p>
+                    {% endif %}
+
+                    <!-- Add New Access -->
+                    {% if available_businesses %}
+                        <h6 class="mt-4">Grant New Access</h6>
+                        <form id="add-access-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="person_id" value="{{ person.id }}">
+                            <div class="row align-items-end">
+                                <div class="col-md-8">
+                                    <label for="business-select" class="form-label">Select Business</label>
+                                    <select id="business-select" class="form-select" name="business_id">
+                                        <option value="">-- Select a business --</option>
+                                        {% for business in available_businesses %}
+                                            <option value="{{ business.id }}">{{ business.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <button type="submit" class="btn btn-success" id="add-access-btn">
+                                        <i class="bi bi-plus"></i> Grant Access
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    {% else %}
+                        <p class="text-muted mt-4">User has access to all businesses.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    const AdminUserDetailView = Backbone.View.extend({
+        el: 'body',
+
+        events: {
+            'submit #role-update-form': 'updateRole',
+            'submit #add-access-form': 'addAccess',
+            'click .remove-access-btn': 'removeAccess'
+        },
+
+        updateRole: function(e) {
+            e.preventDefault();
+            const role = $('#role-select').val();
+            const personId = '{{ person.id }}';
+
+            erie_server().exec_server_post(
+                '{% url "action_admin_update_user_role" person.id %}',
+                {role: role},
+                (response) => {
+                    if (response.success) {
+                        alert('Role updated successfully');
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (response.error || 'Unknown error'));
+                    }
+                }
+            );
+        },
+
+        addAccess: function(e) {
+            e.preventDefault();
+            const businessId = $('#business-select').val();
+
+            if (!businessId) {
+                alert('Please select a business');
+                return;
+            }
+
+            erie_server().exec_server_post(
+                '{% url "action_admin_add_business_access" %}',
+                {
+                    person_id: '{{ person.id }}',
+                    business_id: businessId
+                },
+                (response) => {
+                    if (response.success) {
+                        alert('Access granted successfully');
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (response.error || 'Unknown error'));
+                    }
+                }
+            );
+        },
+
+        removeAccess: function(e) {
+            e.preventDefault();
+            const $btn = $(e.currentTarget);
+            const associationId = $btn.data('association-id');
+            const businessName = $btn.data('business-name');
+
+            if (!confirm(`Remove access to "${businessName}"?`)) {
+                return;
+            }
+
+            const url = '/_admin/business-access/' + associationId + '/delete/';
+
+            erie_server().exec_server_post(
+                url,
+                {},
+                (response) => {
+                    if (response.success) {
+                        alert('Access removed successfully');
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (response.error || 'Unknown error'));
+                    }
+                }
+            );
+        }
+    });
+
+    window.adminUserDetailView = new AdminUserDetailView();
+});
+</script>

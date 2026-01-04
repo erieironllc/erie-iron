@@ -131,4 +131,11 @@ urlpatterns = [
     path('stack/<uuid:stack_id>/credentials/<str:credential_service_name>/secret/update/', views.stack_credential_secret_update, name='stack_credential_secret_update'),
     path('stack/<uuid:stack_id>/credentials/update/', views.stack_credentials_update, name='stack_credentials_update'),
     path('stack/<uuid:stack_id>/credentials/delete/', views.stack_credentials_delete, name='stack_credentials_delete'),
+
+    # Admin routes
+    path('admin/users/', views.view_admin_users, name='view_admin_users'),
+    path('admin/users/<uuid:person_id>/', views.view_admin_user_detail, name='view_admin_user_detail'),
+    path('_admin/users/<uuid:person_id>/update-role/', views.action_admin_update_user_role, name='action_admin_update_user_role'),
+    path('_admin/business-access/add/', views.action_admin_add_business_access, name='action_admin_add_business_access'),
+    path('_admin/business-access/<uuid:association_id>/delete/', views.action_admin_delete_business_access, name='action_admin_delete_business_access'),
 ]

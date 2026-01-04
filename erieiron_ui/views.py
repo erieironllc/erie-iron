@@ -41,7 +41,7 @@ from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance
-from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, request_llm_async, get_current_user
+from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, request_llm_async, get_current_user, admin_required
 
 # from django_ratelimit.decorators import ratelimit
 
@@ -308,23 +308,32 @@ def healthcheck(request):
     return JsonResponse({"ok": True})
 
 
-def _portfolio_tab_context_portfolio(erieiron_business: Business) -> dict:
+def _portfolio_tab_context_portfolio(erieiron_business: Business, request: HttpRequest = None) -> dict:
     ei_business = Business.get_erie_iron_business()
-    
+
+    current_user = get_current_user(request) if request else None
+    if current_user and not current_user.is_admin():
+        accessible_businesses = list(current_user.get_accessible_businesses())
+        all_businesses = accessible_businesses
+    else:
+        all_businesses = list(Business.objects.exclude(id=ei_business.id).order_by("name"))
+
     portfolio_businesses = defaultdict(list)
-    for b in Business.objects.exclude(id=ei_business.id).order_by("name"):
+    for b in all_businesses:
         portfolio_businesses[BusinessStatus(b.status)].append(b)
-    
+
+    businesses_list = []
+    if not current_user or current_user.is_admin():
+        businesses_list.append(ei_business)
+    businesses_list.extend(portfolio_businesses[BusinessStatus.ACTIVE])
+    businesses_list.extend(portfolio_businesses[BusinessStatus.IDEA])
+    businesses_list.extend(portfolio_businesses[BusinessStatus.PAUSED])
+    businesses_list.extend(portfolio_businesses[BusinessStatus.SHUTDOWN])
+
     return {
         "operation_type_choices": BusinessOperationType.choices(),
         "operation_type_default": BusinessOperationType.ERIE_IRON_AUTONOMOUS.value,
-        "businesses": [
-            ei_business,
-            *portfolio_businesses[BusinessStatus.ACTIVE],
-            *portfolio_businesses[BusinessStatus.IDEA],
-            *portfolio_businesses[BusinessStatus.PAUSED],
-            *portfolio_businesses[BusinessStatus.SHUTDOWN]
-        ]
+        "businesses": businesses_list
     }
 
 
@@ -554,7 +563,7 @@ def view_message_processor_details(request, instance_id):
         "portfolio/portfolio_base.html",
         {
             "business": Business.get_erie_iron_business(),
-            "tabs": _build_portfolio_tabs(Business.get_erie_iron_business()),
+            "tabs": _build_portfolio_tabs(Business.get_erie_iron_business(), request=request),
             "instance": instance,
             "processes": process_data,
             "total_processes": len(processes),
@@ -572,6 +581,17 @@ def view_message_processor_details(request, instance_id):
 
 def _portfolio_tab_available_logout(_: Business) -> bool:
     return True
+
+
+def _portfolio_tab_available_admin(_: Business, request: HttpRequest = None) -> bool:
+    if not request:
+        return False
+    try:
+        current_user = get_current_user(request)
+        return current_user and current_user.is_admin()
+    except Exception as e:
+        logger.exception(f"_portfolio_tab_available_admin error: {e}")
+        return False
 
 
 def _portfolio_tab_context_profile(_: Business, request: HttpRequest) -> dict:
@@ -1063,18 +1083,22 @@ def _tab_context_llm_spend(business: Business, request=None) -> dict:
     return _build_llm_spend_context(business=business, request=request)
 
 
-def _build_portfolio_tabs(erieiron_business: Business) -> list[dict]:
+def _build_portfolio_tabs(erieiron_business: Business, request: HttpRequest = None) -> list[dict]:
     from erieiron_ui import tab_defitions
     tabs: list[dict] = []
-    
+
     for definition in tab_defitions.PORTFOLIO_TAB_DEFINITIONS:
         if definition.get("is_divider"):
             tabs.append(definition)
             continue
-        
+
         slug = definition["slug"]
         if "availability_fn" in definition:
-            available = definition["availability_fn"](erieiron_business)
+            fn_params = inspect.signature(definition["availability_fn"]).parameters
+            if "request" in fn_params:
+                available = definition["availability_fn"](erieiron_business, request=request)
+            else:
+                available = definition["availability_fn"](erieiron_business)
         else:
             available = True
         
@@ -1105,8 +1129,8 @@ def view_portfolio(request, tab: str = 'portfolio'):
     
     if tab_slug not in tab_defitions.PORTFOLIO_TAB_MAP:
         raise Http404
-    
-    tabs = _build_portfolio_tabs(erieiron_business)
+
+    tabs = _build_portfolio_tabs(erieiron_business, request=request)
     tab_definition = tab_defitions.PORTFOLIO_TAB_MAP[tab_slug]
     
     active_tab_entry = next((t for t in tabs if t.get('slug') == tab_slug), None)
@@ -1183,9 +1207,9 @@ def view_portfolio_with_sub_tab(request, tab, sub_tab):
     
     if not sub_tab_found:
         raise Http404
-    
-    tabs = _build_portfolio_tabs(erieiron_business)
-    
+
+    tabs = _build_portfolio_tabs(erieiron_business, request=request)
+
     is_available = next((t for t in tabs if t['slug'] == tab), None)
     if not is_available or not is_available['available']:
         raise Http404
@@ -2196,10 +2220,15 @@ def _build_business_tabs(business: Business) -> list[dict]:
 
 def view_business(request, business_id, tab='overview'):
     from erieiron_ui import tab_defitions
-    
+
     business = get_object_or_404(Business, pk=business_id)
+
+    current_user = get_current_user(request)
+    if current_user and not current_user.has_business_access(business):
+        raise Http404
+
     tab = (tab or 'overview').lower()
-    
+
     logger.info(f"view_business called: business_id={business_id}, tab={tab}")
     
     if tab not in tab_defitions.BUSINESS_TAB_MAP:
@@ -2251,8 +2280,13 @@ def view_business(request, business_id, tab='overview'):
 
 def view_business_with_sub_tab(request, business_id, tab, sub_tab):
     from erieiron_ui import tab_defitions
-    
+
     business = get_object_or_404(Business, pk=business_id)
+
+    current_user = get_current_user(request)
+    if current_user and not current_user.has_business_access(business):
+        raise Http404
+
     tab = (tab or 'overview').lower()
     sub_tab = (sub_tab or '').lower()
     
@@ -4280,7 +4314,16 @@ def action_add_business(request):
         raw_idea=business_description,
         operation_type=operation_type
     )
-    
+
+    current_user = get_current_user(request)
+    if current_user and not current_user.is_admin():
+        from erieiron_common.models import PersonBusinessAssociation
+        PersonBusinessAssociation.objects.create(
+            person=current_user,
+            business=business
+        )
+        logging.info(f"Auto-associated {current_user.email} with new business {business.name}")
+
     PubSubManager.publish(
         PubSubMessageType.BUSINESS_IDEA_SUBMITTED,
         payload={
@@ -4289,7 +4332,7 @@ def action_add_business(request):
             'idea_content': business_description
         }
     )
-    
+
     messages.success(request, 'Business idea submitted successfully! It will be reviewed and processed.')
     return redirect(reverse('view_business', args=[business.id]))
 
@@ -6047,7 +6090,7 @@ def view_pubsub_message_details(request, message_id):
         "portfolio/portfolio_base.html",
         {
             "business": Business.get_erie_iron_business(),
-            "tabs": _build_portfolio_tabs(Business.get_erie_iron_business()),
+            "tabs": _build_portfolio_tabs(Business.get_erie_iron_business(), request=request),
             "message": message,
             "payload_json": json.dumps(message.payload, indent=2) if message.payload else None,
             "tab_template": "pubsub/message_details.html",
@@ -6889,3 +6932,133 @@ def action_submit_bug_report_initiative_completion(request):
     except Exception as e:
         logging.exception(e)
         return {"success": False, "error": str(e)}
+
+
+# Admin Views
+
+@admin_required
+def view_admin_users(request):
+    from erieiron_common.models import PersonBusinessAssociation
+
+    people = Person.objects.all().order_by('email')
+
+    people_data = []
+    for person in people:
+        business_count = PersonBusinessAssociation.objects.filter(person=person).count()
+        people_data.append({
+            'person': person,
+            'business_count': business_count
+        })
+
+    erieiron_business = Business.get_erie_iron_business()
+    tabs = _build_portfolio_tabs(erieiron_business, request=request)
+
+    context = {
+        'people_data': people_data,
+        'available_roles': Role.roles_in_order(),
+        'business': erieiron_business,
+        'tabs': tabs,
+        'active_tab': 'admin',
+        'tab_template': 'admin/users.html',
+        'sidebar_title': 'Erie Iron',
+    }
+
+    breadcrumbs = [
+        (reverse('view_portfolio'), "Portfolio"),
+        (reverse('view_admin_users'), "Admin - Users")
+    ]
+
+    return send_response(request, 'portfolio/portfolio_base.html', context, breadcrumbs=breadcrumbs)
+
+
+@admin_required
+def view_admin_user_detail(request, person_id):
+    from erieiron_common.models import PersonBusinessAssociation
+
+    person = get_object_or_404(Person, id=person_id)
+
+    associations = PersonBusinessAssociation.objects.filter(person=person).select_related('business')
+    all_businesses = Business.objects.all().order_by('name')
+
+    associated_business_ids = set(assoc.business.id for assoc in associations)
+    available_businesses = [b for b in all_businesses if b.id not in associated_business_ids]
+
+    erieiron_business = Business.get_erie_iron_business()
+    tabs = _build_portfolio_tabs(erieiron_business, request=request)
+
+    context = {
+        'person': person,
+        'associations': associations,
+        'available_businesses': available_businesses,
+        'available_roles': Role.roles_in_order(),
+        'current_role': Role(person.role),
+        'business': erieiron_business,
+        'tabs': tabs,
+        'active_tab': 'admin',
+        'tab_template': 'admin/user_detail.html',
+        'sidebar_title': 'Erie Iron',
+    }
+
+    breadcrumbs = [
+        (reverse('view_portfolio'), "Portfolio"),
+        (reverse('view_admin_users'), "Admin - Users"),
+        (reverse('view_admin_user_detail', args=[person_id]), person.email)
+    ]
+
+    return send_response(request, 'portfolio/portfolio_base.html', context, breadcrumbs=breadcrumbs)
+
+
+@admin_required
+@json_endpoint
+def action_admin_update_user_role(request, person_id):
+    person = get_object_or_404(Person, id=person_id)
+    new_role = rget(request, 'role')
+
+    if not new_role or not Role.valid_or(new_role):
+        return {"success": False, "error": "Invalid role"}
+
+    person.role = new_role
+    person.save()
+
+    logging.info(f"Admin updated user {person.email} role to {new_role}")
+
+    return {"success": True, "new_role": new_role}
+
+
+@admin_required
+@json_endpoint
+def action_admin_add_business_access(request):
+    from erieiron_common.models import PersonBusinessAssociation
+
+    person_id = rget(request, 'person_id')
+    business_id = rget(request, 'business_id')
+
+    person = get_object_or_404(Person, id=person_id)
+    business = get_object_or_404(Business, id=business_id)
+
+    association, created = PersonBusinessAssociation.objects.get_or_create(
+        person=person,
+        business=business
+    )
+
+    if created:
+        logging.info(f"Admin granted {person.email} access to business {business.name}")
+        return {"success": True, "message": "Access granted"}
+    else:
+        return {"success": False, "error": "Access already exists"}
+
+
+@admin_required
+@json_endpoint
+def action_admin_delete_business_access(request, association_id):
+    from erieiron_common.models import PersonBusinessAssociation
+
+    association = get_object_or_404(PersonBusinessAssociation, id=association_id)
+    person_email = association.person.email
+    business_name = association.business.name
+
+    association.delete()
+
+    logging.info(f"Admin removed {person_email} access to business {business_name}")
+
+    return {"success": True, "message": "Access removed"}

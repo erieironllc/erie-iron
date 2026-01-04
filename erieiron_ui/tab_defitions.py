@@ -188,6 +188,13 @@ PORTFOLIO_TAB_DEFINITIONS = [
     # },
     TAB_DIVIDER,
     {
+        "slug": "admin",
+        "label": "Admin",
+        "is_action_tab": True,
+        "availability_fn": views._portfolio_tab_available_admin,
+        "url_name": "view_admin_users",
+    },
+    {
         "slug": "profile",
         "label": "Profile",
         "template": "portfolio/tabs/profile.html",

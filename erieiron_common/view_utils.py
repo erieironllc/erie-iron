@@ -96,7 +96,7 @@ def admin_required(function):
         
         if p is None or not p.is_admin():
             return redirect(
-                reverse('login'),
+                reverse('view_login'),
                 cookies=[
                     (COOKIE_NEXT_URL, request.get_full_path())
                 ]
@@ -256,14 +256,43 @@ def get_current_user(request) -> models.Person:
 
 
 def _get_current_user_internal(request) -> models.Person:
+    # Try Cognito authentication first
     user_data = parse_session_cookie(request)
     cognito_sub = common.get(user_data, 'sub')
-    profile_photo_url = common.get(user_data, 'picture')
-    try:
-        person = models.Person.objects.get(cognito_sub=cognito_sub)
-        return person
-    except:
-        return None
+    if cognito_sub:
+        try:
+            person = models.Person.objects.get(cognito_sub=cognito_sub)
+            return person
+        except:
+            pass
+
+    # Fallback 1: Try request.user_data (set by middleware)
+    if hasattr(request, 'user_data') and request.user_data:
+        user_email = common.get(request.user_data, 'email')
+        if user_email:
+            try:
+                person = models.Person.objects.get(email=user_email)
+                return person
+            except:
+                pass
+
+    # Fallback 2: Try Django's request.user
+    if hasattr(request, 'user') and request.user and hasattr(request.user, 'email'):
+        try:
+            person = models.Person.objects.get(email=request.user.email)
+            return person
+        except:
+            pass
+
+    # Fallback 3: Try Django's request.user.username as email
+    if hasattr(request, 'user') and request.user and hasattr(request.user, 'username'):
+        try:
+            person = models.Person.objects.get(email=request.user.username)
+            return person
+        except:
+            pass
+
+    return None
 
 
 def send_response(request, template, context=None, validate=False, status_code=200, breadcrumbs=None):

@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import shutil
 import uuid
 from pathlib import Path
 from typing import List
@@ -331,27 +332,35 @@ def dictsort_case_insensitive(value, arg):
 
 @register.simple_tag
 def timestamp_static(orig_filename):
-    static_dir_root = Path.cwd() / settings.STATIC_COMPILED_DIR
+    static_dir_root = Path(settings.STATIC_COMPILED_DIR)
+    if not static_dir_root.is_absolute():
+        static_dir_root = Path.cwd() / static_dir_root
+
     filename, ext = common.get_filename_and_extension(f"{static_dir_root}/{orig_filename}")
-    
-    files_with_time = []
-    
+    files_with_time: list[tuple[Path, int]] = []
+
     for file_path in glob.glob(os.path.join(static_dir_root, f"{filename}-*.{ext}")):
-        base_name = os.path.basename(file_path)
+        path = Path(file_path)
+        base_name = path.name
         timestamp = base_name.split('-')[1].split('.')[0]
-        file_time_tuple = (file_path, int(timestamp))
-        files_with_time.append(file_time_tuple)
-    
+        files_with_time.append((path, int(timestamp)))
+
     files_with_time.sort(key=lambda x: x[1], reverse=True)
-    
+
+    static_root = Path(settings.STATIC_ROOT)
+    target_dir = static_root / static_dir_root.name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     latest_matching_file = orig_filename  # default to the orig name in the case it's not timestamped
-    for idx, file_time_tuple in enumerate(files_with_time):
-        file = file_time_tuple[0]
+    for idx, (file_path, _) in enumerate(files_with_time):
+        destination_path = target_dir / file_path.name
         if idx == 0:
-            latest_matching_file = os.path.basename(file)
+            latest_matching_file = file_path.name
+            shutil.copy2(file_path, destination_path)
         else:
-            common.quietly_delete(file)
-    
+            common.quietly_delete(file_path)
+            common.quietly_delete(destination_path)
+
     return f"/static/{static_dir_root.name}/{latest_matching_file}"
 
 
