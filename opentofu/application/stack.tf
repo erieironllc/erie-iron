@@ -119,6 +119,12 @@ variable "OauthGoogleSecretArn" {
   sensitive   = true
 }
 
+variable "GoogleOAuthEnabled" {
+  description = "Whether to enable Google OAuth as identity provider. Defaults to true. Set to false only for automated testing purposes."
+  type        = bool
+  default     = true
+}
+
 variable "CognitoConfigSecretArn" {
   description = "ARN of an existing Cognito config secret to adopt. If provided and valid, the stack will not create a new secret. If empty or invalid, the stack creates an in-stack secret."
   type        = string
@@ -234,7 +240,8 @@ locals {
   google_oauth_create_secret = local.google_oauth_credentials_provided && length(local.google_oauth_external_arn_valid) == 0
   # Final resolved ARN: external ARN takes precedence, otherwise use newly created secret
   google_oauth_secret_arn = length(local.google_oauth_external_arn_valid) > 0 ? local.google_oauth_external_arn_valid : try(aws_secretsmanager_secret.google_oauth[0].arn, null)
-  google_oauth_enabled    = local.google_oauth_secret_arn != null
+  # Enable Google OAuth if: parameter is true AND (secret ARN exists OR credentials are provided)
+  google_oauth_enabled    = var.GoogleOAuthEnabled 
 
   base_tags = merge(
     {
