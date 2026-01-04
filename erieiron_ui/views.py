@@ -183,12 +183,7 @@ def view_login(request):
             status=500
         )
     
-    # Build callback URL with explicit protocol based on DEBUG setting
-    callback_path = reverse("oauth_cognito_callback")
-    host = request.get_host()
-    protocol = "http" if any(host.lower().startswith(s) for s in ["localhost", "127.0.0.1", "dev."]) else "https"
-    callback_url = f"{protocol}://{host}{callback_path}"
-    logging.info(f"DEBUG ({common.parse_bool(settings.DEBUG)}): Cognito callback_url being sent: {callback_url}")
+    callback_url = get_callback_url(request)
     
     params = {
         "client_id": cognito_client_id,
@@ -207,6 +202,16 @@ def view_login(request):
     cognito_login_url = f"{cognito_domain}/oauth2/authorize?{urlencode(params)}"
     
     return render(request, "login.html", {"cognito_login_url": cognito_login_url})
+
+
+def get_callback_url(request) -> str:
+    # Build callback URL with explicit protocol based on DEBUG setting
+    callback_path = reverse("oauth_cognito_callback")
+    host = request.get_host()
+    protocol = "http" if any(host.lower().startswith(s) for s in ["localhost", "127.0.0.1", "dev."]) else "https"
+    callback_url = f"{protocol}://{host}{callback_path}"
+    logging.info(f"DEBUG ({common.parse_bool(settings.DEBUG)}): Cognito callback_url being sent: {callback_url}")
+    return callback_url
 
 
 # @ratelimit(key='ip', rate='5/m', method='POST')
@@ -229,12 +234,7 @@ def oauth_cognito_callback(request):
         messages.error(request, "Missing authorization code from Cognito")
         return HttpResponseRedirect(reverse("view_login"))
     
-    # Exchange code for tokens using cognito_manager
-    # Build callback URL with explicit protocol based on DEBUG setting
-    callback_path = reverse("oauth_cognito_callback")
-    protocol = "http" if settings.DEBUG else "https"
-    host = request.get_host()
-    callback_url = f"{protocol}://{host}{callback_path}"
+    callback_url = get_callback_url(request)
     tokens = cognito_manager.exchange_code_for_tokens(code, callback_url)
     id_token = tokens.get("id_token")
     
