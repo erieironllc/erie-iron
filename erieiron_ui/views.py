@@ -7062,3 +7062,47 @@ def action_admin_delete_business_access(request, association_id):
     logging.info(f"Admin removed {person_email} access to business {business_name}")
 
     return {"success": True, "message": "Access removed"}
+
+
+@admin_required
+@json_endpoint
+def action_admin_create_person(request):
+    import re
+
+    email = rget(request, 'email', '').strip().lower()
+    name = rget(request, 'name', '').strip()
+    role = rget(request, 'role', Role.FREE_USER.value)
+
+    # Validate email is provided
+    if not email:
+        return {"success": False, "error": "Email is required"}
+
+    # Validate email format
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
+        return {"success": False, "error": "Invalid email format"}
+
+    # Check if email already exists
+    if Person.objects.filter(email=email).exists():
+        return {"success": False, "error": "A person with this email already exists"}
+
+    # Validate role
+    if not Role.valid_or(role):
+        return {"success": False, "error": "Invalid role"}
+
+    # Create Person
+    person = Person.objects.create(
+        email=email,
+        name=name if name else None,
+        role=role,
+        cognito_sub=None
+    )
+
+    logging.info(f"Admin created new person: {email} with role {role} (pre-signup)")
+
+    return {
+        "success": True,
+        "message": "User created successfully",
+        "person_id": str(person.id),
+        "email": person.email
+    }
