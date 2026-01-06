@@ -244,13 +244,23 @@ def oauth_cognito_callback(request):
     
     # Authenticate Django User and create OAuthAccount using cognito_manager
     django_user = cognito_manager.authenticate_user_from_id_token(id_token)
-    
+
     # Parse ID token for Person sync (cognito_manager already validated it)
     user_data = cognito_manager.verify_and_parse_id_token(id_token)
-    
+    user_email = user_data.get('email')
+
+    # Check if Person exists (pre-setup required)
+    if not Person.objects.filter(email=user_email).exists():
+        # User not pre-setup - deny access
+        from django.contrib.auth import logout as django_logout
+        request.session['attempted_email'] = user_email
+        django_logout(request)  # Clear any partial session
+        logging.warning(f"Access denied for non-pre-setup user: {user_email}")
+        return HttpResponseRedirect(reverse('view_access_denied'))
+
     # Create or update Person record (Erie Iron's primary user entity)
     person = Person.getOrCreateFromCognitoUserData(user_data, django_user=django_user)
-    
+
     # Log in the Django user to create session
     django_login(request, django_user)
     
@@ -265,19 +275,25 @@ def oauth_cognito_callback(request):
     return HttpResponseRedirect(destination)
 
 
+def view_access_denied(request):
+    """Landing page for users attempting to authenticate without being pre-setup."""
+    user_email = request.session.get('attempted_email', 'Unknown')
+    return send_response(request, 'access_denied.html', {'user_email': user_email})
+
+
 def action_logout(request):
     """Logout handler that clears Django session and redirects to Cognito logout."""
     from django.contrib.auth import logout as django_logout
     from erieiron_common import view_utils
     from urllib.parse import urlencode
-    
+
     # Clear Django session
     django_logout(request)
-    
+
     # Build Cognito logout URL to clear Cognito session
     cognito_domain = view_utils.get_cognito_domain()
     logout_redirect = request.build_absolute_uri(reverse("view_login"))
-    
+
     if cognito_domain:
         params = {
             "client_id": view_utils.get_cognito_client_id(),

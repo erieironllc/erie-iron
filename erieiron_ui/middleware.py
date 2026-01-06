@@ -33,6 +33,8 @@ class CognitoAuthMiddleware:
             "/login/",
             "/logout",
             "/logout/",
+            "/access-denied",
+            "/access-denied/",
             "/oauth/cognito/callback",
             "/oauth/cognito/callback/",
             "/health",
