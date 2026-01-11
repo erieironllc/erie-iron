@@ -40,6 +40,7 @@ class CognitoAuthMiddleware:
             "/health",
             "/health/",
         }
+        
         self._static_prefix = f"/{settings.STATIC_URL.lstrip('/')}"
     
     def __call__(self, request):
