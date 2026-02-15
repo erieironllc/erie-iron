@@ -3342,12 +3342,15 @@ def build_tfvars_payload(
     payload["VpcId"] = shared_vpc.vpc_id
     if shared_vpc.cidr_block:
         payload.setdefault("VpcCidr", shared_vpc.cidr_block)
-    if len(shared_vpc.public_subnet_ids) >= 2:
+
+    if shared_vpc.public_subnet_ids:
         payload["PublicSubnet1Id"] = shared_vpc.public_subnet_ids[0]
-        payload["PublicSubnet2Id"] = shared_vpc.public_subnet_ids[1]
-    if len(shared_vpc.private_subnet_ids) >= 2:
+        payload["PublicSubnet2Id"] = shared_vpc.public_subnet_ids[1] if len(shared_vpc.public_subnet_ids) >= 2 else shared_vpc.public_subnet_ids[0]
+
+    if shared_vpc.private_subnet_ids:
         payload["PrivateSubnet1Id"] = shared_vpc.private_subnet_ids[0]
-        payload["PrivateSubnet2Id"] = shared_vpc.private_subnet_ids[1]
+        payload["PrivateSubnet2Id"] = shared_vpc.private_subnet_ids[1] if len(shared_vpc.private_subnet_ids) >= 2 else shared_vpc.private_subnet_ids[0]
+
     payload["SecurityGroupId"] = shared_vpc.rds_security_group_id
     payload["CreateIngressRule"] = True  # Explicitly ensure ALB can reach ECS tasks
     
