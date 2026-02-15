@@ -9,7 +9,7 @@ import time
 import traceback
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from django.db import transaction
 from django.db.models import Func
@@ -18,6 +18,7 @@ from erieiron_public import agent_tools
 import settings
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.coding_agents.code_writer import write_code
+from erieiron_autonomous_agent.coding_agents.frontier_session import CommandPlan, CommandSpec, CommandResult
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
@@ -1167,21 +1168,23 @@ def run_django_tests(
         test_args: list[str] = None
 ) -> bool:
     # Prepare test command
+    test_args = list(test_args or [])
+    python_cmd = ["manage.py", "test"] + test_args
     config.dump_env_to_envrc()
     env = os.environ.copy()
     env.update(config.runtime_env)
     db_path = config.sandbox_root_dir / "db.sqlite3"
     env["DATABASE_URL"] = f"sqlite:///{db_path}"
-    
+
     config.log("\n" + "=" * 80)
     config.log("RUNNING DJANGO TESTS LOCALLY (VENV)")
     config.log("=" * 80 + "\n")
-    config.log(f"Command: `python {' '.join(test_args)}`")
+    config.log(f"Command: `python {' '.join(python_cmd)}`")
     config.log(f"Working directory: {config.sandbox_root_dir}\n")
-    
+
     if IterationMode.LOCAL_TESTS.eq(config.self_driving_task.iteration_mode):
         try:
-            result = config.git.run_python(test_args, env)
+            result = config.git.run_python(python_cmd, env)
             if result.returncode == 0:
                 config.log("\n✅ LOCAL DJANGO TESTS PASSED\n")
                 return True
@@ -1195,9 +1198,9 @@ def run_django_tests(
     else:
         run_django_container_command(
             config=config,
-            command_args=["test", "--keepdb", "--noinput"]
+            command_args=["test", "--keepdb", "--noinput", *test_args]
         )
-        
+
         return True
 
 
@@ -1443,7 +1446,17 @@ def execute_iteration(config: CodingAgentConfig):
             ]
         )
     elif task_type in [TaskType.CODING_APPLICATION, TaskType.DESIGN_WEB_APPLICATION, TaskType.INITIATIVE_VERIFICATION]:
-        run_automated_tests(config)
+        command_plan = build_execution_command_plan(config)
+        execution_outcome = config.frontier_session.run_commands(command_plan)
+        status = execution_outcome.get("status")
+        analysis = execution_outcome.get("analysis", {})
+        summary = analysis.get("summary") or "Automated command execution outcome unavailable"
+        if status == "blocked":
+            raise AgentBlocked(analysis.get("blocked") or analysis)
+        if status == "failed":
+            raise FailingTestException(summary)
+        if status == "retry":
+            raise RetryableException(summary)
     else:
         logging.info(f"nothing to execute for task type {task_type}")
 
@@ -1517,44 +1530,50 @@ def detect_frontend_framework(config: CodingAgentConfig) -> dict[str, Any]:
     }
 
 
-def run_automated_tests(config: CodingAgentConfig):
-    import random
-    import time
-    random.seed(time.time())
-    
+def build_execution_command_plan(config: CodingAgentConfig) -> CommandPlan:
     build_plan = config.get_build_plan()
     config.dump_env_to_envrc()
-    
-    failing_tests = []
-    
-    # Run frontend tests if flag is set
+
+    iteration_mode = getattr(config.self_driving_task, "iteration_mode", None)
+    plan = CommandPlan(
+        description="Automated execution command plan",
+        context={
+            "build_plan": {
+                (k.name if isinstance(k, BuildStep) else str(k)): bool(v)
+                for k, v in build_plan.items()
+                if k != "REASONING"
+            },
+            "build_reasoning": build_plan.get("REASONING"),
+            "iteration_mode": iteration_mode,
+        }
+    )
+    plan.context["previous_test_errors"] = common.get(
+        config.iteration_to_modify,
+        ["evaluation_json", "test_errors"]
+    )
+
     if not build_plan.get(BuildStep.RUN_FRONTEND_TESTS):
         config.log("RUN_FRONTEND_TESTS=false: Skipping frontend tests")
     else:
-        failing_tests = run_frontend_tests(config)
-    
-    # Run backend tests if flag is set
+        plan.extend(build_frontend_test_commands(config))
+
     if not build_plan.get(BuildStep.RUN_BACKEND_TESTS):
         config.log("RUN_BACKEND_TESTS=false: Skipping backend tests")
-    elif not (not build_plan.get(BuildStep.DEPLOY_TO_AWS) or failing_tests):
-        failing_tests = run_backend_tests(config, build_plan)
-    
-    if failing_tests:
-        raise FailingTestException(common.safe_join(failing_tests, delim="\n"))
+    elif not build_plan.get(BuildStep.DEPLOY_TO_AWS):
+        config.log("RUN_BACKEND_TESTS=true but DEPLOY_TO_AWS=false: Skipping backend tests")
+    else:
+        plan.extend(build_backend_test_commands(config, build_plan))
+
+    return plan
 
 
-def run_backend_tests(config: CodingAgentConfig, build_plan: dict) -> list[Any]:
+def build_backend_test_commands(config: CodingAgentConfig, build_plan: dict) -> list[CommandSpec]:
     run_locally = config.task.get_container_image_tag() is None or build_plan.get(BuildStep.RUN_TESTS_LOCALLY, False)
-    
-    """Run backend tests locally in venv."""
-    failing_tests = []
-    
-    # Get failing tests from previous iteration if any
+
     test_errors_blob = common.get(config.iteration_to_modify, ["evaluation_json", "test_errors"])
     failing_python_tests = [t for t in test_errors_blob if t.get("file_name", "").endswith(".py")] if test_errors_blob else []
-    
+
     if failing_python_tests:
-        # Parse specific failing tests (reuse existing logic)
         first_tests = llm_chat(
             "parse test failures",
             [
@@ -1566,7 +1585,7 @@ def run_backend_tests(config: CodingAgentConfig, build_plan: dict) -> list[Any]:
                     ```json
                     {
                         "failing_tests": [
-                            'core.tests.test_task_bug_report_articleparsernew_t57y4lei.ForwardToDigestAcceptanceTests.test_s3_upload_triggers_digest_job_enqueue'
+                            "core.tests.test_module.TestCase.test_example"
                         ]
                     }
                 """)),
@@ -1586,29 +1605,193 @@ def run_backend_tests(config: CodingAgentConfig, build_plan: dict) -> list[Any]:
             first_tests = None
     else:
         first_tests = None
-    
-    # Run specific failing tests first
+
+    commands: list[CommandSpec] = []
     if first_tests:
-        config.log(f"Running specific tests first: {first_tests}")
-        if not run_django_tests(config, run_locally, first_tests):
-            failing_tests.append(f"Some or all of {first_tests} failed. See logs above.")
-            return failing_tests
-        config.log(f"{first_tests} PASSED. Proceeding to full test suite.")
-    
-    # Run full test suite
-    config.log("Running full Django test suite locally")
-    if not run_django_tests(config, run_locally):
-        failing_tests.append("Full test suite failed. See logs above for details.")
-        return failing_tests
-    
-    config.log("✅ ALL LOCAL DJANGO TESTS PASSED\n")
-    
-    # Mark that tests passed locally - ready to transition to container mode
-    if not config.self_driving_task.initial_tests_pass:
-        config.self_driving_task.initial_tests_pass = True
-        config.self_driving_task.save()
-    
-    return failing_tests
+        config.log(f"Planning targeted backend tests: {first_tests}")
+        commands.append(_build_django_command_spec(
+            label="targeted_backend_tests",
+            test_args=first_tests,
+            run_locally=run_locally
+        ))
+
+    commands.append(_build_django_command_spec(
+        label="full_backend_tests",
+        test_args=[],
+        run_locally=run_locally
+    ))
+
+    return commands
+
+
+def build_frontend_test_commands(config: CodingAgentConfig) -> list[CommandSpec]:
+    frontend_info = detect_frontend_framework(config)
+    if not frontend_info["has_frontend"]:
+        return []
+
+    frontend_dir = frontend_info["frontend_dir"] or config.sandbox_root_dir
+    metadata_base = {
+        "type": "frontend_tests",
+        "framework": frontend_info["framework"],
+        "frontend_dir": str(frontend_dir.relative_to(config.sandbox_root_dir)) if frontend_dir else "",
+    }
+
+    if not any([frontend_info["has_jest"], frontend_info["has_playwright"], frontend_info["has_cypress"]]):
+        raise BadPlan(textwrap.dedent(f"""
+            ⚠️  No E2E test framework found (Playwright/Cypress/Jest) - skipping E2E tests.  Please update {frontend_dir}/package.json to include a testing framework
+            ⚠️  WARNING: Per codeplanner--test_driven_development.md, E2E tests are REQUIRED for React projects
+        """))
+
+    commands: list[CommandSpec] = []
+    if frontend_info["has_jest"]:
+        commands.append(CommandSpec(
+            label="jest_component_tests",
+            shell_command=[
+                "npm", "test", "--",
+                "--ci", "--forceExit", "--runInBand", "--detectOpenHandles", "--coverage=false"
+            ],
+            workdir=frontend_dir,
+            metadata={**metadata_base, "suite": "jest", "frontend_dir_abs": str(frontend_dir)},
+            action=_jest_command_action
+        ))
+
+    if frontend_info["has_playwright"]:
+        commands.append(CommandSpec(
+            label="playwright_e2e_tests",
+            shell_command=["npx", "playwright", "test"],
+            workdir=frontend_dir,
+            metadata={**metadata_base, "suite": "playwright", "frontend_dir_abs": str(frontend_dir)},
+            action=_playwright_command_action
+        ))
+
+    if frontend_info["has_cypress"]:
+        commands.append(CommandSpec(
+            label="cypress_e2e_tests",
+            shell_command=["npx", "cypress", "run", "--headless", "--browser", "chrome"],
+            workdir=frontend_dir,
+            metadata={**metadata_base, "suite": "cypress", "frontend_dir_abs": str(frontend_dir)},
+            action=_cypress_command_action
+        ))
+
+    return commands
+
+
+def _build_django_command_spec(label: str, test_args: list[str], run_locally: bool) -> CommandSpec:
+    command = ["python", "manage.py", "test"] + common.ensure_list(test_args)
+    metadata = {
+        "type": "django_tests",
+        "run_locally": run_locally,
+        "test_args": list(common.ensure_list(test_args)),
+    }
+    return CommandSpec(
+        label=label,
+        shell_command=command,
+        metadata=metadata,
+        action=_execute_django_command
+    )
+
+
+def _execute_django_command(config: CodingAgentConfig, spec: CommandSpec) -> CommandResult:
+    start = time.time()
+    test_args = spec.metadata.get("test_args") or []
+    run_locally = spec.metadata.get("run_locally", True)
+    try:
+        run_django_tests(config, run_locally, test_args)
+        if not test_args and not config.self_driving_task.initial_tests_pass:
+            config.self_driving_task.initial_tests_pass = True
+            config.self_driving_task.save()
+        return CommandResult(
+            label=spec.label,
+            shell_command=list(spec.shell_command),
+            returncode=0,
+            stdout="Command output streamed to execution log",
+            stderr="",
+            duration_seconds=time.time() - start,
+            metadata=spec.metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CommandResult(
+            label=spec.label,
+            shell_command=list(spec.shell_command),
+            returncode=1,
+            stdout="",
+            stderr=str(exc),
+            duration_seconds=time.time() - start,
+            metadata={**spec.metadata, "exception": type(exc).__name__},
+        )
+
+
+def _jest_command_action(config: CodingAgentConfig, spec: CommandSpec) -> CommandResult:
+    frontend_dir = Path(spec.metadata.get("frontend_dir_abs") or config.sandbox_root_dir)
+    return _execute_frontend_runner(config, spec, lambda: run_jest_tests(config, frontend_dir))
+
+
+def _playwright_command_action(config: CodingAgentConfig, spec: CommandSpec) -> CommandResult:
+    frontend_dir = Path(spec.metadata.get("frontend_dir_abs") or config.sandbox_root_dir)
+    return _execute_frontend_runner(config, spec, lambda: run_playwright_tests(config, frontend_dir))
+
+
+def _cypress_command_action(config: CodingAgentConfig, spec: CommandSpec) -> CommandResult:
+    frontend_dir = Path(spec.metadata.get("frontend_dir_abs") or config.sandbox_root_dir)
+    return _execute_frontend_runner(config, spec, lambda: run_cypress_tests(config, frontend_dir))
+
+
+def _execute_frontend_runner(
+        config: CodingAgentConfig,
+        spec: CommandSpec,
+        runner: Callable[[], None]
+) -> CommandResult:
+    start = time.time()
+    try:
+        runner()
+        return CommandResult(
+            label=spec.label,
+            shell_command=list(spec.shell_command),
+            returncode=0,
+            stdout="Command output streamed to execution log",
+            stderr="",
+            duration_seconds=time.time() - start,
+            metadata=spec.metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CommandResult(
+            label=spec.label,
+            shell_command=list(spec.shell_command),
+            returncode=1,
+            stdout="",
+            stderr=str(exc),
+            duration_seconds=time.time() - start,
+            metadata={**spec.metadata, "exception": type(exc).__name__},
+        )
+
+
+def _run_manage_command_action(config: CodingAgentConfig, spec: CommandSpec) -> CommandResult:
+    start = time.time()
+    manage_args = list(spec.metadata.get("manage_args") or [])
+    try:
+        run_django_container_command(
+            config=config,
+            command_args=manage_args
+        )
+        return CommandResult(
+            label=spec.label,
+            shell_command=list(spec.shell_command),
+            returncode=0,
+            stdout="Command output streamed to execution log",
+            stderr="",
+            duration_seconds=time.time() - start,
+            metadata=spec.metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CommandResult(
+            label=spec.label,
+            shell_command=list(spec.shell_command),
+            returncode=1,
+            stdout="",
+            stderr=str(exc),
+            duration_seconds=time.time() - start,
+            metadata={**spec.metadata, "exception": type(exc).__name__},
+        )
 
 
 def determine_iteration_mode(config: CodingAgentConfig) -> IterationMode:
@@ -1696,51 +1879,16 @@ def update_iteration_mode(config: CodingAgentConfig, new_mode: IterationMode):
         config.self_driving_task.save(update_fields=["iteration_mode"])
 
 
-def run_frontend_tests(
-        config: CodingAgentConfig
-) -> list[Any]:
-    frontend_info = detect_frontend_framework(config)
-    failing_tests = []
-    
-    if frontend_info["has_frontend"]:
-        frontend_dir = frontend_info["frontend_dir"]
-        
-        if not any([frontend_info["has_jest"], frontend_info["has_playwright"], frontend_info["has_cypress"]]):
-            raise BadPlan(textwrap.dedent(f"""
-                ⚠️  No E2E test framework found (Playwright/Cypress/Jest) - skipping E2E tests.  Please update {frontend_dir}/package.json to include a testing framework
-                ⚠️  WARNING: Per codeplanner--test_driven_development.md, E2E tests are REQUIRED for React projects
-            """))
-        
-        if frontend_info["has_jest"]:
-            try:
-                run_jest_tests(config, frontend_dir)
-            except ExecutionException as e:
-                failing_tests.append(f"Jest component tests failed. See logs above for details.")
-        
-        if frontend_info["has_playwright"]:
-            try:
-                run_playwright_tests(config, frontend_dir)
-            except ExecutionException as e:
-                failing_tests.append(f"Playwright E2E tests failed. See logs above for details.")
-        
-        if frontend_info["has_cypress"]:
-            try:
-                run_cypress_tests(config, frontend_dir)
-            except ExecutionException as e:
-                failing_tests.append(f"Cypress E2E tests failed. See logs above for details.")
-        
-        if not failing_tests:
-            config.log("\n" + "=" * 80)
-            config.log("ALL FRONT-END TESTS COMPLETED SUCCESSFULLY")
-            config.log("=" * 80 + "\n")
-    
-    return failing_tests
-
-
 def ingest_tofu_ouputs(config: CodingAgentConfig):
     """Populate runtime_env with the OpenTofu outputs required by the runtime."""
     outputs = config.stack_manager.get_outputs()
     business = config.initiative.business
+
+    config.frontier_session.patch_iac({
+        "operation": "ingest_tofu_outputs",
+        "outputs": outputs,
+        "env": config.env_type.value,
+    })
     
     for output_name, output_value in outputs.items():
         output_value = str(outputs.get(output_name) or "")
@@ -1826,22 +1974,34 @@ def migrate_database(config: CodingAgentConfig):
         return
     
     ingest_tofu_ouputs(config)
-    try:
-        run_django_container_command(
-            config=config,
-            command_args=["makemigrations", "--noinput"]
+    migration_plan = CommandPlan(
+        description="Database migrations",
+        context={"operation": "migrate_database"}
+    )
+    migration_plan.extend([
+        CommandSpec(
+            label="makemigrations",
+            shell_command=["python", "manage.py", "makemigrations", "--noinput"],
+            metadata={"type": "django_management", "manage_args": ["makemigrations", "--noinput"]},
+            action=_run_manage_command_action
+        ),
+        CommandSpec(
+            label="migrate",
+            shell_command=["python", "manage.py", "migrate"],
+            metadata={"type": "django_management", "manage_args": ["migrate"]},
+            action=_run_manage_command_action
         )
-        
-        run_django_container_command(
-            config=config,
-            command_args=["migrate"]
-        )
-    except Exception as e:
-        logging.exception(e)
-        if "DuplicateDatabase" in str(e):
-            raise AgentBlocked(e.__dict__)
-        else:
-            raise DatabaseMigrationException(e)
+    ])
+
+    migration_result = config.frontier_session.run_commands(migration_plan)
+    status = migration_result.get("status")
+    summary = migration_result.get("analysis", {}).get("summary", "Database migration failed")
+    if status == "blocked":
+        raise AgentBlocked(migration_result.get("analysis", {}))
+    if status == "retry":
+        raise RetryableException(summary)
+    if status == "failed":
+        raise DatabaseMigrationException(summary)
 
 
 def validate_web_container(config: CodingAgentConfig):
@@ -1858,6 +2018,11 @@ def validate_web_container(config: CodingAgentConfig):
     
     process = None
     config.log(f"==========  BEGIN Webcontainer Validation ===============")
+    config.frontier_session.patch_iac({
+        "operation": "validate_web_container",
+        "image_tag": config.task.get_container_image_tag(),
+        "env": config.env_type.value,
+    })
     try:
         process = subprocess.Popen(
             [
@@ -1969,24 +2134,12 @@ def evaluate_iteration(
         config: CodingAgentConfig
 ):
     iteration = config.current_iteration
-    
+
     log_output = config.set_phase(SdaPhase.EVALUATE)
     if "no space left on device" in common.default_str(log_output).lower():
         exec_container_prune(aggressive=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
-    
-    runtime_errors, deployment_errors, error_analysis = extract_exceptions(config, iteration)
-    
-    if (
-            TaskType.PRODUCTION_DEPLOYMENT.eq(config.task_type)
-            and iteration.log_content_deployment
-            and not (runtime_errors or deployment_errors)
-    ):
-        raise GoalAchieved(f"Production deployment succeeded for {config.business.domain}")
-    
-    allow_goal_achieved = error_analysis.get('allow_goal_achieved', False)
-    goal_achieved_reason = error_analysis.get('allow_goal_achieved_justification', 'No justification provided')
-    
+
     goal_achieved_critera = textwrap.dedent(f"""
         **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
         **if the OpenTofu plan/apply did not complete successfully, set `"goal_achieved": false`.**  
@@ -2016,84 +2169,33 @@ def evaluate_iteration(
        - Base this determination only on the current iteration's logs and test results; ignore earlier iterations.
     """)
     
-    eval_data = llm_chat(
-        "Iteration Summarizer",
-        [
-            get_sys_prompt([
-                "iteration_summarizer_tofu.md",
-                "common--iam_role_tofu.md",
-                "common--agent_provided_functionality_tofu.md",
-                "common--domain_management_tofu.md",
-                "common--forbidden_actions_tofu.md",
-                "common--environment_variables_tofu.md"
-            ], replacements=[
-                ("<env_vars>", get_env_var_names(config)),
-                ("<goal_achieved_critera>", goal_achieved_critera)
-            ]),
-            
-            get_goal_msg(
-                config,
-                "Task Goal"
-            ),
-            
-            get_code_changes_msg(
-                config
-            ),
-            
-            get_previous_iteration_summaries_msg(
-                config
-            ),
-            
-            LlmMessage.user_from_data(
-                "Allow returning `Goal Achieved`?",
-                {
-                    "allow_goal_achieved": allow_goal_achieved,
-                    "allow_goal_achieved_justification": goal_achieved_reason
-                }
-            ),
-            
-            get_logs_msg(
-                config,
-                config.current_iteration
-            ),
-            
-            LlmMessage.user(textwrap.dedent(
-                f"""
-                **QUICK REFERENCE** Exceptions extracted from the logs.  If there are problems, most likely related to the following:
-                
-                {iteration.exceptions}
-                """
-            )) if iteration.exceptions else None,
-            
-            LlmMessage.user(
-                "Please summarize this iteration"
-            )
-        ],
-        tag_entity=config.current_iteration,
-        output_schema="iteration_summarizer_tofu.md.schema.json"
-    ).json()
-    
+    summary_inputs = build_iteration_summary_inputs(
+        config,
+        goal_achieved_critera
+    )
+    eval_data = config.frontier_session.summarize_iteration(summary_inputs)
+
+    if eval_data.get("exceptions") is not None:
+        iteration.exceptions = eval_data.get("exceptions")
+        iteration.save(update_fields=["exceptions"])
+
     if eval_data.get("is_stagnating"):
         config.current_iteration.strategic_unblocking_json = get_strategic_unblocking_data(config)
         config.current_iteration.save()
-    
+
+    allow_goal_achieved = eval_data.get("allow_goal_achieved", False)
+    if not allow_goal_achieved:
+        eval_data['goal_achieved'] = False
+
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
             evaluation_json=eval_data
         )
         iteration.refresh_from_db(fields=["evaluation_json"])
-    
+
     if eval_data.get("blocked"):
         raise AgentBlocked(eval_data)
-    
-    if not allow_goal_achieved:
-        eval_data['goal_achieved'] = False
-    
-    with transaction.atomic():
-        SelfDrivingTaskIteration.objects.filter(id=iteration.id).update(
-            evaluation_json=eval_data
-        )
-    
+
     if common.parse_bool(eval_data.get("goal_achieved")):
         raise GoalAchieved(eval_data)
     
@@ -2161,13 +2263,9 @@ def evaluate_iteration(
     
     if iteration.goal_achieved():
         raise GoalAchieved(eval_data)
-    
-    extract_lessons(
-        config,
-        "code deploy and execution",
-        log_output
-    )
-    
+
+    _record_iteration_lessons(config, eval_data)
+
     return eval_data
 
 
@@ -2218,6 +2316,91 @@ def get_logs_msg(config, iteration):
             }
         }
     )
+
+
+def build_iteration_summary_inputs(
+        config: CodingAgentConfig,
+        goal_policy_text: str
+) -> dict[str, Any]:
+    iteration = config.current_iteration
+    task = config.task
+    return {
+        "goal": {
+            "description": task.description,
+            "acceptance_criteria": task.completion_criteria,
+            "risk_notes": task.risk_notes,
+            "debug_steps": task.debug_steps,
+        },
+        "goal_achieved_policy": goal_policy_text,
+        "allow_goal_achieved_hints": {
+            "deployment_logs_exist": bool(iteration.log_content_deployment),
+            "version_number": iteration.version_number,
+            "test_file_exists": bool(config.self_driving_task.test_file_path),
+        },
+        "code_changes": _collect_code_change_data(config),
+        "previous_iteration_summaries": _collect_previous_iteration_summaries_for_context(config),
+        "logs": _collect_iteration_logs(iteration),
+        "deployment": iteration.log_content_deployment,
+        "cloudwatch": iteration.log_content_cloudwatch,
+        "exceptions": iteration.exceptions,
+    }
+
+
+def _collect_code_change_data(config: CodingAgentConfig) -> list[dict[str, Any]]:
+    iteration = config.current_iteration
+    return [
+        {
+            "path": cv.code_file.file_path,
+            "diff": cv.get_diff()
+        }
+        for cv in iteration.codeversion_set.all()
+    ]
+
+
+def _collect_iteration_logs(iteration: SelfDrivingTaskIteration) -> dict[str, Any]:
+    return {
+        "init": iteration.log_content_init or "",
+        "coding": iteration.log_content_coding or "",
+        "execution": iteration.log_content_execution or "",
+        "evaluation": iteration.log_content_evaluation or "",
+    }
+
+
+def _collect_previous_iteration_summaries_for_context(
+        config: CodingAgentConfig
+) -> list[dict[str, Any]]:
+    iteration = config.current_iteration
+    summaries = []
+    iterations = list(
+        config.self_driving_task.selfdrivingtaskiteration_set.filter(
+            evaluation_json__isnull=False
+        ).order_by("timestamp")
+    )
+    for prev_iter in iterations[-5:]:
+        if prev_iter == iteration:
+            continue
+        summary_text = common.get(prev_iter.evaluation_json, "summary")
+        if summary_text:
+            summaries.append({
+                "iteration_id": prev_iter.id,
+                "timestamp": prev_iter.timestamp.isoformat() if prev_iter.timestamp else None,
+                "summary": summary_text,
+            })
+    return summaries
+
+
+def _record_iteration_lessons(config: CodingAgentConfig, eval_data: Mapping[str, Any]) -> None:
+    for lesson_data in common.ensure_list(eval_data.get("lessons", [])):
+        if not isinstance(lesson_data, Mapping):
+            continue
+        try:
+            AgentLesson.create_from_data(
+                "code deploy and execution",
+                lesson_data,
+                config.current_iteration
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.exception(exc)
 
 
 def get_code_changes_msg(config):
@@ -2933,21 +3116,12 @@ def plan_iterative_code_changes(config: CodingAgentConfig, goal_instructions=Non
         get_goal_msg(config, "Please plan code changes that work towards achieving this GOAL") if not goal_instructions else common.ensure_list(goal_instructions)
     ]
     
-    planning_model = LlmModel.OPENAI_GPT_5_MINI
-    planning_data = llm_chat(
-        "Plan code changes",
-        messages,
-        model=planning_model,
-        tag_entity=config.current_iteration,
-        reasoning_effort=LlmReasoningEffort.NONE,
-        output_schema="codeplanner--codewriter_audience.md.schema.json",
-        verbosity=LlmVerbosity.LOW,
-        creativity=LlmCreativity.NONE
-    ).json()
-    
+    planning_data = config.frontier_session.plan_changes(messages)
+    planning_model_value = planning_data.pop("_llm_model", LlmModel.OPENAI_GPT_5_MINI.value)
+
     with transaction.atomic():
         SelfDrivingTaskIteration.objects.filter(id=current_iteration.id).update(
-            planning_model=planning_model,
+            planning_model=planning_model_value,
             planning_json=planning_data,
             execute_module=planning_data.get('execute_module'),
             test_module=planning_data.get('test_module')
@@ -3202,7 +3376,15 @@ def deploy_stack(
         ecr_arn=ecr_arn,
         lambda_datas=lambda_datas
     )
-    
+
+    config.frontier_session.patch_iac({
+        "operation": "deploy_stack",
+        "stack_name": stack.stack_name,
+        "env": config.env_type.value,
+        "tfvars": tfvars_payload,
+        "lambda_count": len(lambda_datas or []),
+    })
+
     config.stack_manager.set_stack_vars(tfvars_payload)
     
     error_payload = None

@@ -1236,7 +1236,7 @@ class InfrastructureStack(BaseErieIronModel):
         if EnvironmentType.PRODUCTION.eq(env_type):
             initiative_scope = None  # Production is always business-level
         else:
-            strategy = StackStrategy(business.stack_strategy)
+            strategy = StackStrategy(common.default_str(business.stack_strategy).lower())
             if strategy.allows_initiative_stacks():
                 initiative_scope = initiative
             else:
@@ -1453,7 +1453,7 @@ class Task(BaseErieIronModel):
             ValueError: If task configuration is incompatible with business stack_strategy
         """
         initiative = self.initiative
-        strategy = StackStrategy(initiative.business.stack_strategy)
+        strategy = StackStrategy(common.default_str( initiative.business.stack_strategy).lower())
         is_prod_deploy = TaskType.PRODUCTION_DEPLOYMENT.eq(self.task_type)
         
         if strategy.requires_production_only() or is_prod_deploy:

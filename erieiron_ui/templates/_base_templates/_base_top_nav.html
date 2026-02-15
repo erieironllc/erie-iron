@@ -3,7 +3,7 @@
 
 {% top_nav_dropdowns as breadcrumb_dropdowns %}
 
-{% if request.simple_auth_authenticated %}
+{% if request.simple_auth_authenticated or request.cognito_authenticated or request.user.is_authenticated %}
 <nav id="top_nav" class="navbar navbar-expand-lg top-nav-modern shadow-lg border-0 position-relative"
      {% if breadcrumbs %}style="margin-top: -0.70rem"{% endif %}>
     <div class="container-fluid d-flex py-3 pb-0 px-4 gap-4 flex-wrap justify-content-between align-items-center">

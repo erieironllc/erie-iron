@@ -12,6 +12,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from erieiron_autonomous_agent import system_agent_llm_interface
+from erieiron_autonomous_agent.coding_agents.frontier_session import FrontierSession
 from erieiron_autonomous_agent.models import SelfDrivingTaskIteration, Task, SelfDrivingTask, Business, Initiative, InfrastructureStack
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
@@ -130,17 +131,19 @@ class CodingAgentConfig:
         self.aws_interface.configure_nat_gateway()
         
         self.domain_manager = self.business.get_domain_manager(self.cloud_account)
-        
+
         self.stack_manager = StackManager(
             self.stack,
             self.runtime_env,
             self.sandbox_root_dir
         )
-        
+
         try:
             self.stack_manager.init_workspace()
         except Exception as e:
             logging.exception(e)
+
+        self.frontier_session = FrontierSession(self)
     
     def get_build_plan(self, reset=False):
         if reset or not self._build_plan:

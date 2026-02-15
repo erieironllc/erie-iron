@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Frontier Session Plan Changes Output",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "implementation_directive",
+    "required_rule_contexts",
+    "diagnostic_context",
+    "relevant_lessons",
+    "code_files"
+  ],
+  "properties": {
+    "implementation_directive": {
+      "type": "object",
+      "required": [
+        "objective",
+        "high_level_approach",
+        "key_constraints",
+        "success_criteria"
+      ],
+      "properties": {
+        "objective": { "type": "string" },
+        "high_level_approach": { "type": "string" },
+        "key_constraints": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "success_criteria": { "type": "string" }
+      }
+    },
+    "required_rule_contexts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "diagnostic_context": {
+      "type": "object",
+      "required": [
+        "primary_error",
+        "error_location",
+        "relevant_logs",
+        "environment_state",
+        "prior_attempts"
+      ],
+      "properties": {
+        "primary_error": { "type": "string" },
+        "error_location": { "type": "string" },
+        "relevant_logs": { "type": "string" },
+        "environment_state": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null"]
+          }
+        },
+        "prior_attempts": { "type": "string" }
+      }
+    },
+    "relevant_lessons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "required_credentials": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "code_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code_file_path", "implementation_plan"],
+        "properties": {
+          "code_file_path": { "type": "string" },
+          "implementation_plan": { "type": "string" },
+          "tests": { "type": "string" }
+        }
+      }
+    },
+    "execute_module": { "type": "string" },
+    "test_module": { "type": "string" },
+    "tdd_test_file": { "type": "string" },
+    "blocked": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" },
+        "required_action": { "type": "string" }
+      }
+    },
+    "deprecation_plan": {
+      "type": "object",
+      "properties": {
+        "tombstones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
