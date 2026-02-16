@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Frontier Session Iteration Evaluation Output",
+  "type": "object",
+  "required": ["summary", "goal_achieved", "test_errors", "recommend_next_iteration"],
+  "additionalProperties": true,
+  "properties": {
+    "summary": { "type": "string" },
+    "goal_achieved": { "type": "boolean" },
+    "allow_goal_achieved": { "type": "boolean" },
+    "blocked": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" },
+        "required_action": { "type": "string" }
+      }
+    },
+    "test_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_name": { "type": "string" },
+          "test_name": { "type": "string" },
+          "framework": { "type": "string" },
+          "log_excerpt": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "deployment_notes": { "type": "string" },
+    "lessons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern_description", "trigger", "lesson"],
+        "properties": {
+          "pattern_description": { "type": "string" },
+          "trigger": { "type": "string" },
+          "lesson": { "type": "string" },
+          "context_tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "is_stagnating": { "type": "boolean" },
+    "recommend_next_iteration": { "type": "string" },
+    "exceptions": { "type": "string" }
+  }
+}

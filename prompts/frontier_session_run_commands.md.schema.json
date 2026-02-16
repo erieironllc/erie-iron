@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Frontier Session Command Runner Output",
+  "type": "object",
+  "required": ["status", "summary", "next_actions"],
+  "additionalProperties": true,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed", "blocked", "retry"]
+    },
+    "summary": { "type": "string" },
+    "next_actions": { "type": "string" },
+    "failing_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "reason"],
+        "properties": {
+          "label": { "type": "string" },
+          "reason": { "type": "string" },
+          "log_excerpt": { "type": "string" }
+        }
+      }
+    },
+    "test_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "framework": { "type": "string" },
+          "file_name": { "type": "string" },
+          "test_name": { "type": "string" },
+          "log_excerpt": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blocked": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" },
+        "required_action": { "type": "string" }
+      }
+    }
+  }
+}
