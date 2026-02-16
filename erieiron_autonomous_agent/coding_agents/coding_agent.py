@@ -1182,7 +1182,10 @@ def run_django_tests(
     config.log(f"Command: `python {' '.join(python_cmd)}`")
     config.log(f"Working directory: {config.sandbox_root_dir}\n")
 
-    if IterationMode.LOCAL_TESTS.eq(config.self_driving_task.iteration_mode):
+    force_backend_tests = _env_flag("FORCE_RUN_BACKEND_TESTS")
+    run_in_local_mode = IterationMode.LOCAL_TESTS.eq(config.self_driving_task.iteration_mode) and not force_backend_tests
+
+    if run_in_local_mode:
         try:
             result = config.git.run_python(python_cmd, env)
             if result.returncode == 0:
@@ -1324,6 +1327,7 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         task_execution = init_task_execution(config.current_iteration)
         
         build_plan = config.get_build_plan(reset=True)
+        config._build_plan_overrides = _apply_build_plan_overrides(config, build_plan)
         iteration_mode = determine_iteration_mode(config)
         update_iteration_mode(config, iteration_mode)
         lambda_datas = []
@@ -1372,6 +1376,33 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         store_deploy_and_execution_logs(config, deployment_start_epoch)
         exec_container_prune()
         config.business.snapshot_code(config.current_iteration)
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_build_plan_overrides(config: CodingAgentConfig, build_plan: dict) -> dict[str, bool]:
+    overrides = {
+        "force_backend_tests": False,
+        "force_build_container": False,
+    }
+
+    if _env_flag("FORCE_BUILD_CONTAINER"):
+        if not build_plan.get(BuildStep.BUILD_CONTAINER):
+            config.log("FORCE_BUILD_CONTAINER enabled; overriding build plan to rebuild container")
+        build_plan[BuildStep.BUILD_CONTAINER] = True
+        build_plan[BuildStep.PUSH_TO_ECR] = True
+        overrides["force_build_container"] = True
+
+    if _env_flag("FORCE_RUN_BACKEND_TESTS"):
+        if not build_plan.get(BuildStep.RUN_BACKEND_TESTS):
+            config.log("FORCE_RUN_BACKEND_TESTS enabled; overriding build plan to run backend tests")
+        build_plan[BuildStep.RUN_BACKEND_TESTS] = True
+        build_plan[BuildStep.DEPLOY_TO_AWS] = True
+        overrides["force_backend_tests"] = True
+
+    return overrides
 
 
 def store_deploy_and_execution_logs(
@@ -1532,6 +1563,11 @@ def detect_frontend_framework(config: CodingAgentConfig) -> dict[str, Any]:
 
 def build_execution_command_plan(config: CodingAgentConfig) -> CommandPlan:
     build_plan = config.get_build_plan()
+    overrides = getattr(config, "_build_plan_overrides", None)
+    if overrides is None:
+        overrides = _apply_build_plan_overrides(config, build_plan)
+        config._build_plan_overrides = overrides
+    force_backend_tests = overrides.get("force_backend_tests", False)
     config.dump_env_to_envrc()
 
     iteration_mode = getattr(config.self_driving_task, "iteration_mode", None)
@@ -1559,7 +1595,7 @@ def build_execution_command_plan(config: CodingAgentConfig) -> CommandPlan:
 
     if not build_plan.get(BuildStep.RUN_BACKEND_TESTS):
         config.log("RUN_BACKEND_TESTS=false: Skipping backend tests")
-    elif not build_plan.get(BuildStep.DEPLOY_TO_AWS):
+    elif not build_plan.get(BuildStep.DEPLOY_TO_AWS) and not force_backend_tests:
         config.log("RUN_BACKEND_TESTS=true but DEPLOY_TO_AWS=false: Skipping backend tests")
     else:
         plan.extend(build_backend_test_commands(config, build_plan))
@@ -2140,35 +2176,56 @@ def evaluate_iteration(
         exec_container_prune(aggressive=True)
         raise RetryableException(f"execution is failing with 'no space left on device'\n\n{log_output}.  I just pruned the containers, so should be cleared up now.")
 
-    goal_achieved_critera = textwrap.dedent(f"""
-        **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
-        **if the OpenTofu plan/apply did not complete successfully, set `"goal_achieved": false`.**  
-        **If the test output shows "Ran 0 tests", set `"goal_achieved": false`.**  
-        **If any tests were skipped, set 'goal_achieved': false. Goal can only be set to true if all tests ran successfully without skips and the acceptance criteria are fully covered by the test suite.**  
-        - Set `"goal_achieved": true` only if the logs contain no errors, the task output clearly meets the stated GOAL, and test logs show that one or more tests were actually run.  
-        - If any errors or incomplete behaviors are detected in the logs, set `"goal_achieved": false`.  
-        - Base this determination only on the current logs—do not consider prior iterations.
-        
-       **Primary decision rule (test-centric):**
-       - Set `"goal_achieved": true` when **all** of the following are true:
-         - Build/packaging steps completed successfully (no unrecovered build/compiler errors).
-         - Infrastructure deployment (e.g., OpenTofu plan/apply) either succeeded or was not invoked; there are no final plan/apply failures.
-         - The test runner executed **one or more tests** (i.e., not `Ran 0 tests`).
-         - The final test result for the executed suite shows **no failing or erroring tests** (status equivalent to OK / PASSED in the chosen framework).
-       - Set `"goal_achieved": false` when **any** of the above conditions are not met (e.g., build/deploy failure, tests did not run, or the test runner reports failing/erroring tests).
+    if config.one_off_action:
+        goal_achieved_critera = textwrap.dedent(f"""
+            **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
+            **if the OpenTofu plan/apply did not complete successfully, set `"goal_achieved": false`.**  
 
-       **Treatment of log errors and simulated failures:**
-       - Do **not** set `goal_achieved` to `false` **solely** because log output contains stack traces, exceptions, or error messages **if** the relevant tests ultimately pass. Tests may intentionally simulate failures and assert correct handling; such logged errors are acceptable when the test framework reports success.
-       - Continue to record important runtime or infra issues in the `error` or `test_errors` fields so downstream agents see them, but let the **test outcomes** drive the `goal_achieved` flag.
-       - **Assume negative-path assertions are intentional:** When a passing test suite includes log lines with exceptions, stack traces, warnings, or error messages that are raised and handled inside tests or application code, assume these are part of intentional negative‑case coverage. **Never** set `goal_achieved: false` solely because such errors appear in the logs if all build/deploy steps and tests have succeeded. You may still record these details in `error` or `test_errors` for diagnostics, but they must not influence the `goal_achieved` flag when tests pass.
+           **Primary decision rule (test-centric):**
+           - Set `"goal_achieved": true` when **all** of the following are true:
+             - Build/packaging steps completed successfully (no unrecovered build/compiler errors).
+             - Infrastructure deployment (e.g., OpenTofu plan/apply) either succeeded or was not invoked; there are no final plan/apply failures.
+           - Set `"goal_achieved": false` when **any** of the above conditions are not met (e.g., build/deploy failure, tests did not run, or the test runner reports failing/erroring tests).
 
-       **Skipped tests policy:**
-       - If organizational policy requires, you may treat skipped tests as a reason to keep `goal_achieved: false`. Otherwise, treat a run with skips but no failures/errors as `goal_achieved: true` **only when explicitly instructed by higher-level configuration or input fields.**
+           **Treatment of log errors and simulated failures:**
+           - Do **not** set `goal_achieved` to `false` **solely** because log output contains stack traces, exceptions, or error messages **if** the relevant tests ultimately pass. Tests may intentionally simulate failures and assert correct handling; such logged errors are acceptable when the test framework reports success.
+           - Continue to record important runtime or infra issues in the `error` or `test_errors` fields so downstream agents see them, but let the **test outcomes** drive the `goal_achieved` flag.
+           - **Assume negative-path assertions are intentional:** When a passing test suite includes log lines with exceptions, stack traces, warnings, or error messages that are raised and handled inside tests or application code, assume these are part of intentional negative‑case coverage. **Never** set `goal_achieved: false` solely because such errors appear in the logs if all build/deploy steps and tests have succeeded. You may still record these details in `error` or `test_errors` for diagnostics, but they must not influence the `goal_achieved` flag when tests pass.
 
-       **Do not infer cross-iteration state:**
-       - Base this determination only on the current iteration's logs and test results; ignore earlier iterations.
-    """)
+           **Do not infer cross-iteration state:**
+           - Base this determination only on the current iteration's logs and test results; ignore earlier iterations.
+        """)
     
+    else:
+        goal_achieved_critera = textwrap.dedent(f"""
+            **If the code writing or docker build steps failed, set `"goal_achieved": false`.**  
+            **if the OpenTofu plan/apply did not complete successfully, set `"goal_achieved": false`.**  
+            **If the test output shows "Ran 0 tests", set `"goal_achieved": false`.**  
+            **If any tests were skipped, set 'goal_achieved': false. Goal can only be set to true if all tests ran successfully without skips and the acceptance criteria are fully covered by the test suite.**  
+            - Set `"goal_achieved": true` only if the logs contain no errors, the task output clearly meets the stated GOAL, and test logs show that one or more tests were actually run.  
+            - If any errors or incomplete behaviors are detected in the logs, set `"goal_achieved": false`.  
+            - Base this determination only on the current logs—do not consider prior iterations.
+            
+           **Primary decision rule (test-centric):**
+           - Set `"goal_achieved": true` when **all** of the following are true:
+             - Build/packaging steps completed successfully (no unrecovered build/compiler errors).
+             - Infrastructure deployment (e.g., OpenTofu plan/apply) either succeeded or was not invoked; there are no final plan/apply failures.
+             - The test runner executed **one or more tests** (i.e., not `Ran 0 tests`).
+             - The final test result for the executed suite shows **no failing or erroring tests** (status equivalent to OK / PASSED in the chosen framework).
+           - Set `"goal_achieved": false` when **any** of the above conditions are not met (e.g., build/deploy failure, tests did not run, or the test runner reports failing/erroring tests).
+
+           **Treatment of log errors and simulated failures:**
+           - Do **not** set `goal_achieved` to `false` **solely** because log output contains stack traces, exceptions, or error messages **if** the relevant tests ultimately pass. Tests may intentionally simulate failures and assert correct handling; such logged errors are acceptable when the test framework reports success.
+           - Continue to record important runtime or infra issues in the `error` or `test_errors` fields so downstream agents see them, but let the **test outcomes** drive the `goal_achieved` flag.
+           - **Assume negative-path assertions are intentional:** When a passing test suite includes log lines with exceptions, stack traces, warnings, or error messages that are raised and handled inside tests or application code, assume these are part of intentional negative‑case coverage. **Never** set `goal_achieved: false` solely because such errors appear in the logs if all build/deploy steps and tests have succeeded. You may still record these details in `error` or `test_errors` for diagnostics, but they must not influence the `goal_achieved` flag when tests pass.
+
+           **Skipped tests policy:**
+           - If organizational policy requires, you may treat skipped tests as a reason to keep `goal_achieved: false`. Otherwise, treat a run with skips but no failures/errors as `goal_achieved: true` **only when explicitly instructed by higher-level configuration or input fields.**
+
+           **Do not infer cross-iteration state:**
+           - Base this determination only on the current iteration's logs and test results; ignore earlier iterations.
+        """)
+        
     summary_inputs = build_iteration_summary_inputs(
         config,
         goal_achieved_critera
@@ -2334,8 +2391,7 @@ def build_iteration_summary_inputs(
         "goal_achieved_policy": goal_policy_text,
         "allow_goal_achieved_hints": {
             "deployment_logs_exist": bool(iteration.log_content_deployment),
-            "version_number": iteration.version_number,
-            "test_file_exists": bool(config.self_driving_task.test_file_path),
+            "version_number": iteration.version_number
         },
         "code_changes": _collect_code_change_data(config),
         "previous_iteration_summaries": _collect_previous_iteration_summaries_for_context(config),

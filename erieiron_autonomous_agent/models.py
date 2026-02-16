@@ -1,3 +1,4 @@
+import copy
 import difflib
 # Load model once at startup
 import json
@@ -471,12 +472,18 @@ class Business(BaseErieIronModel):
         qs = self.cloud_accounts.all()
         
         if not env_type:
-            if qs.filter(is_default_production=True).exists():
-                return qs.filter(is_default_production=True).first()
-            else:
-                return qs.filter(is_default_dev=True).first()
+            default_prod = qs.filter(is_default_production=True).first()
+            if default_prod:
+                return default_prod
+            if not qs.exists():
+                return self._ensure_default_cloud_account(EnvironmentType.PRODUCTION)
+            return qs.filter(is_default_dev=True).first()
         elif EnvironmentType.PRODUCTION.eq(env_type):
-            return qs.filter(is_default_production=True).first()
+            default_prod = qs.filter(is_default_production=True).first()
+            if default_prod:
+                return default_prod
+            if not qs.exists():
+                return self._ensure_default_cloud_account(EnvironmentType.PRODUCTION)
         elif EnvironmentType.DEV.eq(env_type):
             return qs.filter(is_default_dev=True).first()
         
@@ -484,6 +491,39 @@ class Business(BaseErieIronModel):
     
     def iter_cloud_accounts(self) -> models.QuerySet:
         return self.cloud_accounts.order_by("name")
+
+    def _ensure_default_cloud_account(
+            self,
+            env_type: EnvironmentType
+    ) -> "CloudAccount | None":
+        if EnvironmentType.PRODUCTION.neq(env_type):
+            return None
+        template_business = Business.get_erie_iron_business()
+        if self.id == template_business.id:
+            return None
+        with transaction.atomic():
+            locked_business = Business.objects.select_for_update().get(id=self.id)
+            if locked_business.cloud_accounts.exists():
+                return locked_business.cloud_accounts.filter(
+                    is_default_production=True
+                ).first()
+            template_account = template_business.cloud_accounts.filter(
+                is_default_production=True
+            ).first()
+            if not template_account:
+                return None
+            template_metadata = (
+                template_account.metadata if isinstance(template_account.metadata, dict) else {}
+            )
+            return CloudAccount.objects.create(
+                business=locked_business,
+                name=f"{locked_business.name}-production" if locked_business.name else "production",
+                provider=template_account.provider,
+                account_identifier=template_account.account_identifier,
+                credentials_secret_arn=template_account.credentials_secret_arn,
+                metadata=copy.deepcopy(template_metadata),
+                is_default_production=True,
+            )
 
 
 class CloudAccount(BaseErieIronModel):
