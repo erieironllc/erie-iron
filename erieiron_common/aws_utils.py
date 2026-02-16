@@ -1022,13 +1022,19 @@ BODY:
     
     def configure_nat_gateway(self):
         ec2 = self.client("ec2")
-        
+
         vpc_config = self.cloud_account.get_vpc_config()
-        
-        # Extract NAT gateway configuration
-        private_subnet_ids = self._extract_subnet_ids(vpc_config, PublicPrivate.PRIVATE)
+        vpc_id = vpc_config["vpc_id"]
+
+        # Always use live subnet data to avoid stale subnet IDs
+        discovered_subnets = self._describe_vpc_subnets(ec2, vpc_id)
+        private_subnet_ids = [
+            subnet["subnet_id"]
+            for subnet in discovered_subnets
+            if subnet["public_private"] == PublicPrivate.PRIVATE
+        ]
+
         if not private_subnet_ids:
-            # private_subnet_ids = self.get_private_subnet_ids(vpc_config)
             raise Exception(
                 f"Cannot cofigure NAT routing  "
                 "Account has no private subnets"
@@ -1207,24 +1213,82 @@ BODY:
         
         return None
     
+    def _validate_subnet_ids(self, subnet_ids: list[str]) -> list[str]:
+        """Validate that subnet IDs exist in AWS. Returns only valid subnet IDs."""
+        if not subnet_ids:
+            return []
+
+        ec2 = self.client("ec2")
+
+        try:
+            response = ec2.describe_subnets(SubnetIds=subnet_ids)
+            valid_ids = [subnet["SubnetId"] for subnet in response.get("Subnets", [])]
+            return valid_ids
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code")
+            if error_code == "InvalidSubnetID.NotFound":
+                logging.warning(
+                    f"Batch validation failed for subnet IDs {subnet_ids}. "
+                    "Validating individually to identify valid subnets."
+                )
+
+                valid_ids = []
+                for subnet_id in subnet_ids:
+                    try:
+                        response = ec2.describe_subnets(SubnetIds=[subnet_id])
+                        if response.get("Subnets"):
+                            valid_ids.append(subnet_id)
+                    except ClientError as individual_error:
+                        individual_code = individual_error.response.get("Error", {}).get("Code")
+                        if individual_code == "InvalidSubnetID.NotFound":
+                            logging.warning(f"Subnet ID {subnet_id} does not exist")
+                        else:
+                            raise
+
+                return valid_ids
+            raise
+
     def _extract_subnet_ids(self, vpc_config, public_private: PublicPrivate) -> list[str]:
-        subnet_ids = [
+        cached_subnet_ids = [
             subnet_data['subnet_id']
             for subnet_data in common.get_list(
-                vpc_config, 
+                vpc_config,
                 "public_subnets" if PublicPrivate.PUBLIC.eq(public_private) else "private_subnets"
             )
         ]
-        if subnet_ids:
-            return subnet_ids
-        
-        return [
+
+        if cached_subnet_ids:
+            validated_ids = self._validate_subnet_ids(cached_subnet_ids)
+            if validated_ids and len(validated_ids) == len(cached_subnet_ids):
+                return validated_ids
+
+            if validated_ids:
+                logging.warning(
+                    f"Some cached subnet IDs are invalid. Valid: {validated_ids}, "
+                    f"Invalid: {set(cached_subnet_ids) - set(validated_ids)}. "
+                    "Discovering all current subnets from AWS to ensure complete list."
+                )
+            else:
+                logging.warning(
+                    f"All cached subnet IDs {cached_subnet_ids} are invalid. "
+                    "Discovering current subnets from AWS."
+                )
+
+        discovered_subnets = self._describe_vpc_subnets(
+            self.client("ec2"),
+            vpc_config["vpc_id"]
+        )
+        subnet_ids = [
             subnet_data['subnet_id']
-            for subnet_data in self._describe_vpc_subnets(
-                self.client("ec2"),
-                vpc_config["vpc_id"]
-            ) if subnet_data['public_private'] == public_private
+            for subnet_data in discovered_subnets
+            if subnet_data['public_private'] == public_private
         ]
+
+        logging.info(
+            f"Discovered {len(subnet_ids)} {public_private} subnet(s) in VPC {vpc_config['vpc_id']}: {subnet_ids}"
+        )
+
+        return subnet_ids
     
     def _hydrate_subnet_metadata(self, vpc_config: dict) -> None:
         collections = ["public_subnets", "private_subnets"]
@@ -1266,20 +1330,34 @@ BODY:
             raise RuntimeError(
                 f"Failed to describe subnets for VPC {vpc_id}: {exc}"
             ) from exc
-        
+
+        all_subnets = response.get("Subnets", [])
+        logging.info(
+            f"Found {len(all_subnets)} total subnet(s) in VPC {vpc_id}: "
+            f"{[s.get('SubnetId') for s in all_subnets]}"
+        )
+
         discovered = []
-        for subnet in response.get("Subnets", []):
+        for subnet in all_subnets:
             tags = {
                 tag.get("Key"): tag.get("Value")
                 for tag in subnet.get("Tags", [])
                 if tag.get("Key")
             }
             public_subnet = self.is_public_subnet(subnet, ec2_client)
+            subnet_id = subnet.get("SubnetId")
+            public_private = PublicPrivate.PUBLIC if public_subnet else PublicPrivate.PRIVATE
+
+            logging.info(
+                f"Subnet {subnet_id} classified as {public_private} "
+                f"(MapPublicIpOnLaunch={subnet.get('MapPublicIpOnLaunch')})"
+            )
+
             discovered.append(
                 {
                     "public": public_subnet,
-                    "public_private": PublicPrivate.from_is_public(public_subnet),
-                    "subnet_id": subnet.get("SubnetId"),
+                    "public_private": public_private,
+                    "subnet_id": subnet_id,
                     "cidr_block": subnet.get("CidrBlock"),
                     "availability_zone": subnet.get("AvailabilityZone"),
                     "name": tags.get("Name"),

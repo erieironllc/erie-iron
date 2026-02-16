@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Frontier Session IaC Guidance Output",
+  "type": "object",
+  "required": ["recommended_action", "notes"],
+  "additionalProperties": true,
+  "properties": {
+    "recommended_action": { "type": "string" },
+    "notes": { "type": "string" },
+    "missing_outputs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "commands_to_run": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blocked": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" },
+        "required_action": { "type": "string" }
+      }
+    }
+  }
+}

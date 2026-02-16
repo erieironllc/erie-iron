@@ -201,7 +201,13 @@ def view_login(request):
     # Build Cognito login URL and pass to template
     cognito_login_url = f"{cognito_domain}/oauth2/authorize?{urlencode(params)}"
     
-    return render(request, "login.html", {"cognito_login_url": cognito_login_url})
+    return send_response(
+        request,
+        "login.html",
+        {
+            "cognito_login_url": cognito_login_url,
+        },
+    )
 
 
 def get_callback_url(request) -> str:
