@@ -1536,6 +1536,9 @@ class Task(BaseErieIronModel):
             },
         )
         
+        if not Path(self_driving_task.sandbox_path).exists():
+            reset_code_dir = True
+        
         if reset_code_dir and not created:
             if Path(self_driving_task.sandbox_path).exists():
                 common.delete_dir(self_driving_task.sandbox_path)

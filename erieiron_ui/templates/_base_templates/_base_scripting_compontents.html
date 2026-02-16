@@ -1,7 +1,7 @@
 {% load static %}
 
 <script>
-    const error_tokens = {{ allowed_back_dests|safe }};
+    const error_tokens = {{ allowed_back_dests|default:"[]"|safe }};
     {#    intentionally obfuscating the var name#}
 
     function resetScrollableContainers() {

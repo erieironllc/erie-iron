@@ -190,6 +190,7 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+WHITENOISE_USE_FINDERS = True
 
 _static_compiled_path = Path(STATIC_COMPILED_DIR)
 if not _static_compiled_path.is_absolute():

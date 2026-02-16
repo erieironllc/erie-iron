@@ -47,5 +47,5 @@ sqlparse
 tiktoken
 torch==2.6.0+cpu; platform_system == "Linux"
 torch==2.6.0; platform_system == "Darwin"
-
+rsa
 ruff
