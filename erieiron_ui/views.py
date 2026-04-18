@@ -32,7 +32,7 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
-from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess
+from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess, WorkflowConnection, WorkflowDefinition, WorkflowStep, WorkflowTrigger
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
@@ -124,6 +124,211 @@ def _serialize_cloud_account(account: CloudAccount) -> dict:
         "created_at": account.created_at,
         "updated_at": account.updated_at,
     }
+
+
+def _workflow_message_type_choices() -> list[dict[str, str]]:
+    return [
+        {
+            "value": value,
+            "label": label,
+        }
+        for value, label in PubSubMessageType.choices()
+    ]
+
+
+def _workflow_message_type_label(message_type: str | None) -> str | None:
+    if not message_type:
+        return None
+
+    return PubSubMessageType(message_type).label()
+
+
+def _serialize_workflow_step(step: WorkflowStep) -> dict:
+    return {
+        "id": str(step.id),
+        "workflow_id": str(step.workflow_id),
+        "name": step.name,
+        "handler_path": step.handler_path,
+        "emits_message_type": step.emits_message_type,
+        "emits_message_type_label": _workflow_message_type_label(step.emits_message_type),
+        "sort_order": step.sort_order,
+    }
+
+
+def _serialize_workflow_trigger(trigger: WorkflowTrigger) -> dict:
+    return {
+        "id": str(trigger.id),
+        "workflow_id": str(trigger.workflow_id),
+        "target_step_id": str(trigger.target_step_id),
+        "target_step_name": trigger.target_step.name,
+        "message_type": trigger.message_type,
+        "message_type_label": _workflow_message_type_label(trigger.message_type),
+        "sort_order": trigger.sort_order,
+    }
+
+
+def _serialize_workflow_connection(connection: WorkflowConnection) -> dict:
+    return {
+        "id": str(connection.id),
+        "workflow_id": str(connection.workflow_id),
+        "source_step_id": str(connection.source_step_id),
+        "source_step_name": connection.source_step.name,
+        "target_step_id": str(connection.target_step_id),
+        "target_step_name": connection.target_step.name,
+        "message_type": connection.message_type,
+        "message_type_label": _workflow_message_type_label(connection.message_type),
+        "sort_order": connection.sort_order,
+    }
+
+
+def _serialize_workflow_definition(workflow: WorkflowDefinition) -> dict:
+    steps = [_serialize_workflow_step(step) for step in workflow.steps.all()]
+    triggers = [_serialize_workflow_trigger(trigger) for trigger in workflow.triggers.all()]
+    connections = [
+        _serialize_workflow_connection(connection)
+        for connection in workflow.connections.all()
+    ]
+    return {
+        "id": str(workflow.id),
+        "name": workflow.name,
+        "description": workflow.description,
+        "is_active": workflow.is_active,
+        "steps": steps,
+        "triggers": triggers,
+        "connections": connections,
+        "step_count": len(steps),
+        "trigger_count": len(triggers),
+        "connection_count": len(connections),
+    }
+
+
+def _normalize_workflow_message_type(message_type: str | None, *, required: bool) -> str | None:
+    normalized_value = common.default_str(message_type).strip()
+    if not normalized_value:
+        if required:
+            raise ValueError("Message type is required.")
+        return None
+
+    message_type_enum = PubSubMessageType.valid_or(normalized_value, None)
+    if message_type_enum is None:
+        raise ValueError(f"Invalid message type: {normalized_value}")
+
+    return message_type_enum.value
+
+
+def _normalize_workflow_sort_order(sort_order: Any) -> int:
+    normalized_value = common.default_str(sort_order).strip()
+    if not normalized_value:
+        return 0
+
+    sort_order_value = int(normalized_value)
+    if sort_order_value < 0:
+        raise ValueError("Sort order must be zero or greater.")
+
+    return sort_order_value
+
+
+def _save_workflow_definition_form(
+        *,
+        workflow_id: str | None,
+        name: str,
+        description: str | None,
+        is_active: bool,
+) -> WorkflowDefinition:
+    workflow = (
+        get_object_or_404(WorkflowDefinition, pk=workflow_id)
+        if workflow_id
+        else WorkflowDefinition()
+    )
+    workflow.name = common.default_str(name).strip()
+    workflow.description = common.default_str(description).strip() or None
+    workflow.is_active = is_active
+
+    if not workflow.name:
+        raise ValueError("Workflow name is required.")
+
+    workflow.full_clean()
+    workflow.save()
+    return workflow
+
+
+def _save_workflow_step_form(
+        *,
+        workflow_id: str,
+        step_id: str | None,
+        name: str,
+        handler_path: str,
+        emits_message_type: str | None,
+        sort_order: Any,
+) -> WorkflowStep:
+    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    step = (
+        get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
+        if step_id
+        else WorkflowStep(workflow=workflow)
+    )
+    step.name = common.default_str(name).strip()
+    step.handler_path = common.default_str(handler_path).strip()
+    step.emits_message_type = _normalize_workflow_message_type(
+        emits_message_type,
+        required=False,
+    )
+    step.sort_order = _normalize_workflow_sort_order(sort_order)
+
+    if not step.name:
+        raise ValueError("Step name is required.")
+    if not step.handler_path:
+        raise ValueError("Handler path is required.")
+
+    step.full_clean()
+    step.save()
+    return step
+
+
+def _save_workflow_trigger_form(
+        *,
+        workflow_id: str,
+        trigger_id: str | None,
+        target_step_id: str,
+        message_type: str,
+        sort_order: Any,
+) -> WorkflowTrigger:
+    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    trigger = (
+        get_object_or_404(WorkflowTrigger, pk=trigger_id, workflow=workflow)
+        if trigger_id
+        else WorkflowTrigger(workflow=workflow)
+    )
+    trigger.target_step = get_object_or_404(WorkflowStep, pk=target_step_id, workflow=workflow)
+    trigger.message_type = _normalize_workflow_message_type(message_type, required=True)
+    trigger.sort_order = _normalize_workflow_sort_order(sort_order)
+    trigger.full_clean()
+    trigger.save()
+    return trigger
+
+
+def _save_workflow_connection_form(
+        *,
+        workflow_id: str,
+        connection_id: str | None,
+        source_step_id: str,
+        target_step_id: str,
+        message_type: str,
+        sort_order: Any,
+) -> WorkflowConnection:
+    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    connection = (
+        get_object_or_404(WorkflowConnection, pk=connection_id, workflow=workflow)
+        if connection_id
+        else WorkflowConnection(workflow=workflow)
+    )
+    connection.source_step = get_object_or_404(WorkflowStep, pk=source_step_id, workflow=workflow)
+    connection.target_step = get_object_or_404(WorkflowStep, pk=target_step_id, workflow=workflow)
+    connection.message_type = _normalize_workflow_message_type(message_type, required=True)
+    connection.sort_order = _normalize_workflow_sort_order(sort_order)
+    connection.full_clean()
+    connection.save()
+    return connection
 
 
 def _build_simple_auth_token(email: str) -> str:
@@ -7030,6 +7235,7 @@ def view_admin_users(request):
         'available_roles': Role.roles_in_order(),
         'business': erieiron_business,
         'tabs': tabs,
+        'admin_active_tab': 'users',
         'active_tab': 'admin',
         'tab_template': 'admin/users.html',
         'sidebar_title': 'Erie Iron',
@@ -7066,6 +7272,7 @@ def view_admin_user_detail(request, person_id):
         'current_role': Role(person.role),
         'business': erieiron_business,
         'tabs': tabs,
+        'admin_active_tab': 'users',
         'active_tab': 'admin',
         'tab_template': 'admin/user_detail.html',
         'sidebar_title': 'Erie Iron',
@@ -7078,6 +7285,190 @@ def view_admin_user_detail(request, person_id):
     ]
 
     return send_response(request, 'portfolio/portfolio_base.html', context, breadcrumbs=breadcrumbs)
+
+
+@admin_required
+def view_admin_workflows(request):
+    workflows = list(WorkflowDefinition.with_graph())
+    workflow_map = {str(workflow.id): workflow for workflow in workflows}
+    requested_workflow_id = common.default_str(rget(request, 'workflow_id')).strip()
+
+    if requested_workflow_id:
+        selected_workflow = workflow_map.get(requested_workflow_id)
+        if selected_workflow is None:
+            raise Http404("Workflow not found.")
+    else:
+        selected_workflow = workflows[0] if workflows else None
+
+    erieiron_business = Business.get_erie_iron_business()
+    tabs = _build_portfolio_tabs(erieiron_business, request=request)
+
+    context = {
+        'workflows': workflows,
+        'workflows_data': [_serialize_workflow_definition(workflow) for workflow in workflows],
+        'selected_workflow': selected_workflow,
+        'message_type_choices': _workflow_message_type_choices(),
+        'business': erieiron_business,
+        'tabs': tabs,
+        'admin_active_tab': 'workflows',
+        'active_tab': 'admin',
+        'tab_template': 'admin/workflows.html',
+        'sidebar_title': 'Erie Iron',
+    }
+
+    breadcrumbs = [
+        (reverse('view_portfolio'), "Portfolio"),
+        (reverse('view_admin_workflows'), "Admin - Workflows")
+    ]
+
+    return send_response(request, 'portfolio/portfolio_base.html', context, breadcrumbs=breadcrumbs)
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_save(request):
+    with transaction.atomic():
+        workflow = _save_workflow_definition_form(
+            workflow_id=rget(request, 'workflow_id'),
+            name=rget(request, 'name'),
+            description=rget(request, 'description'),
+            is_active=rget_bool(request, 'is_active', True),
+        )
+
+    logging.info(f"Admin saved workflow {workflow.name} ({workflow.id})")
+
+    return {
+        "success": True,
+        "workflow_id": str(workflow.id),
+    }
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_delete(request, workflow_id):
+    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    workflow_name = workflow.name
+    workflow.delete()
+
+    logging.info(f"Admin deleted workflow {workflow_name} ({workflow_id})")
+
+    return {"success": True}
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_step_save(request):
+    with transaction.atomic():
+        step = _save_workflow_step_form(
+            workflow_id=rget(request, 'workflow_id'),
+            step_id=rget(request, 'step_id'),
+            name=rget(request, 'name'),
+            handler_path=rget(request, 'handler_path'),
+            emits_message_type=rget(request, 'emits_message_type'),
+            sort_order=rget(request, 'sort_order'),
+        )
+
+    logging.info(f"Admin saved workflow step {step.name} ({step.id})")
+
+    return {
+        "success": True,
+        "workflow_id": str(step.workflow_id),
+    }
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_step_delete(request, step_id):
+    step = get_object_or_404(WorkflowStep, pk=step_id)
+    workflow_id = str(step.workflow_id)
+    step_name = step.name
+    step.delete()
+
+    logging.info(f"Admin deleted workflow step {step_name} ({step_id})")
+
+    return {
+        "success": True,
+        "workflow_id": workflow_id,
+    }
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_trigger_save(request):
+    with transaction.atomic():
+        trigger = _save_workflow_trigger_form(
+            workflow_id=rget(request, 'workflow_id'),
+            trigger_id=rget(request, 'trigger_id'),
+            target_step_id=rget(request, 'target_step_id'),
+            message_type=rget(request, 'message_type'),
+            sort_order=rget(request, 'sort_order'),
+        )
+
+    logging.info(f"Admin saved workflow trigger {trigger.id} for workflow {trigger.workflow.name}")
+
+    return {
+        "success": True,
+        "workflow_id": str(trigger.workflow_id),
+    }
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_trigger_delete(request, trigger_id):
+    trigger = get_object_or_404(WorkflowTrigger, pk=trigger_id)
+    workflow_id = str(trigger.workflow_id)
+    trigger.delete()
+
+    logging.info(f"Admin deleted workflow trigger {trigger_id}")
+
+    return {
+        "success": True,
+        "workflow_id": workflow_id,
+    }
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_connection_save(request):
+    with transaction.atomic():
+        connection = _save_workflow_connection_form(
+            workflow_id=rget(request, 'workflow_id'),
+            connection_id=rget(request, 'connection_id'),
+            source_step_id=rget(request, 'source_step_id'),
+            target_step_id=rget(request, 'target_step_id'),
+            message_type=rget(request, 'message_type'),
+            sort_order=rget(request, 'sort_order'),
+        )
+
+    logging.info(f"Admin saved workflow connection {connection.id} for workflow {connection.workflow.name}")
+
+    return {
+        "success": True,
+        "workflow_id": str(connection.workflow_id),
+    }
+
+
+@require_POST
+@admin_required
+@json_endpoint
+def action_admin_workflow_connection_delete(request, connection_id):
+    connection = get_object_or_404(WorkflowConnection, pk=connection_id)
+    workflow_id = str(connection.workflow_id)
+    connection.delete()
+
+    logging.info(f"Admin deleted workflow connection {connection_id}")
+
+    return {
+        "success": True,
+        "workflow_id": workflow_id,
+    }
 
 
 @admin_required

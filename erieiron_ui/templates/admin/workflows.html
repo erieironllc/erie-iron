@@ -1,0 +1,824 @@
+{% load erieiron_common_tags %}
+
+<div class="container-fluid mt-4"
+     id="workflow-admin-root"
+     data-selected-workflow-id="{% if selected_workflow %}{{ selected_workflow.id }}{% endif %}"
+     data-workflow-save-url="{% url 'action_admin_workflow_save' %}"
+     data-step-save-url="{% url 'action_admin_workflow_step_save' %}"
+     data-trigger-save-url="{% url 'action_admin_workflow_trigger_save' %}"
+     data-connection-save-url="{% url 'action_admin_workflow_connection_save' %}">
+    {% include "admin/_admin_nav.html" %}
+
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2>Workflow Management</h2>
+            <p class="text-muted mb-0">Edit workflow names, handler paths, triggers, and task connections.</p>
+        </div>
+        <button type="button" class="btn btn-primary" data-action="create-workflow">
+            <i class="bi bi-plus-circle"></i> Add Workflow
+        </button>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Workflows</h5>
+                    <span class="badge bg-secondary">{{ workflows|length }}</span>
+                </div>
+                <div class="list-group list-group-flush">
+                    {% for workflow in workflows %}
+                        <a href="{% url 'view_admin_workflows' %}?workflow_id={{ workflow.id }}"
+                           class="list-group-item list-group-item-action {% if selected_workflow and workflow.id == selected_workflow.id %}active{% endif %}">
+                            <div class="d-flex justify-content-between align-items-start gap-3">
+                                <div>
+                                    <div class="fw-semibold">{{ workflow.name }}</div>
+                                    <div class="small {% if selected_workflow and workflow.id == selected_workflow.id %}text-white-50{% else %}text-muted{% endif %}">
+                                        {{ workflow.steps.all|length }} steps, {{ workflow.connections.all|length }} connections
+                                    </div>
+                                </div>
+                                <span class="badge {% if workflow.is_active %}bg-success{% else %}bg-secondary{% endif %}">
+                                    {% if workflow.is_active %}Active{% else %}Inactive{% endif %}
+                                </span>
+                            </div>
+                        </a>
+                    {% empty %}
+                        <div class="list-group-item text-muted">
+                            No workflows yet.
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            {% if selected_workflow %}
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                            <div>
+                                <div class="d-flex align-items-center gap-2 mb-2">
+                                    <h4 class="mb-0">{{ selected_workflow.name }}</h4>
+                                    <span class="badge {% if selected_workflow.is_active %}bg-success{% else %}bg-secondary{% endif %}">
+                                        {% if selected_workflow.is_active %}Active{% else %}Inactive{% endif %}
+                                    </span>
+                                </div>
+                                <p class="text-muted mb-0">{{ selected_workflow.description|default:"No description yet." }}</p>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-outline-secondary" data-action="edit-workflow">
+                                    Edit Workflow
+                                </button>
+                                <button type="button"
+                                        class="btn btn-outline-danger"
+                                        data-delete-url="{% url 'action_admin_workflow_delete' selected_workflow.id %}"
+                                        data-delete-label="workflow {{ selected_workflow.name }}">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-sm-4">
+                                <div class="border rounded-2 p-3 h-100">
+                                    <div class="text-muted small mb-1">Steps</div>
+                                    <div class="fs-4">{{ selected_workflow.steps.all|length }}</div>
+                                </div>
+                            </div>
+                            <div class="col-sm-4">
+                                <div class="border rounded-2 p-3 h-100">
+                                    <div class="text-muted small mb-1">Triggers</div>
+                                    <div class="fs-4">{{ selected_workflow.triggers.all|length }}</div>
+                                </div>
+                            </div>
+                            <div class="col-sm-4">
+                                <div class="border rounded-2 p-3 h-100">
+                                    <div class="text-muted small mb-1">Connections</div>
+                                    <div class="fs-4">{{ selected_workflow.connections.all|length }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-0">Steps</h5>
+                            <div class="small text-muted">Names, handlers, and emitted messages.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary" data-action="create-step">
+                            Add Step
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Order</th>
+                                        <th>Name</th>
+                                        <th>Handler</th>
+                                        <th>Emits</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for step in selected_workflow.steps.all %}
+                                        <tr>
+                                            <td>{{ step.sort_order }}</td>
+                                            <td>{{ step.name }}</td>
+                                            <td class="text-break"><code>{{ step.handler_path }}</code></td>
+                                            <td>{{ step.emits_message_type|default:"-" }}</td>
+                                            <td class="text-end">
+                                                <div class="d-inline-flex gap-2">
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            data-action="edit-step"
+                                                            data-step-id="{{ step.id }}">
+                                                        Edit
+                                                    </button>
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-danger"
+                                                            data-delete-url="{% url 'action_admin_workflow_step_delete' step.id %}"
+                                                            data-delete-label="step {{ step.name }}">
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted">No steps yet.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-0">External Triggers</h5>
+                            <div class="small text-muted">Messages that start workflow steps.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary" data-action="create-trigger">
+                            Add Trigger
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Order</th>
+                                        <th>Message</th>
+                                        <th>Target Step</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for trigger in selected_workflow.triggers.all %}
+                                        <tr>
+                                            <td>{{ trigger.sort_order }}</td>
+                                            <td>{{ trigger.message_type }}</td>
+                                            <td>{{ trigger.target_step.name }}</td>
+                                            <td class="text-end">
+                                                <div class="d-inline-flex gap-2">
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            data-action="edit-trigger"
+                                                            data-trigger-id="{{ trigger.id }}">
+                                                        Edit
+                                                    </button>
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-danger"
+                                                            data-delete-url="{% url 'action_admin_workflow_trigger_delete' trigger.id %}"
+                                                            data-delete-label="trigger {{ trigger.message_type }}">
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted">No triggers yet.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-0">Task Connections</h5>
+                            <div class="small text-muted">Messages that flow between workflow steps.</div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary" data-action="create-connection">
+                            Add Connection
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Order</th>
+                                        <th>Source Step</th>
+                                        <th>Message</th>
+                                        <th>Target Step</th>
+                                        <th class="text-end">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for connection in selected_workflow.connections.all %}
+                                        <tr>
+                                            <td>{{ connection.sort_order }}</td>
+                                            <td>{{ connection.source_step.name }}</td>
+                                            <td>{{ connection.message_type }}</td>
+                                            <td>{{ connection.target_step.name }}</td>
+                                            <td class="text-end">
+                                                <div class="d-inline-flex gap-2">
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-secondary"
+                                                            data-action="edit-connection"
+                                                            data-connection-id="{{ connection.id }}">
+                                                        Edit
+                                                    </button>
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-danger"
+                                                            data-delete-url="{% url 'action_admin_workflow_connection_delete' connection.id %}"
+                                                            data-delete-label="connection {{ connection.source_step.name }} to {{ connection.target_step.name }}">
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="5" class="text-center text-muted">No task connections yet.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            {% else %}
+                <div class="card">
+                    <div class="card-body text-center text-muted py-5">
+                        Create a workflow to start wiring steps, handlers, and task connections.
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{{ workflows_data|json_script:"admin-workflows-data" }}
+{{ message_type_choices|json_script:"admin-workflow-message-types" }}
+
+<div class="modal fade" id="workflowModal" tabindex="-1" aria-labelledby="workflowModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="workflowModalLabel">Workflow</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="workflow-form">
+                    {% csrf_token %}
+                    <input type="hidden" id="workflow-id" name="workflow_id">
+                    <div class="mb-3">
+                        <label for="workflow-name" class="form-label">Name</label>
+                        <input type="text" class="form-control" id="workflow-name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="workflow-description" class="form-label">Description</label>
+                        <textarea class="form-control" id="workflow-description" name="description" rows="4"></textarea>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="workflow-is-active" name="is_active" checked>
+                        <label class="form-check-label" for="workflow-is-active">
+                            Active
+                        </label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" form="workflow-form" data-role="workflow-submit">Save Workflow</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="workflowStepModal" tabindex="-1" aria-labelledby="workflowStepModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="workflowStepModalLabel">Workflow Step</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="workflow-step-form">
+                    {% csrf_token %}
+                    <input type="hidden" id="workflow-step-id" name="step_id">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="workflow-step-name" class="form-label">Step Name</label>
+                            <input type="text" class="form-control" id="workflow-step-name" name="name" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="workflow-step-sort-order" class="form-label">Sort Order</label>
+                            <input type="number" class="form-control" id="workflow-step-sort-order" name="sort_order" min="0" step="1">
+                        </div>
+                        <div class="col-12">
+                            <label for="workflow-step-handler" class="form-label">Handler Path</label>
+                            <input type="text" class="form-control" id="workflow-step-handler" name="handler_path" required>
+                        </div>
+                        <div class="col-12">
+                            <label for="workflow-step-emits-message" class="form-label">Emits Message Type</label>
+                            <select class="form-select" id="workflow-step-emits-message" name="emits_message_type"></select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" form="workflow-step-form" data-role="step-submit">Save Step</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="workflowTriggerModal" tabindex="-1" aria-labelledby="workflowTriggerModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="workflowTriggerModalLabel">Workflow Trigger</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="workflow-trigger-form">
+                    {% csrf_token %}
+                    <input type="hidden" id="workflow-trigger-id" name="trigger_id">
+                    <div class="mb-3">
+                        <label for="workflow-trigger-message" class="form-label">Message Type</label>
+                        <select class="form-select" id="workflow-trigger-message" name="message_type" required></select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="workflow-trigger-target-step" class="form-label">Target Step</label>
+                        <select class="form-select" id="workflow-trigger-target-step" name="target_step_id" required></select>
+                    </div>
+                    <div class="mb-0">
+                        <label for="workflow-trigger-sort-order" class="form-label">Sort Order</label>
+                        <input type="number" class="form-control" id="workflow-trigger-sort-order" name="sort_order" min="0" step="1">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" form="workflow-trigger-form" data-role="trigger-submit">Save Trigger</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="workflowConnectionModal" tabindex="-1" aria-labelledby="workflowConnectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="workflowConnectionModalLabel">Workflow Connection</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="workflow-connection-form">
+                    {% csrf_token %}
+                    <input type="hidden" id="workflow-connection-id" name="connection_id">
+                    <div class="mb-3">
+                        <label for="workflow-connection-source-step" class="form-label">Source Step</label>
+                        <select class="form-select" id="workflow-connection-source-step" name="source_step_id" required></select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="workflow-connection-message" class="form-label">Message Type</label>
+                        <select class="form-select" id="workflow-connection-message" name="message_type" required></select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="workflow-connection-target-step" class="form-label">Target Step</label>
+                        <select class="form-select" id="workflow-connection-target-step" name="target_step_id" required></select>
+                    </div>
+                    <div class="mb-0">
+                        <label for="workflow-connection-sort-order" class="form-label">Sort Order</label>
+                        <input type="number" class="form-control" id="workflow-connection-sort-order" name="sort_order" min="0" step="1">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" form="workflow-connection-form" data-role="connection-submit">Save Connection</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function parseJsonScriptContent(elementId) {
+    const el = document.getElementById(elementId);
+    if (!el) {
+        return [];
+    }
+
+    return JSON.parse(el.textContent);
+}
+
+$(document).ready(function() {
+    const rootEl = document.getElementById('workflow-admin-root');
+    if (!rootEl) {
+        return;
+    }
+
+    const AdminWorkflowsView = Backbone.View.extend({
+        el: '#workflow-admin-root',
+
+        events: {
+            'click [data-action="create-workflow"]': 'openCreateWorkflowModal',
+            'click [data-action="edit-workflow"]': 'openEditWorkflowModal',
+            'submit #workflow-form': 'submitWorkflowForm',
+            'click [data-action="create-step"]': 'openCreateStepModal',
+            'click [data-action="edit-step"]': 'openEditStepModal',
+            'submit #workflow-step-form': 'submitStepForm',
+            'click [data-action="create-trigger"]': 'openCreateTriggerModal',
+            'click [data-action="edit-trigger"]': 'openEditTriggerModal',
+            'submit #workflow-trigger-form': 'submitTriggerForm',
+            'click [data-action="create-connection"]': 'openCreateConnectionModal',
+            'click [data-action="edit-connection"]': 'openEditConnectionModal',
+            'submit #workflow-connection-form': 'submitConnectionForm',
+            'click [data-delete-url]': 'handleDelete'
+        },
+
+        initialize: function() {
+            this.workflows = parseJsonScriptContent('admin-workflows-data');
+            this.messageTypeChoices = parseJsonScriptContent('admin-workflow-message-types');
+            this.selectedWorkflowId = String(this.$el.data('selectedWorkflowId') || '');
+            this.workflowSaveUrl = this.$el.data('workflowSaveUrl');
+            this.stepSaveUrl = this.$el.data('stepSaveUrl');
+            this.triggerSaveUrl = this.$el.data('triggerSaveUrl');
+            this.connectionSaveUrl = this.$el.data('connectionSaveUrl');
+            this.workflowModal = new bootstrap.Modal(document.getElementById('workflowModal'));
+            this.stepModal = new bootstrap.Modal(document.getElementById('workflowStepModal'));
+            this.triggerModal = new bootstrap.Modal(document.getElementById('workflowTriggerModal'));
+            this.connectionModal = new bootstrap.Modal(document.getElementById('workflowConnectionModal'));
+        },
+
+        _getSelectedWorkflow: function() {
+            return this.workflows.find((workflow) => workflow.id === this.selectedWorkflowId) || null;
+        },
+
+        _findStep: function(stepId) {
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return null;
+            }
+
+            return workflow.steps.find((step) => step.id === String(stepId)) || null;
+        },
+
+        _findTrigger: function(triggerId) {
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return null;
+            }
+
+            return workflow.triggers.find((trigger) => trigger.id === String(triggerId)) || null;
+        },
+
+        _findConnection: function(connectionId) {
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return null;
+            }
+
+            return workflow.connections.find((connection) => connection.id === String(connectionId)) || null;
+        },
+
+        _workflowUrl: function(workflowId) {
+            if (!workflowId) {
+                return window.location.pathname;
+            }
+
+            return `${window.location.pathname}?workflow_id=${workflowId}`;
+        },
+
+        _redirectToWorkflow: function(workflowId) {
+            window.location.href = this._workflowUrl(workflowId);
+        },
+
+        _fillMessageTypeSelect: function($select, allowBlank, selectedValue) {
+            $select.empty();
+
+            if (allowBlank) {
+                $select.append($('<option></option>').val('').text('No emitted message'));
+            }
+
+            this.messageTypeChoices.forEach((choice) => {
+                $select.append(
+                    $('<option></option>').val(choice.value).text(choice.value)
+                );
+            });
+
+            if (selectedValue) {
+                $select.val(selectedValue);
+            } else if (allowBlank) {
+                $select.val('');
+            }
+        },
+
+        _fillStepSelect: function($select, selectedValue) {
+            const workflow = this._getSelectedWorkflow();
+            $select.empty();
+
+            if (!workflow) {
+                return;
+            }
+
+            workflow.steps.forEach((step) => {
+                $select.append(
+                    $('<option></option>').val(step.id).text(step.name)
+                );
+            });
+
+            if (selectedValue) {
+                $select.val(String(selectedValue));
+            }
+        },
+
+        openCreateWorkflowModal: function(event) {
+            event.preventDefault();
+            $('#workflowModalLabel').text('Add Workflow');
+            $('#workflow-id').val('');
+            $('#workflow-name').val('');
+            $('#workflow-description').val('');
+            $('#workflow-is-active').prop('checked', true);
+            $('[data-role="workflow-submit"]').text('Add Workflow');
+            this.workflowModal.show();
+        },
+
+        openEditWorkflowModal: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return;
+            }
+
+            $('#workflowModalLabel').text('Edit Workflow');
+            $('#workflow-id').val(workflow.id);
+            $('#workflow-name').val(workflow.name);
+            $('#workflow-description').val(workflow.description || '');
+            $('#workflow-is-active').prop('checked', Boolean(workflow.is_active));
+            $('[data-role="workflow-submit"]').text('Save Workflow');
+            this.workflowModal.show();
+        },
+
+        submitWorkflowForm: function(event) {
+            event.preventDefault();
+
+            erie_server().exec_server_post(
+                this.workflowSaveUrl,
+                {
+                    workflow_id: $('#workflow-id').val(),
+                    name: $('#workflow-name').val().trim(),
+                    description: $('#workflow-description').val().trim(),
+                    is_active: $('#workflow-is-active').is(':checked')
+                },
+                (response) => {
+                    if (response.success) {
+                        this._redirectToWorkflow(response.workflow_id);
+                    } else {
+                        alert(response.error || 'Unable to save workflow.');
+                    }
+                }
+            );
+        },
+
+        openCreateStepModal: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return;
+            }
+
+            $('#workflowStepModalLabel').text('Add Step');
+            $('#workflow-step-id').val('');
+            $('#workflow-step-name').val('');
+            $('#workflow-step-handler').val('');
+            $('#workflow-step-sort-order').val(workflow.steps.length);
+            this._fillMessageTypeSelect($('#workflow-step-emits-message'), true, '');
+            $('[data-role="step-submit"]').text('Add Step');
+            this.stepModal.show();
+        },
+
+        openEditStepModal: function(event) {
+            event.preventDefault();
+            const step = this._findStep($(event.currentTarget).data('stepId'));
+            if (!step) {
+                return;
+            }
+
+            $('#workflowStepModalLabel').text('Edit Step');
+            $('#workflow-step-id').val(step.id);
+            $('#workflow-step-name').val(step.name);
+            $('#workflow-step-handler').val(step.handler_path);
+            $('#workflow-step-sort-order').val(step.sort_order);
+            this._fillMessageTypeSelect($('#workflow-step-emits-message'), true, step.emits_message_type || '');
+            $('[data-role="step-submit"]').text('Save Step');
+            this.stepModal.show();
+        },
+
+        submitStepForm: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return;
+            }
+
+            erie_server().exec_server_post(
+                this.stepSaveUrl,
+                {
+                    workflow_id: workflow.id,
+                    step_id: $('#workflow-step-id').val(),
+                    name: $('#workflow-step-name').val().trim(),
+                    handler_path: $('#workflow-step-handler').val().trim(),
+                    emits_message_type: $('#workflow-step-emits-message').val(),
+                    sort_order: $('#workflow-step-sort-order').val()
+                },
+                (response) => {
+                    if (response.success) {
+                        this._redirectToWorkflow(response.workflow_id);
+                    } else {
+                        alert(response.error || 'Unable to save workflow step.');
+                    }
+                }
+            );
+        },
+
+        openCreateTriggerModal: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow || workflow.steps.length === 0) {
+                alert('Add a workflow step before creating a trigger.');
+                return;
+            }
+
+            $('#workflowTriggerModalLabel').text('Add Trigger');
+            $('#workflow-trigger-id').val('');
+            $('#workflow-trigger-sort-order').val(workflow.triggers.length);
+            this._fillMessageTypeSelect($('#workflow-trigger-message'), false, '');
+            this._fillStepSelect($('#workflow-trigger-target-step'), workflow.steps[0].id);
+            $('[data-role="trigger-submit"]').text('Add Trigger');
+            this.triggerModal.show();
+        },
+
+        openEditTriggerModal: function(event) {
+            event.preventDefault();
+            const trigger = this._findTrigger($(event.currentTarget).data('triggerId'));
+            if (!trigger) {
+                return;
+            }
+
+            $('#workflowTriggerModalLabel').text('Edit Trigger');
+            $('#workflow-trigger-id').val(trigger.id);
+            $('#workflow-trigger-sort-order').val(trigger.sort_order);
+            this._fillMessageTypeSelect($('#workflow-trigger-message'), false, trigger.message_type);
+            this._fillStepSelect($('#workflow-trigger-target-step'), trigger.target_step_id);
+            $('[data-role="trigger-submit"]').text('Save Trigger');
+            this.triggerModal.show();
+        },
+
+        submitTriggerForm: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return;
+            }
+
+            erie_server().exec_server_post(
+                this.triggerSaveUrl,
+                {
+                    workflow_id: workflow.id,
+                    trigger_id: $('#workflow-trigger-id').val(),
+                    message_type: $('#workflow-trigger-message').val(),
+                    target_step_id: $('#workflow-trigger-target-step').val(),
+                    sort_order: $('#workflow-trigger-sort-order').val()
+                },
+                (response) => {
+                    if (response.success) {
+                        this._redirectToWorkflow(response.workflow_id);
+                    } else {
+                        alert(response.error || 'Unable to save workflow trigger.');
+                    }
+                }
+            );
+        },
+
+        openCreateConnectionModal: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow || workflow.steps.length === 0) {
+                alert('Add workflow steps before creating a connection.');
+                return;
+            }
+
+            $('#workflowConnectionModalLabel').text('Add Connection');
+            $('#workflow-connection-id').val('');
+            $('#workflow-connection-sort-order').val(workflow.connections.length);
+            this._fillStepSelect($('#workflow-connection-source-step'), workflow.steps[0].id);
+            this._fillStepSelect($('#workflow-connection-target-step'), workflow.steps[0].id);
+            this._fillMessageTypeSelect($('#workflow-connection-message'), false, workflow.steps[0].emits_message_type || '');
+            $('[data-role="connection-submit"]').text('Add Connection');
+            this.connectionModal.show();
+        },
+
+        openEditConnectionModal: function(event) {
+            event.preventDefault();
+            const connection = this._findConnection($(event.currentTarget).data('connectionId'));
+            if (!connection) {
+                return;
+            }
+
+            $('#workflowConnectionModalLabel').text('Edit Connection');
+            $('#workflow-connection-id').val(connection.id);
+            $('#workflow-connection-sort-order').val(connection.sort_order);
+            this._fillStepSelect($('#workflow-connection-source-step'), connection.source_step_id);
+            this._fillStepSelect($('#workflow-connection-target-step'), connection.target_step_id);
+            this._fillMessageTypeSelect($('#workflow-connection-message'), false, connection.message_type);
+            $('[data-role="connection-submit"]').text('Save Connection');
+            this.connectionModal.show();
+        },
+
+        submitConnectionForm: function(event) {
+            event.preventDefault();
+            const workflow = this._getSelectedWorkflow();
+            if (!workflow) {
+                return;
+            }
+
+            erie_server().exec_server_post(
+                this.connectionSaveUrl,
+                {
+                    workflow_id: workflow.id,
+                    connection_id: $('#workflow-connection-id').val(),
+                    source_step_id: $('#workflow-connection-source-step').val(),
+                    target_step_id: $('#workflow-connection-target-step').val(),
+                    message_type: $('#workflow-connection-message').val(),
+                    sort_order: $('#workflow-connection-sort-order').val()
+                },
+                (response) => {
+                    if (response.success) {
+                        this._redirectToWorkflow(response.workflow_id);
+                    } else {
+                        alert(response.error || 'Unable to save workflow connection.');
+                    }
+                }
+            );
+        },
+
+        handleDelete: function(event) {
+            event.preventDefault();
+
+            const deleteUrl = $(event.currentTarget).data('deleteUrl');
+            const deleteLabel = $(event.currentTarget).data('deleteLabel');
+            if (!deleteUrl) {
+                return;
+            }
+
+            if (!confirm(`Delete ${deleteLabel}?`)) {
+                return;
+            }
+
+            erie_server().exec_server_post(
+                deleteUrl,
+                {},
+                (response) => {
+                    if (response.success) {
+                        if (response.workflow_id) {
+                            this._redirectToWorkflow(response.workflow_id);
+                        } else {
+                            window.location.href = window.location.pathname;
+                        }
+                    } else {
+                        alert(response.error || `Unable to delete ${deleteLabel}.`);
+                    }
+                }
+            );
+        }
+    });
+
+    window.adminWorkflowsView = new AdminWorkflowsView();
+});
+</script>
