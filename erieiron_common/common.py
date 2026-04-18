@@ -1326,10 +1326,28 @@ def serialize_class(cls: Type) -> str:
     return f"{cls.__module__}.{cls.__name__}"
 
 
+def deserialize_symbol(serialized_symbol_path: str):
+    path_parts = serialized_symbol_path.split(".")
+    attribute_parts = []
+
+    while path_parts:
+        module_name = ".".join(path_parts)
+        try:
+            module = importlib.import_module(module_name)
+            target = module
+            for attribute_name in attribute_parts:
+                target = getattr(target, attribute_name)
+            return target
+        except ModuleNotFoundError as exc:
+            if exc.name != module_name and not module_name.startswith(f"{exc.name}."):
+                raise
+            attribute_parts.insert(0, path_parts.pop())
+
+    raise ModuleNotFoundError(serialized_symbol_path)
+
+
 def deserialize_class(serialized_class_and_module) -> Type:
-    module_name, class_name = serialized_class_and_module.rsplit(".", 1)
-    module = importlib.import_module(module_name)
-    return getattr(module, class_name)
+    return deserialize_symbol(serialized_class_and_module)
 
 
 def get_stack_trace_as_string(exception: Exception) -> str:
