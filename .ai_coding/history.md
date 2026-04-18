@@ -1,3 +1,9 @@
+# 2026-04-18 15:34:07
+$ITERATE fixed local management command env selection, stopped blank inherited env vars from overriding `.env.dev_local`, and removed local-profile migration churn from `PubSubHanderInstance.env`.
+
+Run `.venv/bin/python manage.py --erieiron-env=dev_local migrate` manually, then review the changes because the local `makemigrations` path is now clean and the repo rules still require manual migration execution.
+
+
 # 2026-04-18 13:35:28
 $ITERATE fixed the first pgvector migration to create the extension before adding vector columns and updated the local runner/docs to use a Postgres service that actually exposes pgvector on this machine.
 
