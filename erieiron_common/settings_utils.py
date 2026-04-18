@@ -101,7 +101,11 @@ def get_config():
         raise Exception("ERIEIRON_ENV is not defined")
     
     conf_file = Path(os.getcwd()) / 'conf' / f'./.env.{erieiron_env}'
-    config = decouple.Config(decouple.RepositoryEnv(conf_file))
+    repository = decouple.RepositoryEnv(conf_file)
+    for key, value in repository.data.items():
+        if value and os.environ.get(key, "").strip() == "":
+            os.environ.pop(key, None)
+    config = decouple.Config(repository)
     print("config file", conf_file)
     
     return config

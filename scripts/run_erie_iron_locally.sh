@@ -59,11 +59,6 @@ database_exists() {
         "SELECT 1 FROM pg_database WHERE datname = '${LOCAL_DB_NAME}'" | grep -q '^1$'
 }
 
-database_is_migrated() {
-    [[ "$(psql -h localhost -p "${POSTGRES_PORT}" -d "${LOCAL_DB_NAME}" -Atqc \
-        "SELECT to_regclass('public.django_migrations') IS NOT NULL")" == "t" ]]
-}
-
 ensure_local_secrets_file() {
     if [[ ! -f conf/local_secrets.json ]]; then
         cp conf/local_secrets.example.json conf/local_secrets.json
@@ -79,11 +74,12 @@ ensure_local_secrets_file() {
     fi
 }
 
-ensure_migrated_database() {
-    if ! database_is_migrated; then
-        print_info "Running Django migrations"
-        python manage.py migrate --noinput
-    fi
+ensure_current_database_schema() {
+    print_info "Running Django makemigrations"
+    python manage.py makemigrations --noinput
+
+    print_info "Running Django migrations"
+    python manage.py migrate --noinput
 }
 
 active_postgres_major() {
@@ -191,7 +187,7 @@ ensure_local_secrets_file
 
 configure_local_runtime_env
 
-ensure_migrated_database
+ensure_current_database_schema
 
 print_info "Bootstrapping local runtime"
 python manage.py bootstrap_local_runtime

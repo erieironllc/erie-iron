@@ -683,7 +683,7 @@ class PubSubEnvironment(BaseErieIronModel):
 class PubSubHanderInstance(BaseErieIronModel):
     id = models.TextField(primary_key=True, editable=False)
     environment = models.ForeignKey(PubSubEnvironment, null=False, on_delete=models.PROTECT)
-    env = models.TextField(null=False, db_index=True, default=settings.MESSAGE_QUEUE_ENV)
+    env = models.TextField(null=False, db_index=True, default="dev")
     instance_status = models.TextField(null=False, default=PubSubHandlerInstanceStatus.NOT_AVAILABLE)
     max_db_connections = models.IntegerField(null=False, default=0)
     used_db_connections = models.IntegerField(null=False, default=0)
