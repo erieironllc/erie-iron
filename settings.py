@@ -13,7 +13,42 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 BASE_DIR = Path(__file__).resolve().parent
 config = settings_utils.get_config()
+settings_utils.sync_config_to_env(
+    config,
+    [
+        ("ERIEIRON_RUNTIME_PROFILE", "ERIEIRON_RUNTIME_PROFILE"),
+        ("ERIEIRON_LOCAL_SECRETS_FILE", "ERIEIRON_LOCAL_SECRETS_FILE"),
+        ("LOCAL_DB_NAME", "LOCAL_DB_NAME"),
+        ("ERIEIRON_DB_HOST", "ERIEIRON_DB_HOST"),
+        ("ERIEIRON_DB_NAME", "ERIEIRON_DB_NAME"),
+        ("ERIEIRON_DB_PORT", "ERIEIRON_DB_PORT"),
+        ("RDS_SECRET_ARN", "RDS_SECRET_ARN"),
+        ("AWS_DEFAULT_REGION_NAME", "AWS_DEFAULT_REGION"),
+        ("AWS_DEFAULT_REGION_NAME", "AWS_DEFAULT_REGION_NAME"),
+        ("COGNITO_SECRET_ARN", "COGNITO_SECRET_ARN"),
+        ("COGNITO_USER_POOL_ID", "COGNITO_USER_POOL_ID"),
+        ("COGNITO_CLIENT_ID", "COGNITO_CLIENT_ID"),
+        ("COGNITO_DOMAIN", "COGNITO_DOMAIN"),
+        ("LOCAL_AUTH_ENABLED", "LOCAL_AUTH_ENABLED"),
+        ("LOCAL_AUTH_EMAIL", "LOCAL_AUTH_EMAIL"),
+        ("LOCAL_AUTH_PASSWORD", "LOCAL_AUTH_PASSWORD"),
+        ("LOCAL_AUTH_NAME", "LOCAL_AUTH_NAME"),
+    ],
+)
 DEBUG = str(config.get("DEBUG", "True")).lower().strip() == "true"
+ERIEIRON_RUNTIME_PROFILE = config.get(
+    "ERIEIRON_RUNTIME_PROFILE",
+    "local" if os.getenv("ERIEIRON_ENV", "").strip().lower() == "dev_local" else "aws",
+)
+ERIEIRON_LOCAL_SECRETS_FILE = config.get("ERIEIRON_LOCAL_SECRETS_FILE", "conf/local_secrets.json")
+LOCAL_AUTH_ENABLED = config(
+    "LOCAL_AUTH_ENABLED",
+    default=ERIEIRON_RUNTIME_PROFILE == "local",
+    cast=bool,
+)
+LOCAL_AUTH_EMAIL = config("LOCAL_AUTH_EMAIL", default="local-admin@erieiron.local", cast=str)
+LOCAL_AUTH_PASSWORD = config("LOCAL_AUTH_PASSWORD", default="", cast=str)
+LOCAL_AUTH_NAME = config("LOCAL_AUTH_NAME", default="Local Admin", cast=str)
 
 VALIDATION_PORT = 8006
 TIME_ZONE = 'America/Los_Angeles'
@@ -97,8 +132,10 @@ BUSINESS_SANDBOX_ROOTDIR = Path("./erieiron_businesses")
 ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
-    "erieironllc.com"
+    "erieironllc.com",
 ]
+if ERIEIRON_RUNTIME_PROFILE == "local":
+    ALLOWED_HOSTS.append("host.docker.internal")
 
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
@@ -157,8 +194,21 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "erieiron_config.wsgi.application"
 
-
-DATABASES = agent_tools.get_django_settings_databases_conf()
+if ERIEIRON_RUNTIME_PROFILE == "local":
+    local_db_name = os.getenv("LOCAL_DB_NAME", "erieiron_v1")
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": local_db_name,
+            "HOST": "localhost",
+            "PORT": "5432",
+            "TEST": {
+                "NAME": local_db_name,
+            },
+        }
+    }
+else:
+    DATABASES = agent_tools.get_django_settings_databases_conf()
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -237,14 +287,20 @@ SIMPLE_JWT = {
 
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
-    f'https://{os.getenv("DOMAIN_NAME")}',
+    origin
+    for origin in [f'https://{os.getenv("DOMAIN_NAME")}']
+    if origin != "https://None"
 ]
 
 if DEBUG:
     CORS_ALLOWED_ORIGINS += [
+        BASE_URL.rstrip("/"),
+        'http://localhost:8000',
+        'http://127.0.0.1:8000',
         'http://localhost:8024',
         'http://127.0.0.1:8024',
     ]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(CORS_ALLOWED_ORIGINS))
 
 # HTTPS Enforcement (Production only)
 if not DEBUG:

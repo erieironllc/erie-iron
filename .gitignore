@@ -184,6 +184,7 @@ __pycache__/
 /node_modules/
 /erieiron_ui/static/compiled/
 /erieiron_businesses/
+/conf/local_secrets.json
 /.codex/
 /production_deploy_thoughts.md
 /.claude/
