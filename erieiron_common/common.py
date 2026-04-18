@@ -1412,22 +1412,36 @@ def get_methods_with_decorator(decorator_name):
     methods_to_call = []
     
     directory = os.getcwd()
+    skipped_directories = {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "env",
+        "node_modules",
+        "venv",
+    }
     
     for root, dirs, files in os.walk(directory):
-        # Skip virtual environment directories
-        dirs[:] = [d for d in dirs if d not in ("env", "venv", "__pycache__")]
+        dirs[:] = [d for d in dirs if d not in skipped_directories]
         
         for file in files:
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)
                 module_name = os.path.splitext(os.path.relpath(file_path, directory))[0].replace(os.path.sep, ".")
                 
-                with open(file_path, "r", encoding="utf-8") as f:
-                    try:
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
                         tree = ast.parse(f.read(), filename=file_path)
-                    except SyntaxError as e:
-                        print(f"Skipping {file_path} due to syntax error: {e}")
-                        continue
+                except UnicodeDecodeError as e:
+                    print(f"Skipping {file_path} due to encoding error: {e}")
+                    continue
+                except SyntaxError as e:
+                    print(f"Skipping {file_path} due to syntax error: {e}")
+                    continue
                 
                 for node in ast.walk(tree):
                     if isinstance(node, ast.FunctionDef):  # Check for function definitions

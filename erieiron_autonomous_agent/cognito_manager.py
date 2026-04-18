@@ -8,7 +8,6 @@ This module handles AWS Cognito authentication including:
 """
 import json
 import logging
-import os
 import time
 from typing import Optional, Dict, Any
 
@@ -17,56 +16,19 @@ import requests
 from django.contrib.auth import get_user_model
 from django.db import transaction
 
-import boto3
 from erieiron_autonomous_agent.models import OAuthAccount
-from erieiron_common import common
+from erieiron_common import common, view_utils
 
 User = get_user_model()
-
-# Cache configuration loaded from Secrets Manager (5 minute TTL)
-_config_cache = {'data': None, 'expires': 0}
 
 # Cache JWKS for JWT verification (5 minute TTL)
 _jwks_cache = {'data': None, 'expires': 0, 'user_pool_id': None}
 
 
 def _get_cognito_config() -> Dict[str, Any]:
-    """
-    Load Cognito configuration from AWS Secrets Manager.
-
-    Retrieves the secret specified by COGNITO_SECRET_ARN environment variable.
-    Caches the result for 5 minutes to reduce Secrets Manager API calls.
-
-    Returns:
-        dict: Configuration with keys:
-            - user_pool_id: Cognito User Pool ID
-            - client_id: Cognito App Client ID
-            - client_secret: App client secret (empty for public clients)
-            - region: AWS region
-            - domain: Cognito hosted UI domain URL
-            - web_redirect_uri: Web OAuth callback URL
-            - mobile_redirect_uri: Mobile OAuth callback URL
-
-    Raises:
-        ValueError: If COGNITO_SECRET_ARN environment variable not set
-        botocore.exceptions.ClientError: If secret retrieval fails
-    """
-    now = time.time()
-
-    if _config_cache['data'] and _config_cache['expires'] > now:
-        return _config_cache['data']
-
-    secret_arn = os.getenv('COGNITO_SECRET_ARN')
-    if not secret_arn:
-        raise ValueError("COGNITO_SECRET_ARN environment variable not set")
-
-    secretsmanager = boto3.client('secretsmanager')
-    response = secretsmanager.get_secret_value(SecretId=secret_arn)
-    config = json.loads(response['SecretString'])
-
-    _config_cache['data'] = config
-    _config_cache['expires'] = now + 300  # 5 minutes
-
+    config = view_utils.get_cognito_config()
+    if not config.get("domain") or not config.get("client_id") or not config.get("user_pool_id"):
+        raise ValueError("cognito configuration is incomplete")
     return config
 
 

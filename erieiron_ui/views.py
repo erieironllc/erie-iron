@@ -153,19 +153,64 @@ def _resolve_post_login_redirect(request, candidate: str | None) -> str:
 
 def _credentials_match(email: str, password: str) -> bool:
     return (
-            email.lower() in settings.SIMPLE_AUTH_ALLOWED_EMAIL
-            and password == settings.SIMPLE_AUTH_ALLOWED_PASSWORD
+            email.strip().lower() == settings.LOCAL_AUTH_EMAIL.strip().lower()
+            and password == settings.LOCAL_AUTH_PASSWORD
     )
+
+
+def _local_auth_enabled() -> bool:
+    return bool(settings.LOCAL_AUTH_ENABLED)
+
+
+def _handle_local_login(request, next_param: str):
+    from django.contrib.auth import login as django_login
+    from erieiron_common.local_runtime import ensure_local_auth_identity
+
+    if not settings.LOCAL_AUTH_PASSWORD:
+        return HttpResponse(
+            "Local authentication is enabled, but LOCAL_AUTH_PASSWORD is not configured.",
+            status=500,
+        )
+
+    email = common.default_str(request.POST.get("email")).strip().lower()
+    password = common.default_str(request.POST.get("password"))
+
+    if not _credentials_match(email, password):
+        messages.error(request, "Incorrect email or password.")
+        login_url = reverse("view_login")
+        if next_param:
+            login_url = f"{login_url}?next={quote(next_param, safe='/#:?=&%')}"
+        return HttpResponseRedirect(login_url)
+
+    django_user, person = ensure_local_auth_identity()
+    django_login(request, django_user, backend="django.contrib.auth.backends.ModelBackend")
+    request.session["person_id"] = str(person.id)
+
+    destination = _resolve_post_login_redirect(request, next_param)
+    return HttpResponseRedirect(destination)
 
 
 def view_login(request):
     """Login page that renders a sign-in button for Cognito Hosted UI."""
-    next_param = request.GET.get("next") or ""
+    next_param = request.POST.get("next") or request.GET.get("next") or ""
     
     # If already authenticated via Cognito, redirect to destination
-    if getattr(request, "cognito_authenticated", False):
+    if getattr(request, "cognito_authenticated", False) or request.user.is_authenticated:
         destination = _resolve_post_login_redirect(request, next_param)
         return HttpResponseRedirect(destination)
+
+    if _local_auth_enabled():
+        if request.method == "POST":
+            return _handle_local_login(request, next_param)
+        return send_response(
+            request,
+            "login.html",
+            {
+                "local_auth_enabled": True,
+                "local_auth_email": settings.LOCAL_AUTH_EMAIL,
+                "next_param": next_param,
+            },
+        )
     
     # Build Cognito Hosted UI URL for Google sign-in
     from urllib.parse import urlencode
@@ -206,6 +251,8 @@ def view_login(request):
         "login.html",
         {
             "cognito_login_url": cognito_login_url,
+            "local_auth_enabled": False,
+            "next_param": next_param,
         },
     )
 
@@ -295,6 +342,9 @@ def action_logout(request):
 
     # Clear Django session
     django_logout(request)
+
+    if _local_auth_enabled():
+        return HttpResponseRedirect(reverse("view_login"))
 
     # Build Cognito logout URL to clear Cognito session
     cognito_domain = view_utils.get_cognito_domain()

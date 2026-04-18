@@ -1,11 +1,8 @@
-import base64
-import json
 import logging
 import os
 from pathlib import Path
 
-import boto3
-from botocore.exceptions import ClientError
+from erieiron_common import secret_utils
 
 
 def get_logging(debug_sql_statements=False):
@@ -83,29 +80,7 @@ def get_secret_key(config):
 
 
 def get_secret(secret_name: str):
-    # Create a Secrets Manager client
-    session = boto3.session.Session()
-    client = session.client(
-        service_name='secretsmanager',
-        region_name=os.getenv("AWS_REGION", "us-west-2")
-    )
-    
-    try:
-        get_secret_value_response = client.get_secret_value(
-            SecretId=secret_name
-        )
-    except ClientError as e:
-        logging.exception(e)
-        raise e
-    else:
-        # Decrypts secret using the associated KMS CMK
-        # Depending on whether the secret is a string or binary, one of these fields will be populated
-        if 'SecretString' in get_secret_value_response:
-            secret = get_secret_value_response['SecretString']
-            return json.loads(secret)
-        else:
-            decoded_binary_secret = base64.b64decode(get_secret_value_response['SecretBinary'])
-            return json.loads(decoded_binary_secret)
+    return secret_utils.get_secret(secret_name)
 
 
 def get_buckets(config):
@@ -130,6 +105,15 @@ def get_config():
     print("config file", conf_file)
     
     return config
+
+
+def sync_config_to_env(config, env_mappings: list[tuple[str, str]]):
+    for config_key, env_key in env_mappings:
+        value = config.get(config_key, default=None)
+        if value in (None, ""):
+            continue
+        if os.environ.get(env_key) in (None, ""):
+            os.environ[env_key] = str(value)
 
 
 def default_str(s, default_val=""):
