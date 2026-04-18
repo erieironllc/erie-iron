@@ -358,7 +358,7 @@ def redirect(redirect_url, cookies=None):
 
 
 def get_cognito_domain():
-    config = agent_tools.get_cognito_config()
+    config = get_cognito_config()
     return config['domain']
 
 
@@ -366,7 +366,7 @@ def get_cognito_client_id():
     """
     Get Cognito client ID from agent_tools configuration.
     """
-    config = agent_tools.get_cognito_config()
+    config = get_cognito_config()
     return config['client_id']
 
 
@@ -374,8 +374,18 @@ def get_cognito_user_pool_id():
     """
     Get Cognito user pool ID from agent_tools configuration.
     """
-    config = agent_tools.get_cognito_config()
+    config = get_cognito_config()
     return config['user_pool_id']
+
+
+def get_cognito_config():
+    config = agent_tools.get_cognito_config()
+    return {
+        "domain": config.get("domain"),
+        "client_id": config.get("client_id") or config.get("clientId"),
+        "user_pool_id": config.get("user_pool_id") or config.get("userPoolId"),
+        "region": config.get("region") or settings.AWS_DEFAULT_REGION_NAME,
+    }
 
 
 def get_cognito_tokens_from_authcode(code):

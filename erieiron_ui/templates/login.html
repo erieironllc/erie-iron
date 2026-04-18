@@ -54,12 +54,44 @@
             <p class="mb-0">Sign in to orchestrate initiatives, monitor agents, and keep the iron hot.</p>
         </div>
 
-        <div class="text-center">
-            <a href="{{ cognito_login_url }}" class="btn login-btn btn-lg w-100 py-3 fw-semibold">
-                Sign In
-            </a>
-            <p class="text-muted small mt-3">You'll be able to sign in with your Google account.</p>
-        </div>
+        {% if local_auth_enabled %}
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ next_param }}">
+                <div class="mb-3">
+                    <label for="login-email" class="form-label text-muted small text-uppercase">Email</label>
+                    <input
+                        id="login-email"
+                        type="email"
+                        name="email"
+                        value="{{ local_auth_email }}"
+                        class="form-control login-input py-3"
+                        autocomplete="username"
+                        required
+                    >
+                </div>
+                <div class="mb-3">
+                    <label for="login-password" class="form-label text-muted small text-uppercase">Password</label>
+                    <input
+                        id="login-password"
+                        type="password"
+                        name="password"
+                        class="form-control login-input py-3"
+                        autocomplete="current-password"
+                        required
+                    >
+                </div>
+                <button type="submit" class="btn login-btn btn-lg w-100 py-3 fw-semibold">Sign In</button>
+                <p class="text-muted small mt-3 mb-0">Use the local runtime credentials configured for this machine.</p>
+            </form>
+        {% else %}
+            <div class="text-center">
+                <a href="{{ cognito_login_url }}" class="btn login-btn btn-lg w-100 py-3 fw-semibold">
+                    Sign In
+                </a>
+                <p class="text-muted small mt-3">You'll be able to sign in with your Google account.</p>
+            </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

@@ -136,8 +136,17 @@ urlpatterns = [
     # Admin routes
     path('admin/users/', views.view_admin_users, name='view_admin_users'),
     path('admin/users/<uuid:person_id>/', views.view_admin_user_detail, name='view_admin_user_detail'),
+    path('admin/workflows/', views.view_admin_workflows, name='view_admin_workflows'),
     path('_admin/users/create/', views.action_admin_create_person, name='action_admin_create_person'),
     path('_admin/users/<uuid:person_id>/update-role/', views.action_admin_update_user_role, name='action_admin_update_user_role'),
     path('_admin/business-access/add/', views.action_admin_add_business_access, name='action_admin_add_business_access'),
     path('_admin/business-access/<uuid:association_id>/delete/', views.action_admin_delete_business_access, name='action_admin_delete_business_access'),
+    path('_admin/workflows/save/', views.action_admin_workflow_save, name='action_admin_workflow_save'),
+    path('_admin/workflows/<uuid:workflow_id>/delete/', views.action_admin_workflow_delete, name='action_admin_workflow_delete'),
+    path('_admin/workflow-steps/save/', views.action_admin_workflow_step_save, name='action_admin_workflow_step_save'),
+    path('_admin/workflow-steps/<uuid:step_id>/delete/', views.action_admin_workflow_step_delete, name='action_admin_workflow_step_delete'),
+    path('_admin/workflow-triggers/save/', views.action_admin_workflow_trigger_save, name='action_admin_workflow_trigger_save'),
+    path('_admin/workflow-triggers/<uuid:trigger_id>/delete/', views.action_admin_workflow_trigger_delete, name='action_admin_workflow_trigger_delete'),
+    path('_admin/workflow-connections/save/', views.action_admin_workflow_connection_save, name='action_admin_workflow_connection_save'),
+    path('_admin/workflow-connections/<uuid:connection_id>/delete/', views.action_admin_workflow_connection_delete, name='action_admin_workflow_connection_delete'),
 ]

@@ -357,9 +357,6 @@ def timestamp_static(orig_filename):
         if idx == 0:
             latest_matching_file = file_path.name
             shutil.copy2(file_path, destination_path)
-        else:
-            common.quietly_delete(file_path)
-            common.quietly_delete(destination_path)
 
     return f"/static/{static_dir_root.name}/{latest_matching_file}"
 

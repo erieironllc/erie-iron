@@ -184,6 +184,7 @@ __pycache__/
 /node_modules/
 /erieiron_ui/static/compiled/
 /erieiron_businesses/
+/conf/local_secrets.json
 /.codex/
 /production_deploy_thoughts.md
 /.claude/
@@ -255,3 +256,4 @@ __pycache__/
 /artifacts/e348c790-6e58-4662-b98f-872a4d93289a_iteration_history.md
 /artifacts/e348c790-6e58-4662-b98f-872a4d93289a_plan.json
 /conf/local_secrets.json
+/.ai_coding/

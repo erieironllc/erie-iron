@@ -19,6 +19,7 @@ from django.db import models, transaction
 from django.db.models import Sum, Q, QuerySet
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from pgvector.django import VectorField
 
@@ -39,6 +40,7 @@ from erieiron_common.enums import (
     GoalStatus,
     BusinessIdeaSource,
     TaskType,
+    PubSubMessageType,
     EnvironmentType,
     InfrastructureStackType,
     StackStrategy,
@@ -1074,6 +1076,221 @@ class Initiative(BaseErieIronModel):
         )
 
 
+class WorkflowDefinition(BaseErieIronModel):
+    name = models.TextField(unique=True)
+    description = models.TextField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_timestamp = models.DateTimeField(auto_now_add=True)
+    updated_timestamp = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def with_graph(cls) -> QuerySet["WorkflowDefinition"]:
+        return cls.objects.prefetch_related(
+            models.Prefetch(
+                "steps",
+                queryset=WorkflowStep.objects.order_by("sort_order", "name"),
+            ),
+            models.Prefetch(
+                "triggers",
+                queryset=WorkflowTrigger.objects.select_related("target_step").order_by(
+                    "sort_order",
+                    "message_type",
+                ),
+            ),
+            models.Prefetch(
+                "connections",
+                queryset=WorkflowConnection.objects.select_related(
+                    "source_step",
+                    "target_step",
+                ).order_by("sort_order", "id"),
+            ),
+        )
+
+    @classmethod
+    def active_workflows(cls) -> QuerySet["WorkflowDefinition"]:
+        return cls.with_graph().filter(is_active=True)
+
+    @classmethod
+    def register_active_workflows(cls, pubsub_manager):
+        for workflow in cls.active_workflows():
+            workflow.register(pubsub_manager)
+
+    def register(self, pubsub_manager):
+        step_triggers: dict[uuid.UUID, list[WorkflowTrigger]] = {}
+        step_connections: dict[uuid.UUID, list[WorkflowConnection]] = {}
+
+        for trigger in self.triggers.all():
+            step_triggers.setdefault(trigger.target_step_id, []).append(trigger)
+
+        for connection in self.connections.all():
+            step_connections.setdefault(connection.target_step_id, []).append(connection)
+
+        for step in self.steps.all():
+            completed_message_type = step.get_completed_message_type()
+            handler = step.get_handler()
+
+            for trigger in step_triggers.get(step.id, []):
+                pubsub_manager.on(
+                    PubSubMessageType(trigger.message_type),
+                    handler,
+                    completed_message_type,
+                )
+
+            for connection in step_connections.get(step.id, []):
+                pubsub_manager.on(
+                    PubSubMessageType(connection.message_type),
+                    handler,
+                    completed_message_type,
+                )
+
+
+class WorkflowStep(BaseErieIronModel):
+    workflow = models.ForeignKey(
+        WorkflowDefinition,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+    name = models.TextField()
+    handler_path = models.TextField(
+        help_text="Dotted handler path such as package.module.function."
+    )
+    emits_message_type = models.TextField(
+        choices=PubSubMessageType.choices(),
+        null=True,
+        blank=True,
+        help_text="Message type published after this step completes.",
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("workflow", "name"),
+                name="uniq_workflow_step_name",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["workflow", "sort_order"]),
+            models.Index(fields=["workflow", "emits_message_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.workflow.name}: {self.name}"
+
+    def get_handler(self):
+        return common.deserialize_symbol(self.handler_path)
+
+    def get_completed_message_type(self) -> PubSubMessageType | None:
+        if not self.emits_message_type:
+            return None
+
+        return PubSubMessageType(self.emits_message_type)
+
+
+class WorkflowTrigger(BaseErieIronModel):
+    workflow = models.ForeignKey(
+        WorkflowDefinition,
+        on_delete=models.CASCADE,
+        related_name="triggers",
+    )
+    target_step = models.ForeignKey(
+        WorkflowStep,
+        on_delete=models.CASCADE,
+        related_name="triggers",
+    )
+    message_type = models.TextField(choices=PubSubMessageType.choices())
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "message_type"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("workflow", "target_step", "message_type"),
+                name="uniq_workflow_trigger",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["workflow", "sort_order"]),
+            models.Index(fields=["workflow", "message_type"]),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.target_step_id and self.workflow_id != self.target_step.workflow_id:
+            raise ValidationError(
+                {"target_step": "Workflow triggers must point to a step in the same workflow."}
+            )
+
+    def __str__(self):
+        return f"{self.workflow.name}: {self.message_type} -> {self.target_step.name}"
+
+
+class WorkflowConnection(BaseErieIronModel):
+    workflow = models.ForeignKey(
+        WorkflowDefinition,
+        on_delete=models.CASCADE,
+        related_name="connections",
+    )
+    source_step = models.ForeignKey(
+        WorkflowStep,
+        on_delete=models.CASCADE,
+        related_name="outgoing_connections",
+    )
+    target_step = models.ForeignKey(
+        WorkflowStep,
+        on_delete=models.CASCADE,
+        related_name="incoming_connections",
+    )
+    message_type = models.TextField(choices=PubSubMessageType.choices())
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("workflow", "source_step", "target_step", "message_type"),
+                name="uniq_workflow_connection",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["workflow", "sort_order"]),
+            models.Index(fields=["workflow", "message_type"]),
+            models.Index(fields=["source_step", "target_step"]),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.source_step_id and self.workflow_id != self.source_step.workflow_id:
+            raise ValidationError(
+                {"source_step": "Workflow connections must start from a step in the same workflow."}
+            )
+        if self.target_step_id and self.workflow_id != self.target_step.workflow_id:
+            raise ValidationError(
+                {"target_step": "Workflow connections must point to a step in the same workflow."}
+            )
+        if (
+            self.source_step_id
+            and self.source_step.emits_message_type
+            and self.message_type != self.source_step.emits_message_type
+        ):
+            raise ValidationError(
+                {"message_type": "Workflow connection message type must match the source step output."}
+            )
+
+    def __str__(self):
+        return (
+            f"{self.workflow.name}: {self.source_step.name} -[{self.message_type}]-> "
+            f"{self.target_step.name}"
+        )
+
+
 class InfrastructureStack(BaseErieIronModel):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     initiative = models.ForeignKey(
@@ -1575,6 +1792,9 @@ class Task(BaseErieIronModel):
                 "business": business,
             },
         )
+        
+        if not Path(self_driving_task.sandbox_path).exists():
+            reset_code_dir = True
         
         if reset_code_dir and not created:
             if Path(self_driving_task.sandbox_path).exists():

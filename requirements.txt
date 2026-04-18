@@ -41,11 +41,12 @@ python-dateutil>=2.8.0
 python-decouple>=3.8
 python-hcl2>=4.3.0
 requests==2.32.5
+rsa
 scikit-learn>=1.0.0
 sentence-transformers==2.6.1
 sqlparse
 tiktoken
 torch==2.6.0+cpu; platform_system == "Linux"
 torch==2.6.0; platform_system == "Darwin"
-
+rsa
 ruff
