@@ -32,11 +32,11 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
-from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, TaskImplementationVersion, RunningProcess, WorkflowConnection, WorkflowDefinition, WorkflowStep, WorkflowTrigger
+from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, TaskImplementationVersion, TaskPromptImprovement, RunningProcess, WorkflowConnection, WorkflowDefinition, WorkflowStep, WorkflowTrigger
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase, TaskImplementationSourceKind
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -3793,6 +3793,33 @@ def _task_tab_context_executions(task, business, self_driving_task) -> dict:
     return {"task_executions": task_executions}
 
 
+def _task_tab_available_prompt_improvements(task, business, self_driving_task) -> bool:
+    return (
+        task.implementation_source_kind == TaskImplementationSourceKind.LLM_PROMPT.value
+        or task.prompt_improvements.exists()
+    )
+
+
+def _task_tab_context_prompt_improvements(task, business, self_driving_task) -> dict:
+    prompt_improvements = list(task.get_prompt_improvements())
+    for improvement in prompt_improvements:
+        improvement.summary = improvement.get_summary()
+        improvement.guardrails = improvement.get_guardrails()
+        improvement.rollback_signals = improvement.get_rollback_signals()
+        if improvement.generated_llm_request_id:
+            improvement.generated_llm_request_url = reverse(
+                "view_llm_request",
+                args=[improvement.generated_llm_request_id],
+            )
+        else:
+            improvement.generated_llm_request_url = None
+
+    return {
+        "prompt_improvements": prompt_improvements,
+        "prompt_improvement_schedule_choices": TaskExecutionSchedule.choices(),
+    }
+
+
 def _task_tab_available_processes(task, business, self_driving_task) -> bool:
     return RunningProcess.objects.filter(task_execution__task=task).exists()
 
@@ -3872,6 +3899,7 @@ def _task_tab_context_edit(task, business, self_driving_task: SelfDrivingTask) -
         "sandbox_path": sandbox_path,
         "task_status_choices": TaskStatus.choices(),
         "task_execution_schedule_choices": TaskExecutionSchedule.choices(),
+        "task_prompt_improvement_schedule_choices": TaskExecutionSchedule.choices(),
         "task_type_choices": TaskType.choices(),
         "task_role_choices": Role.choices() if hasattr(Role, 'choices') else [],
         "task_phase_choices": [],
@@ -5323,6 +5351,7 @@ def action_update_task(request, task_id):
         status = rget(request, 'status', '').strip()
         task_type = rget(request, 'task_type', '').strip()
         execution_schedule = rget(request, 'execution_schedule', '').strip()
+        prompt_improvement_schedule = rget(request, 'prompt_improvement_schedule', '').strip()
         execution_start_time = rget(request, 'execution_start_time', '').strip()
         completion_criteria = rget(request, 'completion_criteria', "").strip()
         requires_test = request.POST.get('requires_test') == 'on'
@@ -5336,6 +5365,7 @@ def action_update_task(request, task_id):
             'status': status,
             'task_type': task_type,
             'execution_schedule': execution_schedule,
+            'prompt_improvement_schedule': prompt_improvement_schedule,
             'requires_test': requires_test
         }
         
@@ -5393,6 +5423,70 @@ def action_update_task(request, task_id):
         logging.exception(e)
         messages.error(request, f'Error updating task: {str(e)}')
         return redirect(reverse('view_task', args=[task_id]))
+
+
+def action_generate_task_prompt_improvement(request, task_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    task = get_object_or_404(Task, pk=task_id)
+    improvement = task.generate_prompt_improvement_candidate()
+    messages.success(
+        request,
+        f"Generated prompt improvement {improvement.id} for task {task.id}.",
+    )
+    return redirect(reverse('view_task_tab', args=['prompt-improvements', task_id]))
+
+
+def action_apply_task_prompt_improvement(request, improvement_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    improvement = get_object_or_404(
+        TaskPromptImprovement.objects.select_related("task"),
+        pk=improvement_id,
+    )
+    review_notes = rget(request, "review_notes", "").strip()
+    improvement.apply(review_notes=review_notes)
+    messages.success(
+        request,
+        f"Applied prompt improvement {improvement.id} to task {improvement.task.id}.",
+    )
+    return redirect(reverse('view_task_tab', args=['prompt-improvements', improvement.task_id]))
+
+
+def action_reject_task_prompt_improvement(request, improvement_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    improvement = get_object_or_404(
+        TaskPromptImprovement.objects.select_related("task"),
+        pk=improvement_id,
+    )
+    review_notes = rget(request, "review_notes", "").strip()
+    improvement.reject(review_notes=review_notes)
+    messages.success(
+        request,
+        f"Rejected prompt improvement {improvement.id} for task {improvement.task.id}.",
+    )
+    return redirect(reverse('view_task_tab', args=['prompt-improvements', improvement.task_id]))
+
+
+def action_rollback_task_prompt_improvement(request, improvement_id):
+    if request.method != 'POST':
+        raise Exception()
+
+    improvement = get_object_or_404(
+        TaskPromptImprovement.objects.select_related("task"),
+        pk=improvement_id,
+    )
+    review_notes = rget(request, "review_notes", "").strip()
+    improvement.rollback(review_notes=review_notes)
+    messages.success(
+        request,
+        f"Rolled back prompt improvement {improvement.id} for task {improvement.task.id}.",
+    )
+    return redirect(reverse('view_task_tab', args=['prompt-improvements', improvement.task_id]))
 
 
 def action_business_green_light(request, business_id):

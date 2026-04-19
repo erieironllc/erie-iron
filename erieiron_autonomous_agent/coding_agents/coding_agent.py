@@ -445,8 +445,7 @@ def _run_repo_backed_prompt_task(
         task_execution,
         version,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    source_path = version.get_source_file_path(config.sandbox_root_dir)
-    prompt_text = source_path.read_text()
+    prompt_text = version.get_prompt_text(config.sandbox_root_dir)
     output_schema = version.get_output_schema_file_path(config.sandbox_root_dir)
     if not output_schema:
         output_schema = _build_task_output_schema(config.task)

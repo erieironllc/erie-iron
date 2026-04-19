@@ -46,8 +46,12 @@ from erieiron_common.enums import (
     StackStrategy,
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
+    LlmReasoningEffort,
+    LlmCreativity,
     CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning, TaskImplementationPhase,
     TaskImplementationSourceKind,
+    TaskPromptImprovementStatus,
+    TaskPromptImprovementTrigger,
     IterationMode,
 )
 from erieiron_common.git_utils import GitWrapper
@@ -1688,6 +1692,11 @@ class Task(BaseErieIronModel):
     execution_schedule = models.TextField(
         choices=TaskExecutionSchedule.choices(), default=TaskExecutionSchedule.ONCE
     )
+    prompt_improvement_schedule = models.TextField(
+        choices=TaskExecutionSchedule.choices(),
+        default=TaskExecutionSchedule.NOT_APPLICABLE,
+    )
+    last_prompt_improvement_at = models.DateTimeField(null=True, blank=True)
     execution_start_time = models.DateTimeField(null=True, blank=True)
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
@@ -1745,6 +1754,13 @@ class Task(BaseErieIronModel):
     
     def get_implementation_versions(self) -> QuerySet["TaskImplementationVersion"]:
         return self.taskimplementationversion_set.order_by("-version_number", "-created_at")
+
+    def get_prompt_improvements(self) -> QuerySet["TaskPromptImprovement"]:
+        return self.prompt_improvements.select_related(
+            "base_implementation_version",
+            "applied_implementation_version",
+            "generated_llm_request",
+        ).order_by("-created_at")
     
     def get_active_implementation_version(self) -> Optional["TaskImplementationVersion"]:
         if self.active_implementation_version_id:
@@ -1835,6 +1851,165 @@ class Task(BaseErieIronModel):
             metadata["llm_models"] = llm_models
         
         return metadata
+
+    def get_prompt_improvement_schedule_enum(self) -> TaskExecutionSchedule:
+        return TaskExecutionSchedule.valid_or(
+            self.prompt_improvement_schedule,
+            TaskExecutionSchedule.NOT_APPLICABLE,
+        )
+
+    def get_prompt_improvement_source_root(self) -> Path:
+        self_driving_task = self.create_self_driving_env(reset_code_dir=False)
+        return Path(self_driving_task.sandbox_path)
+
+    def build_prompt_improvement_context(
+            self,
+            *,
+            execution_limit: int = 10,
+            lesson_limit: int = 10,
+            improvement_limit: int = 5,
+    ) -> dict[str, Any]:
+        implementation_version = self.get_active_implementation_version()
+        if not implementation_version:
+            raise ValidationError("task requires an active implementation version")
+        if TaskImplementationSourceKind.LLM_PROMPT.neq(implementation_version.source_kind):
+            raise ValidationError("prompt improvement is only available for llm_prompt tasks")
+
+        repo_root = self.get_prompt_improvement_source_root()
+        recent_executions = list(
+            self.taskexecution_set.select_related("implementation_version")
+            .filter(executed_time__isnull=False)
+            .order_by("-executed_time", "-created_time")[:execution_limit]
+        )
+        lessons = list(
+            AgentLesson.objects.filter(source_iteration__self_driving_task__task=self)
+            .exclude(invalid_lesson=True)
+            .select_related("source_iteration")
+            .order_by("-timestamp")[:lesson_limit]
+        )
+        prior_improvements = list(self.get_prompt_improvements()[:improvement_limit])
+
+        return {
+            "task_id": self.id,
+            "task_description": self.description,
+            "completion_criteria": copy.deepcopy(self.completion_criteria or []),
+            "guidance": self.guidance,
+            "active_implementation_version": {
+                "id": str(implementation_version.id),
+                "version_number": implementation_version.version_number,
+                "source_kind": implementation_version.source_kind,
+                "application_repo_file_path": implementation_version.application_repo_file_path,
+                "application_repo_ref": implementation_version.application_repo_ref,
+                "source_metadata": copy.deepcopy(implementation_version.source_metadata or {}),
+                "prompt_text": implementation_version.get_prompt_text(repo_root),
+            },
+            "recent_executions": [
+                {
+                    "id": str(execution.id),
+                    "created_time": execution.created_time.isoformat() if execution.created_time else None,
+                    "executed_time": execution.executed_time.isoformat() if execution.executed_time else None,
+                    "status": execution.status,
+                    "evaluation_score": execution.evaluation_score,
+                    "evaluation_metadata": copy.deepcopy(execution.evaluation_metadata or {}),
+                    "implementation_provenance": copy.deepcopy(execution.implementation_provenance or {}),
+                    "model_metadata": copy.deepcopy(execution.model_metadata or {}),
+                    "output": copy.deepcopy(execution.output or {}),
+                    "error_msg": execution.error_msg,
+                }
+                for execution in recent_executions
+            ],
+            "lessons": [lesson.get_llm_data() for lesson in lessons],
+            "prior_improvements": [
+                {
+                    "id": str(improvement.id),
+                    "status": improvement.status,
+                    "trigger_source": improvement.trigger_source,
+                    "created_at": improvement.created_at.isoformat() if improvement.created_at else None,
+                    "approved_at": improvement.approved_at.isoformat() if improvement.approved_at else None,
+                    "applied_at": improvement.applied_at.isoformat() if improvement.applied_at else None,
+                    "summary": improvement.get_summary(),
+                    "rollback_signals": improvement.get_rollback_signals(),
+                    "guardrails": improvement.get_guardrails(),
+                    "review_notes": improvement.review_notes,
+                }
+                for improvement in prior_improvements
+            ],
+        }
+
+    def generate_prompt_improvement_candidate(
+            self,
+            *,
+            trigger_source: str | TaskPromptImprovementTrigger = TaskPromptImprovementTrigger.MANUAL,
+    ) -> "TaskPromptImprovement":
+        context = self.build_prompt_improvement_context()
+        if len(context["recent_executions"]) < 1:
+            raise ValidationError("task needs at least one completed execution before prompt improvement")
+
+        from erieiron_autonomous_agent import system_agent_llm_interface
+
+        response = system_agent_llm_interface.llm_chat(
+            description=f"Generate prompt improvement for task {self.id}",
+            messages=[
+                system_agent_llm_interface.get_sys_prompt("task_prompt_improver.md"),
+                LlmMessage.user_from_data("Prompt Improvement Context", context),
+            ],
+            tag_entity=self.initiative,
+            model=LlmModel.OPENAI_GPT_5_1,
+            output_schema="task_prompt_improver.md.schema.json",
+            reasoning_effort=LlmReasoningEffort.MEDIUM,
+            verbosity=LlmVerbosity.MEDIUM,
+            creativity=LlmCreativity.LOW,
+            code_response=True,
+        )
+        proposal_json = response.json()
+        candidate_prompt_text = common.assert_not_empty(
+            common.default_str(proposal_json.get("candidate_prompt_markdown")).strip()
+        )
+        generated_llm_request = None
+        if response.llm_request_id:
+            generated_llm_request = LlmRequest.objects.filter(
+                id=response.llm_request_id
+            ).first()
+        improvement = TaskPromptImprovement.objects.create(
+            task=self,
+            base_implementation_version=self.get_active_implementation_version(),
+            status=TaskPromptImprovementStatus.PENDING_REVIEW,
+            trigger_source=TaskPromptImprovementTrigger(trigger_source),
+            generated_llm_request=generated_llm_request,
+            context_json=context,
+            proposal_json=proposal_json,
+            candidate_prompt_text=candidate_prompt_text,
+            review_notes="",
+        )
+        Task.objects.filter(id=self.id).update(last_prompt_improvement_at=common.get_now())
+        self.refresh_from_db(fields=["last_prompt_improvement_at"])
+        return improvement
+
+    def should_run_prompt_improvement(self, now: datetime | None = None) -> bool:
+        schedule = self.get_prompt_improvement_schedule_enum()
+        if schedule in [
+            TaskExecutionSchedule.NOT_APPLICABLE,
+            TaskExecutionSchedule.ONCE,
+            TaskExecutionSchedule.DAEMON,
+        ]:
+            return False
+        if TaskImplementationSourceKind.LLM_PROMPT.neq(self.implementation_source_kind):
+            return False
+        if self.prompt_improvements.filter(
+            status=TaskPromptImprovementStatus.PENDING_REVIEW.value
+        ).exists():
+            return False
+
+        now = now or common.get_now()
+        if self.last_prompt_improvement_at is None:
+            return self.taskexecution_set.filter(executed_time__isnull=False).count() >= 3
+
+        schedule_delta = {
+            TaskExecutionSchedule.HOURLY: timedelta(hours=1),
+            TaskExecutionSchedule.DAILY: timedelta(days=1),
+            TaskExecutionSchedule.WEEKLY: timedelta(weeks=1),
+        }[schedule]
+        return self.last_prompt_improvement_at + schedule_delta <= now
     
     def evaluate_execution(
             self,
@@ -2168,6 +2343,14 @@ class TaskImplementationVersion(BaseErieIronModel):
     def get_source_label(self) -> str:
         return common.default_str(self.application_repo_file_path)
 
+    def get_prompt_text(self, repo_root: Path) -> str:
+        prompt_override = common.default_str(
+            (self.source_metadata or {}).get("prompt_override")
+        ).strip()
+        if prompt_override:
+            return prompt_override
+        return self.get_source_file_path(repo_root).read_text()
+
     def get_evaluator_label(self) -> str:
         evaluator_file_path = common.default_str(
             (self.evaluator_config or {}).get("application_repo_file_path")
@@ -2242,6 +2425,123 @@ class TaskImplementationVersion(BaseErieIronModel):
             )
         
         return provenance
+
+
+class TaskPromptImprovement(BaseErieIronModel):
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.CASCADE,
+        related_name="prompt_improvements",
+    )
+    base_implementation_version = models.ForeignKey(
+        TaskImplementationVersion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    applied_implementation_version = models.ForeignKey(
+        TaskImplementationVersion,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    generated_llm_request = models.ForeignKey(
+        "LlmRequest",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    status = models.TextField(
+        choices=TaskPromptImprovementStatus.choices(),
+        default=TaskPromptImprovementStatus.PENDING_REVIEW,
+    )
+    trigger_source = models.TextField(
+        choices=TaskPromptImprovementTrigger.choices(),
+        default=TaskPromptImprovementTrigger.MANUAL,
+    )
+    context_json = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
+    proposal_json = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
+    candidate_prompt_text = models.TextField()
+    review_notes = models.TextField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["task", "status"]),
+            models.Index(fields=["task", "created_at"]),
+        ]
+
+    def get_summary(self) -> str:
+        return common.default_str(common.get(self.proposal_json, "summary")).strip()
+
+    def get_guardrails(self) -> list[str]:
+        return common.ensure_list(common.get(self.proposal_json, "guardrails"))
+
+    def get_rollback_signals(self) -> list[str]:
+        return common.ensure_list(common.get(self.proposal_json, "rollback_signals"))
+
+    def apply(self, review_notes: str | None = None) -> TaskImplementationVersion:
+        if TaskPromptImprovementStatus.PENDING_REVIEW.neq(self.status):
+            raise ValidationError("only pending prompt improvements can be applied")
+        if self.base_implementation_version is None:
+            raise ValidationError("prompt improvement requires a base implementation version")
+
+        base_version = self.base_implementation_version
+        source_metadata = copy.deepcopy(base_version.source_metadata or {})
+        source_metadata["prompt_override"] = self.candidate_prompt_text
+        source_metadata["prompt_improvement_id"] = str(self.id)
+
+        with transaction.atomic():
+            applied_version = self.task.create_implementation_version(
+                source_kind=TaskImplementationSourceKind.LLM_PROMPT,
+                application_repo_file_path=base_version.application_repo_file_path,
+                application_repo_ref=base_version.application_repo_ref,
+                source_metadata=source_metadata,
+                evaluator_config=copy.deepcopy(base_version.evaluator_config or {}),
+                set_active=True,
+            )
+            self.applied_implementation_version = applied_version
+            self.status = TaskPromptImprovementStatus.APPLIED
+            self.approved_at = common.get_now()
+            self.applied_at = self.approved_at
+            self.review_notes = common.default_str(review_notes).strip()
+            self.save(
+                update_fields=[
+                    "applied_implementation_version",
+                    "status",
+                    "approved_at",
+                    "applied_at",
+                    "review_notes",
+                    "updated_at",
+                ]
+            )
+        return applied_version
+
+    def reject(self, review_notes: str | None = None) -> None:
+        if TaskPromptImprovementStatus.PENDING_REVIEW.neq(self.status):
+            raise ValidationError("only pending prompt improvements can be rejected")
+        self.status = TaskPromptImprovementStatus.REJECTED
+        self.review_notes = common.default_str(review_notes).strip()
+        self.save(update_fields=["status", "review_notes", "updated_at"])
+
+    def rollback(self, review_notes: str | None = None) -> None:
+        if TaskPromptImprovementStatus.APPLIED.neq(self.status):
+            raise ValidationError("only applied prompt improvements can be rolled back")
+        if self.base_implementation_version is None:
+            raise ValidationError("prompt improvement rollback requires a base implementation version")
+
+        Task.objects.filter(id=self.task_id).update(
+            active_implementation_version=self.base_implementation_version
+        )
+        self.task.refresh_from_db(fields=["active_implementation_version"])
+        self.status = TaskPromptImprovementStatus.ROLLED_BACK
+        self.review_notes = common.default_str(review_notes).strip()
+        self.save(update_fields=["status", "review_notes", "updated_at"])
 
 
 class SelfDrivingTask(BaseErieIronModel):

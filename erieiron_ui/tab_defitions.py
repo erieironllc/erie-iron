@@ -237,6 +237,13 @@ TASK_TAB_DEFINITIONS = [
         "availability_fn": views._task_tab_available_executions,
         "context_fn": views._task_tab_context_executions,
     },
+    {
+        "slug": "prompt-improvements",
+        "label": "Prompt Updates",
+        "template": "task/tabs/prompt_improvements.html",
+        "availability_fn": views._task_tab_available_prompt_improvements,
+        "context_fn": views._task_tab_context_prompt_improvements,
+    },
     TAB_DIVIDER,
     {
         "slug": "testcode",
