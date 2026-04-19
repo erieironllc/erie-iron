@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -110,6 +111,29 @@ class GitWrapper:
                 # Do not drop the stash since it was not cleanly applied
         
         return self
+
+    def checkout_ref(self, repo_ref: str) -> str:
+        repo_ref = common.assert_not_empty(common.default_str(repo_ref).strip())
+        try:
+            self.exec("fetch", "--all", "--tags")
+        except Exception:
+            logging.exception("failed to fetch refs before checkout")
+        try:
+            self.exec("checkout", repo_ref)
+        except Exception:
+            self.exec("fetch", "origin", repo_ref)
+            self.exec("checkout", "FETCH_HEAD")
+        return self.get_current_revision()
+
+    def get_current_revision(self) -> str:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(self.source_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
     
     def exists(self, repo_url):
         try:
@@ -238,67 +262,79 @@ class GitWrapper:
     
     @staticmethod
     def get_latest_commit(repo_url: str | None = None) -> tuple[str, str]:
-        remote_url = repo_url.strip() if repo_url else None
-        if not remote_url:
+        owner, repo = GitWrapper._extract_github_repo_slug(repo_url) or (None, None)
+        if not owner or not repo:
             raise Exception("Git remote origin URL is not configured or provided")
-        
-        cleaned = remote_url.strip()
+        return GitWrapper._fetch_commit_via_api(owner, repo)
+
+    @staticmethod
+    def get_commit_for_ref(repo_url: str, repo_ref: str) -> tuple[str, str]:
+        owner, repo = GitWrapper._extract_github_repo_slug(repo_url) or (None, None)
+        if not owner or not repo:
+            raise Exception("Git remote origin URL is not configured or provided")
+        return GitWrapper._fetch_commit_via_api(owner, repo, repo_ref=repo_ref)
+
+    @staticmethod
+    def _extract_github_repo_slug(remote_url: str | None) -> tuple[str, str] | None:
+        cleaned = common.default_str(remote_url).strip()
         if not cleaned:
-            raise Exception("no remote url")
-        
-        github_token = get_github_token()
-        if not github_token:
-            raise Exception("unable to fetch github token from aws secrets")
-        
+            return None
         if cleaned.endswith(".git"):
             cleaned = cleaned[:-4]
-        
-        path_fragment = None
-        
         if cleaned.startswith("git@github.com:"):
             path_fragment = cleaned.split(":", 1)[1]
+        elif cleaned.startswith("ssh://git@github.com/"):
+            parsed = urlparse(cleaned)
+            path_fragment = parsed.path.lstrip("/")
         elif "github.com/" in cleaned:
             path_fragment = cleaned.split("github.com/", 1)[1]
         elif "github.com:" in cleaned:
             path_fragment = cleaned.split("github.com:", 1)[1]
-        
-        if not path_fragment:
-            raise Exception("no path fragment")
-        
-        path_fragment = path_fragment.lstrip("/")
-        owner, repo = path_fragment.split("/", 2)
-        
-        response = requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}/commits",
-            headers={
-                "Authorization": f"token {github_token}",
-                "Accept": "application/vnd.github+json",
-            },
-            params={"per_page": 1},
-            timeout=10
-        )
-        
+        else:
+            return None
+        parts = [part for part in path_fragment.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return None
+        return parts[0], parts[1]
+
+    @staticmethod
+    def _fetch_commit_via_api(owner: str, repo: str, repo_ref: str | None = None) -> tuple[str, str]:
+        github_token = get_github_token()
+        if not github_token:
+            raise Exception("unable to fetch github token from aws secrets")
+        if repo_ref:
+            response = requests.get(
+                f"https://api.github.com/repos/{owner}/{repo}/commits/{repo_ref}",
+                headers={
+                    "Authorization": f"token {github_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=10,
+            )
+        else:
+            response = requests.get(
+                f"https://api.github.com/repos/{owner}/{repo}/commits",
+                headers={
+                    "Authorization": f"token {github_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                params={"per_page": 1},
+                timeout=10,
+            )
         if response.status_code != 200:
-            error_message = (
+            raise Exception(
                 f"GitHub API returned {response.status_code} for {owner}/{repo}: {response.text}"
             )
-            raise Exception(error_message)
-        
         payload = response.json()
-        if not isinstance(payload, list) or not payload:
-            raise Exception(f"GitHub API response for {owner}/{repo} did not include commits")
-        
-        commit_obj = payload[0]
-        commit_sha = commit_obj.get("sha")
-        commit_message = ""
-        
-        commit_details = commit_obj.get("commit") or {}
-        if isinstance(commit_details, dict):
-            commit_message = commit_details.get("message") or ""
-        
+        if isinstance(payload, list):
+            if not payload:
+                raise Exception(f"GitHub API response for {owner}/{repo} did not include commits")
+            payload = payload[0]
+        commit_sha = payload.get("sha")
+        commit_details = payload.get("commit") or {}
+        commit_message = commit_details.get("message") or ""
         if not commit_sha:
             raise Exception("GitHub API response missing commit SHA")
-        
         return commit_sha, commit_message
 
 

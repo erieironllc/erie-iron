@@ -685,6 +685,11 @@ class TaskImplementationPhase(ErieEnum):
     SERVER_IMPLEMENTATION = auto()
 
 
+class TaskImplementationSourceKind(ErieEnum):
+    LLM_PROMPT = "llm_prompt"
+    CODE_FILE = "code_file"
+
+
 class BuildStep(ErieEnum):
     BUILD_CONTAINER = auto()
     BUILD_LAMBDAS = auto()

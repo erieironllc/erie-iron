@@ -18,6 +18,22 @@ from erieiron_common.llm_apis.llm_response import LlmResponse
 PROMPTS_DIR = BOARD_LEVEL_BASE_PATH = BUSINESS_LEVEL_BASE_PATH = BASE_PROMPTS_PATH = Path(os.getcwd()) / "prompts"
 
 
+def resolve_output_schema_path(output_schema):
+    if not output_schema:
+        return None
+    if isinstance(output_schema, Path):
+        return output_schema
+    if isinstance(output_schema, str):
+        output_schema_path = Path(output_schema)
+        if output_schema_path.exists():
+            return output_schema_path
+        stripped = output_schema.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            return output_schema
+        return PROMPTS_DIR / output_schema
+    return output_schema
+
+
 def board_level_chat(
         description,
         system_prompts: list[str],
@@ -200,6 +216,7 @@ def llm_chat(
 ) -> LlmResponse:
     input_model = model
     messages = common.flatten(messages)
+    resolved_output_schema = resolve_output_schema_path(output_schema)
     
     if not creativity:
         creativity = LlmCreativity.NONE if code_response else LlmCreativity.MEDIUM
@@ -241,7 +258,7 @@ def llm_chat(
             initiative=initiative,
             task_iteration=iteration,
             llm_model=model.value,
-            output_schema=common.safe_read(output_schema),
+            output_schema=common.safe_read(resolved_output_schema),
             token_count=0,
             price=0,
             input_messages=[{
@@ -251,8 +268,8 @@ def llm_chat(
         )
         llm_request_url = f"{settings.BASE_URL}/llm/debug/{llm_request.id}"
         
-        if output_schema:
-            logging.info(f"llm chat start: {description} ({output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; Creativity: {creativity}, {llm_request_url}")
+        if resolved_output_schema:
+            logging.info(f"llm chat start: {description} ({resolved_output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; Creativity: {creativity}, {llm_request_url}")
         else:
             logging.info(f"llm chat start: {description}; Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; Creativity: {creativity}; {llm_request_url}")
         
@@ -261,7 +278,7 @@ def llm_chat(
             llm_resp = chat(
                 messages=llm_messages,
                 model=model,
-                output_schema=PROMPTS_DIR / output_schema if output_schema else None,
+                output_schema=resolved_output_schema,
                 code_response=code_response,
                 reasoning_effort=reasoning_effort,
                 verbosity=verbosity,

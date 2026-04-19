@@ -7,6 +7,7 @@ import subprocess
 import textwrap
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
@@ -22,16 +23,37 @@ from erieiron_autonomous_agent.coding_agents.frontier_session import CommandPlan
 from erieiron_autonomous_agent.coding_agents.coding_agent_config import SdaPhase, LAMBDA_PACKAGES_BUCKET, ERIEIRON_PUBLIC_COMMON_VERSION, SdaInitialAction, CodingAgentConfig, MIN_PODMAN_STORAGE_FREE_GB, ENVVAR_TO_STACK_OUTPUT
 from erieiron_autonomous_agent.coding_agents.self_driving_coder_exceptions import AgentBlocked, NeedPlan, RetryableException, BadPlan, GoalAchieved, CodeReviewException, ExecutionException, FailingTestException, DatabaseMigrationException
 from erieiron_autonomous_agent.enums import TaskStatus
-from erieiron_autonomous_agent.models import Business, CodeVersion, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative
+from erieiron_autonomous_agent.models import Business, CodeVersion, SelfDrivingTaskIteration, Task, SelfDrivingTask, CodeFile, AgentLesson, AgentTombstone, InfrastructureStack, Initiative, TaskExecution
 from erieiron_autonomous_agent.system_agent_llm_interface import llm_chat, get_sys_prompt
 from erieiron_common import common, aws_utils, ses_manager
 from erieiron_common.aws_utils import sanitize_aws_name, package_lambda
 from erieiron_common.chat_engine.language_utils import get_text_embedding
-from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, IterationMode, BuildStep
+from erieiron_common.enums import LlmModel, PubSubMessageType, TaskType, TaskExecutionSchedule, EnvironmentType, LlmReasoningEffort, CredentialService, ContainerPlatform, InfrastructureStackType, LlmCreativity, LlmVerbosity, CredentialServiceProvisioning, CredentialsSpace, IterationMode, BuildStep, TaskImplementationSourceKind
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.opentofu_helpers import OpenTofuException, OpenTofuCommandException, MissingStackPerms
 from erieiron_common.stack_manager import StackManager
+
+
+TASK_EVALUATOR_OUTPUT_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "metadata": {"type": "object"},
+        },
+        "required": ["score"],
+        "additionalProperties": False,
+    }
+)
+
+
+@dataclass(frozen=True)
+class RepoBackedTaskRunResult:
+    output: dict[str, Any]
+    model_metadata: dict[str, Any] | None = None
+    evaluation_score: float | None = None
+    evaluation_metadata: dict[str, Any] | None = None
 
 
 def execute(
@@ -221,9 +243,13 @@ def execute_one_off_action(config: CodingAgentConfig, one_off_action: SdaInitial
         write_code(config)
     
     if not SdaInitialAction.EVAL.eq(one_off_action):
-        build_deploy_exec_iteration(
-            config
-        )
+        try:
+            build_deploy_exec_iteration(
+                config
+            )
+        except GoalAchieved:
+            handle_goal_achieved(config)
+            return
     
     evaluate_iteration(config)
 
@@ -252,6 +278,13 @@ def handle_goal_achieved(config):
             status=TaskStatus.COMPLETE
         )
         return
+
+    if _uses_repo_backed_task_runtime(config.task):
+        Task.objects.filter(id=config.task.id).update(
+            status=TaskStatus.COMPLETE
+        )
+        config.git.cleanup()
+        return
     
     if TaskType.CODING_ML.eq(config.task_type):
         from erieiron_autonomous_agent.coding_agents.ml_packager import package_ml_artifacts
@@ -276,6 +309,348 @@ def handle_goal_achieved(config):
         )
     finally:
         config.git.cleanup()
+
+
+def _uses_repo_backed_task_runtime(task: Task) -> bool:
+    return (
+        TaskType.TASK_EXECUTION.eq(task.task_type)
+        and task.get_active_implementation_version() is not None
+    )
+
+
+def _build_task_output_schema(task: Task) -> str | None:
+    output_fields = [field for field in common.ensure_list(task.output_fields) if common.default_str(field).strip()]
+    if not output_fields:
+        return None
+    return json.dumps(
+        {
+            "type": "object",
+            "properties": {field: {} for field in output_fields},
+            "required": output_fields,
+            "additionalProperties": True,
+        }
+    )
+
+
+def _best_effort_ingest_task_runtime_env(config: CodingAgentConfig) -> dict[str, str]:
+    try:
+        ingest_tofu_ouputs(config)
+    except Exception as exc:
+        logging.info("unable to ingest stack outputs for repo-backed task %s: %s", config.task.id, exc)
+        config.log(f"Unable to ingest stack outputs: {exc}")
+    env = os.environ.copy()
+    env.update(config.runtime_env)
+    return env
+
+
+def _update_task_execution_revision(task_execution, revision: str | None):
+    if not revision:
+        return
+    provenance = {
+        **(task_execution.implementation_provenance or {}),
+        "application_repo_revision": revision,
+        "instance_config_revision": revision,
+    }
+    TaskExecution.objects.filter(id=task_execution.id).update(
+        implementation_provenance=provenance
+    )
+    task_execution.implementation_provenance = provenance
+
+
+def _coerce_llm_task_output(response_text: str) -> dict[str, Any]:
+    stripped = common.default_str(response_text).strip()
+    if not stripped:
+        return {}
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        return {"result": stripped}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"result": parsed}
+
+
+def _get_task_execution_io_paths(config: CodingAgentConfig) -> tuple[Path, Path]:
+    task_io_dir = Path(config.sandbox_root_dir) / "task_io"
+    task_io_dir.mkdir(parents=True, exist_ok=True)
+    input_file = task_io_dir / f"{config.task.id}-input.json"
+    output_file = task_io_dir / f"{config.task.id}-output.json"
+    return input_file, output_file
+
+
+def _write_task_execution_input(task_execution, input_file: Path):
+    common.write_json(input_file, task_execution.input or {})
+
+
+def _resolve_management_command_name(relative_path: Path) -> str | None:
+    parts = relative_path.parts
+    if len(parts) < 3:
+        return None
+    for idx, part in enumerate(parts[:-2]):
+        if part == "management" and parts[idx + 1] == "commands":
+            return relative_path.stem
+    return None
+
+
+def _run_repo_backed_code_task(
+        config: CodingAgentConfig,
+        task_execution,
+        version,
+        runtime_env: dict[str, str],
+        input_file: Path,
+        output_file: Path,
+) -> dict[str, Any]:
+    source_path = version.get_source_file_path(config.sandbox_root_dir)
+    relative_source_path = source_path.relative_to(config.sandbox_root_dir)
+    command_name = _resolve_management_command_name(relative_source_path)
+    if command_name:
+        python_cmd = [
+            "manage.py",
+            command_name,
+            "--input_file",
+            input_file,
+            "--output_file",
+            output_file,
+        ]
+    elif source_path.suffix == ".py":
+        python_cmd = [
+            relative_source_path,
+            "--input_file",
+            input_file,
+            "--output_file",
+            output_file,
+        ]
+    else:
+        raise AgentBlocked(
+            {
+                "description": f"Unsupported code task entrypoint {relative_source_path}",
+                "task_id": config.task.id,
+            }
+        )
+    config.log(
+        f"Running repo-backed code implementation from {relative_source_path} @ {version.application_repo_ref}"
+    )
+    result = config.git.run_python(python_cmd, runtime_env)
+    if result.stdout:
+        config.log(result.stdout)
+    if result.stderr:
+        config.log(result.stderr)
+    if not output_file.exists():
+        raise ExecutionException(f"Task execution did not write {output_file.name}")
+    return common.read_json(output_file, default={}) or {}
+
+
+def _run_repo_backed_prompt_task(
+        config: CodingAgentConfig,
+        task_execution,
+        version,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    source_path = version.get_source_file_path(config.sandbox_root_dir)
+    prompt_text = source_path.read_text()
+    output_schema = version.get_output_schema_file_path(config.sandbox_root_dir)
+    if not output_schema:
+        output_schema = _build_task_output_schema(config.task)
+    model = LlmModel.valid_or(
+        common.get(version.source_metadata, "model"),
+        LlmModel.OPENAI_GPT_5_MINI,
+    )
+    reasoning_effort = LlmReasoningEffort.valid_or(
+        common.get(version.source_metadata, "reasoning_effort"),
+        LlmReasoningEffort.LOW,
+    )
+    verbosity = LlmVerbosity.valid_or(
+        common.get(version.source_metadata, "verbosity"),
+        LlmVerbosity.LOW,
+    )
+    creativity = LlmCreativity.valid_or(
+        common.get(version.source_metadata, "creativity"),
+        LlmCreativity.NONE,
+    )
+    response = llm_chat(
+        f"Execute task {config.task.id}",
+        [
+            LlmMessage.sys(prompt_text),
+            LlmMessage.user_from_data(
+                "Task Execution Context",
+                {
+                    "task_id": config.task.id,
+                    "task_description": config.task.description,
+                    "completion_criteria": config.task.completion_criteria,
+                    "input_fields": config.task.input_fields,
+                    "output_fields": config.task.output_fields,
+                    "input": task_execution.input or {},
+                },
+            ),
+        ],
+        tag_entity=config.current_iteration,
+        model=model,
+        output_schema=output_schema,
+        reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
+        creativity=creativity,
+        code_response=bool(output_schema),
+    )
+    output_data = response.json() if output_schema else _coerce_llm_task_output(response.text)
+    return output_data, {
+        "llm_model": str(response.model),
+        "prompt_file_path": version.application_repo_file_path,
+        "reasoning_effort": reasoning_effort.value,
+        "verbosity": verbosity.value,
+        "creativity": creativity.value,
+    }
+
+
+def _run_repo_backed_evaluator(
+        config: CodingAgentConfig,
+        task_execution,
+        version,
+        runtime_env: dict[str, str],
+        output_data: dict[str, Any],
+) -> tuple[float | None, dict[str, Any] | None]:
+    evaluator_spec = version.get_evaluator_spec()
+    evaluator_config = evaluator_spec["config"]
+    if not evaluator_config:
+        return None, None
+    evaluation_input = {
+        "task_id": config.task.id,
+        "task_description": config.task.description,
+        "input": task_execution.input or {},
+        "output": output_data or {},
+        "implementation_provenance": task_execution.implementation_provenance or {},
+    }
+    if TaskImplementationSourceKind.CODE_FILE.eq(version.source_kind):
+        evaluator_path = version.get_evaluator_file_path(config.sandbox_root_dir)
+        input_file = Path(config.sandbox_root_dir) / "task_io" / f"{config.task.id}-evaluation-input.json"
+        output_file = Path(config.sandbox_root_dir) / "task_io" / f"{config.task.id}-evaluation-output.json"
+        common.write_json(input_file, evaluation_input)
+        relative_evaluator_path = evaluator_path.relative_to(config.sandbox_root_dir)
+        command_name = _resolve_management_command_name(relative_evaluator_path)
+        if command_name:
+            python_cmd = [
+                "manage.py",
+                command_name,
+                "--input_file",
+                input_file,
+                "--output_file",
+                output_file,
+            ]
+        else:
+            python_cmd = [
+                relative_evaluator_path,
+                "--input_file",
+                input_file,
+                "--output_file",
+                output_file,
+            ]
+        result = config.git.run_python(python_cmd, runtime_env)
+        if result.stdout:
+            config.log(result.stdout)
+        if result.stderr:
+            config.log(result.stderr)
+        evaluator_output = common.read_json(output_file, default={}) or {}
+    else:
+        evaluator_path = version.get_evaluator_file_path(config.sandbox_root_dir)
+        evaluator_output = llm_chat(
+            f"Evaluate task {config.task.id}",
+            [
+                LlmMessage.sys(evaluator_path.read_text()),
+                LlmMessage.user_from_data("Task Execution Result", evaluation_input),
+            ],
+            tag_entity=config.current_iteration,
+            model=LlmModel.valid_or(
+                common.get(evaluator_config, "model"),
+                LlmModel.OPENAI_GPT_5_MINI,
+            ),
+            output_schema=version.get_evaluator_output_schema_file_path(config.sandbox_root_dir) or TASK_EVALUATOR_OUTPUT_SCHEMA,
+            reasoning_effort=LlmReasoningEffort.valid_or(
+                common.get(evaluator_config, "reasoning_effort"),
+                LlmReasoningEffort.LOW,
+            ),
+            verbosity=LlmVerbosity.valid_or(
+                common.get(evaluator_config, "verbosity"),
+                LlmVerbosity.LOW,
+            ),
+            creativity=LlmCreativity.valid_or(
+                common.get(evaluator_config, "creativity"),
+                LlmCreativity.NONE,
+            ),
+            code_response=True,
+        ).json()
+    return evaluator_output.get("score"), evaluator_output.get("metadata")
+
+
+def _set_repo_backed_iteration_result(
+        config: CodingAgentConfig,
+        task_execution,
+        *,
+        goal_achieved: bool,
+        summary: str,
+        blocked_data: dict[str, Any] | None = None,
+):
+    evaluation_json = {
+        "goal_achieved": goal_achieved,
+        "allow_goal_achieved": goal_achieved,
+        "summary": summary,
+        "task_execution_id": str(task_execution.id),
+        "task_execution_status": task_execution.status,
+        "evaluation_score": task_execution.evaluation_score,
+    }
+    if blocked_data:
+        evaluation_json["blocked"] = blocked_data
+    SelfDrivingTaskIteration.objects.filter(id=config.current_iteration.id).update(
+        evaluation_json=evaluation_json
+    )
+    config.current_iteration.refresh_from_db(fields=["evaluation_json"])
+
+
+def _run_repo_backed_task_execution(
+        config: CodingAgentConfig,
+        task_execution,
+) -> RepoBackedTaskRunResult:
+    version = task_execution.implementation_version or config.task.get_active_implementation_version()
+    if not version:
+        raise AgentBlocked(
+            {
+                "description": f"Task {config.task.id} is missing an active implementation version",
+                "task_id": config.task.id,
+            }
+        )
+    runtime_env = _best_effort_ingest_task_runtime_env(config)
+    config.dump_env_to_envrc()
+    revision = config.git.checkout_ref(version.application_repo_ref)
+    _update_task_execution_revision(task_execution, revision)
+    input_file, output_file = _get_task_execution_io_paths(config)
+    _write_task_execution_input(task_execution, input_file)
+    if TaskImplementationSourceKind.LLM_PROMPT.eq(version.source_kind):
+        output_data, model_metadata = _run_repo_backed_prompt_task(
+            config,
+            task_execution,
+            version,
+        )
+        common.write_json(output_file, output_data)
+    else:
+        output_data = _run_repo_backed_code_task(
+            config,
+            task_execution,
+            version,
+            runtime_env,
+            input_file,
+            output_file,
+        )
+        model_metadata = None
+    evaluation_score, evaluation_metadata = _run_repo_backed_evaluator(
+        config,
+        task_execution,
+        version,
+        runtime_env,
+        output_data,
+    )
+    return RepoBackedTaskRunResult(
+        output=output_data,
+        model_metadata=model_metadata,
+        evaluation_score=evaluation_score,
+        evaluation_metadata=evaluation_metadata,
+    )
 
 
 def on_reset_task_test(task_id):
@@ -1325,6 +1700,11 @@ def build_deploy_exec_iteration(config: CodingAgentConfig, attempt=0) -> str:
         config.current_iteration.evaluation_json = None
         config.current_iteration.save()
         task_execution = init_task_execution(config.current_iteration)
+
+        if _uses_repo_backed_task_runtime(config.task):
+            execute_iteration(config, task_execution=task_execution)
+            config.log("Iteration execution finished")
+            return
         
         build_plan = config.get_build_plan(reset=True)
         config._build_plan_overrides = _apply_build_plan_overrides(config, build_plan)
@@ -1443,12 +1823,61 @@ def store_deploy_and_execution_logs(
     config.current_iteration.save(update_fields=["log_content_deployment", "log_content_cloudwatch"])
 
 
-def execute_iteration(config: CodingAgentConfig):
+def execute_iteration(config: CodingAgentConfig, task_execution=None):
     config.set_phase(SdaPhase.EXECUTION)
     
     task = config.task
     task_type = config.task_type
     self_driving_task = config.self_driving_task
+
+    if _uses_repo_backed_task_runtime(task):
+        task_execution = task_execution or init_task_execution(config.current_iteration)
+        try:
+            run_result = _run_repo_backed_task_execution(config, task_execution)
+            if run_result.model_metadata is not None:
+                merged_model_metadata = {
+                    **(task_execution.model_metadata or {}),
+                    **run_result.model_metadata,
+                }
+                TaskExecution.objects.filter(id=task_execution.id).update(
+                    model_metadata=merged_model_metadata
+                )
+                task_execution.model_metadata = merged_model_metadata
+            task_execution.resolve(
+                output=run_result.output,
+                evaluation_score=run_result.evaluation_score,
+                evaluation_metadata=run_result.evaluation_metadata,
+            )
+            _set_repo_backed_iteration_result(
+                config,
+                task_execution,
+                goal_achieved=True,
+                summary=f"Executed repo-backed task implementation from {task_execution.implementation_provenance.get('application_repo_file_path')}",
+            )
+            raise GoalAchieved(config.current_iteration.evaluation_json)
+        except GoalAchieved:
+            raise
+        except AgentBlocked:
+            raise
+        except Exception as exc:
+            task_execution.resolve(
+                status=TaskStatus.FAILED,
+                error_msg=str(exc),
+            )
+            blocked_data = {
+                "description": f"Repo-backed task execution failed for {task.id}",
+                "task_id": task.id,
+                "error": str(exc),
+                "implementation_provenance": task_execution.implementation_provenance,
+            }
+            _set_repo_backed_iteration_result(
+                config,
+                task_execution,
+                goal_achieved=False,
+                summary=blocked_data["description"],
+                blocked_data=blocked_data,
+            )
+            raise AgentBlocked(blocked_data)
     
     if TaskType.CODING_ML.eq(task_type):
         run_django_container_command(

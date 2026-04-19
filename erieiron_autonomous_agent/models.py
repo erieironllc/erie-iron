@@ -47,12 +47,19 @@ from erieiron_common.enums import (
     DEV_STACK_TOKEN_LENGTH,
     LlmVerbosity,
     CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning, TaskImplementationPhase,
+    TaskImplementationSourceKind,
     IterationMode,
 )
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.json_encoder import ErieIronJSONEncoder
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.models import BaseErieIronModel
+
+
+@dataclass(frozen=True)
+class TaskExecutionEvaluationResult:
+    score: float
+    metadata: dict[str, Any]
 
 
 class Business(BaseErieIronModel):
@@ -1684,6 +1691,18 @@ class Task(BaseErieIronModel):
     execution_start_time = models.DateTimeField(null=True, blank=True)
     timeout_seconds = models.IntegerField(null=True, blank=True)
     guidance = models.TextField(null=True, blank=True)
+    implementation_source_kind = models.TextField(
+        choices=TaskImplementationSourceKind.choices(),
+        null=True,
+        blank=True,
+    )
+    active_implementation_version = models.ForeignKey(
+        "TaskImplementationVersion",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     
     implementation_phase = models.CharField(
         max_length=50,
@@ -1724,13 +1743,157 @@ class Task(BaseErieIronModel):
         else:
             return EnvironmentType.DEV
     
-    def create_execution(self, input_data=None, iteration=None) -> "TaskExecution":
+    def get_implementation_versions(self) -> QuerySet["TaskImplementationVersion"]:
+        return self.taskimplementationversion_set.order_by("-version_number", "-created_at")
+    
+    def get_active_implementation_version(self) -> Optional["TaskImplementationVersion"]:
+        if self.active_implementation_version_id:
+            return self.active_implementation_version
+        return self.taskimplementationversion_set.order_by("version_number", "created_at").last()
+    
+    def get_implementation_source_kind_enum(self) -> Optional[TaskImplementationSourceKind]:
+        if self.implementation_source_kind:
+            return TaskImplementationSourceKind(self.implementation_source_kind)
+        
+        active_version = self.get_active_implementation_version()
+        if active_version:
+            return active_version.source_kind_enum()
+        
+        return None
+    
+    def create_implementation_version(
+            self,
+            *,
+            source_kind: str | TaskImplementationSourceKind | None = None,
+            application_repo_file_path: str | None = None,
+            application_repo_ref: str | None = None,
+            source_metadata: dict | None = None,
+            evaluator_config: dict | None = None,
+            set_active: bool = True,
+    ) -> "TaskImplementationVersion":
+        source_kind = source_kind or self.implementation_source_kind
+        if not source_kind:
+            raise ValidationError("task implementation source kind is required")
+        
+        source_kind = TaskImplementationSourceKind(source_kind)
+        existing_kind = self.get_implementation_source_kind_enum()
+        if existing_kind and existing_kind.neq(source_kind):
+            raise ValidationError("task implementation source kind cannot change once versions exist")
+        
+        next_version_number = (
+            self.taskimplementationversion_set.aggregate(max_version=models.Max("version_number"))["max_version"]
+            or 0
+        ) + 1
+        
+        version = TaskImplementationVersion.objects.create(
+            task=self,
+            source_kind=source_kind.value,
+            version_number=next_version_number,
+            application_repo_file_path=application_repo_file_path,
+            application_repo_ref=application_repo_ref,
+            source_metadata=copy.deepcopy(source_metadata or {}),
+            evaluator_config=copy.deepcopy(evaluator_config or {}),
+        )
+        
+        update_fields = {}
+        if self.implementation_source_kind != source_kind.value:
+            update_fields["implementation_source_kind"] = source_kind.value
+        if set_active:
+            update_fields["active_implementation_version"] = version
+        
+        if update_fields:
+            Task.objects.filter(id=self.id).update(**update_fields)
+            self.refresh_from_db(fields=list(update_fields.keys()))
+        
+        return version
+    
+    def build_execution_model_metadata(
+            self,
+            *,
+            iteration: Optional["SelfDrivingTaskIteration"] = None,
+            model_metadata: dict | None = None,
+    ) -> dict[str, Any]:
+        if model_metadata is not None:
+            return copy.deepcopy(model_metadata)
+        
+        if not iteration:
+            return {}
+        
+        metadata: dict[str, Any] = {}
+        if iteration.planning_model:
+            metadata["planning_model"] = iteration.planning_model
+        if iteration.coding_model:
+            metadata["coding_model"] = iteration.coding_model
+        
+        llm_models = list(
+            iteration.llmrequest_set.exclude(llm_model__isnull=True)
+            .exclude(llm_model="")
+            .values_list("llm_model", flat=True)
+            .distinct()
+        )
+        if llm_models:
+            metadata["llm_models"] = llm_models
+        
+        return metadata
+    
+    def evaluate_execution(
+            self,
+            *,
+            implementation_version: Optional["TaskImplementationVersion"] = None,
+            crashed: bool = False,
+            score: float | None = None,
+            metadata: dict | None = None,
+    ) -> TaskExecutionEvaluationResult:
+        implementation_version = implementation_version or self.get_active_implementation_version()
+        evaluator_spec = implementation_version.get_evaluator_spec() if implementation_version else {
+            "kind": "default",
+            "config": {},
+        }
+        
+        if score is None:
+            final_score = 0.0 if crashed else 1.0
+        else:
+            final_score = max(0.0, min(1.0, float(score)))
+        
+        evaluation_metadata = copy.deepcopy(metadata or {})
+        evaluation_metadata["evaluator"] = evaluator_spec
+        
+        return TaskExecutionEvaluationResult(
+            score=final_score,
+            metadata=evaluation_metadata,
+        )
+    
+    def create_execution(
+            self,
+            input_data=None,
+            iteration=None,
+            model_metadata: dict | None = None,
+    ) -> "TaskExecution":
+        implementation_version = self.get_active_implementation_version()
+        implementation_source_kind = (
+            implementation_version.source_kind
+            if implementation_version
+            else common.default_str(self.implementation_source_kind) or None
+        )
+        implementation_provenance = (
+            implementation_version.build_execution_provenance(self.initiative.business)
+            if implementation_version
+            else {}
+        )
+        
         with transaction.atomic():
             return TaskExecution.objects.create(
                 task=self,
                 iteration=iteration,
                 status=TaskStatus.NOT_STARTED,
                 input=input_data or {},
+                implementation_version=implementation_version,
+                implementation_source_kind=implementation_source_kind,
+                implementation_provenance=implementation_provenance,
+                model_metadata=self.build_execution_model_metadata(
+                    iteration=iteration,
+                    model_metadata=model_metadata,
+                ),
             )
     
     def get_last_execution(self) -> Optional["TaskExecution"]:
@@ -1886,6 +2049,21 @@ class Task(BaseErieIronModel):
 
 
 class TaskExecution(BaseErieIronModel):
+    implementation_version = models.ForeignKey(
+        "TaskImplementationVersion",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    implementation_source_kind = models.TextField(
+        choices=TaskImplementationSourceKind.choices(),
+        null=True,
+        blank=True,
+    )
+    implementation_provenance = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
+    model_metadata = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
+    evaluation_score = models.FloatField(null=True)
+    evaluation_metadata = models.JSONField(default=dict, encoder=ErieIronJSONEncoder)
     task = models.ForeignKey(Task, on_delete=models.CASCADE)
     iteration = models.ForeignKey(
         "SelfDrivingTaskIteration", on_delete=models.CASCADE, null=True
@@ -1899,17 +2077,171 @@ class TaskExecution(BaseErieIronModel):
     output = models.JSONField(default=dict, null=True)
     error_msg = models.TextField(null=True)
     
-    def resolve(self, output=None, status=TaskStatus.COMPLETE, error_msg=None):
+    def resolve(
+            self,
+            output=None,
+            status=TaskStatus.COMPLETE,
+            error_msg=None,
+            evaluation_score: float | None = None,
+            evaluation_metadata: dict | None = None,
+    ):
+        evaluation_result = self.task.evaluate_execution(
+            implementation_version=self.implementation_version,
+            crashed=bool(error_msg) or TaskStatus.FAILED.eq(status),
+            score=evaluation_score,
+            metadata=evaluation_metadata,
+        )
+        
         with transaction.atomic():
             TaskExecution.objects.filter(id=self.id).update(
                 status=status,
                 error_msg=error_msg,
                 output=output or {},
                 executed_time=common.get_now(),
+                evaluation_score=evaluation_result.score,
+                evaluation_metadata=evaluation_result.metadata,
             )
         
         self.refresh_from_db()
         return self
+
+
+class TaskImplementationVersion(BaseErieIronModel):
+    task = models.ForeignKey(Task, on_delete=models.CASCADE)
+    source_kind = models.TextField(choices=TaskImplementationSourceKind.choices())
+    version_number = models.PositiveIntegerField()
+    application_repo_file_path = models.TextField(null=True, blank=True)
+    application_repo_ref = models.TextField(null=True, blank=True)
+    source_metadata = models.JSONField(default=dict, encoder=ErieIronJSONEncoder, blank=True)
+    evaluator_config = models.JSONField(default=dict, encoder=ErieIronJSONEncoder, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ["task", "version_number"]
+        indexes = [
+            models.Index(fields=["task", "source_kind"]),
+            models.Index(fields=["task", "created_at"]),
+        ]
+    
+    def __str__(self):
+        return f"{self.task_id}::{self.source_kind}::v{self.version_number}"
+    
+    def source_kind_enum(self) -> TaskImplementationSourceKind:
+        return TaskImplementationSourceKind(self.source_kind)
+    
+    def clean(self):
+        errors = {}
+        if not TaskImplementationSourceKind.valid(self.source_kind):
+            raise ValidationError({"source_kind": "invalid source kind"})
+        
+        source_kind = self.source_kind_enum()
+        task_source_kind = self.task.get_implementation_source_kind_enum() if self.task_id else None
+        if task_source_kind and task_source_kind.neq(source_kind):
+            errors["source_kind"] = "implementation versions must match the task implementation source kind"
+        
+        application_repo_file_path = common.default_str(self.application_repo_file_path).strip()
+        application_repo_ref = common.default_str(self.application_repo_ref).strip()
+        
+        if not application_repo_file_path:
+            errors["application_repo_file_path"] = (
+                f"{source_kind.label()} implementations require application_repo_file_path"
+            )
+        if not application_repo_ref:
+            errors["application_repo_ref"] = (
+                f"{source_kind.label()} implementations require application_repo_ref"
+            )
+        
+        evaluator_config = copy.deepcopy(self.evaluator_config or {})
+        if evaluator_config:
+            if not common.default_str(evaluator_config.get("application_repo_file_path")).strip():
+                errors["evaluator_config"] = "custom evaluators require application_repo_file_path"
+            elif not common.default_str(evaluator_config.get("application_repo_ref")).strip():
+                errors["evaluator_config"] = "custom evaluators require application_repo_ref"
+        
+        if errors:
+            raise ValidationError(errors)
+    
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+    
+    def get_source_label(self) -> str:
+        return common.default_str(self.application_repo_file_path)
+
+    def get_evaluator_label(self) -> str:
+        evaluator_file_path = common.default_str(
+            (self.evaluator_config or {}).get("application_repo_file_path")
+        )
+        if evaluator_file_path:
+            return evaluator_file_path
+        return "Default"
+
+    def get_source_file_path(self, repo_root: Path) -> Path:
+        return self._resolve_repo_file_path(repo_root, self.application_repo_file_path)
+
+    def get_output_schema_file_path(self, repo_root: Path) -> Optional[Path]:
+        schema_path = common.default_str((self.source_metadata or {}).get("output_schema_file_path")).strip()
+        if not schema_path:
+            return None
+        return self._resolve_repo_file_path(repo_root, schema_path)
+
+    def get_evaluator_file_path(self, repo_root: Path) -> Optional[Path]:
+        file_path = common.default_str((self.evaluator_config or {}).get("application_repo_file_path")).strip()
+        if not file_path:
+            return None
+        return self._resolve_repo_file_path(repo_root, file_path)
+
+    def get_evaluator_output_schema_file_path(self, repo_root: Path) -> Optional[Path]:
+        schema_path = common.default_str((self.evaluator_config or {}).get("output_schema_file_path")).strip()
+        if not schema_path:
+            return None
+        return self._resolve_repo_file_path(repo_root, schema_path)
+
+    @staticmethod
+    def _resolve_repo_file_path(repo_root: Path, relative_path: str | None) -> Path:
+        repo_root = Path(repo_root).resolve()
+        target_path = (repo_root / common.assert_not_empty(common.default_str(relative_path).strip())).resolve()
+        if repo_root not in target_path.parents and target_path != repo_root:
+            raise ValidationError("implementation file path must stay within the application repo")
+        return target_path
+    
+    def get_evaluator_spec(self) -> dict[str, Any]:
+        evaluator_config = copy.deepcopy(self.evaluator_config or {})
+        if not evaluator_config:
+            return {
+                "kind": "default",
+                "config": {},
+            }
+        return {
+            "kind": self.source_kind,
+            "config": evaluator_config,
+        }
+    
+    def build_execution_provenance(self, business: Business) -> dict[str, Any]:
+        provenance = {
+            "source_version_number": self.version_number,
+            "source_kind": self.source_kind,
+            "application_repo_file_path": self.application_repo_file_path,
+            "application_repo_ref": self.application_repo_ref,
+            "instance_config_revision": None,
+            "source_metadata": copy.deepcopy(self.source_metadata or {}),
+        }
+        
+        if self.application_repo_file_path and self.application_repo_ref:
+            application_repo_url = business.get_application_repo_url()
+            application_repo_revision, _ = GitWrapper.get_commit_for_ref(
+                application_repo_url,
+                self.application_repo_ref,
+            )
+            provenance.update(
+                {
+                    "application_repo_url": application_repo_url,
+                    "application_repo_revision": application_repo_revision,
+                    "instance_config_revision": application_repo_revision,
+                }
+            )
+        
+        return provenance
 
 
 class SelfDrivingTask(BaseErieIronModel):
