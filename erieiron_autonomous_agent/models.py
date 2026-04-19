@@ -4,6 +4,7 @@ import difflib
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import tempfile
 import textwrap
@@ -30,6 +31,7 @@ from erieiron_autonomous_agent.enums import (
     TrafficLight,
     TaskStatus,
     BusinessOperationType,
+    WorkflowDatastoreBackend,
 )
 from erieiron_common import common
 from erieiron_common.enums import (
@@ -1094,9 +1096,24 @@ class Initiative(BaseErieIronModel):
 
 
 class WorkflowDefinition(BaseErieIronModel):
+    WORKSPACE_APPLICATION_WORKFLOW_NAME = "Business Workflow"
+
     name = models.TextField(unique=True)
     description = models.TextField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    long_term_memory_enabled = models.BooleanField(
+        default=False,
+        help_text="Enables workflow-local long-term memory inside the workflow application sandbox.",
+    )
+    datastore_enabled = models.BooleanField(
+        default=False,
+        help_text="Enables a workflow-local key-value datastore isolated from Erie Iron platform storage.",
+    )
+    datastore_backend = models.TextField(
+        choices=WorkflowDatastoreBackend.choices(),
+        default=WorkflowDatastoreBackend.SQLITE,
+        help_text="Backend used by the isolated workflow datastore. Defaults to SQLite inside the workflow sandbox.",
+    )
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now=True)
 
@@ -1134,6 +1151,10 @@ class WorkflowDefinition(BaseErieIronModel):
         return cls.with_graph().filter(is_active=True)
 
     @classmethod
+    def get_workspace_application_workflow(cls) -> Optional["WorkflowDefinition"]:
+        return cls.objects.filter(name=cls.WORKSPACE_APPLICATION_WORKFLOW_NAME).first()
+
+    @classmethod
     def register_active_workflows(cls, pubsub_manager):
         for workflow in cls.active_workflows():
             workflow.register(pubsub_manager)
@@ -1165,6 +1186,40 @@ class WorkflowDefinition(BaseErieIronModel):
                     handler,
                     completed_message_type,
                 )
+
+    def get_datastore_backend(self) -> WorkflowDatastoreBackend:
+        return WorkflowDatastoreBackend(self.datastore_backend)
+
+    def get_sqlite_datastore_relative_path(self) -> Path:
+        if self.get_datastore_backend() != WorkflowDatastoreBackend.SQLITE:
+            raise ValueError("SQLite datastore path is only defined for SQLite workflow datastores.")
+
+        return Path(".erieiron") / "workflow-datastore.sqlite3"
+
+    def ensure_workspace_datastore(self, workspace_root: Path) -> Optional[Path]:
+        if not self.datastore_enabled:
+            return None
+
+        if self.get_datastore_backend() != WorkflowDatastoreBackend.SQLITE:
+            raise NotImplementedError(
+                f"Workspace datastore bootstrap is not implemented for backend {self.datastore_backend}."
+            )
+
+        datastore_path = Path(workspace_root) / self.get_sqlite_datastore_relative_path()
+        datastore_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with sqlite3.connect(datastore_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS workflow_datastore_documents (
+                    key TEXT PRIMARY KEY,
+                    document_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+        return datastore_path
 
 
 class WorkflowStep(BaseErieIronModel):
@@ -2169,6 +2224,8 @@ class Task(BaseErieIronModel):
                     git.clone(repo_url)
             else:
                 raise e
+
+        self_driving_task.initialize_workspace_runtime()
         
         return self_driving_task
     
@@ -2592,6 +2649,16 @@ class SelfDrivingTask(BaseErieIronModel):
     
     def get_git(self) -> GitWrapper:
         return GitWrapper(self.sandbox_path)
+
+    def initialize_workspace_runtime(self) -> Optional[Path]:
+        workspace_root = Path(self.sandbox_path)
+        (workspace_root / ".erieiron").mkdir(parents=True, exist_ok=True)
+
+        workflow = WorkflowDefinition.get_workspace_application_workflow()
+        if workflow is None:
+            return None
+
+        return workflow.ensure_workspace_datastore(workspace_root)
     
     def rollback_to(self, iteraton: "SelfDrivingTaskIteration"):
         # we don't want any files created in future iterations hanging around, so delete everything

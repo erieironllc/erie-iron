@@ -15,6 +15,9 @@ def test_sync_default_workflows_creates_board_and_business_graph():
     ]
 
     board_workflow = WorkflowDefinition.objects.get(name="Board Workflow")
+    assert board_workflow.long_term_memory_enabled is False
+    assert board_workflow.datastore_enabled is False
+    assert board_workflow.datastore_backend == "SQLITE"
     assert board_workflow.steps.filter(
         name="Find new business opportunity",
         emits_message_type=PubSubMessageType.BUSINESS_IDEA_SUBMITTED.value,
@@ -30,6 +33,9 @@ def test_sync_default_workflows_creates_board_and_business_graph():
     ).exists()
 
     business_workflow = WorkflowDefinition.objects.get(name="Business Workflow")
+    assert business_workflow.long_term_memory_enabled is False
+    assert business_workflow.datastore_enabled is False
+    assert business_workflow.datastore_backend == "SQLITE"
     assert business_workflow.steps.filter(
         name="Queue product initiatives",
         handler_path="erieiron_common.message_queue.pubsub_manager.PubSubManager.noop",

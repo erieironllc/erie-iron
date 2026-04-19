@@ -457,6 +457,10 @@ def _serialize_workflow_definition(workflow: WorkflowDefinition) -> dict:
         "name": workflow.name,
         "description": workflow.description,
         "is_active": workflow.is_active,
+        "long_term_memory_enabled": workflow.long_term_memory_enabled,
+        "datastore_enabled": workflow.datastore_enabled,
+        "datastore_backend": workflow.datastore_backend,
+        "datastore_backend_label": workflow.get_datastore_backend().label(),
         "steps": steps,
         "triggers": triggers,
         "connections": connections,
@@ -499,6 +503,8 @@ def _save_workflow_definition_form(
         name: str,
         description: str | None,
         is_active: bool,
+        long_term_memory_enabled: bool,
+        datastore_enabled: bool,
 ) -> WorkflowDefinition:
     workflow = (
         get_object_or_404(WorkflowDefinition, pk=workflow_id)
@@ -508,6 +514,8 @@ def _save_workflow_definition_form(
     workflow.name = common.default_str(name).strip()
     workflow.description = common.default_str(description).strip() or None
     workflow.is_active = is_active
+    workflow.long_term_memory_enabled = long_term_memory_enabled
+    workflow.datastore_enabled = datastore_enabled
 
     if not workflow.name:
         raise ValueError("Workflow name is required.")
@@ -7890,6 +7898,8 @@ def action_admin_workflow_save(request):
             name=rget(request, 'name'),
             description=rget(request, 'description'),
             is_active=rget_bool(request, 'is_active', True),
+            long_term_memory_enabled=rget_bool(request, 'long_term_memory_enabled', False),
+            datastore_enabled=rget_bool(request, 'datastore_enabled', False),
         )
 
     logging.info(f"Admin saved workflow {workflow.name} ({workflow.id})")

@@ -1,8 +1,12 @@
+import sqlite3
+
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
+from erieiron_autonomous_agent.enums import WorkflowDatastoreBackend
 from erieiron_autonomous_agent.models import (
+    SelfDrivingTask,
     WorkflowConnection,
     WorkflowDefinition,
     WorkflowStep,
@@ -50,6 +54,85 @@ def test_workflow_models_persist_triggers_steps_and_connections():
     assert trigger.target_step_id == find_ideas.id
     assert connection.source_step_id == find_ideas.id
     assert connection.target_step_id == submit_idea.id
+
+
+@pytest.mark.django_db
+def test_workflow_definition_defaults_disable_long_term_memory_and_datastore():
+    workflow = WorkflowDefinition.objects.create(name="Workflow Defaults")
+
+    assert workflow.long_term_memory_enabled is False
+    assert workflow.datastore_enabled is False
+    assert workflow.datastore_backend == WorkflowDatastoreBackend.SQLITE
+
+
+@pytest.mark.django_db
+def test_workflow_definition_defaults_to_sqlite_datastore_path_inside_workflow_sandbox():
+    workflow = WorkflowDefinition.objects.create(
+        name="Workflow With Datastore",
+        datastore_enabled=True,
+    )
+
+    assert workflow.get_datastore_backend() == WorkflowDatastoreBackend.SQLITE
+    assert str(workflow.get_sqlite_datastore_relative_path()) == ".erieiron/workflow-datastore.sqlite3"
+
+
+@pytest.mark.django_db
+def test_workflow_definition_rejects_sqlite_path_lookup_for_non_sqlite_backend():
+    workflow = WorkflowDefinition.objects.create(
+        name="Workflow With External Datastore",
+        datastore_enabled=True,
+        datastore_backend=WorkflowDatastoreBackend.DYNAMODB,
+    )
+
+    with pytest.raises(ValueError, match="SQLite datastore path is only defined"):
+        workflow.get_sqlite_datastore_relative_path()
+
+
+def test_workflow_definition_ensure_workspace_datastore_creates_sqlite_store(tmp_path):
+    workflow = WorkflowDefinition(
+        name="Business Workflow",
+        datastore_enabled=True,
+        datastore_backend=WorkflowDatastoreBackend.SQLITE,
+    )
+
+    datastore_path = workflow.ensure_workspace_datastore(tmp_path)
+
+    assert datastore_path == tmp_path / ".erieiron" / "workflow-datastore.sqlite3"
+    assert datastore_path.exists()
+
+    with sqlite3.connect(datastore_path) as connection:
+        columns = connection.execute(
+            "PRAGMA table_info(workflow_datastore_documents)"
+        ).fetchall()
+
+    assert [column[1] for column in columns] == ["key", "document_json", "updated_at"]
+
+
+def test_self_driving_task_initialize_workspace_runtime_creates_configured_datastore(
+        tmp_path,
+        monkeypatch,
+):
+    workflow = WorkflowDefinition(
+        name="Business Workflow",
+        datastore_enabled=True,
+        datastore_backend=WorkflowDatastoreBackend.SQLITE,
+    )
+    self_driving_task = SelfDrivingTask(
+        sandbox_path=str(tmp_path),
+        main_name="workspace",
+        goal="goal",
+    )
+
+    monkeypatch.setattr(
+        WorkflowDefinition,
+        "get_workspace_application_workflow",
+        classmethod(lambda cls: workflow),
+    )
+
+    datastore_path = self_driving_task.initialize_workspace_runtime()
+
+    assert datastore_path == tmp_path / ".erieiron" / "workflow-datastore.sqlite3"
+    assert datastore_path.exists()
 
 
 @pytest.mark.django_db

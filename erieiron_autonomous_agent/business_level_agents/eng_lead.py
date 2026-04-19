@@ -391,6 +391,7 @@ def bootstrap_buiness(business_id):
         
         self_driving_task.sandbox_path = os.path.abspath(git.source_root)
         self_driving_task.save()
+        self_driving_task.initialize_workspace_runtime()
         
         git.mk_venv()
         business.snapshot_code(self_driving_task_iteration)

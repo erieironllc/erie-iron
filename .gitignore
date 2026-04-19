@@ -184,9 +184,6 @@ __pycache__/
 /node_modules/
 /erieiron_ui/static/compiled/
 /erieiron_businesses/
-/conf/config.json
-/conf/secrets.json
-/conf/local_secrets.json
 /.codex/
 /production_deploy_thoughts.md
 /.claude/
@@ -196,3 +193,5 @@ __pycache__/
 **/.terraform/
 /artifacts/
 /.ai_coding/
+/conf/config.json
+/conf/secrets.json

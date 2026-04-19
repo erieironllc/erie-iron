@@ -65,3 +65,21 @@ class TrafficLight(ErieEnum):
     GREEN = auto()
     YELLOW = auto()
     RED = auto()
+
+
+class WorkflowDatastoreBackend(ErieEnum):
+    SQLITE = auto()
+    POSTGRES = auto()
+    MONGO = auto()
+    DYNAMODB = auto()
+
+    def label(self):
+        if self == WorkflowDatastoreBackend.SQLITE:
+            return "SQLite"
+        if self == WorkflowDatastoreBackend.POSTGRES:
+            return "Postgres"
+        if self == WorkflowDatastoreBackend.MONGO:
+            return "Mongo"
+        if self == WorkflowDatastoreBackend.DYNAMODB:
+            return "DynamoDB"
+        return super().label()
