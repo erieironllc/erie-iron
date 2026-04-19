@@ -36,7 +36,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase, TaskImplementationSourceKind
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase, TaskImplementationSourceKind, TaskPromptImprovementStatus
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -68,6 +68,16 @@ PROJECT_PLAN_STATUS_ORDER = [
     TaskStatus.COMPLETE.value,
     TaskStatus.FAILED.value,
 ]
+PROMPT_IMPROVEMENT_STATUS_BADGE_CLASSES = {
+    TaskPromptImprovementStatus.PENDING_REVIEW.value: "text-bg-primary",
+    TaskPromptImprovementStatus.APPLIED.value: "text-bg-success",
+    TaskPromptImprovementStatus.REJECTED.value: "text-bg-secondary",
+    TaskPromptImprovementStatus.ROLLED_BACK.value: "text-bg-warning",
+}
+PROMPT_IMPROVEMENT_TRIGGER_BADGE_CLASSES = {
+    "manual": "text-bg-info",
+    "scheduled": "text-bg-dark",
+}
 
 
 def _paginate_llm_requests(queryset, page_number: int = 0, page_size: int = LLM_REQUESTS_PAGE_SIZE):
@@ -3614,6 +3624,93 @@ def _build_task_implementation_versions(task: Task) -> tuple[TaskImplementationV
     return active_version, versions
 
 
+def _prompt_improvement_score_badge_class(score: float | None) -> str:
+    if score is None:
+        return "text-bg-secondary"
+    if score >= 0.8:
+        return "text-bg-success"
+    if score >= 0.5:
+        return "text-bg-warning"
+    return "text-bg-danger"
+
+
+def _prompt_improvement_model_label(model_metadata: dict | None) -> str | None:
+    metadata = model_metadata or {}
+
+    llm_model = common.default_str(common.get(metadata, "llm_model")).strip()
+    if llm_model:
+        return llm_model
+
+    llm_models = [
+        common.default_str(model_name).strip()
+        for model_name in common.ensure_list(common.get(metadata, "llm_models"))
+        if common.default_str(model_name).strip()
+    ]
+    if llm_models:
+        return ", ".join(llm_models)
+
+    model_parts = []
+    planning_model = common.default_str(common.get(metadata, "planning_model")).strip()
+    coding_model = common.default_str(common.get(metadata, "coding_model")).strip()
+    if planning_model:
+        model_parts.append(f"Plan: {planning_model}")
+    if coding_model:
+        model_parts.append(f"Code: {coding_model}")
+    if model_parts:
+        return " | ".join(model_parts)
+
+    return None
+
+
+def _build_prompt_improvement_status_counts(
+        prompt_improvements: list[TaskPromptImprovement],
+) -> list[dict[str, Any]]:
+    status_counts = {status.value: 0 for status in TaskPromptImprovementStatus}
+    for improvement in prompt_improvements:
+        if improvement.status in status_counts:
+            status_counts[improvement.status] += 1
+
+    return [
+        {
+            "status": status.value,
+            "count": status_counts[status.value],
+            "badge_class": PROMPT_IMPROVEMENT_STATUS_BADGE_CLASSES[status.value],
+        }
+        for status in TaskPromptImprovementStatus
+    ]
+
+
+def _build_recent_prompt_improvement_executions(
+        task: Task,
+) -> tuple[list[TaskExecution], float | None]:
+    recent_executions = list(
+        task.taskexecution_set.select_related("implementation_version")
+        .filter(executed_time__isnull=False)
+        .order_by("-executed_time", "-created_time")[:5]
+    )
+    score_values = []
+    for execution in recent_executions:
+        execution.score_badge_class = _prompt_improvement_score_badge_class(
+            execution.evaluation_score
+        )
+        execution.display_model = _prompt_improvement_model_label(
+            execution.model_metadata
+        )
+        execution.version_label = None
+        if execution.implementation_version_id:
+            execution.version_label = (
+                f"Version {execution.implementation_version.version_number}"
+            )
+        if execution.evaluation_score is not None:
+            score_values.append(execution.evaluation_score)
+
+    average_score = None
+    if score_values:
+        average_score = sum(score_values) / len(score_values)
+
+    return recent_executions, average_score
+
+
 def _task_tab_context_overview(task, business, self_driving_task) -> dict:
     active_version, implementation_versions = _build_task_implementation_versions(task)
     return {
@@ -3801,11 +3898,35 @@ def _task_tab_available_prompt_improvements(task, business, self_driving_task) -
 
 
 def _task_tab_context_prompt_improvements(task, business, self_driving_task) -> dict:
+    active_version, _ = _build_task_implementation_versions(task)
     prompt_improvements = list(task.get_prompt_improvements())
     for improvement in prompt_improvements:
         improvement.summary = improvement.get_summary()
+        improvement.change_notes = [
+            common.default_str(note).strip()
+            for note in common.ensure_list(common.get(improvement.proposal_json, "change_notes"))
+            if common.default_str(note).strip()
+        ]
         improvement.guardrails = improvement.get_guardrails()
         improvement.rollback_signals = improvement.get_rollback_signals()
+        improvement.status_badge_class = PROMPT_IMPROVEMENT_STATUS_BADGE_CLASSES.get(
+            improvement.status,
+            "text-bg-secondary",
+        )
+        improvement.trigger_badge_class = PROMPT_IMPROVEMENT_TRIGGER_BADGE_CLASSES.get(
+            improvement.trigger_source,
+            "text-bg-secondary",
+        )
+        improvement.base_version_label = None
+        if improvement.base_implementation_version_id:
+            improvement.base_version_label = (
+                f"Version {improvement.base_implementation_version.version_number}"
+            )
+        improvement.applied_version_label = None
+        if improvement.applied_implementation_version_id:
+            improvement.applied_version_label = (
+                f"Version {improvement.applied_implementation_version.version_number}"
+            )
         if improvement.generated_llm_request_id:
             improvement.generated_llm_request_url = reverse(
                 "view_llm_request",
@@ -3813,10 +3934,27 @@ def _task_tab_context_prompt_improvements(task, business, self_driving_task) -> 
             )
         else:
             improvement.generated_llm_request_url = None
+    if active_version:
+        active_version.prompt_override = common.default_str(
+            common.get(active_version.source_metadata, "prompt_override")
+        ).strip() or None
+        active_version.output_schema_label = common.default_str(
+            common.get(active_version.source_metadata, "output_schema_file_path")
+        ).strip() or None
+        active_version.is_prompt_override = bool(active_version.prompt_override)
+    recent_executions, recent_average_score = _build_recent_prompt_improvement_executions(task)
+    latest_execution = recent_executions[0] if recent_executions else None
 
     return {
+        "active_implementation_version": active_version,
+        "latest_prompt_improvement_execution": latest_execution,
         "prompt_improvements": prompt_improvements,
+        "prompt_improvement_status_counts": _build_prompt_improvement_status_counts(
+            prompt_improvements
+        ),
         "prompt_improvement_schedule_choices": TaskExecutionSchedule.choices(),
+        "recent_prompt_improvement_executions": recent_executions,
+        "recent_prompt_improvement_average_score": recent_average_score,
     }
 
 
