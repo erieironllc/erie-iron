@@ -26,7 +26,7 @@ npm run compile-ui
 createdb erieiron_local
 ```
 
-3. Create the local secrets file and replace the placeholder values.
+3. Create the local secrets file and replace the placeholder values, including the application repo URL for this Erie Iron instance.
 
 ```bash
 cp conf/local_secrets.example.json conf/local_secrets.json
@@ -62,5 +62,6 @@ The local profile uses:
 
 - Postgres on `localhost:5432` via `postgresql@17`
 - `conf/local_secrets.json` instead of AWS Secrets Manager
+- `APPLICATION_REPO.url` in `conf/local_secrets.json` as the application repo URL that local task execution resolves against
 - local session-based login instead of Cognito
 - `python manage.py bootstrap_local_runtime --verify-only` to re-check the setup without changing users

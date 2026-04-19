@@ -248,6 +248,12 @@ class Business(BaseErieIronModel):
         return Business.objects.get_or_create(
             name="Erie Iron, LLC", defaults={"source": BusinessIdeaSource.HUMAN}
         )[0]
+
+    def get_application_repo_url(self) -> str:
+        repo_url = common.default_str(self.github_repo_url).strip()
+        if not repo_url:
+            raise ValueError(f"application repo url is not configured for business {self.name}")
+        return repo_url
     
     def needs_bank_balance_update(self):
         return not BusinessBankBalanceSnapshot.objects.filter(
@@ -1810,18 +1816,19 @@ class Task(BaseErieIronModel):
         )
         
         git = self_driving_task.get_git()
+        repo_url = business.get_application_repo_url()
         try:
             if git.source_exists():
                 git.pull()
             else:
-                git.clone(business.github_repo_url)
+                git.clone(repo_url)
         except Exception as e:
             if "repository not found" in str(e).lower():
                 bootstrap_repo(business, git)
                 if git.source_exists():
                     git.pull()
                 else:
-                    git.clone(business.github_repo_url)
+                    git.clone(repo_url)
             else:
                 raise e
         

@@ -348,6 +348,7 @@ def bootstrap_buiness(business_id):
         if not business.github_repo_url:
             business.github_repo_url = f"https://github.com/erieironllc/{business.service_token}"
             business.save()
+        repo_url = business.get_application_repo_url()
         
         bootstrap_initiative, _ = business.initiative_set.get_or_create(
             title=InitiativeNames.BOOTSTRAP_ENVS,
@@ -367,7 +368,7 @@ def bootstrap_buiness(business_id):
             defaults={
                 "id": uuid.uuid4(),
                 "status": TaskStatus.IN_PROGRESS,
-                "description": f"Clone the bootstrap repo to {business.github_repo_url}",
+                "description": f"Clone the bootstrap repo to {repo_url}",
                 "requires_test": False
             }
         )
@@ -413,11 +414,11 @@ def bootstrap_buiness(business_id):
 
 
 def bootstrap_repo(business: Business, git: GitWrapper):
-    if git.exists(business.github_repo_url):
-        git.clone(business.github_repo_url)
+    target_repo = business.get_application_repo_url()
+    if git.exists(target_repo):
+        git.clone(target_repo)
     else:
         source_repo = get_source_repo_url(business)
-        target_repo = business.github_repo_url
         clone_path = git.source_root
         
         logging.info(f"Cloning bootstrap repository from {source_repo} to {clone_path} ({target_repo})")
@@ -440,7 +441,7 @@ def bootstrap_repo(business: Business, git: GitWrapper):
                 ("erieiron_bootstrap", business.service_token)
             ])
         
-        git.create_repo(business.github_repo_url)
+        git.create_repo(target_repo)
         git.add_commit_push(f"Initialize repository for {business.name}")
 
 
