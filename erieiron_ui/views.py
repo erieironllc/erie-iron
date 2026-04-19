@@ -32,7 +32,7 @@ from erieiron_autonomous_agent import system_agent_llm_interface
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
 from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
-from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, RunningProcess, WorkflowConnection, WorkflowDefinition, WorkflowStep, WorkflowTrigger
+from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, TaskImplementationVersion, RunningProcess, WorkflowConnection, WorkflowDefinition, WorkflowStep, WorkflowTrigger
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
@@ -3597,8 +3597,29 @@ def _task_tab_available_overview(task, business, self_driving_task) -> bool:
     return True
 
 
+def _build_task_implementation_versions(task: Task) -> tuple[TaskImplementationVersion | None, list[TaskImplementationVersion]]:
+    active_version = task.get_active_implementation_version()
+    versions = list(task.get_implementation_versions())
+    active_version_id = active_version.id if active_version else None
+
+    if active_version:
+        active_version.source_label = active_version.get_source_label()
+        active_version.evaluator_label = active_version.get_evaluator_label()
+    
+    for version in versions:
+        version.is_active_version = version.id == active_version_id
+        version.source_label = version.get_source_label()
+        version.evaluator_label = version.get_evaluator_label()
+    
+    return active_version, versions
+
+
 def _task_tab_context_overview(task, business, self_driving_task) -> dict:
-    return {}
+    active_version, implementation_versions = _build_task_implementation_versions(task)
+    return {
+        "active_implementation_version": active_version,
+        "implementation_versions": implementation_versions,
+    }
 
 
 def _task_tab_available_blocked_by(task, business, self_driving_task) -> bool:
@@ -3761,11 +3782,14 @@ def _task_tab_context_codefiles(task, business, self_driving_task) -> dict:
 
 
 def _task_tab_available_executions(task, business, self_driving_task) -> bool:
-    return False  # task.taskexecution_set.exists()
+    return task.taskexecution_set.exists()
 
 
 def _task_tab_context_executions(task, business, self_driving_task) -> dict:
-    task_executions = list(task.taskexecution_set.order_by("-executed_time"))
+    task_executions = list(
+        task.taskexecution_set.select_related("implementation_version")
+        .order_by("-executed_time", "-created_time")
+    )
     return {"task_executions": task_executions}
 
 

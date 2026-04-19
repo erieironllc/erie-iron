@@ -69,6 +69,64 @@
         </section>
     {% endif %}
 
+    <section class="task-overview__section">
+        <div class="task-overview__section-header">
+            <h5 class="task-overview__section-title">Implementation Source</h5>
+        </div>
+        <div class="task-overview__section-body">
+            {% if active_implementation_version %}
+                <dl class="row mb-4">
+                    <dt class="col-sm-3">Source Kind</dt>
+                    <dd class="col-sm-9">{{ active_implementation_version.source_kind|label }}</dd>
+                    <dt class="col-sm-3">Active Version</dt>
+                    <dd class="col-sm-9">Version {{ active_implementation_version.version_number }}</dd>
+                    <dt class="col-sm-3">Source</dt>
+                    <dd class="col-sm-9">{{ active_implementation_version.source_label }}</dd>
+                    {% if active_implementation_version.application_repo_ref %}
+                        <dt class="col-sm-3">Repo Ref</dt>
+                        <dd class="col-sm-9"><code>{{ active_implementation_version.application_repo_ref }}</code></dd>
+                    {% endif %}
+                    <dt class="col-sm-3">Evaluator</dt>
+                    <dd class="col-sm-9">{{ active_implementation_version.evaluator_label }}</dd>
+                </dl>
+            {% else %}
+                <p class="mb-4 text-muted">No implementation source is configured for this task yet.</p>
+            {% endif %}
+
+            {% if implementation_versions %}
+                <div class="table-responsive">
+                    <table class="table table-dark table-sm align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th scope="col">Version</th>
+                            <th scope="col">Kind</th>
+                            <th scope="col">Source</th>
+                            <th scope="col">Evaluator</th>
+                            <th scope="col">Created</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for version in implementation_versions %}
+                            <tr>
+                                <td>
+                                    Version {{ version.version_number }}
+                                    {% if version.is_active_version %}
+                                        <span class="badge bg-primary ms-2">Active</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ version.source_kind|label }}</td>
+                                <td>{{ version.source_label }}</td>
+                                <td>{{ version.evaluator_label }}</td>
+                                <td>{{ version.created_at }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+        </div>
+    </section>
+
     {% if task.risk_notes %}
         <section class="task-overview__section">
             <div class="task-overview__section-header">

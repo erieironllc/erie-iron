@@ -230,6 +230,13 @@ TASK_TAB_DEFINITIONS = [
         "availability_fn": views._task_tab_available_iterations,
         "context_fn": views._task_tab_context_iterations,
     },
+    {
+        "slug": "executions",
+        "label": "Executions",
+        "template": "task/tabs/executions.html",
+        "availability_fn": views._task_tab_available_executions,
+        "context_fn": views._task_tab_context_executions,
+    },
     TAB_DIVIDER,
     {
         "slug": "testcode",

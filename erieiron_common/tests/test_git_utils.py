@@ -1,6 +1,3 @@
-import types
-from pathlib import Path
-
 import pytest
 
 from erieiron_common.git_utils import GitWrapper
@@ -20,30 +17,39 @@ from erieiron_common.git_utils import GitWrapper
 def test_extract_github_repo_slug(remote_url, expected):
     assert GitWrapper._extract_github_repo_slug(remote_url) == expected
 
-
 def test_get_latest_commit_uses_github_api(monkeypatch):
-    repo_root = Path(__file__).resolve().parent.parent.parent
-
-    def fake_run_cmd(cwd, cmd):
-        assert list(cmd) == ["git", "config", "--get", "remote.origin.url"]
-        return types.SimpleNamespace(stdout="https://github.com/example/repo.git\n")
-
-    def fake_fetch(self, owner, repo):
-        assert (owner, repo) == ("example", "repo")
+    def fake_fetch(owner, repo, repo_ref=None):
+        assert (owner, repo, repo_ref) == ("example", "repo", None)
         return "abc123", "commit message"
 
-    monkeypatch.setattr("erieiron_common.git_utils.run_cmd", fake_run_cmd)
     monkeypatch.setattr(
-        "erieiron_common.git_utils.GitWrapper._fetch_latest_commit_via_api",
+        "erieiron_common.git_utils.GitWrapper._fetch_commit_via_api",
         fake_fetch,
     )
 
-    git = GitWrapper(source_root=repo_root)
+    assert GitWrapper.get_latest_commit("https://github.com/example/repo.git") == (
+        "abc123",
+        "commit message",
+    )
 
-    assert git.get_latest_commit() == ("abc123", "commit message")
+
+def test_get_commit_for_ref_uses_github_api(monkeypatch):
+    def fake_fetch(owner, repo, repo_ref=None):
+        assert (owner, repo, repo_ref) == ("example", "repo", "feature/ref")
+        return "def456", "feature commit"
+
+    monkeypatch.setattr(
+        "erieiron_common.git_utils.GitWrapper._fetch_commit_via_api",
+        fake_fetch,
+    )
+
+    assert GitWrapper.get_commit_for_ref(
+        "https://github.com/example/repo.git",
+        "feature/ref",
+    ) == ("def456", "feature commit")
 
 
-def test_fetch_latest_commit_via_api_success(monkeypatch, tmp_path):
+def test_fetch_commit_via_api_success(monkeypatch, tmp_path):
     git = GitWrapper(source_root=tmp_path)
 
     monkeypatch.setattr("erieiron_common.git_utils.get_github_token", lambda: "token")
@@ -68,10 +74,10 @@ def test_fetch_latest_commit_via_api_success(monkeypatch, tmp_path):
 
     monkeypatch.setattr("erieiron_common.git_utils.requests.get", fake_get)
 
-    assert git._fetch_latest_commit_via_api("example", "repo") == ("abc123", "commit message")
+    assert git._fetch_commit_via_api("example", "repo") == ("abc123", "commit message")
 
 
-def test_fetch_latest_commit_via_api_non_200(monkeypatch, tmp_path):
+def test_fetch_commit_via_api_non_200(monkeypatch, tmp_path):
     git = GitWrapper(source_root=tmp_path)
 
     monkeypatch.setattr("erieiron_common.git_utils.get_github_token", lambda: "token")
@@ -88,6 +94,6 @@ def test_fetch_latest_commit_via_api_non_200(monkeypatch, tmp_path):
     )
 
     with pytest.raises(Exception) as exc:
-        git._fetch_latest_commit_via_api("example", "repo")
+        git._fetch_commit_via_api("example", "repo")
 
     assert "GitHub API returned 404" in str(exc.value)

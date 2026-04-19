@@ -18,17 +18,42 @@
                 </div>
                 <div class="card-body">
                     <dl class="row">
+                        {% if execution.implementation_source_kind %}
+                            <dt class="col-sm-3">Implementation Source</dt>
+                            <dd class="col-sm-9">
+                                {{ execution.implementation_source_kind|label }}
+                                {% if execution.implementation_version %}
+                                    <span class="badge bg-primary ms-2">Version {{ execution.implementation_version.version_number }}</span>
+                                {% endif %}
+                            </dd>
+                        {% endif %}
+                        {% if execution.evaluation_score is not None %}
+                            <dt class="col-sm-3">Evaluation Score</dt>
+                            <dd class="col-sm-9">{{ execution.evaluation_score|floatformat:2 }}</dd>
+                        {% endif %}
+                        {% if execution.implementation_provenance %}
+                            <dt class="col-sm-3">Implementation Provenance</dt>
+                            <dd class="col-sm-9"><pre>{{ execution.implementation_provenance|pprint_json }}</pre></dd>
+                        {% endif %}
+                        {% if execution.model_metadata %}
+                            <dt class="col-sm-3">Model Metadata</dt>
+                            <dd class="col-sm-9"><pre>{{ execution.model_metadata|pprint_json }}</pre></dd>
+                        {% endif %}
+                        {% if execution.evaluation_metadata %}
+                            <dt class="col-sm-3">Evaluation Metadata</dt>
+                            <dd class="col-sm-9"><pre>{{ execution.evaluation_metadata|pprint_json }}</pre></dd>
+                        {% endif %}
                         {% if execution.input %}
-                            <dt>Input</dt>
-                            <dd><pre>{{ execution.input|pprint_json }}</pre></dd>
+                            <dt class="col-sm-3">Input</dt>
+                            <dd class="col-sm-9"><pre>{{ execution.input|pprint_json }}</pre></dd>
                         {% endif %}
                         {% if execution.output %}
-                            <dt>Output</dt>
-                            <dd><pre>{{ execution.output|pprint_json }}</pre></dd>
+                            <dt class="col-sm-3">Output</dt>
+                            <dd class="col-sm-9"><pre>{{ execution.output|pprint_json }}</pre></dd>
                         {% endif %}
                         {% if execution.error_msg %}
-                            <dt>Error Message</dt>
-                            <dd><pre>{{ execution.error_msg|safe }}</pre></dd>
+                            <dt class="col-sm-3">Error Message</dt>
+                            <dd class="col-sm-9"><pre>{{ execution.error_msg|safe }}</pre></dd>
                         {% endif %}
                         {% if execution.process.log_tail %}
                             <dt class="col-sm-3">Recent Output</dt>
