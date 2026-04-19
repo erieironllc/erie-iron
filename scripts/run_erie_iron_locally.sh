@@ -42,6 +42,111 @@ require_command() {
     fi
 }
 
+runserver_addrport_arg() {
+    local expects_value=false
+    for arg in "${RUNSERVER_ARGS[@]}"; do
+        if [[ "$expects_value" == "true" ]]; then
+            expects_value=false
+            continue
+        fi
+
+        case "$arg" in
+            --settings|--pythonpath|--verbosity|-s|-p|-v)
+                expects_value=true
+                ;;
+            --settings=*|--pythonpath=*|--verbosity=*)
+                ;;
+            --ipv6|--nothreading|--noreload|--nostatic|--insecure|--skip-checks|--traceback|--no-color|--force-color|--help|--version)
+                ;;
+            -*)
+                ;;
+            *)
+                printf '%s\n' "$arg"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+extract_runserver_port() {
+    local addrport="$1"
+    local port="${addrport##*:}"
+    if [[ "$addrport" != *:* ]]; then
+        port="$addrport"
+    fi
+
+    if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        print_error "Unable to determine Django port from runserver addrport: ${addrport}"
+        exit 1
+    fi
+
+    printf '%s\n' "$port"
+}
+
+port_is_available() {
+    local port="$1"
+    "$PYTHON_BOOTSTRAP_BIN" - "$port" <<'PY'
+import socket
+import sys
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
+
+find_available_webapp_port() {
+    local port=8001
+    while [[ "$port" -le 65535 ]]; do
+        if port_is_available "$port"; then
+            printf '%s\n' "$port"
+            return 0
+        fi
+        port=$((port + 1))
+    done
+
+    print_error "No available Django port found above 8000."
+    exit 1
+}
+
+read_config_webapp_port() {
+    local runtime_path="$1"
+    "$PYTHON_BOOTSTRAP_BIN" - "$runtime_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+webapp_port = config_payload.get("WEBAPP_PORT")
+if webapp_port in (None, ""):
+    raise SystemExit(1)
+print(int(webapp_port))
+PY
+}
+
+resolve_webapp_port() {
+    local runtime_path="$1"
+    local cli_addrport
+    cli_addrport="$(runserver_addrport_arg || true)"
+    if [[ -n "$cli_addrport" ]]; then
+        extract_runserver_port "$cli_addrport"
+        return 0
+    fi
+
+    local config_port
+    if config_port="$(read_config_webapp_port "$runtime_path")"; then
+        printf '%s\n' "$config_port"
+        return 0
+    fi
+
+    find_available_webapp_port
+}
+
 wait_for_postgres() {
     local attempts=0
     until pg_isready -h localhost -p "${POSTGRES_PORT}" >/dev/null 2>&1; do
@@ -147,6 +252,7 @@ configure_local_runtime_env() {
     unset LOCAL_AUTH_PASSWORD
     unset LOCAL_AUTH_NAME
     export LOCAL_DB_NAME
+    export WEBAPP_PORT
 }
 
 if [[ ! -f manage.py ]]; then
@@ -201,6 +307,9 @@ fi
 
 ensure_local_runtime_files
 
+WEBAPP_PORT="$(resolve_webapp_port conf/config.json)"
+print_info "Using Django development port ${WEBAPP_PORT}"
+
 configure_local_runtime_env
 
 ensure_current_database_schema
@@ -214,4 +323,7 @@ if [[ "$SKIP_RUNSERVER" == "true" ]]; then
 fi
 
 print_info "Starting Django development server"
-exec python manage.py runserver "${RUNSERVER_ARGS[@]}"
+if [[ -n "$(runserver_addrport_arg || true)" ]]; then
+    exec python manage.py runserver "${RUNSERVER_ARGS[@]}"
+fi
+exec python manage.py runserver "${WEBAPP_PORT}" "${RUNSERVER_ARGS[@]}"

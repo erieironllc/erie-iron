@@ -5,7 +5,6 @@ import textwrap
 import traceback
 from pathlib import Path
 
-import settings
 from erieiron_autonomous_agent.enums import BusinessOperationType
 from erieiron_autonomous_agent.models import LlmRequest, Business, Initiative, SelfDrivingTaskIteration
 from erieiron_common import common
@@ -266,7 +265,7 @@ def llm_chat(
                 "content": sanitize_prompt(m.text)
             } for m in llm_messages]
         )
-        llm_request_url = f"{settings.BASE_URL}/llm/debug/{llm_request.id}"
+        llm_request_url = common.build_absolute_uri(f"llm/debug/{llm_request.id}")
         
         if resolved_output_schema:
             logging.info(f"llm chat start: {description} ({resolved_output_schema}); Model:{model}; Reasoning: {reasoning_effort}; Verbosity: {verbosity}; Creativity: {creativity}, {llm_request_url}")

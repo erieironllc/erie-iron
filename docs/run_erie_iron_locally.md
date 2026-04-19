@@ -6,7 +6,7 @@ Fast path:
 ./scripts/run_erie_iron_locally.sh
 ```
 
-The script automates the setup flow below, uses a local Postgres service that exposes `pgvector`, creates the local database if needed, verifies that Django migration files are present and already applied, and starts `runserver`. It stops early only if `conf/config.json` or `conf/secrets.json` still contains the example placeholder values or if you still need to run migrations manually.
+The script automates the setup flow below, uses a local Postgres service that exposes `pgvector`, creates the local database if needed, verifies that Django migration files are present and already applied, and starts `runserver`. It stops early only if `conf/config.json` or `conf/secrets.json` still contains the example placeholder values or if you still need to run migrations manually. When `WEBAPP_PORT` is omitted from `conf/config.json`, the script chooses the first available port above `8000`.
 
 1. Install the local dependencies.
 
@@ -34,26 +34,27 @@ cp conf/secrets.example.json conf/secrets.json
 ```
 
 4. Confirm `conf/config.json` still has `"ERIEIRON_RUNTIME_PROFILE": "local"`.
+5. Keep `BASE_URL` host-only, and set `WEBAPP_PORT` when you want a fixed Django port.
 
-5. Run the Django migrations.
+6. Run the Django migrations.
 
 ```bash
 python manage.py migrate
 ```
 
-6. Verify the local runtime and create the default admin identity.
+7. Verify the local runtime and create the default admin identity.
 
 ```bash
 python manage.py bootstrap_local_runtime
 ```
 
-7. Start the app.
+8. Start the app.
 
 ```bash
-python manage.py runserver
+python manage.py runserver 8000
 ```
 
-8. Sign in with the local email from `conf/config.json` and the password from `conf/secrets.json`.
+9. Sign in with the local email from `conf/config.json` and the password from `conf/secrets.json`.
 
 If `LOCAL_AUTH_ENABLED` is set to `false` in `conf/config.json`, Erie Iron auto-signs in as `LOCAL_ADMIN_EMAIL` and skips the login screen.
 

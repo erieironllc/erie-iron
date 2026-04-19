@@ -41,6 +41,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 import settings
 from erieiron_common.json_encoder import ErieIronJSONEncoder
+from erieiron_common import settings_utils
 
 UUID_NULL_OBJECT = uuid.UUID('11111111-1111-1111-1111-111111111111')
 
@@ -1805,7 +1806,7 @@ def safe_filename(s, replacement="_", max_length=255):
 
 
 def build_absolute_uri(page=""):
-    return f"{settings.BASE_URL}/{page}"
+    return settings_utils.join_url_path(settings.RUNTIME_BASE_URL, page)
 
 
 def copy_missing_files(src_dir, destination_dir):

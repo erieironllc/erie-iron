@@ -5,10 +5,10 @@ from django.db import transaction
 from django.db.models import F, Value
 from django.db.models.functions import Coalesce
 
-import settings
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import Task
 from erieiron_common import aws_utils
+from erieiron_common import common
 from erieiron_common.enums import PubSubMessageType, TaskType
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
@@ -196,7 +196,7 @@ Task {task.id}: {task.description} FAILED
         body=f"""
 <h3>TaskID</h3>{task.id}<hr>
 
-{settings.BASE_URL}/task/task_build_dev_runtime_container
+{common.build_absolute_uri("task/task_build_dev_runtime_container")}
 
 <h3>Error</h3><pre>{err}</pre><hr>
 

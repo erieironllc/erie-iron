@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import decouple
 
@@ -178,3 +180,85 @@ def default_str(s, default_val=""):
         return default_val
     else:
         return s
+
+
+def _build_url_netloc(parsed_url, port: int | None) -> str:
+    hostname = parsed_url.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+
+    auth = ""
+    if parsed_url.username:
+        auth = parsed_url.username
+        if parsed_url.password:
+            auth = f"{auth}:{parsed_url.password}"
+        auth = f"{auth}@"
+
+    if port is None:
+        return f"{auth}{hostname}"
+    return f"{auth}{hostname}:{port}"
+
+
+def set_url_port(url: str, port: int | None) -> str:
+    normalized_url = str(url).rstrip("/")
+    parsed_url = urlsplit(normalized_url)
+    if not parsed_url.scheme or parsed_url.hostname is None:
+        return normalized_url
+
+    return urlunsplit(
+        (
+            parsed_url.scheme,
+            _build_url_netloc(parsed_url, port),
+            parsed_url.path.rstrip("/"),
+            parsed_url.query,
+            parsed_url.fragment,
+        )
+    ).rstrip("/")
+
+
+def strip_url_port(url: str) -> str:
+    return set_url_port(url, None)
+
+
+def join_url_path(base_url: str, path: str = "") -> str:
+    normalized_base_url = str(base_url).rstrip("/")
+    normalized_path = str(path).lstrip("/")
+    if not normalized_path:
+        return normalized_base_url
+    return f"{normalized_base_url}/{normalized_path}"
+
+
+def apply_webapp_port_to_local_origins(origins: list[str], webapp_port: int | None) -> list[str]:
+    normalized_origins = []
+    for origin in origins:
+        normalized_origin = str(origin).rstrip("/")
+        parsed_origin = urlsplit(normalized_origin)
+        if webapp_port is not None and parsed_origin.hostname in {"localhost", "127.0.0.1"}:
+            normalized_origin = set_url_port(normalized_origin, webapp_port)
+        normalized_origins.append(normalized_origin)
+    return list(dict.fromkeys(normalized_origins))
+
+
+def get_runserver_port(default_port: int) -> int:
+    if len(sys.argv) < 2 or sys.argv[1] != "runserver":
+        return default_port
+
+    expects_value = False
+    for arg in sys.argv[2:]:
+        if expects_value:
+            expects_value = False
+            continue
+
+        if arg in {"--settings", "--pythonpath", "--verbosity", "-s", "-p", "-v"}:
+            expects_value = True
+            continue
+
+        if arg.startswith("--settings=") or arg.startswith("--pythonpath=") or arg.startswith("--verbosity="):
+            continue
+
+        if arg.startswith("-"):
+            continue
+
+        return int(arg.rsplit(":", 1)[-1])
+
+    return default_port

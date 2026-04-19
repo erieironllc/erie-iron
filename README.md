@@ -54,6 +54,7 @@ Before running that script:
 1. Copy `conf/config.example.json` to `conf/config.json`.
 2. Copy `conf/secrets.example.json` to `conf/secrets.json`.
 3. Replace every `replace-me` value in both files.
+4. Keep `BASE_URL` host-only, and set `WEBAPP_PORT` if you want a fixed Django port.
 
 The local profile uses:
 
@@ -76,7 +77,7 @@ cp conf/config.example.json conf/config.json
 cp conf/secrets.example.json conf/secrets.json
 python manage.py migrate
 python manage.py bootstrap_local_runtime
-python manage.py runserver
+python manage.py runserver 8000
 ```
 
 If `LOCAL_AUTH_ENABLED` is `true`, sign in with the local email from `conf/config.json` and the password from `conf/secrets.json`. If it is `false`, Erie Iron auto-signs in as `LOCAL_ADMIN_EMAIL`.

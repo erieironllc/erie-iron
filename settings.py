@@ -20,6 +20,7 @@ settings_utils.sync_config_to_env(
         ("ERIEIRON_LOCAL_CONFIG_FILE", "ERIEIRON_LOCAL_CONFIG_FILE"),
         ("ERIEIRON_LOCAL_SECRETS_FILE", "ERIEIRON_LOCAL_SECRETS_FILE"),
         ("LOCAL_DB_NAME", "LOCAL_DB_NAME"),
+        ("WEBAPP_PORT", "WEBAPP_PORT"),
         ("ERIEIRON_DB_HOST", "ERIEIRON_DB_HOST"),
         ("ERIEIRON_DB_NAME", "ERIEIRON_DB_NAME"),
         ("ERIEIRON_DB_PORT", "ERIEIRON_DB_PORT"),
@@ -61,7 +62,13 @@ STRIPE_WEBHOOK_SECRET_ARN = "TODO"
 SELF_DRIVING_IAC_PROVIDER = os.getenv("SELF_DRIVING_IAC_PROVIDER", "opentofu").lower()
 TOFU_BIN = os.environ.get("OPENTOFU_BIN", "tofu")
 
-BASE_URL = config.get("BASE_URL", "http://localhost:8000")
+CONFIGURED_WEBAPP_PORT = config("WEBAPP_PORT", default=8000, cast=int)
+WEBAPP_PORT = settings_utils.get_runserver_port(CONFIGURED_WEBAPP_PORT)
+BASE_URL = settings_utils.strip_url_port(config.get("BASE_URL", "http://localhost"))
+RUNTIME_BASE_URL = settings_utils.set_url_port(
+    BASE_URL,
+    WEBAPP_PORT if ERIEIRON_RUNTIME_PROFILE == "local" else None,
+)
 STATIC_COMPILED_DIR = config('STATIC_COMPILED_DIR')
 REQUIRED_ACCOUNT_NAME = config('REQUIRED_ACCOUNT_NAME', default="Erie Iron LLC", cast=str)
 ALLOW_MPS_DEVICE = config('ALLOW_MPS_DEVICE', default=False, cast=bool)
@@ -140,10 +147,17 @@ ALLOWED_HOSTS = [
 if ERIEIRON_RUNTIME_PROFILE == "local":
     ALLOWED_HOSTS.append("host.docker.internal")
 
-CSRF_TRUSTED_ORIGINS = config(
-    'CSRF_TRUSTED_ORIGINS',
-    default="https://erieironllc.com,https://*.erieironllc.com",
-    cast=Csv()
+_csrf_default_origins = "https://erieironllc.com,https://*.erieironllc.com"
+if ERIEIRON_RUNTIME_PROFILE == "local":
+    _csrf_default_origins = "http://localhost,http://127.0.0.1"
+
+CSRF_TRUSTED_ORIGINS = settings_utils.apply_webapp_port_to_local_origins(
+    config(
+        'CSRF_TRUSTED_ORIGINS',
+        default=_csrf_default_origins,
+        cast=Csv()
+    ),
+    WEBAPP_PORT if ERIEIRON_RUNTIME_PROFILE == "local" else None,
 )
 
 INSTALLED_APPS = [
@@ -298,11 +312,9 @@ CORS_ALLOWED_ORIGINS = [
 
 if DEBUG:
     CORS_ALLOWED_ORIGINS += [
-        BASE_URL.rstrip("/"),
-        'http://localhost:8000',
-        'http://127.0.0.1:8000',
-        'http://localhost:8024',
-        'http://127.0.0.1:8024',
+        RUNTIME_BASE_URL,
+        settings_utils.set_url_port('http://localhost', WEBAPP_PORT),
+        settings_utils.set_url_port('http://127.0.0.1', WEBAPP_PORT),
     ]
 CORS_ALLOWED_ORIGINS = list(dict.fromkeys(CORS_ALLOWED_ORIGINS))
 
