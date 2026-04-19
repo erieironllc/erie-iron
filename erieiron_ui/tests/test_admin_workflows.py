@@ -22,6 +22,8 @@ def test_view_admin_workflows_builds_selected_workflow_context():
         name="Admin Workflow",
         description="Workflow admin detail",
         is_active=True,
+        long_term_memory_enabled=True,
+        datastore_enabled=True,
     )
     source_step = WorkflowStep.objects.create(
         workflow=workflow,
@@ -85,6 +87,10 @@ def test_view_admin_workflows_builds_selected_workflow_context():
     assert selected_workflow_data["description"] == "Workflow admin detail"
     assert selected_workflow_data["source_kind"] == WorkflowDefinitionSourceKind.APPLICATION_REPO.value
     assert selected_workflow_data["is_active"] is True
+    assert selected_workflow_data["long_term_memory_enabled"] is True
+    assert selected_workflow_data["datastore_enabled"] is True
+    assert selected_workflow_data["datastore_backend"] == "SQLITE"
+    assert selected_workflow_data["datastore_backend_label"] == "SQLite"
     assert selected_workflow_data["steps"] == [
         {
             "id": str(source_step.id),
@@ -436,6 +442,30 @@ def test_save_workflow_step_form_updates_name_handler_and_emitted_message():
     assert step.handler_path == "erieiron_autonomous_agent.board_level_agents.corporate_development_agent.submit_business_opportunity"
     assert step.emits_message_type == PubSubMessageType.BUSINESS_IDEA_SUBMITTED.value
     assert step.sort_order == 5
+
+
+@pytest.mark.django_db
+def test_save_workflow_definition_form_updates_memory_and_datastore_settings():
+    workflow = WorkflowDefinition.objects.create(name="Editable Workflow")
+
+    updated_workflow = views._save_workflow_definition_form(
+        workflow_id=str(workflow.id),
+        name="Workflow With Memory",
+        description="Workflow settings updated",
+        is_active=False,
+        long_term_memory_enabled=True,
+        datastore_enabled=True,
+    )
+
+    workflow.refresh_from_db()
+
+    assert updated_workflow.id == workflow.id
+    assert workflow.name == "Workflow With Memory"
+    assert workflow.description == "Workflow settings updated"
+    assert workflow.is_active is False
+    assert workflow.long_term_memory_enabled is True
+    assert workflow.datastore_enabled is True
+    assert workflow.datastore_backend == "SQLITE"
 
 
 @pytest.mark.django_db

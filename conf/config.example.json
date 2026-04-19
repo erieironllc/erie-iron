@@ -1,10 +1,11 @@
 {
   "APPLICATION_REPO": "replace-me",
-  "BASE_URL": "http://localhost:8000",
+"BASE_URL": "http://localhost:8000",
+"WEBAPP_PORT": 8000,
   "AWS_ACCOUNT_ID": "000000000000",
   "AWS_DEFAULT_REGION_NAME": "us-west-2",
   "STATIC_COMPILED_DIR": "erieiron_ui/static/compiled",
-  "CSRF_TRUSTED_ORIGINS": "http://localhost:8000,http://127.0.0.1:8000",
+  "CSRF_TRUSTED_ORIGINS": "http://localhost,http://127.0.0.1",
   "START_MESSAGE_QUEUE_PROCESSOR": true,
   "MESSAGE_QUEUE_ENV": "local",
   "ERIEIRON_RUNTIME_PROFILE": "local",

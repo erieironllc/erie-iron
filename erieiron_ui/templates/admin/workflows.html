@@ -37,6 +37,12 @@
                                 <span class="badge text-bg-dark">{{ selected_workflow_data.step_count }} step{{ selected_workflow_data.step_count|pluralize }}</span>
                                 <span class="badge text-bg-dark">{{ selected_workflow_data.external_trigger_count }} external trigger{{ selected_workflow_data.external_trigger_count|pluralize }}</span>
                                 <span class="badge text-bg-dark">{{ selected_workflow_data.connection_count }} connection{{ selected_workflow_data.connection_count|pluralize }}</span>
+                                <span class="badge {% if selected_workflow.long_term_memory_enabled %}text-bg-info{% else %}text-bg-secondary{% endif %}">
+                                    {% if selected_workflow.long_term_memory_enabled %}Long-term memory on{% else %}Long-term memory off{% endif %}
+                                </span>
+                                <span class="badge {% if selected_workflow.datastore_enabled %}text-bg-info{% else %}text-bg-secondary{% endif %}">
+                                    {% if selected_workflow.datastore_enabled %}{{ selected_workflow_data.datastore_backend_label }} datastore{% else %}Datastore off{% endif %}
+                                </span>
                             </div>
                         </div>
                         <div class="workflow-diagram__card-actions d-flex flex-wrap gap-2">
@@ -218,11 +224,31 @@
                         <label for="workflow-description" class="form-label">Description</label>
                         <textarea class="form-control" id="workflow-description" name="description" rows="4"></textarea>
                     </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="workflow-is-active" name="is_active" checked>
-                        <label class="form-check-label" for="workflow-is-active">
-                            Active
-                        </label>
+                    <div class="d-flex flex-column gap-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="workflow-is-active" name="is_active" checked>
+                            <label class="form-check-label" for="workflow-is-active">
+                                Active
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="workflow-long-term-memory-enabled" name="long_term_memory_enabled">
+                            <label class="form-check-label" for="workflow-long-term-memory-enabled">
+                                Enable long-term memory
+                            </label>
+                            <div class="form-text">
+                                Keeps workflow memory inside the workflow application sandbox instead of Erie Iron platform memory.
+                            </div>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="workflow-datastore-enabled" name="datastore_enabled">
+                            <label class="form-check-label" for="workflow-datastore-enabled">
+                                Enable workflow datastore
+                            </label>
+                            <div class="form-text">
+                                Uses a separate key-value datastore for the workflow application. SQLite is the default backend.
+                            </div>
+                        </div>
                     </div>
                 </form>
             </div>
@@ -617,6 +643,8 @@ $(document).ready(function() {
             $('#workflow-name').val('');
             $('#workflow-description').val('');
             $('#workflow-is-active').prop('checked', true);
+            $('#workflow-long-term-memory-enabled').prop('checked', false);
+            $('#workflow-datastore-enabled').prop('checked', false);
             $('[data-role="workflow-submit"]').text('Add Workflow');
             this.workflowModal.show();
         },
@@ -633,6 +661,8 @@ $(document).ready(function() {
             $('#workflow-name').val(workflow.name);
             $('#workflow-description').val(workflow.description || '');
             $('#workflow-is-active').prop('checked', Boolean(workflow.is_active));
+            $('#workflow-long-term-memory-enabled').prop('checked', Boolean(workflow.long_term_memory_enabled));
+            $('#workflow-datastore-enabled').prop('checked', Boolean(workflow.datastore_enabled));
             $('[data-role="workflow-submit"]').text('Save Workflow');
             this.workflowModal.show();
         },
@@ -646,7 +676,9 @@ $(document).ready(function() {
                     workflow_id: $('#workflow-id').val(),
                     name: $('#workflow-name').val().trim(),
                     description: $('#workflow-description').val().trim(),
-                    is_active: $('#workflow-is-active').is(':checked')
+                    is_active: $('#workflow-is-active').is(':checked'),
+                    long_term_memory_enabled: $('#workflow-long-term-memory-enabled').is(':checked'),
+                    datastore_enabled: $('#workflow-datastore-enabled').is(':checked')
                 },
                 (response) => {
                     if (response.success) {
