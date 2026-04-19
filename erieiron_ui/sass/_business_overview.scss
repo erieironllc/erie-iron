@@ -150,6 +150,226 @@ $overview-roots: (
   @include overview-component($root);
 }
 
+.task-prompt-improvements {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+
+  &__hero,
+  &__panel {
+    padding: 2rem;
+    border-radius: 1.25rem;
+    border: 1px solid rgba($primary, 0.14);
+    background: linear-gradient(180deg, rgba($nav-bg, 0.96), rgba($sidebar-bg, 0.92));
+    box-shadow: 0 24px 36px rgba($nav-bg, 0.35);
+  }
+
+  &__hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    background: linear-gradient(135deg, rgba($nav-bg, 0.98), rgba($primary, 0.18));
+  }
+
+  &__hero-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    flex: 1 1 420px;
+    min-width: 0;
+  }
+
+  &__eyebrow {
+    @extend .erie-label;
+    color: rgba($light, 0.68);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: clamp(1.85rem, 2.5vw, 2.6rem);
+    font-weight: 700;
+    color: $light;
+  }
+
+  &__summary {
+    margin: 0;
+    font-size: 1.02rem;
+    line-height: 1.75;
+    color: rgba($light, 0.86);
+  }
+
+  &__hero-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    align-items: flex-end;
+    flex: 0 1 320px;
+  }
+
+  &__hero-meta {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1.25rem;
+    border-radius: 1rem;
+    border: 1px solid rgba($primary, 0.16);
+    background: rgba($nav-bg, 0.62);
+  }
+
+  &__hero-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  &__hero-meta-label,
+  &__metric-label {
+    @extend .erie-label;
+    color: rgba($light, 0.62);
+  }
+
+  &__hero-meta-value,
+  &__metric-value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $light;
+  }
+
+  &__panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  &__panel-header,
+  &__section-header,
+  &__proposal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  &__panel-title,
+  &__section-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba($light, 0.88);
+  }
+
+  &__panel-subtitle {
+    margin: 0.35rem 0 0;
+    color: rgba($light, 0.68);
+  }
+
+  &__metric-grid,
+  &__detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+  }
+
+  &__metric-card,
+  &__detail-card,
+  &__summary-block,
+  &__candidate-block,
+  &__execution-item,
+  &__proposal {
+    border-radius: 1rem;
+    border: 1px solid rgba($primary, 0.12);
+    background: rgba($nav-bg, 0.72);
+    box-shadow: inset 0 0 0 1px rgba($primary, 0.04);
+  }
+
+  &__metric-card,
+  &__detail-card,
+  &__summary-block,
+  &__candidate-block,
+  &__execution-item {
+    padding: 1.15rem 1.25rem;
+  }
+
+  &__metric-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 148px;
+  }
+
+  &__metric-note {
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: rgba($light, 0.66);
+  }
+
+  &__inline-note,
+  &__empty-state {
+    padding: 1rem 1.25rem;
+    border-radius: 1rem;
+    border: 1px dashed rgba($primary, 0.24);
+    background: rgba($nav-bg, 0.54);
+    color: rgba($light, 0.74);
+  }
+
+  &__execution-section,
+  &__proposal-list,
+  &__proposal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  &__execution-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  &__execution-meta {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    color: rgba($light, 0.68);
+    font-size: 0.92rem;
+  }
+
+  &__proposal {
+    overflow: hidden;
+  }
+
+  &__proposal-header {
+    padding: 1.15rem 1.25rem;
+    border-bottom: 1px solid rgba($primary, 0.1);
+    background: linear-gradient(180deg, rgba($primary, 0.08), rgba($nav-bg, 0.08));
+  }
+
+  &__proposal-body {
+    padding: 1.25rem;
+  }
+
+  &__prompt-text {
+    margin: 0;
+    padding: 1rem 1.1rem;
+    border-radius: 0.9rem;
+    border: 1px solid rgba($primary, 0.14);
+    background: rgba($dark, 0.92);
+    color: $light;
+    font-family: $font-mono;
+    font-size: 0.93rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+}
+
 @media (max-width: 768px) {
   @each $root in $overview-roots {
     #{$root} {
@@ -168,6 +388,33 @@ $overview-roots: (
       &__section {
         padding: 1.5rem;
       }
+    }
+  }
+
+  .task-prompt-improvements {
+    &__hero,
+    &__panel {
+      padding: 1.5rem;
+    }
+
+    &__hero-actions {
+      width: 100%;
+      align-items: stretch;
+      flex-basis: auto;
+    }
+
+    &__hero-meta,
+    &__proposal-body,
+    &__proposal-header,
+    &__metric-card,
+    &__detail-card,
+    &__summary-block,
+    &__candidate-block,
+    &__execution-item,
+    &__inline-note,
+    &__empty-state {
+      padding-left: 1rem;
+      padding-right: 1rem;
     }
   }
 }

@@ -105,6 +105,16 @@
                 </div>
 
                 <div class="mb-3">
+                    <label for="prompt_improvement_schedule" class="form-label">Prompt Improvement Schedule</label>
+                    <select name="prompt_improvement_schedule" id="prompt_improvement_schedule" class="form-select">
+                        {% for value, label in task_prompt_improvement_schedule_choices %}
+                            <option value="{{ value }}"
+                                    {% if task.prompt_improvement_schedule == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="mb-3">
                     <label for="timeout_seconds" class="form-label">Timeout (seconds)</label>
                     <input type="number" name="timeout_seconds" id="timeout_seconds" class="form-control"
                            value="{% if task.timeout_seconds %}{{ task.timeout_seconds }}{% endif %}">

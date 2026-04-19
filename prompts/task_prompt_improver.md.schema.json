@@ -1,0 +1,37 @@
+{
+  "title": "Task Prompt Improver Output Schema",
+  "type": "object",
+  "required": [
+    "summary",
+    "candidate_prompt_markdown",
+    "change_notes",
+    "guardrails",
+    "rollback_signals"
+  ],
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "candidate_prompt_markdown": {
+      "type": "string"
+    },
+    "change_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "guardrails": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollback_signals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

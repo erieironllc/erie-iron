@@ -1,8 +1,12 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import ValidationError
 
+from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
     Business,
@@ -15,6 +19,7 @@ from erieiron_common.enums import (
     BusinessIdeaSource,
     InitiativeType,
     Level,
+    LlmModel,
     TaskImplementationSourceKind,
     TaskType,
 )
@@ -44,6 +49,16 @@ def _make_task() -> Task:
         risk_notes="Keep provenance stable",
         completion_criteria=["Implementation versions persist"],
     )
+
+
+class _DummyLlmResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.text = json.dumps(payload)
+        self.model = LlmModel.OPENAI_GPT_5_MINI
+
+    def json(self):
+        return dict(self._payload)
 
 
 @pytest.mark.django_db
@@ -156,6 +171,62 @@ def test_create_execution_snapshots_prompt_file_provenance():
         "application_repo_revision": "abc123",
     }
     mock_get_commit_for_ref.assert_called_once_with("https://github.com/example/application-repo", "main")
+
+
+@pytest.mark.django_db
+def test_run_repo_backed_prompt_task_prefers_prompt_override(tmp_path):
+    task = _make_task()
+    Task.objects.filter(id=task.id).update(output_fields=["answer"])
+    task.refresh_from_db(fields=["output_fields"])
+    version = task.create_implementation_version(
+        source_kind=TaskImplementationSourceKind.LLM_PROMPT,
+        application_repo_file_path="prompts/run_task.md",
+        application_repo_ref="main",
+        source_metadata={"prompt_override": "Use the approved override prompt."},
+    )
+    self_driving_task = SelfDrivingTask.objects.create(
+        business=task.initiative.business,
+        main_name="task_impl_versions",
+        sandbox_path=str(tmp_path / "sandbox"),
+        goal="Run the task",
+        task=task,
+    )
+    iteration = SelfDrivingTaskIteration.objects.create(
+        self_driving_task=self_driving_task,
+        version_number=1,
+        planning_model="gpt-5.4",
+        coding_model="gpt-5.4-mini",
+    )
+    prompt_path = tmp_path / "prompts" / "run_task.md"
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Stale prompt text", encoding="utf-8")
+
+    with patch(
+        "erieiron_autonomous_agent.models.GitWrapper.get_commit_for_ref",
+        return_value=("abc123", "latest commit"),
+    ):
+        task_execution = task.create_execution(iteration=iteration)
+
+    config = SimpleNamespace(
+        task=task,
+        current_iteration=iteration,
+        sandbox_root_dir=Path(tmp_path),
+    )
+
+    with patch.object(
+        coding_agent,
+        "llm_chat",
+        return_value=_DummyLlmResponse({"answer": "ok"}),
+    ) as mock_llm_chat:
+        output_data, model_metadata = coding_agent._run_repo_backed_prompt_task(
+            config,
+            task_execution,
+            version,
+        )
+
+    assert output_data == {"answer": "ok"}
+    assert model_metadata["prompt_file_path"] == "prompts/run_task.md"
+    assert mock_llm_chat.call_args.args[1][0].text == "Use the approved override prompt."
 
 
 @pytest.mark.django_db

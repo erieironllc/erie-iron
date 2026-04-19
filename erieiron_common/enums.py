@@ -690,6 +690,18 @@ class TaskImplementationSourceKind(ErieEnum):
     CODE_FILE = "code_file"
 
 
+class TaskPromptImprovementStatus(ErieEnum):
+    PENDING_REVIEW = "pending_review"
+    REJECTED = "rejected"
+    APPLIED = "applied"
+    ROLLED_BACK = "rolled_back"
+
+
+class TaskPromptImprovementTrigger(ErieEnum):
+    MANUAL = "manual"
+    SCHEDULED = "scheduled"
+
+
 class BuildStep(ErieEnum):
     BUILD_CONTAINER = auto()
     BUILD_LAMBDAS = auto()

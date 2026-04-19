@@ -1,0 +1,290 @@
+{% load erieiron_common_tags %}
+
+<div class="tab-pane-content task-prompt-improvements">
+    <section class="task-prompt-improvements__hero">
+        <div class="task-prompt-improvements__hero-copy">
+            <span class="task-prompt-improvements__eyebrow">Task Self-Improvement</span>
+            <h2 class="task-prompt-improvements__title">{{ task.get_name }}</h2>
+            <div class="task-prompt-improvements__summary markdown-container">
+                {% if task.description %}
+                    {{ task.description|markdown }}
+                {% else %}
+                    Review prompt revisions, evaluator signals, and approval state before promoting a new prompt version.
+                {% endif %}
+            </div>
+        </div>
+        <div class="task-prompt-improvements__hero-actions">
+            <div class="task-prompt-improvements__hero-meta">
+                <div class="task-prompt-improvements__hero-meta-item">
+                    <span class="task-prompt-improvements__hero-meta-label">Schedule</span>
+                    <span class="task-prompt-improvements__hero-meta-value">{{ task.prompt_improvement_schedule|label }}</span>
+                </div>
+                <div class="task-prompt-improvements__hero-meta-item">
+                    <span class="task-prompt-improvements__hero-meta-label">Last generated</span>
+                    <span class="task-prompt-improvements__hero-meta-value">
+                        {{ task.last_prompt_improvement_at|default_if_none:"Not generated yet" }}
+                    </span>
+                </div>
+            </div>
+            {% if task.implementation_source_kind == "llm_prompt" %}
+                <form method="post" action="{% url 'action_generate_task_prompt_improvement' task.id %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-primary">Generate Prompt Update</button>
+                </form>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="task-prompt-improvements__panel">
+        <div class="task-prompt-improvements__panel-header">
+            <div>
+                <h5 class="task-prompt-improvements__panel-title">Current Prompt Loop</h5>
+                <p class="task-prompt-improvements__panel-subtitle">
+                    Active prompt provenance, evaluator source, and recent execution scores used to review prompt changes.
+                </p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                {% for status_summary in prompt_improvement_status_counts %}
+                    <span class="badge rounded-pill {{ status_summary.badge_class }}">
+                        {{ status_summary.status|label }} {{ status_summary.count }}
+                    </span>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="task-prompt-improvements__metric-grid">
+            <article class="task-prompt-improvements__metric-card">
+                <span class="task-prompt-improvements__metric-label">Prompt Source</span>
+                {% if active_implementation_version %}
+                    <strong class="task-prompt-improvements__metric-value">{{ active_implementation_version.source_label }}</strong>
+                    <span class="task-prompt-improvements__metric-note">
+                        {% if active_implementation_version.is_prompt_override %}
+                            Active version is serving an approved prompt override.
+                        {% else %}
+                            Active version is reading from the application repo file.
+                        {% endif %}
+                    </span>
+                {% else %}
+                    <strong class="task-prompt-improvements__metric-value">No active prompt source</strong>
+                {% endif %}
+            </article>
+
+            <article class="task-prompt-improvements__metric-card">
+                <span class="task-prompt-improvements__metric-label">Evaluator</span>
+                {% if active_implementation_version %}
+                    <strong class="task-prompt-improvements__metric-value">{{ active_implementation_version.evaluator_label }}</strong>
+                    {% if active_implementation_version.output_schema_label %}
+                        <span class="task-prompt-improvements__metric-note">
+                            Output schema: {{ active_implementation_version.output_schema_label }}
+                        </span>
+                    {% endif %}
+                {% else %}
+                    <strong class="task-prompt-improvements__metric-value">Default</strong>
+                {% endif %}
+            </article>
+
+            <article class="task-prompt-improvements__metric-card">
+                <span class="task-prompt-improvements__metric-label">Latest Score</span>
+                {% if latest_prompt_improvement_execution and latest_prompt_improvement_execution.evaluation_score != None %}
+                    <strong class="task-prompt-improvements__metric-value">
+                        {{ latest_prompt_improvement_execution.evaluation_score|floatformat:2 }}
+                    </strong>
+                    <span class="task-prompt-improvements__metric-note">
+                        {{ latest_prompt_improvement_execution.executed_time }}
+                    </span>
+                {% else %}
+                    <strong class="task-prompt-improvements__metric-value">No scored runs yet</strong>
+                {% endif %}
+            </article>
+
+            <article class="task-prompt-improvements__metric-card">
+                <span class="task-prompt-improvements__metric-label">Recent Average</span>
+                {% if recent_prompt_improvement_average_score != None %}
+                    <strong class="task-prompt-improvements__metric-value">
+                        {{ recent_prompt_improvement_average_score|floatformat:2 }}
+                    </strong>
+                    <span class="task-prompt-improvements__metric-note">
+                        {{ recent_prompt_improvement_executions|length }} completed run{{ recent_prompt_improvement_executions|length|pluralize }}
+                    </span>
+                {% else %}
+                    <strong class="task-prompt-improvements__metric-value">No completed runs</strong>
+                {% endif %}
+            </article>
+        </div>
+
+        {% if active_implementation_version and active_implementation_version.prompt_override %}
+            <div class="task-prompt-improvements__inline-note">
+                The active prompt text is currently sourced from an approved override stored in version history.
+            </div>
+        {% endif %}
+
+        <div class="task-prompt-improvements__execution-section">
+            <div class="task-prompt-improvements__section-header">
+                <h6 class="task-prompt-improvements__section-title">Recent Eval Signals</h6>
+            </div>
+            {% if recent_prompt_improvement_executions %}
+                <div class="task-prompt-improvements__execution-list">
+                    {% for execution in recent_prompt_improvement_executions %}
+                        <article class="task-prompt-improvements__execution-item">
+                            <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                                <div class="d-flex flex-wrap gap-2 align-items-center">
+                                    <span class="badge rounded-pill {{ execution.score_badge_class }}">
+                                        {% if execution.evaluation_score != None %}
+                                            Score {{ execution.evaluation_score|floatformat:2 }}
+                                        {% else %}
+                                            No score
+                                        {% endif %}
+                                    </span>
+                                    {% if execution.version_label %}
+                                        <span class="badge rounded-pill text-bg-dark">{{ execution.version_label }}</span>
+                                    {% endif %}
+                                    <span class="badge rounded-pill text-bg-secondary">{{ execution.status|label }}</span>
+                                </div>
+                                <small class="text-muted">{{ execution.executed_time }}</small>
+                            </div>
+                            <div class="task-prompt-improvements__execution-meta">
+                                {% if execution.display_model %}
+                                    <span>Model: {{ execution.display_model }}</span>
+                                {% endif %}
+                                {% if execution.error_msg %}
+                                    <span class="text-danger">Execution captured an error</span>
+                                {% endif %}
+                            </div>
+                        </article>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="task-prompt-improvements__empty-state">
+                    No completed executions yet. Run the task before reviewing prompt changes.
+                </div>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="task-prompt-improvements__panel">
+        <div class="task-prompt-improvements__panel-header">
+            <div>
+                <h5 class="task-prompt-improvements__panel-title">Prompt Proposals</h5>
+                <p class="task-prompt-improvements__panel-subtitle">
+                    Generated prompt candidates, supporting notes, and approval controls.
+                </p>
+            </div>
+        </div>
+
+        {% if prompt_improvements %}
+            <div class="task-prompt-improvements__proposal-list">
+                {% for improvement in prompt_improvements %}
+                    <article class="task-prompt-improvements__proposal">
+                        <header class="task-prompt-improvements__proposal-header">
+                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                <span class="badge rounded-pill {{ improvement.status_badge_class }}">{{ improvement.status|label }}</span>
+                                <span class="badge rounded-pill {{ improvement.trigger_badge_class }}">{{ improvement.trigger_source|label }}</span>
+                                {% if improvement.base_version_label %}
+                                    <span class="badge rounded-pill text-bg-dark">{{ improvement.base_version_label }}</span>
+                                {% endif %}
+                                {% if improvement.applied_version_label %}
+                                    <span class="badge rounded-pill text-bg-success">{{ improvement.applied_version_label }}</span>
+                                {% endif %}
+                            </div>
+                            <small class="text-muted">{{ improvement.created_at }}</small>
+                        </header>
+
+                        <div class="task-prompt-improvements__proposal-body">
+                            <section class="task-prompt-improvements__summary-block">
+                                <div class="task-prompt-improvements__section-header">
+                                    <h6 class="task-prompt-improvements__section-title">Summary</h6>
+                                    {% if improvement.generated_llm_request_url %}
+                                        <a href="{{ improvement.generated_llm_request_url }}">Open LLM request</a>
+                                    {% endif %}
+                                </div>
+                                {% if improvement.summary %}
+                                    <p class="mb-0">{{ improvement.summary }}</p>
+                                {% else %}
+                                    <p class="mb-0 text-muted">No summary was returned for this proposal.</p>
+                                {% endif %}
+                            </section>
+
+                            {% if improvement.change_notes or improvement.guardrails or improvement.rollback_signals %}
+                                <div class="task-prompt-improvements__detail-grid">
+                                    {% if improvement.change_notes %}
+                                        <section class="task-prompt-improvements__detail-card">
+                                            <h6 class="task-prompt-improvements__section-title">Change Notes</h6>
+                                            <ul class="mb-0">
+                                                {% for note in improvement.change_notes %}
+                                                    <li>{{ note }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </section>
+                                    {% endif %}
+
+                                    {% if improvement.guardrails %}
+                                        <section class="task-prompt-improvements__detail-card">
+                                            <h6 class="task-prompt-improvements__section-title">Guardrails</h6>
+                                            <ul class="mb-0">
+                                                {% for item in improvement.guardrails %}
+                                                    <li>{{ item }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </section>
+                                    {% endif %}
+
+                                    {% if improvement.rollback_signals %}
+                                        <section class="task-prompt-improvements__detail-card">
+                                            <h6 class="task-prompt-improvements__section-title">Rollback Signals</h6>
+                                            <ul class="mb-0">
+                                                {% for item in improvement.rollback_signals %}
+                                                    <li>{{ item }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </section>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+
+                            <section class="task-prompt-improvements__candidate-block">
+                                <div class="task-prompt-improvements__section-header">
+                                    <h6 class="task-prompt-improvements__section-title">Candidate Prompt</h6>
+                                </div>
+                                <pre class="task-prompt-improvements__prompt-text">{{ improvement.candidate_prompt_text }}</pre>
+                            </section>
+
+                            {% if improvement.review_notes %}
+                                <section class="task-prompt-improvements__detail-card">
+                                    <h6 class="task-prompt-improvements__section-title">Review Notes</h6>
+                                    <pre class="task-prompt-improvements__prompt-text">{{ improvement.review_notes }}</pre>
+                                </section>
+                            {% endif %}
+
+                            {% if improvement.status == "pending_review" %}
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <form method="post" action="{% url 'action_apply_task_prompt_improvement' improvement.id %}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="review_notes" value="Applied from task prompt updates tab">
+                                        <button type="submit" class="btn btn-success">Apply</button>
+                                    </form>
+                                    <form method="post" action="{% url 'action_reject_task_prompt_improvement' improvement.id %}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="review_notes" value="Rejected from task prompt updates tab">
+                                        <button type="submit" class="btn btn-outline-danger">Reject</button>
+                                    </form>
+                                </div>
+                            {% elif improvement.status == "applied" %}
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <form method="post" action="{% url 'action_rollback_task_prompt_improvement' improvement.id %}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="review_notes" value="Rolled back from task prompt updates tab">
+                                        <button type="submit" class="btn btn-warning">Rollback</button>
+                                    </form>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="task-prompt-improvements__empty-state">
+                No prompt updates have been generated for this task.
+            </div>
+        {% endif %}
+    </section>
+</div>
