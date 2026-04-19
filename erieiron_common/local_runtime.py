@@ -1,30 +1,89 @@
+import json
 import os
 from pathlib import Path
 
 
 LOCAL_RUNTIME_PROFILE = "local"
-LOCAL_RUNTIME_ENVS = frozenset({"dev_local", "local"})
+DEFAULT_LOCAL_CONFIG_PATH = "conf/config.json"
+DEFAULT_LOCAL_SECRETS_PATH = "conf/secrets.json"
 
 
 def is_local_runtime() -> bool:
     runtime_profile = os.getenv("ERIEIRON_RUNTIME_PROFILE")
     if runtime_profile:
         return runtime_profile.strip().lower() == LOCAL_RUNTIME_PROFILE
-    return os.getenv("ERIEIRON_ENV", "").strip().lower() in LOCAL_RUNTIME_ENVS
+
+    try:
+        config_payload = load_local_runtime_json(get_local_config_path(), "local config")
+    except Exception:
+        return False
+
+    configured_profile = config_payload.get("ERIEIRON_RUNTIME_PROFILE", "")
+    return str(configured_profile).strip().lower() == LOCAL_RUNTIME_PROFILE
+
+
+def resolve_local_runtime_path(configured_path: str | None, default_path: str) -> Path:
+    runtime_path = Path(configured_path or default_path)
+    if runtime_path.is_absolute():
+        return runtime_path
+    return (Path.cwd() / runtime_path).resolve()
+
+
+def load_local_runtime_json(path: Path, file_label: str) -> dict:
+    if not path.exists():
+        raise ValueError(f"{file_label} file not found: {path}")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{file_label} file must be a JSON object")
+
+    return payload
+
+
+def get_local_config_path() -> Path:
+    return resolve_local_runtime_path(
+        os.getenv("ERIEIRON_LOCAL_CONFIG_FILE"),
+        DEFAULT_LOCAL_CONFIG_PATH,
+    )
 
 
 def get_local_secrets_path() -> Path:
-    configured_path = os.getenv("ERIEIRON_LOCAL_SECRETS_FILE", "conf/local_secrets.json")
-    secrets_path = Path(configured_path)
-    if secrets_path.is_absolute():
-        return secrets_path
-    return (Path.cwd() / secrets_path).resolve()
+    return resolve_local_runtime_path(
+        os.getenv("ERIEIRON_LOCAL_SECRETS_FILE"),
+        DEFAULT_LOCAL_SECRETS_PATH,
+    )
+
+
+def get_local_config(config_name: str) -> dict:
+    config_path = get_local_config_path()
+    config_payload = load_local_runtime_json(config_path, "local config")
+    if config_name not in config_payload:
+        raise ValueError(
+            f"config '{config_name}' not found in local config file {config_path}"
+        )
+
+    config_value = config_payload[config_name]
+    if not isinstance(config_value, dict):
+        raise ValueError(f"config '{config_name}' must be a JSON object")
+
+    return config_value.copy()
+
+
+def get_local_config_value(config_name: str):
+    config_path = get_local_config_path()
+    config_payload = load_local_runtime_json(config_path, "local config")
+    if config_name not in config_payload:
+        raise ValueError(
+            f"config '{config_name}' not found in local config file {config_path}"
+        )
+
+    return config_payload[config_name]
 
 
 def get_local_auth_config() -> dict[str, str | bool]:
     import settings
 
-    email = settings.LOCAL_AUTH_EMAIL.strip().lower()
+    email = settings.LOCAL_ADMIN_EMAIL.strip().lower()
     name = settings.LOCAL_AUTH_NAME.strip() or email
     return {
         "enabled": bool(settings.LOCAL_AUTH_ENABLED),
@@ -34,7 +93,13 @@ def get_local_auth_config() -> dict[str, str | bool]:
     }
 
 
-def ensure_local_auth_identity():
+def local_admin_autologin_enabled() -> bool:
+    import settings
+
+    return is_local_runtime() and not bool(settings.LOCAL_AUTH_ENABLED)
+
+
+def ensure_local_admin_identity(require_password: bool = False):
     from django.contrib.auth import get_user_model
     from django.db import transaction
 
@@ -42,11 +107,9 @@ def ensure_local_auth_identity():
     from erieiron_common.models import Person
 
     auth_config = get_local_auth_config()
-    if not auth_config["enabled"]:
-        raise ValueError("local auth is not enabled")
     if not auth_config["email"]:
-        raise ValueError("LOCAL_AUTH_EMAIL must be configured")
-    if not auth_config["password"]:
+        raise ValueError("LOCAL_ADMIN_EMAIL must be configured")
+    if require_password and not auth_config["password"]:
         raise ValueError("LOCAL_AUTH_PASSWORD must be configured")
 
     user_model = get_user_model()
@@ -82,7 +145,7 @@ def ensure_local_auth_identity():
         if not user.is_superuser:
             user.is_superuser = True
             user_changed = True
-        if not user.check_password(auth_config["password"]):
+        if auth_config["password"] and not user.check_password(auth_config["password"]):
             user.set_password(auth_config["password"])
             user_changed = True
         if user_changed:
@@ -112,3 +175,11 @@ def ensure_local_auth_identity():
                 person.save()
 
     return user, person
+
+
+def ensure_local_auth_identity():
+    auth_config = get_local_auth_config()
+    if not auth_config["enabled"]:
+        raise ValueError("local auth is not enabled")
+
+    return ensure_local_admin_identity(require_password=True)

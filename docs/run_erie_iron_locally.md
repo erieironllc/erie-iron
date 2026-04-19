@@ -6,7 +6,7 @@ Fast path:
 ./scripts/run_erie_iron_locally.sh
 ```
 
-The script automates the setup flow below, uses a local Postgres service that exposes `pgvector`, creates the local database if needed, runs Django migrations if needed, and starts `runserver`. It stops early only if `conf/local_secrets.json` still contains the example placeholder values.
+The script automates the setup flow below, uses a local Postgres service that exposes `pgvector`, creates the local database if needed, verifies that Django migration files are present and already applied, and starts `runserver`. It stops early only if `conf/config.json` or `conf/secrets.json` still contains the example placeholder values or if you still need to run migrations manually.
 
 1. Install the local dependencies.
 
@@ -26,17 +26,14 @@ npm run compile-ui
 createdb erieiron_local
 ```
 
-3. Create the local secrets file and replace the placeholder values, including the application repo URL for this Erie Iron instance.
+3. Create the local runtime files and replace the placeholder values, including the application repo URL for this Erie Iron instance.
 
 ```bash
-cp conf/local_secrets.example.json conf/local_secrets.json
+cp conf/config.example.json conf/config.json
+cp conf/secrets.example.json conf/secrets.json
 ```
 
-4. Use the local runtime profile.
-
-```bash
-export ERIEIRON_ENV=dev_local
-```
+4. Confirm `conf/config.json` still has `"ERIEIRON_RUNTIME_PROFILE": "local"`.
 
 5. Run the Django migrations.
 
@@ -56,12 +53,14 @@ python manage.py bootstrap_local_runtime
 python manage.py runserver
 ```
 
-8. Sign in with the local email from `conf/.env.dev_local` and the password you configured there.
+8. Sign in with the local email from `conf/config.json` and the password from `conf/secrets.json`.
+
+If `LOCAL_AUTH_ENABLED` is set to `false` in `conf/config.json`, Erie Iron auto-signs in as `LOCAL_ADMIN_EMAIL` and skips the login screen.
 
 The local profile uses:
 
 - Postgres on `localhost:5432` via `postgresql@17`
-- `conf/local_secrets.json` instead of AWS Secrets Manager
-- `APPLICATION_REPO.url` in `conf/local_secrets.json` as the application repo URL that local task execution resolves against
+- `conf/config.json` for local platform configuration such as `APPLICATION_REPO`
+- `conf/secrets.json` instead of AWS Secrets Manager
 - local session-based login instead of Cognito
 - `python manage.py bootstrap_local_runtime --verify-only` to re-check the setup without changing users

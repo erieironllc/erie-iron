@@ -95,8 +95,8 @@ class TestAwsInterface(aws_utils.AwsInterface):
 def non_prod_required(function):
     @wraps(function)
     def wrap(*args, **kwargs):
-        if os.getenv("ERIEIRON_ENV") == "prod":
-            raise Exception("cannot use test utils from the prod env")
+        if os.getenv("ERIEIRON_RUNTIME_PROFILE", "").strip().lower() == "aws":
+            raise Exception("cannot use test utils from the aws runtime")
 
         return function(*args, **kwargs)
 

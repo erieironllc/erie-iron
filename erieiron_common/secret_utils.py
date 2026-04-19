@@ -5,7 +5,11 @@ import os
 import boto3
 from botocore.exceptions import ClientError
 
-from erieiron_common.local_runtime import get_local_secrets_path, is_local_runtime
+from erieiron_common.local_runtime import (
+    get_local_secrets_path,
+    is_local_runtime,
+    load_local_runtime_json,
+)
 
 
 def get_secret(secret_name: str, region_name: str = None) -> dict:
@@ -16,10 +20,7 @@ def get_secret(secret_name: str, region_name: str = None) -> dict:
 
 def get_local_secret(secret_name: str) -> dict:
     secrets_path = get_local_secrets_path()
-    if not secrets_path.exists():
-        raise ValueError(f"local secrets file not found: {secrets_path}")
-
-    secrets_payload = json.loads(secrets_path.read_text(encoding="utf-8"))
+    secrets_payload = load_local_runtime_json(secrets_path, "local secrets")
     if secret_name not in secrets_payload:
         raise ValueError(f"secret '{secret_name}' not found in local secrets file {secrets_path}")
 

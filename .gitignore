@@ -184,13 +184,15 @@ __pycache__/
 /node_modules/
 /erieiron_ui/static/compiled/
 /erieiron_businesses/
+/conf/config.json
+/conf/secrets.json
 /conf/local_secrets.json
 /.codex/
 /production_deploy_thoughts.md
 /.claude/
 /opentofu/workspaces/
 /opentofu/swizzled_modules/
-/.ai_coding/
 *.lock.hcl
 **/.terraform/
 /artifacts/
+/.ai_coding/

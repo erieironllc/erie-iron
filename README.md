@@ -1,146 +1,119 @@
-# Erie Iron Common
+# Erie Iron
 
-A comprehensive utilities package providing common infrastructure, utilities, and shared functionality for Erie Iron applications.
+Erie Iron is a local-first agent runtime for building, running, and improving autonomous workflows.
 
-## Features
+The project is centered on three ideas:
 
-- **Django Integration**: Models, utilities, and infrastructure for Django applications
-- **AWS Integration**: Comprehensive AWS utilities including S3, DynamoDB, CloudWatch, and more
-- **LLM APIs**: Unified interfaces for OpenAI, Anthropic Claude, Google Gemini, and other language models
-- **Message Queue**: PubSub messaging system for distributed application architecture
-- **Chat Engine**: Conversational AI infrastructure and chat management
-- **Common Utilities**: Shared functions for JSON encoding, date handling, caching, and more
+- run locally on a Mac mini or similar always-on machine
+- define workflows in the database instead of hardcoded Python graphs
+- make tasks measurable and self-improving through prompt history, execution audits, and evaluation scores
 
-## Installation
+## Product Goal
 
-Install from PyPI:
+Erie Iron should let an operator:
+
+- run the system locally with local PostgreSQL
+- create and manage multiple named workflows through metadata and UI
+- route work through workflow steps, triggers, and connections stored in the database
+- give each task a system prompt, prompt version history, and execution audit trail
+- evaluate task outcomes on a `0` to `1` scale
+- improve task prompts over time, either automatically or through the UI
+
+## Repository Layout
+
+- `erieiron_common/`
+  Shared enums, LLM adapters, AWS helpers, messaging, local runtime helpers, and other common utilities.
+- `erieiron_autonomous_agent/`
+  Workflow orchestration, coding agents, task models, workflow models, management commands, and iteration logic.
+- `erieiron_ui/`
+  Django views, templates, Backbone assets, and Sass styles for the operator UI.
+- `docs/`
+  Architecture notes, UI rules, local runtime documentation, and design docs.
+- `scripts/`
+  Helper scripts, including the local bootstrap path in `scripts/run_erie_iron_locally.sh`.
+
+## Core Runtime Model
+
+- local Django application for the UI and operator workflows
+- local PostgreSQL as the primary data store
+- database-backed workflow definitions for steps, triggers, and connections
+- task execution records that capture prompt version, model, and outcome
+- prompt improvement flows that use prior evaluations and execution history
+- shared LLM adapters, messaging, and agent orchestration in the existing modules
+
+## Local Development
+
+Fast path:
 
 ```bash
-pip install erieiron-common
+./scripts/run_erie_iron_locally.sh
 ```
 
-Or install with optional dependencies:
+Before running that script:
+
+1. Copy `conf/config.example.json` to `conf/config.json`.
+2. Copy `conf/secrets.example.json` to `conf/secrets.json`.
+3. Replace every `replace-me` value in both files.
+
+The local profile uses:
+
+- PostgreSQL on `localhost:5432`
+- `conf/config.json` for local platform configuration
+- `conf/secrets.json` instead of AWS Secrets Manager
+- local session-based auth instead of Cognito
+
+Detailed setup notes live in [docs/run_erie_iron_locally.md](docs/run_erie_iron_locally.md).
+
+If you want to run the steps manually instead of using the helper script:
 
 ```bash
-# Install with all AWS features
-pip install erieiron-common[aws]
-
-# Install with machine learning features
-pip install erieiron-common[ml]
-
-# Install with LLM API features
-pip install erieiron-common[llm]
-
-# Install with Google Cloud Platform features
-pip install erieiron-common[gcp]
-
-# Install with development tools
-pip install erieiron-common[dev]
-
-# Install everything
-pip install erieiron-common[all]
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+npm install
+npm run compile-ui
+cp conf/config.example.json conf/config.json
+cp conf/secrets.example.json conf/secrets.json
+python manage.py migrate
+python manage.py bootstrap_local_runtime
+python manage.py runserver
 ```
 
-Install from source:
+If `LOCAL_AUTH_ENABLED` is `true`, sign in with the local email from `conf/config.json` and the password from `conf/secrets.json`. If it is `false`, Erie Iron auto-signs in as `LOCAL_ADMIN_EMAIL`.
 
-```bash
-git clone https://github.com/erieironllc/erieiron.git
-cd erieiron-common
-pip install -e .
-```
+## Workflow Model
 
-## Quick Start
+Workflows are organized as reusable named definitions with:
 
-### Basic Usage
+- multiple named workflows
+- steps, triggers, and connections stored in the database
+- UI for creating and editing workflows
+- task routing driven by workflow metadata
 
-```python
-from erieiron_common import get_now, log_info
-from erieiron_common.enums import ErieEnum
+## Self-Improving Tasks
 
-# Use common utilities
-current_time = get_now()
-log_info("Application started")
+Each task is expected to support:
 
-# Use enum base class
-class MyEnum(ErieEnum):
-    OPTION_A = "OPTION_A"
-    OPTION_B = "OPTION_B"
-```
+- a system prompt
+- prompt version history
+- an evaluation method that returns a score from `0` to `1`
+- an execution audit trail that records prompt version, model, and outcome
+- scheduled or operator-managed prompt improvement based on task history
 
-### Django Integration
+## Useful Entry Points
 
-Add to your Django `INSTALLED_APPS`:
+- `python manage.py runserver`
+- `python manage.py bootstrap_local_runtime`
+- `python manage.py message_processor_daemon`
+- `npm run compile-ui`
 
-```python
-INSTALLED_APPS = [
-    # ... your apps
-    'erieiron_common',
-]
-```
+## Related Docs
 
-Use common models:
-
-```python
-from erieiron_common.models import BaseErieIronModel
-
-class MyModel(BaseErieIronModel):
-    name = models.CharField(max_length=100)
-    # Automatically gets 'erieiron_mymodel' as table name
-```
-
-### AWS Utilities
-
-```python
-from erieiron_common.aws_utils import get_aws_interface
-
-aws = get_aws_interface()
-aws.send_email(
-    subject="Test Email",
-    recipient="user@example.com",
-    body="Hello from Erie Iron!"
-)
-```
-
-### LLM APIs
-
-```python
-from erieiron_common.llm_apis import llm_interface
-from erieiron_common.llm_apis.llm_interface import LlmMessage
-from erieiron_common.enums import LlmMessageType
-
-messages = [
-    LlmMessage(LlmMessageType.USER, "Hello, how are you?")
-]
-
-response = llm_interface.chat(messages)
-print(response.text)
-```
-
-### Message Queue
-
-```python
-from erieiron_common.message_queue.pubsub_manager import PubSubManager
-from erieiron_common.enums import PubSubMessageType
-
-# Publish a message
-PubSubManager.publish(
-    PubSubMessageType.ANALYSIS_REQUESTED,
-    "business_123",
-    {"task": "analyze_business"}
-)
-```
-
-## Autonomous Agent IaC Provider
-
-- Toggle the IaC backend used by the autonomous agent with the `SELF_DRIVING_IAC_PROVIDER` environment variable (defaults to `opentofu`; set to `cloudformation` for the legacy path).
-- When OpenTofu is active, infrastructure stack records persist workspace metadata (workspace name, directory, and state file) in `InfrastructureStack.stack_arn` so downstream systems can resolve deployment state without CloudFormation ARNs.
-- The UI now surfaces an "IaC Logs" tab that renders OpenTofu plan/apply output alongside a fallback view for historical CloudFormation payloads.
+- [docs/architecture.md](docs/architecture.md)
+- [docs/high_level_architecture.md](docs/high_level_architecture.md)
+- [docs/ui_spec.md](docs/ui_spec.md)
+- [docs/run_erie_iron_locally.md](docs/run_erie_iron_locally.md)
 
 ## License
 
-This project is licensed under the MIT License.
-
-## Support
-
-- Issues: https://github.com/erieironllc/erieiron/issues
-- Email: tech@erieironllc.com
+MIT

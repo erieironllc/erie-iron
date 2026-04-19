@@ -17,6 +17,7 @@ settings_utils.sync_config_to_env(
     config,
     [
         ("ERIEIRON_RUNTIME_PROFILE", "ERIEIRON_RUNTIME_PROFILE"),
+        ("ERIEIRON_LOCAL_CONFIG_FILE", "ERIEIRON_LOCAL_CONFIG_FILE"),
         ("ERIEIRON_LOCAL_SECRETS_FILE", "ERIEIRON_LOCAL_SECRETS_FILE"),
         ("LOCAL_DB_NAME", "LOCAL_DB_NAME"),
         ("ERIEIRON_DB_HOST", "ERIEIRON_DB_HOST"),
@@ -30,24 +31,26 @@ settings_utils.sync_config_to_env(
         ("COGNITO_CLIENT_ID", "COGNITO_CLIENT_ID"),
         ("COGNITO_DOMAIN", "COGNITO_DOMAIN"),
         ("LOCAL_AUTH_ENABLED", "LOCAL_AUTH_ENABLED"),
-        ("LOCAL_AUTH_EMAIL", "LOCAL_AUTH_EMAIL"),
+        ("LOCAL_ADMIN_EMAIL", "LOCAL_ADMIN_EMAIL"),
         ("LOCAL_AUTH_PASSWORD", "LOCAL_AUTH_PASSWORD"),
         ("LOCAL_AUTH_NAME", "LOCAL_AUTH_NAME"),
     ],
 )
 DEBUG = str(config.get("DEBUG", "True")).lower().strip() == "true"
-ERIEIRON_RUNTIME_PROFILE = config.get(
-    "ERIEIRON_RUNTIME_PROFILE",
-    "local" if os.getenv("ERIEIRON_ENV", "").strip().lower() == "dev_local" else "aws",
-)
-ERIEIRON_LOCAL_SECRETS_FILE = config.get("ERIEIRON_LOCAL_SECRETS_FILE", "conf/local_secrets.json")
+ERIEIRON_RUNTIME_PROFILE = config.get("ERIEIRON_RUNTIME_PROFILE", "aws")
+ERIEIRON_LOCAL_CONFIG_FILE = config.get("ERIEIRON_LOCAL_CONFIG_FILE", "conf/config.json")
+ERIEIRON_LOCAL_SECRETS_FILE = config.get("ERIEIRON_LOCAL_SECRETS_FILE", "conf/secrets.json")
 LOCAL_AUTH_ENABLED = config(
     "LOCAL_AUTH_ENABLED",
     default=ERIEIRON_RUNTIME_PROFILE == "local",
     cast=bool,
 )
-LOCAL_AUTH_EMAIL = config("LOCAL_AUTH_EMAIL", default="local-admin@erieiron.local", cast=str)
-LOCAL_AUTH_PASSWORD = config("LOCAL_AUTH_PASSWORD", default="", cast=str)
+LOCAL_ADMIN_EMAIL = config("LOCAL_ADMIN_EMAIL", default="local-admin@erieiron.local", cast=str)
+LOCAL_AUTH_PASSWORD = config(
+    "LOCAL_AUTH_PASSWORD",
+    default=settings_utils.get_optional_secret_value("LOCAL_AUTH", "PASSWORD"),
+    cast=str,
+)
 LOCAL_AUTH_NAME = config("LOCAL_AUTH_NAME", default="Local Admin", cast=str)
 
 VALIDATION_PORT = 8006

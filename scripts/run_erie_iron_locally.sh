@@ -59,27 +59,43 @@ database_exists() {
         "SELECT 1 FROM pg_database WHERE datname = '${LOCAL_DB_NAME}'" | grep -q '^1$'
 }
 
-ensure_local_secrets_file() {
-    if [[ ! -f conf/local_secrets.json ]]; then
-        cp conf/local_secrets.example.json conf/local_secrets.json
-        print_error "Created conf/local_secrets.json from the example template."
-        print_error "Replace every 'replace-me' value in conf/local_secrets.json, then rerun this script."
+ensure_local_runtime_json_file() {
+    local runtime_path="$1"
+    local example_path="$2"
+
+    if [[ ! -f "${runtime_path}" ]]; then
+        cp "${example_path}" "${runtime_path}"
+        print_error "Created ${runtime_path} from the example template."
+        print_error "Replace every 'replace-me' value in ${runtime_path}, then rerun this script."
         exit 1
     fi
 
-    if grep -q 'replace-me' conf/local_secrets.json; then
-        print_error "conf/local_secrets.json still contains placeholder values."
-        print_error "Replace every 'replace-me' value in conf/local_secrets.json, then rerun this script."
+    if grep -q 'replace-me' "${runtime_path}"; then
+        print_error "${runtime_path} still contains placeholder values."
+        print_error "Replace every 'replace-me' value in ${runtime_path}, then rerun this script."
         exit 1
     fi
 }
 
-ensure_current_database_schema() {
-    print_info "Running Django makemigrations"
-    python manage.py makemigrations --noinput
+ensure_local_runtime_files() {
+    ensure_local_runtime_json_file conf/config.json conf/config.example.json
+    ensure_local_runtime_json_file conf/secrets.json conf/secrets.example.json
+}
 
-    print_info "Running Django migrations"
-    python manage.py migrate --noinput
+ensure_current_database_schema() {
+    print_info "Checking Django migration files"
+    if ! python manage.py makemigrations --check --dry-run >/dev/null; then
+        print_error "Model changes are missing migration files."
+        print_error "Run 'python manage.py makemigrations' manually, review the result, and rerun this script."
+        exit 1
+    fi
+
+    print_info "Checking for unapplied Django migrations"
+    if python manage.py showmigrations --plan | grep -q '\[ \]'; then
+        print_error "The local database has unapplied migrations."
+        print_error "Run 'python manage.py migrate' manually, then rerun this script."
+        exit 1
+    fi
 }
 
 active_postgres_major() {
@@ -124,12 +140,12 @@ configure_local_runtime_env() {
     unset COGNITO_CLIENT_ID
     unset COGNITO_DOMAIN
     unset ERIEIRON_RUNTIME_PROFILE
+    unset ERIEIRON_LOCAL_CONFIG_FILE
     unset ERIEIRON_LOCAL_SECRETS_FILE
     unset LOCAL_AUTH_ENABLED
-    unset LOCAL_AUTH_EMAIL
+    unset LOCAL_ADMIN_EMAIL
     unset LOCAL_AUTH_PASSWORD
     unset LOCAL_AUTH_NAME
-    export ERIEIRON_ENV=dev_local
     export LOCAL_DB_NAME
 }
 
@@ -183,7 +199,7 @@ if ! database_exists; then
     createdb -h localhost -p "${POSTGRES_PORT}" "${LOCAL_DB_NAME}"
 fi
 
-ensure_local_secrets_file
+ensure_local_runtime_files
 
 configure_local_runtime_env
 

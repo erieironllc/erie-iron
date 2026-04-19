@@ -44,12 +44,41 @@ class CognitoAuthMiddleware:
         self._static_prefix = f"/{settings.STATIC_URL.lstrip('/')}"
     
     def __call__(self, request):
+        from django.contrib.auth import login as django_login
+
+        from erieiron_common.local_runtime import (
+            ensure_local_admin_identity,
+            local_admin_autologin_enabled,
+        )
+
         # Initialize attributes
         request.cognito_authenticated = False
         request.cognito_email = None
         request.cognito_sub = None
         request.cognito_user = None
         request.person = None
+        request.user_data = None
+
+        if local_admin_autologin_enabled():
+            django_user, person = ensure_local_admin_identity()
+            if not request.user.is_authenticated or request.user.pk != django_user.pk:
+                django_login(
+                    request,
+                    django_user,
+                    backend="django.contrib.auth.backends.ModelBackend",
+                )
+            request.session["person_id"] = str(person.id)
+            request.person = person
+            request.cognito_user = person
+            request.cognito_authenticated = True
+            request.cognito_email = person.email
+            request.cognito_sub = person.cognito_sub
+            request.user_data = {
+                "email": person.email,
+                "name": person.name,
+                "sub": str(person.cognito_sub or ""),
+            }
+            return self.get_response(request)
         
         # Skip auth for public paths
         if self._is_public_path(request.path):

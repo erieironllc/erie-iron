@@ -627,13 +627,39 @@ def _resolve_post_login_redirect(request, candidate: str | None) -> str:
 
 def _credentials_match(email: str, password: str) -> bool:
     return (
-            email.strip().lower() == settings.LOCAL_AUTH_EMAIL.strip().lower()
+            email.strip().lower() == settings.LOCAL_ADMIN_EMAIL.strip().lower()
             and password == settings.LOCAL_AUTH_PASSWORD
     )
 
 
 def _local_auth_enabled() -> bool:
     return bool(settings.LOCAL_AUTH_ENABLED)
+
+
+def _local_admin_autologin_enabled() -> bool:
+    from erieiron_common.local_runtime import local_admin_autologin_enabled
+
+    return local_admin_autologin_enabled()
+
+
+def _authenticate_local_admin_request(request):
+    from django.contrib.auth import login as django_login
+    from erieiron_common.local_runtime import ensure_local_admin_identity
+
+    django_user, person = ensure_local_admin_identity()
+    django_login(request, django_user, backend="django.contrib.auth.backends.ModelBackend")
+    request.session["person_id"] = str(person.id)
+    request.cognito_authenticated = True
+    request.cognito_user = person
+    request.person = person
+    request.cognito_email = person.email
+    request.cognito_sub = person.cognito_sub
+    request.user_data = {
+        "email": person.email,
+        "name": person.name,
+        "sub": str(person.cognito_sub or ""),
+    }
+    return person
 
 
 def _handle_local_login(request, next_param: str):
@@ -665,8 +691,13 @@ def _handle_local_login(request, next_param: str):
 
 
 def view_login(request):
-    """Login page that renders a sign-in button for Cognito Hosted UI."""
+    """Login entrypoint for local and Cognito-backed authentication modes."""
     next_param = request.POST.get("next") or request.GET.get("next") or ""
+
+    if _local_admin_autologin_enabled():
+        _authenticate_local_admin_request(request)
+        destination = _resolve_post_login_redirect(request, next_param)
+        return HttpResponseRedirect(destination)
     
     # If already authenticated via Cognito, redirect to destination
     if getattr(request, "cognito_authenticated", False) or request.user.is_authenticated:
@@ -681,7 +712,7 @@ def view_login(request):
             "login.html",
             {
                 "local_auth_enabled": True,
-                "local_auth_email": settings.LOCAL_AUTH_EMAIL,
+                "LOCAL_ADMIN_EMAIL": settings.LOCAL_ADMIN_EMAIL,
                 "next_param": next_param,
             },
         )
@@ -809,7 +840,7 @@ def view_access_denied(request):
 
 
 def action_logout(request):
-    """Logout handler that clears Django session and redirects to Cognito logout."""
+    """Logout handler that clears Django session and redirects appropriately."""
     from django.contrib.auth import logout as django_logout
     from erieiron_common import view_utils
     from urllib.parse import urlencode
@@ -817,7 +848,7 @@ def action_logout(request):
     # Clear Django session
     django_logout(request)
 
-    if _local_auth_enabled():
+    if _local_auth_enabled() or _local_admin_autologin_enabled():
         return HttpResponseRedirect(reverse("view_login"))
 
     # Build Cognito logout URL to clear Cognito session

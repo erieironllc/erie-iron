@@ -9,7 +9,6 @@ def django_required(function):
     @wraps(function)
     def wrap(*args, **kwargs):
         os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'settings')
-        os.environ.setdefault('ERIEIRON_ENV', 'prod')  # TODO figure out how to get the env from params
         django.setup()
 
         return function(*args, **kwargs)

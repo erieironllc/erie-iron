@@ -10,13 +10,20 @@ from erieiron_common.enums import BusinessIdeaSource
 
 
 def write_local_secrets(tmp_path, payload):
-    secrets_path = tmp_path / "local_secrets.json"
+    secrets_path = tmp_path / "secrets.json"
     secrets_path.write_text(json.dumps(payload), encoding="utf-8")
     return secrets_path
 
 
-def configure_local_runtime(monkeypatch, secrets_path):
+def write_local_config(tmp_path, payload):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    return config_path
+
+
+def configure_local_runtime(monkeypatch, config_path, secrets_path):
     monkeypatch.setenv("ERIEIRON_RUNTIME_PROFILE", "local")
+    monkeypatch.setenv("ERIEIRON_LOCAL_CONFIG_FILE", str(config_path))
     monkeypatch.setenv("ERIEIRON_LOCAL_SECRETS_FILE", str(secrets_path))
 
 
@@ -41,15 +48,19 @@ def test_business_get_application_repo_url_requires_value():
         business.get_application_repo_url()
 
 
-def test_bootstrap_local_runtime_resolves_application_repo_url_from_local_secret(
+def test_bootstrap_local_runtime_resolves_application_repo_url_from_local_config(
     monkeypatch,
     tmp_path,
 ):
     secrets_path = write_local_secrets(
         tmp_path,
-        {"APPLICATION_REPO": {"url": "https://github.com/example/local-app"}},
+        {"LLM_API_KEYS": {"OPENAI": "test-openai-key"}},
     )
-    configure_local_runtime(monkeypatch, secrets_path)
+    config_path = write_local_config(
+        tmp_path,
+        {"APPLICATION_REPO": "https://github.com/example/local-app"},
+    )
+    configure_local_runtime(monkeypatch, config_path, secrets_path)
 
     command = Command()
 
@@ -64,7 +75,8 @@ def test_bootstrap_local_runtime_prefers_explicit_application_repo_url(
     tmp_path,
 ):
     secrets_path = write_local_secrets(tmp_path, {})
-    configure_local_runtime(monkeypatch, secrets_path)
+    config_path = write_local_config(tmp_path, {})
+    configure_local_runtime(monkeypatch, config_path, secrets_path)
 
     command = Command()
 
@@ -74,19 +86,20 @@ def test_bootstrap_local_runtime_prefers_explicit_application_repo_url(
     )
 
 
-def test_bootstrap_local_runtime_requires_application_repo_url_secret_key(
+def test_bootstrap_local_runtime_requires_application_repo_url_config_key(
     monkeypatch,
     tmp_path,
 ):
-    secrets_path = write_local_secrets(
+    secrets_path = write_local_secrets(tmp_path, {})
+    config_path = write_local_config(
         tmp_path,
-        {"APPLICATION_REPO": {}},
+        {"APPLICATION_REPO": ""},
     )
-    configure_local_runtime(monkeypatch, secrets_path)
+    configure_local_runtime(monkeypatch, config_path, secrets_path)
 
     command = Command()
 
-    with pytest.raises(CommandError, match="APPLICATION_REPO .* include url"):
+    with pytest.raises(CommandError, match="must not be blank"):
         command._resolve_application_repo_url(None)
 
 

@@ -256,6 +256,15 @@ def get_current_user(request) -> models.Person:
 
 
 def _get_current_user_internal(request) -> models.Person:
+    from erieiron_common.local_runtime import (
+        ensure_local_admin_identity,
+        local_admin_autologin_enabled,
+    )
+
+    if local_admin_autologin_enabled():
+        _, person = ensure_local_admin_identity()
+        return person
+
     # Try Cognito authentication first
     user_data = parse_session_cookie(request)
     cognito_sub = common.get(user_data, 'sub')
@@ -310,7 +319,8 @@ def send_response(request, template, context=None, validate=False, status_code=2
     # only allow back button for 'view_' methods
     for up in urls.urlpatterns:
         if common.default_str(up.lookup_str).startswith("webservice.views.view_"):
-            allowed_back_dests.append(common.default_str(up.pattern.regex.pattern).replace("^", "").replace("\Z", "").split("/")[0])
+            regex_pattern = common.default_str(up.pattern.regex.pattern)
+            allowed_back_dests.append(regex_pattern.replace("^", "").replace("\\Z", "").split("/")[0])
     
     user_email: str = common.get(request, ["user_data", "email"], default_val="")
     

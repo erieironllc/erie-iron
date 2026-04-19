@@ -4,10 +4,13 @@ from django.db import connection
 import settings
 from erieiron_autonomous_agent.models import Business
 from erieiron_common.local_runtime import (
+    ensure_local_admin_identity,
     ensure_local_auth_identity,
     get_local_auth_config,
+    get_local_config_value,
     get_local_secrets_path,
     is_local_runtime,
+    local_admin_autologin_enabled,
 )
 from erieiron_common.models import Person
 from erieiron_common.secret_utils import get_local_secret
@@ -32,7 +35,7 @@ class Command(BaseCommand):
         if not is_local_runtime() and settings.ERIEIRON_RUNTIME_PROFILE != "local":
             raise CommandError(
                 "bootstrap_local_runtime must be run with the local runtime profile "
-                "(for example ERIEIRON_ENV=dev_local)."
+                "(for example ERIEIRON_RUNTIME_PROFILE=local)."
             )
 
         self._verify_database_connection()
@@ -54,6 +57,12 @@ class Command(BaseCommand):
         if options["verify_only"]:
             return
 
+        if local_admin_autologin_enabled():
+            _, person = ensure_local_admin_identity()
+            self.stdout.write(self.style.SUCCESS("Local admin identity is ready."))
+            self.stdout.write(f"Auto-login email: {person.email}")
+            return
+
         _, person = ensure_local_auth_identity()
         self.stdout.write(self.style.SUCCESS("Local admin identity is ready."))
         self.stdout.write(f"Login email: {person.email}")
@@ -65,12 +74,8 @@ class Command(BaseCommand):
 
     def _verify_local_auth_config(self):
         auth_config = get_local_auth_config()
-        if not auth_config["enabled"]:
-            raise CommandError("LOCAL_AUTH_ENABLED must be true for the local runtime.")
         if not auth_config["email"]:
-            raise CommandError("LOCAL_AUTH_EMAIL must be configured.")
-        if not auth_config["password"]:
-            raise CommandError("LOCAL_AUTH_PASSWORD must be configured.")
+            raise CommandError("LOCAL_ADMIN_EMAIL must be configured.")
 
     def _verify_local_secrets(self):
         secrets_path = get_local_secrets_path()
@@ -85,11 +90,12 @@ class Command(BaseCommand):
         if explicit_repo_url is not None:
             return self._normalize_application_repo_url(explicit_repo_url)
 
-        application_repo = get_local_secret("APPLICATION_REPO")
-        if "url" not in application_repo:
-            raise CommandError("APPLICATION_REPO in the local secrets file must include url.")
+        try:
+            application_repo_url = get_local_config_value("APPLICATION_REPO")
+        except ValueError as exc:
+            raise CommandError(str(exc)) from exc
 
-        return self._normalize_application_repo_url(application_repo["url"])
+        return self._normalize_application_repo_url(application_repo_url)
 
     def _normalize_application_repo_url(self, repo_url):
         normalized_repo_url = str(repo_url).strip()
