@@ -196,3 +196,5 @@ __pycache__/
 **/.terraform/
 /artifacts/
 /.ai_coding/
+/.application_repo_cache/
+

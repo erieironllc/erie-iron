@@ -127,3 +127,20 @@ def test_bootstrap_local_runtime_syncs_application_repo_url():
         github_repo_url="https://github.com/example/new-app"
     )
     assert refreshed_fields == [["github_repo_url"]]
+
+
+def test_bootstrap_local_runtime_syncs_application_repo_config():
+    business = Business(
+        id="erie-iron",
+        name="Erie Iron, LLC",
+        source=BusinessIdeaSource.HUMAN,
+        github_repo_url="https://github.com/example/new-app",
+    )
+    command = Command()
+
+    with patch(
+        "erieiron_autonomous_agent.management.commands.bootstrap_local_runtime.sync_business_application_repo_if_changed"
+    ) as sync_mock:
+        command._sync_application_repo_config(business)
+
+    sync_mock.assert_called_once_with(business)

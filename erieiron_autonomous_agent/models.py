@@ -49,6 +49,7 @@ from erieiron_common.enums import (
     LlmReasoningEffort,
     LlmCreativity,
     CloudProvider, CredentialService, LlmModel, CredentialServiceProvisioning, TaskImplementationPhase,
+    WorkflowDefinitionSourceKind,
     TaskImplementationSourceKind,
     TaskPromptImprovementStatus,
     TaskPromptImprovementTrigger,
@@ -1096,6 +1097,11 @@ class Initiative(BaseErieIronModel):
 class WorkflowDefinition(BaseErieIronModel):
     name = models.TextField(unique=True)
     description = models.TextField(null=True, blank=True)
+    source_kind = models.TextField(
+        default=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+        choices=WorkflowDefinitionSourceKind.choices(),
+        help_text="Whether the workflow comes from the application repo or Erie Iron runtime internals.",
+    )
     is_active = models.BooleanField(default=True)
     created_timestamp = models.DateTimeField(auto_now_add=True)
     updated_timestamp = models.DateTimeField(auto_now=True)
@@ -1107,8 +1113,18 @@ class WorkflowDefinition(BaseErieIronModel):
         return self.name
 
     @classmethod
-    def with_graph(cls) -> QuerySet["WorkflowDefinition"]:
-        return cls.objects.prefetch_related(
+    def with_graph(
+            cls,
+            *,
+            source_kind: str | WorkflowDefinitionSourceKind | None = None,
+    ) -> QuerySet["WorkflowDefinition"]:
+        qs = cls.objects.all()
+        if source_kind:
+            qs = qs.filter(
+                source_kind=WorkflowDefinitionSourceKind(source_kind).value,
+            )
+
+        return qs.prefetch_related(
             models.Prefetch(
                 "steps",
                 queryset=WorkflowStep.objects.order_by("sort_order", "name"),
@@ -1130,8 +1146,24 @@ class WorkflowDefinition(BaseErieIronModel):
         )
 
     @classmethod
-    def active_workflows(cls) -> QuerySet["WorkflowDefinition"]:
-        return cls.with_graph().filter(is_active=True)
+    def application_workflows(cls) -> QuerySet["WorkflowDefinition"]:
+        return cls.with_graph(
+            source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO,
+        )
+
+    @classmethod
+    def internal_workflows(cls) -> QuerySet["WorkflowDefinition"]:
+        return cls.with_graph(
+            source_kind=WorkflowDefinitionSourceKind.ERIE_IRON_INTERNAL,
+        )
+
+    @classmethod
+    def active_workflows(
+            cls,
+            *,
+            source_kind: str | WorkflowDefinitionSourceKind | None = None,
+    ) -> QuerySet["WorkflowDefinition"]:
+        return cls.with_graph(source_kind=source_kind).filter(is_active=True)
 
     @classmethod
     def register_active_workflows(cls, pubsub_manager):
@@ -2341,7 +2373,94 @@ class TaskImplementationVersion(BaseErieIronModel):
         return super().save(*args, **kwargs)
     
     def get_source_label(self) -> str:
+        task_directory = self.get_task_directory_relative_path()
+        runtime_config = self.get_task_bundle_runtime_config()
+        if task_directory:
+            if TaskImplementationSourceKind.CODE_FILE.eq(self.source_kind):
+                source_label = common.default_str(runtime_config.get("entrypoint_path")).strip()
+                if source_label:
+                    return f"{task_directory}/{source_label}"
+            prompt_label = common.default_str(runtime_config.get("prompt_path")).strip()
+            if prompt_label:
+                return f"{task_directory}/{prompt_label}"
+            task_config_path = self.get_task_config_relative_path()
+            if task_config_path:
+                return task_config_path
         return common.default_str(self.application_repo_file_path)
+
+    def get_prompt_source_label(self) -> str:
+        task_directory = self.get_task_directory_relative_path()
+        prompt_path = common.default_str(
+            self.get_task_bundle_runtime_config().get("prompt_path")
+        ).strip()
+        if task_directory and prompt_path:
+            return f"{task_directory}/{prompt_path}"
+        return self.get_source_label()
+
+    def get_task_config_relative_path(self) -> str | None:
+        return (
+            common.default_str((self.source_metadata or {}).get("task_config_path")).strip()
+            or None
+        )
+
+    def get_task_directory_relative_path(self) -> str | None:
+        task_directory = common.default_str(
+            (self.source_metadata or {}).get("task_directory")
+        ).strip()
+        if task_directory:
+            return task_directory
+
+        task_config_path = self.get_task_config_relative_path()
+        if task_config_path:
+            return str(Path(task_config_path).parent).replace("\\", "/")
+
+        return None
+
+    def uses_task_bundle_config(self) -> bool:
+        return self.get_task_config_relative_path() is not None
+
+    def get_task_bundle_runtime_config(self, repo_root: Path | None = None) -> dict[str, Any]:
+        runtime_config: dict[str, Any] = {}
+
+        if repo_root is not None and self.uses_task_bundle_config():
+            task_config_path = self.get_task_config_file_path(repo_root)
+            if task_config_path and task_config_path.exists():
+                task_config = common.read_json(task_config_path, default={}) or {}
+                runtime_config.update(copy.deepcopy(task_config.get("runtime") or {}))
+
+        source_metadata = copy.deepcopy(self.source_metadata or {})
+        fallback_runtime_config = {
+            "task_directory": self.get_task_directory_relative_path(),
+            "task_config_path": self.get_task_config_relative_path(),
+            "entrypoint_path": common.default_str(source_metadata.get("entrypoint_path")).strip() or None,
+            "prompt_path": common.default_str(source_metadata.get("prompt_path")).strip() or None,
+            "output_schema_path": common.default_str(
+                source_metadata.get("output_schema_file_path")
+            ).strip() or None,
+            "application_repo_ref": common.default_str(self.application_repo_ref).strip() or None,
+            "source_kind": common.default_str(source_metadata.get("source_kind")).strip() or self.source_kind,
+        }
+        for field_name, field_value in fallback_runtime_config.items():
+            if runtime_config.get(field_name):
+                continue
+            if field_value:
+                runtime_config[field_name] = field_value
+
+        llm_config = {}
+        for field_name in ("model", "reasoning_effort", "verbosity", "creativity"):
+            field_value = common.default_str(source_metadata.get(field_name)).strip()
+            if field_value:
+                llm_config[field_name] = field_value
+        if llm_config and not runtime_config.get("llm"):
+            runtime_config["llm"] = llm_config
+
+        return runtime_config
+
+    def get_task_config_file_path(self, repo_root: Path) -> Path | None:
+        task_config_path = self.get_task_config_relative_path()
+        if not task_config_path:
+            return None
+        return self._resolve_repo_file_path(repo_root, task_config_path)
 
     def get_prompt_text(self, repo_root: Path) -> str:
         prompt_override = common.default_str(
@@ -2349,6 +2468,14 @@ class TaskImplementationVersion(BaseErieIronModel):
         ).strip()
         if prompt_override:
             return prompt_override
+        runtime_config = self.get_task_bundle_runtime_config(repo_root)
+        prompt_path = common.default_str(runtime_config.get("prompt_path")).strip()
+        if self.get_task_directory_relative_path() and prompt_path:
+            from erieiron_autonomous_agent.application_repo_config import (
+                resolve_task_bundle_path,
+            )
+
+            return resolve_task_bundle_path(repo_root, self.task_id, prompt_path).read_text()
         return self.get_source_file_path(repo_root).read_text()
 
     def get_evaluator_label(self) -> str:
@@ -2360,9 +2487,38 @@ class TaskImplementationVersion(BaseErieIronModel):
         return "Default"
 
     def get_source_file_path(self, repo_root: Path) -> Path:
+        runtime_config = self.get_task_bundle_runtime_config(repo_root)
+        task_directory = self.get_task_directory_relative_path()
+        if task_directory:
+            if TaskImplementationSourceKind.CODE_FILE.eq(self.source_kind):
+                entrypoint_path = common.default_str(
+                    runtime_config.get("entrypoint_path")
+                ).strip()
+                if entrypoint_path:
+                    from erieiron_autonomous_agent.application_repo_config import (
+                        resolve_task_bundle_path,
+                    )
+
+                    return resolve_task_bundle_path(repo_root, self.task_id, entrypoint_path)
+            prompt_path = common.default_str(runtime_config.get("prompt_path")).strip()
+            if prompt_path:
+                from erieiron_autonomous_agent.application_repo_config import (
+                    resolve_task_bundle_path,
+                )
+
+                return resolve_task_bundle_path(repo_root, self.task_id, prompt_path)
         return self._resolve_repo_file_path(repo_root, self.application_repo_file_path)
 
     def get_output_schema_file_path(self, repo_root: Path) -> Optional[Path]:
+        schema_path = common.default_str(
+            self.get_task_bundle_runtime_config(repo_root).get("output_schema_path")
+        ).strip()
+        if self.get_task_directory_relative_path() and schema_path:
+            from erieiron_autonomous_agent.application_repo_config import (
+                resolve_task_bundle_path,
+            )
+
+            return resolve_task_bundle_path(repo_root, self.task_id, schema_path)
         schema_path = common.default_str((self.source_metadata or {}).get("output_schema_file_path")).strip()
         if not schema_path:
             return None
@@ -2396,7 +2552,7 @@ class TaskImplementationVersion(BaseErieIronModel):
                 "config": {},
             }
         return {
-            "kind": self.source_kind,
+            "kind": common.default_str(evaluator_config.get("kind")).strip() or self.source_kind,
             "config": evaluator_config,
         }
     
@@ -2409,6 +2565,10 @@ class TaskImplementationVersion(BaseErieIronModel):
             "instance_config_revision": None,
             "source_metadata": copy.deepcopy(self.source_metadata or {}),
         }
+        if self.get_task_directory_relative_path():
+            provenance["task_directory"] = self.get_task_directory_relative_path()
+        if self.get_task_config_relative_path():
+            provenance["task_config_path"] = self.get_task_config_relative_path()
         
         if self.application_repo_file_path and self.application_repo_ref:
             application_repo_url = business.get_application_repo_url()

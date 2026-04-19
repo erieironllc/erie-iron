@@ -6,6 +6,9 @@ from unittest.mock import patch
 import pytest
 from django.core.exceptions import ValidationError
 
+from erieiron_autonomous_agent.application_repo_config import (
+    build_task_config_relative_path,
+)
 from erieiron_autonomous_agent.coding_agents import coding_agent
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_autonomous_agent.models import (
@@ -227,6 +230,33 @@ def test_run_repo_backed_prompt_task_prefers_prompt_override(tmp_path):
     assert output_data == {"answer": "ok"}
     assert model_metadata["prompt_file_path"] == "prompts/run_task.md"
     assert mock_llm_chat.call_args.args[1][0].text == "Use the approved override prompt."
+
+
+@pytest.mark.django_db
+def test_task_bundle_runtime_resolves_entrypoint_and_schema_paths(tmp_path):
+    task = _make_task()
+    task_bundle_dir = tmp_path / "configuration" / "tasks" / task.id
+    task_bundle_dir.mkdir(parents=True, exist_ok=True)
+    entrypoint_path = task_bundle_dir / "run.py"
+    entrypoint_path.write_text("print('bundle task')", encoding="utf-8")
+    schema_path = task_bundle_dir / "schema.json"
+    schema_path.write_text('{"type": "object"}', encoding="utf-8")
+
+    version = task.create_implementation_version(
+        source_kind=TaskImplementationSourceKind.CODE_FILE,
+        application_repo_file_path=build_task_config_relative_path(task.id),
+        application_repo_ref="main",
+        source_metadata={
+            "task_directory": f"configuration/tasks/{task.id}",
+            "task_config_path": build_task_config_relative_path(task.id),
+            "entrypoint_path": "run.py",
+            "output_schema_file_path": "schema.json",
+        },
+    )
+
+    assert version.get_source_label().endswith("/run.py")
+    assert version.get_source_file_path(tmp_path) == entrypoint_path
+    assert version.get_output_schema_file_path(tmp_path) == schema_path
 
 
 @pytest.mark.django_db

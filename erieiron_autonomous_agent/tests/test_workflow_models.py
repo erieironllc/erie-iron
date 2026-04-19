@@ -8,7 +8,7 @@ from erieiron_autonomous_agent.models import (
     WorkflowStep,
     WorkflowTrigger,
 )
-from erieiron_common.enums import PubSubMessageType
+from erieiron_common.enums import PubSubMessageType, WorkflowDefinitionSourceKind
 
 
 @pytest.mark.django_db
@@ -47,6 +47,7 @@ def test_workflow_models_persist_triggers_steps_and_connections():
         "Find ideas",
         "Submit idea",
     ]
+    assert workflow.source_kind == WorkflowDefinitionSourceKind.APPLICATION_REPO.value
     assert trigger.target_step_id == find_ideas.id
     assert connection.source_step_id == find_ideas.id
     assert connection.target_step_id == submit_idea.id

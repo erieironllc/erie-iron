@@ -6,7 +6,7 @@ Fast path:
 ./scripts/run_erie_iron_locally.sh
 ```
 
-The script automates the setup flow below, uses a local Postgres service that exposes `pgvector`, creates the local database if needed, verifies that Django migration files are present and already applied, and starts `runserver`. It stops early only if `conf/config.json` or `conf/secrets.json` still contains the example placeholder values or if you still need to run migrations manually. When `WEBAPP_PORT` is omitted from `conf/config.json`, the script chooses the first available port above `8000`.
+The script automates the setup flow below, uses a local Postgres service that exposes `pgvector`, creates the local database if needed, applies Django migrations automatically for a brand-new database, syncs workflow and task config from `APPLICATION_REPO`, verifies that Django migration files are present, and starts `runserver`. It stops early only if `conf/config.json` or `conf/secrets.json` still contains the example placeholder values or if an existing local database still needs manual migrations. When `WEBAPP_PORT` is omitted from `conf/config.json`, the script chooses the first available port above `8000`.
 
 1. Install the local dependencies.
 
@@ -20,11 +20,7 @@ npm install
 npm run compile-ui
 ```
 
-2. Create the local Postgres database.
-
-```bash
-createdb erieiron_local
-```
+2. Create the local Postgres database named by `LOCAL_DB_NAME` in `conf/config.json`.
 
 3. Create the local runtime files and replace the placeholder values, including the application repo URL for this Erie Iron instance.
 

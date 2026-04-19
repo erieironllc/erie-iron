@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 
 from erieiron_autonomous_agent.models import (
     WorkflowConnection,
@@ -8,6 +9,7 @@ from erieiron_autonomous_agent.models import (
 )
 from erieiron_autonomous_agent.workflow import initialize_database_workflows
 from erieiron_common.enums import PubSubMessageType
+from erieiron_common.llm_request_handler import handle_llm_request
 from erieiron_common.message_queue.pubsub_manager import PubSubManager, subscribers
 
 
@@ -58,7 +60,10 @@ def test_initialize_database_workflows_registers_active_workflow_edges():
         sort_order=0,
     )
 
-    initialize_database_workflows(PubSubManager())
+    with patch(
+        "erieiron_autonomous_agent.workflow.sync_erieiron_application_repo_if_changed"
+    ):
+        initialize_database_workflows(PubSubManager())
 
     assert (
         initial_handler,
@@ -70,6 +75,36 @@ def test_initialize_database_workflows_registers_active_workflow_edges():
         None,
         PubSubMessageType.EVERY_DAY,
     ) in subscribers[PubSubMessageType.EVERY_HOUR]
+
+
+@pytest.mark.django_db
+def test_initialize_database_workflows_syncs_internal_and_application_workflows_before_registering():
+    workflow = WorkflowDefinition.objects.create(name="Synced Runtime Workflow", is_active=True)
+    step = WorkflowStep.objects.create(
+        workflow=workflow,
+        name="Find opportunities",
+        handler_path=f"{__name__}.initial_handler",
+        emits_message_type=PubSubMessageType.EVERY_HOUR.value,
+    )
+    WorkflowTrigger.objects.create(
+        workflow=workflow,
+        target_step=step,
+        message_type=PubSubMessageType.EVERY_MINUTE.value,
+    )
+
+    sync_calls = []
+    with patch(
+        "erieiron_autonomous_agent.workflow.sync_internal_workflows",
+        side_effect=lambda: sync_calls.append("internal"),
+    ) as internal_sync_mock, patch(
+        "erieiron_autonomous_agent.workflow.sync_erieiron_application_repo_if_changed",
+        side_effect=lambda: sync_calls.append("application_repo"),
+    ) as sync_mock:
+        initialize_database_workflows(PubSubManager())
+
+    internal_sync_mock.assert_called_once_with()
+    sync_mock.assert_called_once_with()
+    assert sync_calls == ["internal", "application_repo"]
 
 
 @pytest.mark.django_db
@@ -87,7 +122,10 @@ def test_initialize_database_workflows_skips_inactive_workflows():
         message_type=PubSubMessageType.EVERY_MINUTE.value,
     )
 
-    initialize_database_workflows(PubSubManager())
+    with patch(
+        "erieiron_autonomous_agent.workflow.sync_erieiron_application_repo_if_changed"
+    ):
+        initialize_database_workflows(PubSubManager())
 
     assert not subscribers[PubSubMessageType.EVERY_MINUTE]
 
@@ -106,3 +144,17 @@ def test_workflow_step_resolves_nested_handler_paths():
 
     assert handler.__self__ is PubSubManager
     assert handler.__name__ == "noop"
+
+
+@pytest.mark.django_db
+def test_initialize_database_workflows_registers_internal_llm_request_handler():
+    with patch(
+        "erieiron_autonomous_agent.workflow.sync_erieiron_application_repo_if_changed"
+    ):
+        initialize_database_workflows(PubSubManager())
+
+    assert (
+        handle_llm_request,
+        None,
+        None,
+    ) in subscribers[PubSubMessageType.LLM_REQUEST]

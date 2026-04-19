@@ -492,7 +492,7 @@ def _run_repo_backed_prompt_task(
     output_data = response.json() if output_schema else _coerce_llm_task_output(response.text)
     return output_data, {
         "llm_model": str(response.model),
-        "prompt_file_path": version.application_repo_file_path,
+        "prompt_file_path": version.get_prompt_source_label(),
         "reasoning_effort": reasoning_effort.value,
         "verbosity": verbosity.value,
         "creativity": creativity.value,

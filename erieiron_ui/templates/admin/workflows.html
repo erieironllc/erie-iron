@@ -12,7 +12,7 @@
     <div class="workflow-admin__page-header d-flex justify-content-between align-items-end gap-3 mb-3">
         <div>
             <h2 class="mb-1">Workflow Management</h2>
-            <p class="text-muted mb-0">Edit workflow names, handler paths, triggers, and task connections.</p>
+            <p class="text-muted mb-0">Edit application workflow names, handler paths, triggers, and task connections.</p>
         </div>
         <button type="button" class="btn btn-primary" data-action="create-workflow">
             <i class="bi bi-plus-circle"></i> Add Workflow
@@ -35,7 +35,7 @@
                             </div>
                             <div class="workflow-diagram__card-meta">
                                 <span class="badge text-bg-dark">{{ selected_workflow_data.step_count }} step{{ selected_workflow_data.step_count|pluralize }}</span>
-                                <span class="badge text-bg-dark">{{ selected_workflow_data.trigger_count }} trigger{{ selected_workflow_data.trigger_count|pluralize }}</span>
+                                <span class="badge text-bg-dark">{{ selected_workflow_data.external_trigger_count }} external trigger{{ selected_workflow_data.external_trigger_count|pluralize }}</span>
                                 <span class="badge text-bg-dark">{{ selected_workflow_data.connection_count }} connection{{ selected_workflow_data.connection_count|pluralize }}</span>
                             </div>
                         </div>
@@ -65,6 +65,7 @@
                             {% if diagram.has_content %}
                                 <div class="workflow-diagram"
                                      id="workflow-diagram-{{ selected_workflow.id }}"
+                                     style="--workflow-diagram-columns: {{ diagram.column_count|default:1 }};"
                                      data-role="workflow-diagram">
                                     <div class="workflow-diagram__canvas">
                                         <div class="workflow-diagram__canvas-inner">
@@ -83,58 +84,86 @@
                                                         <div class="workflow-diagram__layer-nodes">
                                                             {% for node in layer.nodes %}
                                                                 <article class="workflow-diagram__node workflow-diagram__node--{{ node.kind }}"
+                                                                         style="--workflow-node-column: {{ node.column_index|add:'1' }};"
                                                                          data-node-id="{{ node.id }}"
                                                                          data-node-kind="{{ node.kind }}">
-                                                                    <div class="workflow-diagram__node-body">
-                                                                        <div class="workflow-diagram__node-eyebrow">
+                                                                    <div class="workflow-diagram__node-menu dropdown">
+                                                                        <button type="button"
+                                                                                class="btn btn-sm workflow-diagram__node-menu-toggle"
+                                                                                data-bs-toggle="dropdown"
+                                                                                aria-expanded="false"
+                                                                                aria-label="{% if node.kind == 'trigger' %}Open trigger actions{% else %}Open task actions{% endif %}">
+                                                                            <i class="bi bi-three-dots-vertical"></i>
+                                                                        </button>
+                                                                        <ul class="dropdown-menu dropdown-menu-end workflow-diagram__node-menu-list">
                                                                             {% if node.kind == "trigger" %}
-                                                                                External Trigger
+                                                                                {% if node.triggers|length == 1 %}
+                                                                                    {% with trigger=node.triggers.0 %}
+                                                                                        <li>
+                                                                                            <button type="button"
+                                                                                                    class="dropdown-item"
+                                                                                                    data-action="edit-trigger"
+                                                                                                    data-trigger-id="{{ trigger.id }}">
+                                                                                                Edit {{ trigger.target_step_name }}
+                                                                                            </button>
+                                                                                        </li>
+                                                                                        <li>
+                                                                                            <button type="button"
+                                                                                                    class="dropdown-item text-danger"
+                                                                                                    data-delete-url="{% url 'action_admin_workflow_trigger_delete' trigger.id %}"
+                                                                                                    data-delete-label="trigger {{ node.title }} to {{ trigger.target_step_name }}">
+                                                                                                Delete {{ trigger.target_step_name }}
+                                                                                            </button>
+                                                                                        </li>
+                                                                                    {% endwith %}
+                                                                                {% else %}
+                                                                                    <li><h6 class="dropdown-header">Edit triggers</h6></li>
+                                                                                    {% for trigger in node.triggers %}
+                                                                                        <li>
+                                                                                            <button type="button"
+                                                                                                    class="dropdown-item"
+                                                                                                    data-action="edit-trigger"
+                                                                                                    data-trigger-id="{{ trigger.id }}">
+                                                                                                Edit {{ trigger.target_step_name }}
+                                                                                            </button>
+                                                                                        </li>
+                                                                                    {% endfor %}
+                                                                                    <li><hr class="dropdown-divider"></li>
+                                                                                    <li><h6 class="dropdown-header text-danger">Delete triggers</h6></li>
+                                                                                    {% for trigger in node.triggers %}
+                                                                                        <li>
+                                                                                            <button type="button"
+                                                                                                    class="dropdown-item text-danger"
+                                                                                                    data-delete-url="{% url 'action_admin_workflow_trigger_delete' trigger.id %}"
+                                                                                                    data-delete-label="trigger {{ node.title }} to {{ trigger.target_step_name }}">
+                                                                                                Delete {{ trigger.target_step_name }}
+                                                                                            </button>
+                                                                                        </li>
+                                                                                    {% endfor %}
+                                                                                {% endif %}
                                                                             {% else %}
-                                                                                Task
+                                                                                <li>
+                                                                                    <button type="button"
+                                                                                            class="dropdown-item"
+                                                                                            data-action="edit-step"
+                                                                                            data-step-id="{{ node.object_id }}">
+                                                                                        Edit task
+                                                                                    </button>
+                                                                                </li>
+                                                                                <li>
+                                                                                    <button type="button"
+                                                                                            class="dropdown-item text-danger"
+                                                                                            data-delete-url="{% url 'action_admin_workflow_step_delete' node.object_id %}"
+                                                                                            data-delete-label="task {{ node.title }}">
+                                                                                        Delete task
+                                                                                    </button>
+                                                                                </li>
                                                                             {% endif %}
-                                                                        </div>
-                                                                        <div class="workflow-diagram__node-title">{{ node.title }}</div>
-                                                                        <div class="workflow-diagram__node-subtitle">{{ node.subtitle }}</div>
-
-                                                                        {% if node.kind == "step" %}
-                                                                            <div class="workflow-diagram__node-detail workflow-diagram__node-detail--code">
-                                                                                <code>{{ node.detail }}</code>
-                                                                            </div>
-                                                                        {% else %}
-                                                                            <div class="workflow-diagram__node-detail">
-                                                                                {{ node.detail }}
-                                                                            </div>
-                                                                        {% endif %}
+                                                                        </ul>
                                                                     </div>
 
-                                                                    <div class="workflow-diagram__node-actions">
-                                                                        {% if node.kind == "trigger" %}
-                                                                            <button type="button"
-                                                                                    class="btn btn-sm btn-outline-secondary"
-                                                                                    data-action="edit-trigger"
-                                                                                    data-trigger-id="{{ node.object_id }}">
-                                                                                Edit
-                                                                            </button>
-                                                                            <button type="button"
-                                                                                    class="btn btn-sm btn-outline-danger"
-                                                                                    data-delete-url="{% url 'action_admin_workflow_trigger_delete' node.object_id %}"
-                                                                                    data-delete-label="trigger {{ node.title }}">
-                                                                                Delete
-                                                                            </button>
-                                                                        {% else %}
-                                                                            <button type="button"
-                                                                                    class="btn btn-sm btn-outline-secondary"
-                                                                                    data-action="edit-step"
-                                                                                    data-step-id="{{ node.object_id }}">
-                                                                                Edit
-                                                                            </button>
-                                                                            <button type="button"
-                                                                                    class="btn btn-sm btn-outline-danger"
-                                                                                    data-delete-url="{% url 'action_admin_workflow_step_delete' node.object_id %}"
-                                                                                    data-delete-label="step {{ node.title }}">
-                                                                                Delete
-                                                                            </button>
-                                                                        {% endif %}
+                                                                    <div class="workflow-diagram__node-body">
+                                                                        <div class="workflow-diagram__node-title">{{ node.title }}</div>
                                                                     </div>
                                                                 </article>
                                                             {% endfor %}
@@ -157,7 +186,7 @@
             {% else %}
                 <div class="card">
                     <div class="card-body text-center text-muted py-5">
-                Create a workflow to start wiring steps, handlers, and task connections.
+                Create an application workflow to start wiring steps, handlers, and task connections.
             </div>
         </div>
     {% endif %}
@@ -410,8 +439,8 @@ $(document).ready(function() {
             svg.innerHTML = '';
             edgeLabels.innerHTML = '';
 
-            const svgWidth = canvasInner.scrollWidth;
-            const svgHeight = canvasInner.scrollHeight;
+            const svgWidth = Math.ceil(canvasInner.clientWidth);
+            const svgHeight = Math.ceil(canvasInner.clientHeight);
             svg.setAttribute('width', svgWidth);
             svg.setAttribute('height', svgHeight);
             svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
@@ -485,6 +514,10 @@ $(document).ready(function() {
                 );
                 path.setAttribute('marker-end', `url(#${markerIdsByKind[edge.kind]})`);
                 svg.appendChild(path);
+
+                if (!edge.label) {
+                    return;
+                }
 
                 const label = document.createElement('div');
                 label.className = `workflow-diagram__edge-label workflow-diagram__edge-label--${edge.kind}`;

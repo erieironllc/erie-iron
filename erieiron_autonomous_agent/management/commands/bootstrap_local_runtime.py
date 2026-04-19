@@ -2,6 +2,9 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 
 import settings
+from erieiron_autonomous_agent.application_repo_config import (
+    sync_business_application_repo_if_changed,
+)
 from erieiron_autonomous_agent.models import Business
 from erieiron_common.local_runtime import (
     ensure_local_admin_identity,
@@ -47,6 +50,7 @@ class Command(BaseCommand):
             options["application_repo_url"]
         )
         self._sync_application_repo_url(business, application_repo_url)
+        self._sync_application_repo_config(business)
         system_person = Person.get_system_person()
 
         self.stdout.write(self.style.SUCCESS("Verified local runtime configuration."))
@@ -109,3 +113,6 @@ class Command(BaseCommand):
 
         Business.objects.filter(id=business.id).update(github_repo_url=application_repo_url)
         business.refresh_from_db(fields=["github_repo_url"])
+
+    def _sync_application_repo_config(self, business):
+        sync_business_application_repo_if_changed(business)

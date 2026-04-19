@@ -685,6 +685,11 @@ class TaskImplementationPhase(ErieEnum):
     SERVER_IMPLEMENTATION = auto()
 
 
+class WorkflowDefinitionSourceKind(ErieEnum):
+    APPLICATION_REPO = "application_repo"
+    ERIE_IRON_INTERNAL = "erie_iron_internal"
+
+
 class TaskImplementationSourceKind(ErieEnum):
     LLM_PROMPT = "llm_prompt"
     CODE_FILE = "code_file"

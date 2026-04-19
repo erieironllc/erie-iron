@@ -36,7 +36,7 @@ from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, 
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
 from erieiron_common.aws_utils import aws_console_url_from_arn
-from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase, TaskImplementationSourceKind, TaskPromptImprovementStatus
+from erieiron_common.enums import PubSubMessageType, PubSubMessageStatus, BusinessIdeaSource, Constants, TaskExecutionSchedule, TaskType, Level, LlmModel, LlmVerbosity, LlmReasoningEffort, LlmCreativity, Role, InfrastructureStackType, StackStrategy, EnvironmentType, InitiativeType, InitiativeNames, CloudProvider, BusinessNiche, CredentialService, CredentialServiceProvisioning, TaskImplementationPhase, WorkflowDefinitionSourceKind, TaskImplementationSourceKind, TaskPromptImprovementStatus
 from erieiron_common.git_utils import GitWrapper
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
@@ -52,12 +52,6 @@ DEFAULT_HIDDEN_PUBSUB_MESSAGE_TYPES = {
     PubSubMessageType.EVERY_HOUR.value,
     PubSubMessageType.EVERY_DAY.value,
 }
-WORKFLOW_EXTERNAL_TRIGGER_MESSAGE_TYPES = (
-    PubSubMessageType.EVERY_MINUTE.value,
-    PubSubMessageType.EVERY_HOUR.value,
-    PubSubMessageType.EVERY_DAY.value,
-    PubSubMessageType.EVERY_WEEK.value,
-)
 
 LLM_REQUESTS_PAGE_SIZE = 20
 PROJECT_PLAN_STATUS_CLASSES = {
@@ -168,16 +162,25 @@ def _workflow_message_type_label(message_type: str | None) -> str | None:
     return PubSubMessageType(message_type).label()
 
 
-def _workflow_external_trigger_message_type_choices() -> list[dict[str, str]]:
-    allowed_message_types = set(WORKFLOW_EXTERNAL_TRIGGER_MESSAGE_TYPES)
-    return [
-        {
-            "value": value,
-            "label": label,
-        }
-        for value, label in PubSubMessageType.choices()
-        if value in allowed_message_types
-    ]
+def _workflow_emitted_message_types(
+        workflow: WorkflowDefinition | None,
+) -> set[str]:
+    if workflow is None:
+        return set()
+
+    return {
+        step.emits_message_type
+        for step in workflow.steps.all()
+        if step.emits_message_type
+    }
+
+
+def _workflow_external_trigger_message_type_choices(
+        workflow: WorkflowDefinition | None,
+) -> list[dict[str, str]]:
+    return _workflow_message_type_choices(
+        excluded_values=_workflow_emitted_message_types(workflow),
+    )
 
 
 def _workflow_step_sort_key(step: WorkflowStep) -> tuple[int, str, str]:
@@ -210,7 +213,12 @@ def _workflow_diagram_node_id(node_kind: str, object_id: Any) -> str:
 
 def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
     steps = list(workflow.steps.all())
-    triggers = list(workflow.triggers.all())
+    emitted_message_types = _workflow_emitted_message_types(workflow)
+    triggers = [
+        trigger
+        for trigger in workflow.triggers.all()
+        if trigger.message_type not in emitted_message_types
+    ]
     connections = list(workflow.connections.all())
     if not steps and not triggers:
         return {
@@ -218,6 +226,7 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
             "node_count": 0,
             "edge_count": 0,
             "layer_count": 0,
+            "column_count": 0,
             "layers": [],
             "edges": [],
         }
@@ -226,9 +235,11 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
     triggers_by_target_step_id: dict[uuid.UUID, list[WorkflowTrigger]] = defaultdict(list)
     incoming_connections_by_target_step_id: dict[uuid.UUID, list[WorkflowConnection]] = defaultdict(list)
     outgoing_connections_by_source_step_id: dict[uuid.UUID, list[WorkflowConnection]] = defaultdict(list)
+    trigger_groups_by_message_type: dict[str, list[WorkflowTrigger]] = defaultdict(list)
 
     for trigger in triggers:
         triggers_by_target_step_id[trigger.target_step_id].append(trigger)
+        trigger_groups_by_message_type[trigger.message_type].append(trigger)
 
     for connection in connections:
         incoming_connections_by_target_step_id[connection.target_step_id].append(connection)
@@ -278,38 +289,54 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
     layers: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     column_index_by_node_id: dict[str, int] = {}
+    trigger_group_node_id_by_message_type: dict[str, str] = {}
 
-    sorted_triggers = sorted(triggers, key=_workflow_trigger_sort_key)
-    if sorted_triggers:
+    sorted_trigger_groups = sorted(
+        trigger_groups_by_message_type.items(),
+        key=lambda trigger_group: (
+            min(trigger.sort_order for trigger in trigger_group[1]),
+            trigger_group[0],
+        ),
+    )
+    if sorted_trigger_groups:
         trigger_nodes = []
-        for column_index, trigger in enumerate(sorted_triggers):
-            node_id = _workflow_diagram_node_id("trigger", trigger.id)
+        for column_index, (message_type, grouped_triggers) in enumerate(sorted_trigger_groups):
+            sorted_grouped_triggers = sorted(grouped_triggers, key=_workflow_trigger_sort_key)
+            node_id = _workflow_diagram_node_id("trigger", message_type)
             column_index_by_node_id[node_id] = column_index
-            trigger_message_label = _workflow_message_type_label(trigger.message_type)
+            trigger_group_node_id_by_message_type[message_type] = node_id
             trigger_nodes.append(
                 {
                     "id": node_id,
-                    "object_id": str(trigger.id),
                     "kind": "trigger",
-                    "title": trigger_message_label or trigger.message_type,
-                    "subtitle": f"Starts {trigger.target_step.name}",
-                    "detail": trigger.message_type,
-                    "sort_order": trigger.sort_order,
+                    "title": message_type,
+                    "sort_order": min(trigger.sort_order for trigger in sorted_grouped_triggers),
                     "column_index": column_index,
-                    "target_step_id": str(trigger.target_step_id),
-                    "target_step_name": trigger.target_step.name,
+                    "message_type": message_type,
+                    "message_type_label": _workflow_message_type_label(message_type),
+                    "trigger_count": len(sorted_grouped_triggers),
+                    "triggers": [
+                        {
+                            "id": str(trigger.id),
+                            "target_step_id": str(trigger.target_step_id),
+                            "target_step_name": trigger.target_step.name,
+                            "sort_order": trigger.sort_order,
+                        }
+                        for trigger in sorted_grouped_triggers
+                    ],
                 }
             )
-            edges.append(
-                {
-                    "id": _workflow_diagram_node_id("trigger-edge", trigger.id),
-                    "kind": "trigger",
-                    "source_node_id": node_id,
-                    "target_node_id": _workflow_diagram_node_id("step", trigger.target_step_id),
-                    "label": trigger_message_label or trigger.message_type,
-                    "line_label": trigger.message_type,
-                }
-            )
+            for trigger in sorted_grouped_triggers:
+                edges.append(
+                    {
+                        "id": _workflow_diagram_node_id("trigger-edge", trigger.id),
+                        "kind": "trigger",
+                        "source_node_id": node_id,
+                        "target_node_id": _workflow_diagram_node_id("step", trigger.target_step_id),
+                        "label": None,
+                        "line_label": trigger.message_type,
+                    }
+                )
 
         layers.append(
             {
@@ -328,9 +355,9 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
 
         def step_row_sort_key(step: WorkflowStep) -> tuple[float, int, str, str]:
             predecessor_positions = [
-                column_index_by_node_id[_workflow_diagram_node_id("trigger", trigger.id)]
+                column_index_by_node_id[trigger_group_node_id_by_message_type[trigger.message_type]]
                 for trigger in triggers_by_target_step_id.get(step.id, [])
-                if _workflow_diagram_node_id("trigger", trigger.id) in column_index_by_node_id
+                if trigger.message_type in trigger_group_node_id_by_message_type
             ] + [
                 column_index_by_node_id[_workflow_diagram_node_id("step", connection.source_step_id)]
                 for connection in incoming_connections_by_target_step_id.get(step.id, [])
@@ -357,20 +384,14 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
         for column_index, step in enumerate(sorted_row_steps):
             node_id = _workflow_diagram_node_id("step", step.id)
             column_index_by_node_id[node_id] = column_index
-            emitted_message_label = _workflow_message_type_label(step.emits_message_type)
             layer_nodes.append(
                 {
                     "id": node_id,
                     "object_id": str(step.id),
                     "kind": "step",
                     "title": step.name,
-                    "subtitle": emitted_message_label or "No emitted message",
-                    "detail": step.handler_path,
                     "sort_order": step.sort_order,
                     "column_index": column_index,
-                    "handler_path": step.handler_path,
-                    "emits_message_type": step.emits_message_type,
-                    "emits_message_type_label": emitted_message_label,
                 }
             )
 
@@ -384,14 +405,13 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
         )
 
     for connection in sorted(connections, key=_workflow_connection_sort_key):
-        connection_message_label = _workflow_message_type_label(connection.message_type)
         edges.append(
             {
                 "id": _workflow_diagram_node_id("connection-edge", connection.id),
                 "kind": "connection",
                 "source_node_id": _workflow_diagram_node_id("step", connection.source_step_id),
                 "target_node_id": _workflow_diagram_node_id("step", connection.target_step_id),
-                "label": connection_message_label or connection.message_type,
+                "label": connection.message_type,
                 "line_label": connection.message_type,
             }
         )
@@ -402,6 +422,7 @@ def _serialize_workflow_diagram(workflow: WorkflowDefinition) -> dict:
         "node_count": node_count,
         "edge_count": len(edges),
         "layer_count": len(layers),
+        "column_count": max((len(layer["nodes"]) for layer in layers), default=0),
         "layers": layers,
         "edges": edges,
     }
@@ -446,8 +467,14 @@ def _serialize_workflow_connection(connection: WorkflowConnection) -> dict:
 
 
 def _serialize_workflow_definition(workflow: WorkflowDefinition) -> dict:
+    emitted_message_types = _workflow_emitted_message_types(workflow)
     steps = [_serialize_workflow_step(step) for step in workflow.steps.all()]
     triggers = [_serialize_workflow_trigger(trigger) for trigger in workflow.triggers.all()]
+    external_trigger_count = sum(
+        1
+        for trigger in workflow.triggers.all()
+        if trigger.message_type not in emitted_message_types
+    )
     connections = [
         _serialize_workflow_connection(connection)
         for connection in workflow.connections.all()
@@ -456,6 +483,7 @@ def _serialize_workflow_definition(workflow: WorkflowDefinition) -> dict:
         "id": str(workflow.id),
         "name": workflow.name,
         "description": workflow.description,
+        "source_kind": workflow.source_kind,
         "is_active": workflow.is_active,
         "steps": steps,
         "triggers": triggers,
@@ -463,6 +491,7 @@ def _serialize_workflow_definition(workflow: WorkflowDefinition) -> dict:
         "diagram": _serialize_workflow_diagram(workflow),
         "step_count": len(steps),
         "trigger_count": len(triggers),
+        "external_trigger_count": external_trigger_count,
         "connection_count": len(connections),
     }
 
@@ -493,6 +522,14 @@ def _normalize_workflow_sort_order(sort_order: Any) -> int:
     return sort_order_value
 
 
+def _get_application_workflow_or_404(workflow_id: str) -> WorkflowDefinition:
+    return get_object_or_404(
+        WorkflowDefinition,
+        pk=workflow_id,
+        source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+    )
+
+
 def _save_workflow_definition_form(
         *,
         workflow_id: str | None,
@@ -501,9 +538,11 @@ def _save_workflow_definition_form(
         is_active: bool,
 ) -> WorkflowDefinition:
     workflow = (
-        get_object_or_404(WorkflowDefinition, pk=workflow_id)
+        _get_application_workflow_or_404(workflow_id)
         if workflow_id
-        else WorkflowDefinition()
+        else WorkflowDefinition(
+            source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+        )
     )
     workflow.name = common.default_str(name).strip()
     workflow.description = common.default_str(description).strip() or None
@@ -526,7 +565,7 @@ def _save_workflow_step_form(
         emits_message_type: str | None,
         sort_order: Any,
 ) -> WorkflowStep:
-    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    workflow = _get_application_workflow_or_404(workflow_id)
     step = (
         get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
         if step_id
@@ -558,7 +597,8 @@ def _save_workflow_trigger_form(
         message_type: str,
         sort_order: Any,
 ) -> WorkflowTrigger:
-    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    workflow = _get_application_workflow_or_404(workflow_id)
+    emitted_message_types = _workflow_emitted_message_types(workflow)
     trigger = (
         get_object_or_404(WorkflowTrigger, pk=trigger_id, workflow=workflow)
         if trigger_id
@@ -567,9 +607,9 @@ def _save_workflow_trigger_form(
     trigger.target_step = get_object_or_404(WorkflowStep, pk=target_step_id, workflow=workflow)
     trigger.message_type = _normalize_workflow_message_type(message_type, required=True)
     trigger.sort_order = _normalize_workflow_sort_order(sort_order)
-    if trigger.message_type not in WORKFLOW_EXTERNAL_TRIGGER_MESSAGE_TYPES:
+    if trigger.message_type in emitted_message_types:
         raise ValueError(
-            "External triggers currently only support time-based PubSub message types."
+            "External triggers must use a PubSub message type that is not emitted by a workflow step."
         )
     trigger.full_clean()
     trigger.save()
@@ -585,7 +625,7 @@ def _save_workflow_connection_form(
         message_type: str,
         sort_order: Any,
 ) -> WorkflowConnection:
-    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    workflow = _get_application_workflow_or_404(workflow_id)
     connection = (
         get_object_or_404(WorkflowConnection, pk=connection_id, workflow=workflow)
         if connection_id
@@ -7835,7 +7875,7 @@ def view_admin_user_detail(request, person_id):
 
 @admin_required
 def view_admin_workflows(request):
-    workflows = list(WorkflowDefinition.with_graph())
+    workflows = list(WorkflowDefinition.application_workflows())
     workflows_data = [_serialize_workflow_definition(workflow) for workflow in workflows]
     workflow_map = {str(workflow.id): workflow for workflow in workflows}
     requested_workflow_id = common.default_str(rget(request, 'workflow_id')).strip()
@@ -7863,7 +7903,7 @@ def view_admin_workflows(request):
         'selected_workflow': selected_workflow,
         'selected_workflow_data': selected_workflow_data,
         'message_type_choices': _workflow_message_type_choices(),
-        'external_trigger_message_type_choices': _workflow_external_trigger_message_type_choices(),
+        'external_trigger_message_type_choices': _workflow_external_trigger_message_type_choices(selected_workflow),
         'business': erieiron_business,
         'tabs': tabs,
         'admin_active_tab': 'workflows',
@@ -7904,7 +7944,7 @@ def action_admin_workflow_save(request):
 @admin_required
 @json_endpoint
 def action_admin_workflow_delete(request, workflow_id):
-    workflow = get_object_or_404(WorkflowDefinition, pk=workflow_id)
+    workflow = _get_application_workflow_or_404(workflow_id)
     workflow_name = workflow.name
     workflow.delete()
 
@@ -7939,7 +7979,11 @@ def action_admin_workflow_step_save(request):
 @admin_required
 @json_endpoint
 def action_admin_workflow_step_delete(request, step_id):
-    step = get_object_or_404(WorkflowStep, pk=step_id)
+    step = get_object_or_404(
+        WorkflowStep,
+        pk=step_id,
+        workflow__source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+    )
     workflow_id = str(step.workflow_id)
     step_name = step.name
     step.delete()
@@ -7977,7 +8021,11 @@ def action_admin_workflow_trigger_save(request):
 @admin_required
 @json_endpoint
 def action_admin_workflow_trigger_delete(request, trigger_id):
-    trigger = get_object_or_404(WorkflowTrigger, pk=trigger_id)
+    trigger = get_object_or_404(
+        WorkflowTrigger,
+        pk=trigger_id,
+        workflow__source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+    )
     workflow_id = str(trigger.workflow_id)
     trigger.delete()
 
@@ -8015,7 +8063,11 @@ def action_admin_workflow_connection_save(request):
 @admin_required
 @json_endpoint
 def action_admin_workflow_connection_delete(request, connection_id):
-    connection = get_object_or_404(WorkflowConnection, pk=connection_id)
+    connection = get_object_or_404(
+        WorkflowConnection,
+        pk=connection_id,
+        workflow__source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+    )
     workflow_id = str(connection.workflow_id)
     connection.delete()
 

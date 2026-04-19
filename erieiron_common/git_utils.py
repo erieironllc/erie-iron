@@ -112,6 +112,47 @@ class GitWrapper:
         
         return self
 
+    def has_head(self) -> bool:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=str(self.source_root),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+
+    def get_remote_default_branch(self, remote: str = "origin") -> str | None:
+        result = subprocess.run(
+            ["git", "ls-remote", "--symref", remote, "HEAD"],
+            cwd=str(self.source_root),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+
+        branch_prefix = "refs/heads/"
+        for line in result.stdout.splitlines():
+            if not line.startswith("ref: "):
+                continue
+            ref_metadata, _, ref_name = line.partition("\t")
+            if ref_name != "HEAD":
+                continue
+            branch_ref = common.safe_get(ref_metadata.split(), 1)
+            if common.default_str(branch_ref).startswith(branch_prefix):
+                return branch_ref[len(branch_prefix):]
+        return None
+
+    def bootstrap_from_remote_head(self, remote: str = "origin") -> str | None:
+        default_branch = self.get_remote_default_branch(remote)
+        if not default_branch:
+            return None
+        self.exec("fetch", remote, default_branch)
+        self.exec("checkout", "-B", default_branch, f"{remote}/{default_branch}")
+        return default_branch
+
     def checkout_ref(self, repo_ref: str) -> str:
         repo_ref = common.assert_not_empty(common.default_str(repo_ref).strip())
         try:

@@ -1,6 +1,6 @@
 from django.db import transaction
 
-from erieiron_common.enums import PubSubMessageType
+from erieiron_common.enums import PubSubMessageType, WorkflowDefinitionSourceKind
 
 
 DEFAULT_WORKFLOW_SPECS = (
@@ -57,11 +57,6 @@ DEFAULT_WORKFLOW_SPECS = (
                 "handler_path": "erieiron_autonomous_agent.coding_agents.coding_agent.on_reset_task_test",
                 "sort_order": 90,
             },
-            {
-                "name": "Handle LLM request",
-                "handler_path": "erieiron_common.llm_request_handler.handle_llm_request",
-                "sort_order": 100,
-            },
         ),
         "triggers": (
             {
@@ -98,11 +93,6 @@ DEFAULT_WORKFLOW_SPECS = (
                 "target_step": "Reset task test",
                 "message_type": PubSubMessageType.RESET_TASK_TEST.value,
                 "sort_order": 70,
-            },
-            {
-                "target_step": "Handle LLM request",
-                "message_type": PubSubMessageType.LLM_REQUEST.value,
-                "sort_order": 80,
             },
         ),
         "connections": (
@@ -386,23 +376,44 @@ DEFAULT_WORKFLOW_SPECS = (
 )
 
 
+INTERNAL_WORKFLOW_SPECS = (
+    {
+        "name": "Erie Iron Internal Workflow",
+        "description": "Runtime-only workflows managed by Erie Iron rather than an application repo.",
+        "steps": (
+            {
+                "name": "Handle LLM request",
+                "handler_path": "erieiron_common.llm_request_handler.handle_llm_request",
+                "sort_order": 10,
+            },
+        ),
+        "triggers": (
+            {
+                "target_step": "Handle LLM request",
+                "message_type": PubSubMessageType.LLM_REQUEST.value,
+                "sort_order": 10,
+            },
+        ),
+        "connections": (),
+    },
+)
+
+
 def sync_default_workflows(apps_registry=None):
-    WorkflowDefinition, WorkflowStep, WorkflowTrigger, WorkflowConnection = _resolve_models(
-        apps_registry
+    return _sync_workflow_specs(
+        DEFAULT_WORKFLOW_SPECS,
+        WorkflowDefinitionSourceKind.APPLICATION_REPO,
+        apps_registry,
     )
-    workflows = []
 
-    for workflow_spec in DEFAULT_WORKFLOW_SPECS:
-        workflows.append(
-            _sync_workflow_spec(
-                workflow_spec,
-                WorkflowDefinition,
-                WorkflowStep,
-                WorkflowTrigger,
-                WorkflowConnection,
-            )
-        )
 
+def sync_internal_workflows(apps_registry=None):
+    workflows = _sync_workflow_specs(
+        INTERNAL_WORKFLOW_SPECS,
+        WorkflowDefinitionSourceKind.ERIE_IRON_INTERNAL,
+        apps_registry,
+    )
+    _remove_legacy_board_workflow_llm_request_step(apps_registry)
     return workflows
 
 
@@ -410,6 +421,27 @@ def remove_default_workflows(apps_registry=None):
     WorkflowDefinition, _, _, _ = _resolve_models(apps_registry)
     workflow_names = [workflow_spec["name"] for workflow_spec in DEFAULT_WORKFLOW_SPECS]
     WorkflowDefinition.objects.filter(name__in=workflow_names).delete()
+
+
+def _sync_workflow_specs(workflow_specs, source_kind, apps_registry=None):
+    WorkflowDefinition, WorkflowStep, WorkflowTrigger, WorkflowConnection = _resolve_models(
+        apps_registry
+    )
+    workflows = []
+
+    for workflow_spec in workflow_specs:
+        workflows.append(
+            _sync_workflow_spec(
+                workflow_spec,
+                WorkflowDefinition,
+                WorkflowStep,
+                WorkflowTrigger,
+                WorkflowConnection,
+                source_kind=source_kind,
+            )
+        )
+
+    return workflows
 
 
 def _resolve_models(apps_registry):
@@ -437,14 +469,22 @@ def _sync_workflow_spec(
     WorkflowStep,
     WorkflowTrigger,
     WorkflowConnection,
+    *,
+    source_kind,
 ):
     with transaction.atomic():
+        workflow_defaults = {
+            "description": workflow_spec.get("description"),
+            "is_active": True,
+        }
+        if any(field.name == "source_kind" for field in WorkflowDefinition._meta.fields):
+            workflow_defaults["source_kind"] = WorkflowDefinitionSourceKind(
+                source_kind
+            ).value
+
         workflow, _ = WorkflowDefinition.objects.update_or_create(
             name=workflow_spec["name"],
-            defaults={
-                "description": workflow_spec.get("description"),
-                "is_active": True,
-            },
+            defaults=workflow_defaults,
         )
 
         step_ids_by_name = {}
@@ -484,3 +524,16 @@ def _sync_workflow_spec(
             )
 
         return workflow
+
+
+def _remove_legacy_board_workflow_llm_request_step(apps_registry=None):
+    WorkflowDefinition, WorkflowStep, _, _ = _resolve_models(apps_registry)
+    if not any(field.name == "source_kind" for field in WorkflowDefinition._meta.fields):
+        return
+
+    WorkflowStep.objects.filter(
+        workflow__name="Board Workflow",
+        workflow__source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
+        name="Handle LLM request",
+        handler_path="erieiron_common.llm_request_handler.handle_llm_request",
+    ).delete()

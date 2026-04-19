@@ -8,7 +8,9 @@ VENV_DIR="${VENV_DIR:-.venv}"
 POSTGRES_FORMULA="${POSTGRES_FORMULA:-postgresql@17}"
 POSTGRES_MAJOR="${POSTGRES_FORMULA#postgresql@}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-LOCAL_DB_NAME="${LOCAL_DB_NAME:-erieiron_local}"
+DEFAULT_LOCAL_DB_NAME="erieiron_v1"
+LOCAL_DB_NAME="${LOCAL_DB_NAME:-}"
+LOCAL_DB_CREATED=false
 
 SKIP_RUNSERVER=false
 RUNSERVER_ARGS=()
@@ -160,8 +162,54 @@ wait_for_postgres() {
 }
 
 database_exists() {
-    psql -h localhost -p "${POSTGRES_PORT}" -d postgres -Atqc \
-        "SELECT 1 FROM pg_database WHERE datname = '${LOCAL_DB_NAME}'" | grep -q '^1$'
+    local escaped_db_name="${LOCAL_DB_NAME//\'/\'\'}"
+
+    psql \
+        -h localhost \
+        -p "${POSTGRES_PORT}" \
+        -d postgres \
+        -Atqc "SELECT 1 FROM pg_database WHERE datname = '${escaped_db_name}'" | grep -q '^1$'
+}
+
+resolve_local_db_name() {
+    local config_path="$1"
+
+    if [[ -n "${LOCAL_DB_NAME}" ]]; then
+        return
+    fi
+
+    LOCAL_DB_NAME="$(
+        python - "${config_path}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+configured_db_name = str(config_payload.get("LOCAL_DB_NAME", "")).strip()
+print(configured_db_name)
+PY
+    )"
+
+    if [[ -z "${LOCAL_DB_NAME}" ]]; then
+        LOCAL_DB_NAME="${DEFAULT_LOCAL_DB_NAME}"
+    fi
+}
+
+ensure_local_database() {
+    if ! database_exists; then
+        print_info "Creating local Postgres database ${LOCAL_DB_NAME}"
+        createdb -h localhost -p "${POSTGRES_PORT}" "${LOCAL_DB_NAME}"
+        LOCAL_DB_CREATED=true
+    fi
+
+    print_info "Ensuring pgvector is installed in ${LOCAL_DB_NAME}"
+    psql \
+        -h localhost \
+        -p "${POSTGRES_PORT}" \
+        -d "${LOCAL_DB_NAME}" \
+        -v ON_ERROR_STOP=1 \
+        -c "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null
 }
 
 ensure_local_runtime_json_file() {
@@ -197,6 +245,12 @@ ensure_current_database_schema() {
 
     print_info "Checking for unapplied Django migrations"
     if python manage.py showmigrations --plan | grep -q '\[ \]'; then
+        if [[ "${LOCAL_DB_CREATED}" == "true" ]]; then
+            print_info "Applying Django migrations to new local database"
+            python manage.py migrate
+            return
+        fi
+
         print_error "The local database has unapplied migrations."
         print_error "Run 'python manage.py migrate' manually, then rerun this script."
         exit 1
@@ -300,12 +354,9 @@ npm install
 print_info "Compiling UI assets"
 npm run compile-ui
 
-if ! database_exists; then
-    print_info "Creating local Postgres database ${LOCAL_DB_NAME}"
-    createdb -h localhost -p "${POSTGRES_PORT}" "${LOCAL_DB_NAME}"
-fi
-
 ensure_local_runtime_files
+resolve_local_db_name "conf/config.json"
+ensure_local_database
 
 WEBAPP_PORT="$(resolve_webapp_port conf/config.json)"
 print_info "Using Django development port ${WEBAPP_PORT}"

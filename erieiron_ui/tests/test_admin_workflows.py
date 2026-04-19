@@ -12,7 +12,7 @@ from erieiron_autonomous_agent.models import (
     WorkflowStep,
     WorkflowTrigger,
 )
-from erieiron_common.enums import PubSubMessageType
+from erieiron_common.enums import PubSubMessageType, WorkflowDefinitionSourceKind
 from erieiron_ui import views
 
 
@@ -69,14 +69,12 @@ def test_view_admin_workflows_builds_selected_workflow_context():
         choice["value"]
         for choice in context["external_trigger_message_type_choices"]
     ]
-    assert external_trigger_message_type_values == [
-        PubSubMessageType.EVERY_MINUTE.value,
-        PubSubMessageType.EVERY_HOUR.value,
-        PubSubMessageType.EVERY_DAY.value,
-        PubSubMessageType.EVERY_WEEK.value,
-    ]
+    assert PubSubMessageType.EVERY_MINUTE.value in external_trigger_message_type_values
+    assert (
+        PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED.value
+        in external_trigger_message_type_values
+    )
     assert PubSubMessageType.ANALYSIS_REQUESTED.value not in external_trigger_message_type_values
-    assert PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED.value not in external_trigger_message_type_values
     selected_workflow_data = next(
         workflow_data
         for workflow_data in context["workflows_data"]
@@ -85,6 +83,7 @@ def test_view_admin_workflows_builds_selected_workflow_context():
     assert selected_workflow_data["id"] == str(workflow.id)
     assert selected_workflow_data["name"] == "Admin Workflow"
     assert selected_workflow_data["description"] == "Workflow admin detail"
+    assert selected_workflow_data["source_kind"] == WorkflowDefinitionSourceKind.APPLICATION_REPO.value
     assert selected_workflow_data["is_active"] is True
     assert selected_workflow_data["steps"] == [
         {
@@ -132,12 +131,14 @@ def test_view_admin_workflows_builds_selected_workflow_context():
     ]
     assert selected_workflow_data["step_count"] == 2
     assert selected_workflow_data["trigger_count"] == 1
+    assert selected_workflow_data["external_trigger_count"] == 1
     assert selected_workflow_data["connection_count"] == 1
     assert selected_workflow_data["diagram"] == {
         "has_content": True,
         "node_count": 3,
         "edge_count": 2,
         "layer_count": 3,
+        "column_count": 1,
         "layers": [
             {
                 "index": 0,
@@ -145,16 +146,22 @@ def test_view_admin_workflows_builds_selected_workflow_context():
                 "title": "External Triggers",
                 "nodes": [
                     {
-                        "id": f"trigger-{workflow.triggers.get().id}",
-                        "object_id": str(workflow.triggers.get().id),
+                        "id": f"trigger-{PubSubMessageType.EVERY_MINUTE.value}",
                         "kind": "trigger",
-                        "title": "Every minute",
-                        "subtitle": "Starts Analyze request",
-                        "detail": PubSubMessageType.EVERY_MINUTE.value,
+                        "title": PubSubMessageType.EVERY_MINUTE.value,
                         "sort_order": 0,
                         "column_index": 0,
-                        "target_step_id": str(source_step.id),
-                        "target_step_name": "Analyze request",
+                        "message_type": PubSubMessageType.EVERY_MINUTE.value,
+                        "message_type_label": "Every minute",
+                        "trigger_count": 1,
+                        "triggers": [
+                            {
+                                "id": str(workflow.triggers.get().id),
+                                "target_step_id": str(source_step.id),
+                                "target_step_name": "Analyze request",
+                                "sort_order": 0,
+                            },
+                        ],
                     },
                 ],
             },
@@ -168,13 +175,8 @@ def test_view_admin_workflows_builds_selected_workflow_context():
                         "object_id": str(source_step.id),
                         "kind": "step",
                         "title": "Analyze request",
-                        "subtitle": "Analysis requested",
-                        "detail": "erieiron_autonomous_agent.board_level_agents.board_analyst.on_analysis_requested",
                         "sort_order": 0,
                         "column_index": 0,
-                        "handler_path": "erieiron_autonomous_agent.board_level_agents.board_analyst.on_analysis_requested",
-                        "emits_message_type": PubSubMessageType.ANALYSIS_REQUESTED.value,
-                        "emits_message_type_label": "Analysis requested",
                     },
                 ],
             },
@@ -188,13 +190,8 @@ def test_view_admin_workflows_builds_selected_workflow_context():
                         "object_id": str(target_step.id),
                         "kind": "step",
                         "title": "Submit request",
-                        "subtitle": "No emitted message",
-                        "detail": "erieiron_autonomous_agent.board_level_agents.corporate_development_agent.submit_business_opportunity",
                         "sort_order": 1,
                         "column_index": 0,
-                        "handler_path": "erieiron_autonomous_agent.board_level_agents.corporate_development_agent.submit_business_opportunity",
-                        "emits_message_type": None,
-                        "emits_message_type_label": None,
                     },
                 ],
             },
@@ -203,9 +200,9 @@ def test_view_admin_workflows_builds_selected_workflow_context():
             {
                 "id": f"trigger-edge-{workflow.triggers.get().id}",
                 "kind": "trigger",
-                "source_node_id": f"trigger-{workflow.triggers.get().id}",
+                "source_node_id": f"trigger-{PubSubMessageType.EVERY_MINUTE.value}",
                 "target_node_id": f"step-{source_step.id}",
-                "label": "Every minute",
+                "label": None,
                 "line_label": PubSubMessageType.EVERY_MINUTE.value,
             },
             {
@@ -213,7 +210,7 @@ def test_view_admin_workflows_builds_selected_workflow_context():
                 "kind": "connection",
                 "source_node_id": f"step-{source_step.id}",
                 "target_node_id": f"step-{target_step.id}",
-                "label": "Analysis requested",
+                "label": PubSubMessageType.ANALYSIS_REQUESTED.value,
                 "line_label": PubSubMessageType.ANALYSIS_REQUESTED.value,
             },
         ],
@@ -221,7 +218,118 @@ def test_view_admin_workflows_builds_selected_workflow_context():
 
 
 @pytest.mark.django_db
-def test_serialize_workflow_diagram_keeps_disconnected_steps_in_first_step_layer():
+def test_view_admin_workflows_hides_internal_runtime_workflows():
+    internal_workflow = WorkflowDefinition.objects.create(
+        name="Internal Runtime Workflow",
+        source_kind=WorkflowDefinitionSourceKind.ERIE_IRON_INTERNAL.value,
+        is_active=True,
+    )
+    application_workflow = WorkflowDefinition.objects.create(
+        name="Application Workflow",
+        is_active=True,
+    )
+
+    request = RequestFactory().get("/admin/workflows/")
+    erieiron_business = SimpleNamespace(name="Erie Iron")
+
+    with patch("erieiron_ui.views._build_portfolio_tabs", return_value=[{"slug": "admin"}]), \
+            patch("erieiron_ui.views.send_response", return_value=HttpResponse("ok")) as mock_send_response, \
+            patch("erieiron_ui.views.Business.get_erie_iron_business", return_value=erieiron_business):
+        response = views.view_admin_workflows.__wrapped__(request)
+
+    assert response.status_code == 200
+    context = mock_send_response.call_args.args[2]
+    assert context["selected_workflow"].id == application_workflow.id
+    assert [workflow_data["id"] for workflow_data in context["workflows_data"]] == [
+        str(application_workflow.id),
+    ]
+    assert str(internal_workflow.id) not in {
+        workflow_data["id"]
+        for workflow_data in context["workflows_data"]
+    }
+
+
+@pytest.mark.django_db
+def test_serialize_workflow_diagram_groups_external_triggers_by_message_type():
+    workflow = WorkflowDefinition.objects.create(name="Grouped Trigger Workflow")
+    first_step = WorkflowStep.objects.create(
+        workflow=workflow,
+        name="First task",
+        handler_path="erieiron_autonomous_agent.board_level_agents.corporate_development_agent.find_new_business_opportunity",
+        sort_order=0,
+    )
+    second_step = WorkflowStep.objects.create(
+        workflow=workflow,
+        name="Second task",
+        handler_path="erieiron_autonomous_agent.board_level_agents.corporate_development_agent.submit_business_opportunity",
+        sort_order=1,
+    )
+    first_trigger = WorkflowTrigger.objects.create(
+        workflow=workflow,
+        target_step=first_step,
+        message_type=PubSubMessageType.EVERY_MINUTE.value,
+        sort_order=0,
+    )
+    second_trigger = WorkflowTrigger.objects.create(
+        workflow=workflow,
+        target_step=second_step,
+        message_type=PubSubMessageType.EVERY_MINUTE.value,
+        sort_order=1,
+    )
+
+    diagram = views._serialize_workflow_diagram(workflow)
+
+    assert diagram["column_count"] == 2
+    trigger_layer = next(layer for layer in diagram["layers"] if layer["index"] == 0)
+    assert trigger_layer["nodes"] == [
+        {
+            "id": f"trigger-{PubSubMessageType.EVERY_MINUTE.value}",
+            "kind": "trigger",
+            "title": PubSubMessageType.EVERY_MINUTE.value,
+            "sort_order": 0,
+            "column_index": 0,
+            "message_type": PubSubMessageType.EVERY_MINUTE.value,
+            "message_type_label": "Every minute",
+            "trigger_count": 2,
+            "triggers": [
+                {
+                    "id": str(first_trigger.id),
+                    "target_step_id": str(first_step.id),
+                    "target_step_name": "First task",
+                    "sort_order": 0,
+                },
+                {
+                    "id": str(second_trigger.id),
+                    "target_step_id": str(second_step.id),
+                    "target_step_name": "Second task",
+                    "sort_order": 1,
+                },
+            ],
+        },
+    ]
+    trigger_edges = [edge for edge in diagram["edges"] if edge["kind"] == "trigger"]
+    assert trigger_edges == [
+        {
+            "id": f"trigger-edge-{first_trigger.id}",
+            "kind": "trigger",
+            "source_node_id": f"trigger-{PubSubMessageType.EVERY_MINUTE.value}",
+            "target_node_id": f"step-{first_step.id}",
+            "label": None,
+            "line_label": PubSubMessageType.EVERY_MINUTE.value,
+        },
+        {
+            "id": f"trigger-edge-{second_trigger.id}",
+            "kind": "trigger",
+            "source_node_id": f"trigger-{PubSubMessageType.EVERY_MINUTE.value}",
+            "target_node_id": f"step-{second_step.id}",
+            "label": None,
+            "line_label": PubSubMessageType.EVERY_MINUTE.value,
+        },
+    ]
+
+
+@pytest.mark.django_db
+def test_serialize_workflow_diagram_keeps_disconnected_steps_in_first_step_layer_and_filters_internal_triggers():
     workflow = WorkflowDefinition.objects.create(name="Workflow Graph")
     triggered_step = WorkflowStep.objects.create(
         workflow=workflow,
@@ -248,6 +356,12 @@ def test_serialize_workflow_diagram_keeps_disconnected_steps_in_first_step_layer
         message_type=PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED.value,
         sort_order=0,
     )
+    WorkflowTrigger.objects.create(
+        workflow=workflow,
+        target_step=downstream_step,
+        message_type=PubSubMessageType.ANALYSIS_REQUESTED.value,
+        sort_order=1,
+    )
     WorkflowConnection.objects.create(
         workflow=workflow,
         source_step=triggered_step,
@@ -259,6 +373,10 @@ def test_serialize_workflow_diagram_keeps_disconnected_steps_in_first_step_layer
     diagram = views._serialize_workflow_diagram(workflow)
 
     assert diagram["layer_count"] == 3
+    trigger_layer = next(layer for layer in diagram["layers"] if layer["index"] == 0)
+    assert [node["title"] for node in trigger_layer["nodes"]] == [
+        PubSubMessageType.PORTFOLIO_ADD_BUSINESSES_REQUESTED.value,
+    ]
     first_step_layer = next(layer for layer in diagram["layers"] if layer["index"] == 1)
     assert [node["title"] for node in first_step_layer["nodes"]] == [
         "Triggered step",
@@ -281,7 +399,7 @@ def test_save_workflow_trigger_form_rejects_task_emitted_message_type():
 
     with pytest.raises(
         ValueError,
-        match="External triggers currently only support time-based PubSub message types.",
+        match="External triggers must use a PubSub message type that is not emitted by a workflow step.",
     ):
         views._save_workflow_trigger_form(
             workflow_id=str(workflow.id),
