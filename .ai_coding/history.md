@@ -1,3 +1,21 @@
+# 2026-04-19 19:39:45
+$IMPL - dropped the stray `business-conversations` class from the root chat template and rewrote the root-chat SCSS sizing to fill the viewport as a flex column with a centered 52rem chat column so the input stops being shifted left and the chat fills the window properly.
+
+Suggested next step: open http://127.0.0.1:8000/ and send a few messages to confirm the new sizing holds with full conversations and both the user- and assistant-message columns look right.
+
+
+# 2026-04-19 19:01:02
+$FIX - gated async client-message publish on websocket configuration so local root-chat completions fall back to polling instead of crashing on a missing AWS cloud account, and added a regression test for the no-websocket path.
+
+Suggested next step: open the root chat locally and confirm a queued reply appears while websocket delivery is disabled so the polling path is exercised end to end.
+
+
+# 2026-04-19 18:19:40
+$IMPL - updated the shared skill instructions so Playwright-based UI inspection is explicitly allowed for HTML/CSS/UI changes without being treated as a test run.
+
+Suggested next step: review the updated wording, then use it on the next UI/CSS change to confirm the guidance is clear in practice.
+
+
 # 2026-04-19 16:58:40
 $IMPL - added Rename chat to the root-chat sidebar row menu, wired a root conversation rename endpoint, and updated the shared conversation view so sidebar labels refresh immediately after rename.
 

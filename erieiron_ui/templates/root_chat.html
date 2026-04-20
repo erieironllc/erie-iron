@@ -4,7 +4,7 @@
 
 {% block content %}
     <div id="root-chat-root"
-         class="root-chat business-conversations"
+         class="root-chat"
          data-create-url="{% url 'root_conversation_create' %}"
          data-detail-url-template="/api/root/conversations/__CONVERSATION_ID__/"
          data-message-url-template="/api/root/conversations/__CONVERSATION_ID__/message/"
@@ -72,8 +72,6 @@
             </aside>
 
             <section class="root-chat__main">
-                <div class="alert d-none" data-role="status"></div>
-
                 <div class="conversation-layout">
                     <div class="conversation-container">
                         <div class="messages-container" data-role="messages-container">

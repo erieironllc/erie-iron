@@ -1,12 +1,16 @@
 .root-chat {
-  min-height: calc(100vh - 5.5rem);
-  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 4.25rem);
+  max-height: calc(100vh - 4.25rem);
+  padding: 1rem;
 
   &__shell {
     display: grid;
     grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr);
     gap: 1rem;
-    min-height: calc(100vh - 8.5rem);
+    flex: 1;
+    min-height: 0;
   }
 
   &__sidebar {
@@ -24,6 +28,8 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    height: 100%;
+    overflow: hidden;
   }
 
   &__header {
@@ -200,38 +206,65 @@
   }
 
   .conversation-layout {
-    height: calc(100vh - 14.5rem);
-    max-height: calc(100vh - 14.5rem);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    position: relative;
+    overflow: hidden;
   }
 
   .conversation-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    height: 100%;
+    overflow: hidden;
   }
 
   .messages-container {
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 1.5rem max(1rem, calc((100% - 52rem) / 2));
     min-width: 0;
+
+    &::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: rgba($nav-bg, 0.3);
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: rgba($text-muted-color, 0.5);
+      border-radius: 4px;
+
+      &:hover {
+        background: rgba($text-muted-color, 0.7);
+      }
+    }
   }
 
   .message-input-wrapper {
-    position: static;
-    left: auto;
-    right: auto;
-    bottom: auto;
+    position: relative;
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    padding: 0;
+    padding: 1rem 1.5rem 1.5rem 1.5rem;
+    margin: 0;
     background: transparent;
     border: 0;
     border-radius: 0;
     box-shadow: none;
     z-index: auto;
-    flex: 0 0 auto;
+    flex-shrink: 0;
   }
 
   &__composer {
@@ -240,23 +273,31 @@
     gap: 0.75rem;
     align-items: end;
     width: 100%;
-    max-width: 100%;
-    padding: 1rem 1.25rem;
-    border-top: 1px solid rgba($primary, 0.12);
-    background: rgba($dark, 0.92);
+    max-width: 52rem;
+    margin: 0 auto;
+    padding: 0;
 
     textarea.form-control {
       min-height: 3.5rem;
       max-height: 12rem;
       resize: vertical;
-      border-radius: 0.5rem;
-      border-color: rgba($primary, 0.18);
-      background: rgba($body-bg, 0.88);
+      border-radius: 0.75rem;
+      border: 1px solid rgba($primary, 0.18);
+      background: rgba($body-bg, 0.95);
       color: $light;
+      padding: 0.875rem 1rem;
+      font-size: 0.9375rem;
+      line-height: 1.5;
+
+      &::placeholder {
+        color: rgba($text-muted-color, 0.7);
+      }
 
       &:focus {
+        outline: none;
         border-color: rgba($primary, 0.5);
-        box-shadow: 0 0 0 0.25rem rgba($primary, 0.15);
+        box-shadow: 0 0 0 3px rgba($primary, 0.12);
+        background: rgba($body-bg, 1);
       }
     }
   }
@@ -268,6 +309,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    align-self: flex-end;
+    margin-bottom: 0.25rem;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   }
 
   &__empty-state {
@@ -293,8 +341,225 @@
     line-height: 1.6;
   }
 
+  .conversation-message {
+    margin-bottom: 1.5rem;
+    padding: 1.25rem 1.5rem;
+    border-radius: 0.75rem;
+    animation: fadeIn 0.3s ease-in;
+
+    &.message-user {
+      background-color: rgba($primary, 0.12);
+      border-left: 3px solid rgba($primary, 0.6);
+      max-width: 75%;
+      margin-left: auto;
+      margin-right: 0;
+    }
+
+    &.message-assistant {
+      background-color: rgba($dark, 0.5);
+      border-left: 3px solid rgba($success, 0.6);
+    }
+
+    .message-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+
+      .copy-btn {
+        opacity: 0;
+        transition: opacity 0.15s ease;
+        color: $text-muted-color;
+        background: none;
+        border: none;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.875rem;
+        cursor: pointer;
+
+        &:hover {
+          color: $light;
+        }
+      }
+    }
+
+    &:hover .message-header .copy-btn {
+      opacity: 1;
+    }
+
+    .message-role {
+      font-weight: 600;
+      font-size: 0.875rem;
+      color: $light;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .message-content {
+      line-height: 1.65;
+      color: $light;
+      font-size: 0.9375rem;
+
+      p {
+        margin-bottom: 1rem;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+
+      code {
+        background-color: rgba($light, 0.15);
+        color: $light;
+        padding: 0.2rem 0.4rem;
+        border-radius: 0.25rem;
+        font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Monaco, monospace;
+        font-size: 0.875em;
+      }
+
+      pre {
+        background-color: rgba($dark, 0.7);
+        color: $light;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin: 1rem 0;
+
+        code {
+          background: none;
+          padding: 0;
+        }
+      }
+
+      strong {
+        font-weight: 600;
+      }
+
+      em {
+        font-style: italic;
+      }
+    }
+
+    .message-timestamp {
+      font-size: 0.75rem;
+      color: $text-muted-color;
+      margin-top: 0.75rem;
+      display: block;
+    }
+  }
+
+  .change-proposal {
+    margin: 1.5rem 0;
+    padding: 1.25rem;
+    border: 2px solid $warning;
+    border-radius: 0.75rem;
+    background-color: rgba($warning, 0.12);
+    width: 100%;
+    animation: slideIn 0.4s ease-out;
+
+    &.alert-success {
+      border-color: $success;
+      background-color: rgba($success, 0.12);
+    }
+
+    .alert-heading {
+      margin-bottom: 0.75rem;
+      font-size: 1.125rem;
+      color: $light;
+
+      i {
+        margin-right: 0.5rem;
+      }
+    }
+
+    details {
+      summary {
+        cursor: pointer;
+        font-weight: 500;
+        color: $light;
+        user-select: none;
+
+        &:hover {
+          color: $white;
+        }
+      }
+
+      pre {
+        margin-top: 0.5rem;
+        font-size: 0.85rem;
+        max-height: 300px;
+        overflow-y: auto;
+        background-color: rgba($dark, 0.6);
+        color: $light;
+        padding: 1rem;
+        border-radius: 0.5rem;
+      }
+    }
+
+    .btn {
+      i {
+        margin-right: 0.25rem;
+      }
+    }
+  }
+
+  .loading-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    color: $text-muted-color;
+    width: 100%;
+
+    .spinner {
+      display: inline-block;
+      width: 1.5rem;
+      height: 1.5rem;
+      border: 2px solid rgba($primary, 0.1);
+      border-radius: 50%;
+      border-top-color: $primary;
+      animation: spin 0.8s linear infinite;
+      margin-right: 0.75rem;
+    }
+
+    .loading-text {
+      font-size: 0.9375rem;
+      font-weight: 500;
+      color: $light;
+    }
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateX(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   @media (max-width: 991.98px) {
     padding: 1rem;
+    height: auto;
+    max-height: none;
 
     &__shell {
       grid-template-columns: 1fr;
@@ -314,8 +579,36 @@
     }
 
     .conversation-layout {
-      height: calc(100vh - 16rem);
-      max-height: calc(100vh - 16rem);
+      flex: 1;
+    }
+
+    .conversation-message {
+      padding: 1rem;
+
+      &.message-user {
+        max-width: 70%;
+        margin-right: 0.5rem;
+      }
+
+      &.message-assistant {
+        max-width: 100%;
+      }
+    }
+
+    &__composer {
+      max-width: 100%;
+      padding: 0 0.5rem;
+    }
+
+    .message-input-wrapper {
+      padding: 1rem 0.5rem;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .conversation-message {
+      padding: 0.875rem 1rem;
+      border-radius: 0.5rem;
     }
   }
 }

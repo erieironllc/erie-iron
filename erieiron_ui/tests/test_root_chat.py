@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from django.http import HttpResponse
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
 
 from erieiron_autonomous_agent.models import (
@@ -219,6 +219,65 @@ def test_handle_llm_request_publishes_root_conversation_payload():
     assert published_payload["conversation_id"] == str(conversation.id)
     assert published_payload["assistant_message"]["content"] == "I can prepare that workflow change."
     assert conversation.messages.filter(role="assistant", content="I can prepare that workflow change.").exists()
+
+
+@pytest.mark.django_db
+@override_settings(CLIENT_MESSAGE_WEBSOCKET_ENDPOINT="")
+def test_handle_llm_request_skips_websocket_publish_without_endpoint():
+    person = Person.objects.create(
+        email="root-chat-local@example.com",
+        name="Root Chat Local",
+    )
+    erieiron_business = Business.get_erie_iron_business()
+    conversation = BusinessConversation.objects.create(
+        business=erieiron_business,
+        title="Root Ops Chat",
+        status="active",
+    )
+    ConversationMessage.objects.create(
+        conversation=conversation,
+        role="user",
+        content="Add a new workflow",
+    )
+
+    llm_response = LlmResponse(
+        text="I can prepare that workflow change.",
+        model=LlmModel.OPENAI_GPT_5_1,
+        input_token_count=10,
+        output_token_count=20,
+        chat_millis=123.0,
+    )
+    llm_response.set_llm_request_id(uuid4())
+
+    with patch(
+        "erieiron_common.llm_request_handler.system_agent_llm_interface.llm_chat",
+        return_value=llm_response,
+    ), patch(
+        "erieiron_ui.views.RootConversationManager.suggest_conversation_title",
+        return_value=None,
+    ), patch(
+        "erieiron_common.aws_utils.get_aws_interface",
+    ) as mock_get_aws_interface:
+        handle_llm_request(
+            {
+                "person_id": str(person.id),
+                "description": "Erie Iron root conversation",
+                "messages": [],
+                "model": LlmModel.OPENAI_GPT_5_1.value,
+                "completion_handler_path": "erieiron_ui.views.complete_root_conversation_llm_response",
+                "completion_handler_data": {"conversation_id": str(conversation.id)},
+                "client_context": {
+                    "client_event_type": "root_conversation_response",
+                    "conversation_id": str(conversation.id),
+                },
+            }
+        )
+
+    mock_get_aws_interface.assert_not_called()
+    assert conversation.messages.filter(
+        role="assistant",
+        content="I can prepare that workflow change.",
+    ).exists()
 
 
 @pytest.mark.django_db
