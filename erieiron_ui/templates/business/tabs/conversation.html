@@ -4,6 +4,11 @@
     <div id="business-conversations-root"
          class="business-conversations"
          data-business-id="{{ business.id }}"
+         data-create-url="{% url 'business_conversation_create' business.id %}"
+         data-detail-url-template="/api/conversation/__CONVERSATION_ID__/"
+         data-message-url-template="/api/conversation/__CONVERSATION_ID__/message/"
+         data-delete-url-template="/api/conversation/__CONVERSATION_ID__/delete/"
+         data-default-conversation-title="Business Discussion"
          {% if current_conversation %}data-conversation-id="{{ current_conversation.id }}"{% endif %}>
 
         <div class="d-flex justify-content-between align-items-start mb-3">

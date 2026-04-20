@@ -3693,7 +3693,8 @@ class ConversationChange(BaseErieIronModel):
         ('architecture', 'Architecture'),
         ('infrastructure', 'Infrastructure'),
         ('initiative', 'New Initiative'),
-        ('task', 'New Task')
+        ('task', 'Task'),
+        ('workflow', 'Workflow'),
     ])
     change_description = models.TextField(help_text="Human-readable description of proposed change")
     change_details = models.JSONField(encoder=ErieIronJSONEncoder,

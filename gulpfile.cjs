@@ -23,7 +23,19 @@ const paths = {
             './node_modules/backbone/backbone.js',
             './node_modules/bootstrap/dist/js/bootstrap.bundle.js',
             './erieiron_common/js/**/*.js',
-            './erieiron_ui/js/**/*.js'
+            './erieiron_ui/js/view-conversation-base.js',
+            './erieiron_ui/js/view-business-conversations.js',
+            './erieiron_ui/js/view-business-plan.js',
+            './erieiron_ui/js/view-businesses-llm_spend.js',
+            './erieiron_ui/js/view-cloud-accounts.js',
+            './erieiron_ui/js/view-codefile.js',
+            './erieiron_ui/js/view-credentials.js',
+            './erieiron_ui/js/view-debug-assistance.js',
+            './erieiron_ui/js/view-infrastructure-stacks.js',
+            './erieiron_ui/js/view-iteration.js',
+            './erieiron_ui/js/view-llm_request.js',
+            './erieiron_ui/js/view-niche-ideas.js',
+            './erieiron_ui/js/view-root-chat.js',
         ],
         dest: './erieiron_ui/static/compiled/'
     }

@@ -5,6 +5,8 @@ from django.http import HttpResponse
 from django.test import RequestFactory
 
 from erieiron_common import view_utils
+from erieiron_common.enums import LlmModel
+from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 
 def test_get_current_user_uses_local_admin_identity_when_bypass_enabled():
@@ -57,3 +59,32 @@ def test_send_response_normalizes_allowed_back_dest_patterns():
     assert response.cookies["csrftoken"].value == "csrf-token"
     _, _, context = mock_render.call_args.args
     assert set(context["allowed_back_dests"]) == {"portfolio", "business"}
+
+
+def test_request_llm_async_flattens_nested_messages():
+    person = SimpleNamespace(id="person-id", email="person@example.com")
+    messages = [
+        LlmMessage.user("first message"),
+        [
+            LlmMessage.assistant("second message"),
+            None,
+        ],
+    ]
+
+    with patch(
+        "erieiron_common.message_queue.pubsub_manager.PubSubManager.publish",
+        return_value="queued-message",
+    ) as mock_publish:
+        queued_message = view_utils.request_llm_async(
+            person=person,
+            description="Nested message test",
+            messages=messages,
+            model=LlmModel.OPENAI_GPT_5_MINI,
+        )
+
+    assert queued_message == "queued-message"
+    payload = mock_publish.call_args.kwargs["payload"]
+    assert payload["messages"] == [
+        {"message_type": "user", "text": "first message"},
+        {"message_type": "assistant", "text": "second message"},
+    ]

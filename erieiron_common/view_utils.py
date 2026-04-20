@@ -335,7 +335,9 @@ def send_response(request, template, context=None, validate=False, status_code=2
     try:
         current_user = get_current_user(request)
         context['current_user'] = current_user
-        context['websocket_url'] = f"wss://{settings.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT}?uid={current_user.pk}"
+        websocket_endpoint = common.default_str(settings.CLIENT_MESSAGE_WEBSOCKET_ENDPOINT).strip()
+        if websocket_endpoint and websocket_endpoint.lower() != "none":
+            context['websocket_url'] = f"wss://{websocket_endpoint}?uid={current_user.pk}"
         context['consent_to_cookies'] = current_user.cookie_consent == 'accepted'
         context['current_user_id'] = current_user.id
         context['is_dev_view'] = current_user.has_role(Role.DEVELOPER) and settings.DEBUG
@@ -564,7 +566,10 @@ def request_llm_async(
         creativity=None,
         code_response=False,
         completion_view_url=None,
-        completion_view_data=None
+        completion_view_data=None,
+        completion_handler_path=None,
+        completion_handler_data=None,
+        client_context=None,
 ):
     """
     Helper function to publish an async LLM request to the PubSub queue.
@@ -585,6 +590,9 @@ def request_llm_async(
         code_response: bool - Whether response is code
         completion_view_url: Optional URL to POST results to (Option B pattern)
         completion_view_data: Optional dict of additional data to pass to completion view
+        completion_handler_path: Optional dotted Python path for post-processing the LLM response
+        completion_handler_data: Optional dict of additional data to pass to the completion handler
+        client_context: Optional dict merged into websocket success/error payloads
 
     Returns:
         PubSubMessage object that was created
@@ -613,6 +621,8 @@ def request_llm_async(
     from erieiron_common.enums import PubSubMessageType, LlmReasoningEffort, LlmVerbosity, LlmCreativity
     from erieiron_common.message_queue.pubsub_manager import PubSubManager
 
+    messages = common.filter_none(common.flatten(common.ensure_list(messages)))
+
     # Serialize messages to dict format for payload
     messages_data = []
     for msg in messages:
@@ -620,7 +630,7 @@ def request_llm_async(
             "message_type": msg.message_type.value,
             "text": msg.text
         }
-        if hasattr(msg, 'file') and msg.file:
+        if msg.file:
             # Note: file handling requires additional serialization
             # For now, we'll skip files in async requests
             pass
@@ -657,6 +667,12 @@ def request_llm_async(
         payload["completion_view_url"] = completion_view_url
     if completion_view_data:
         payload["completion_view_data"] = completion_view_data
+    if completion_handler_path:
+        payload["completion_handler_path"] = completion_handler_path
+    if completion_handler_data:
+        payload["completion_handler_data"] = completion_handler_data
+    if client_context:
+        payload["client_context"] = client_context
 
     # Publish to PubSub
     message = PubSubManager.publish(

@@ -12,9 +12,14 @@ from erieiron_autonomous_agent.models import (
     ConversationMessage,
     ConversationChange,
     LlmRequest,
-    Business
+    Business,
+    Initiative,
+    Task,
+    WorkflowDefinition,
 )
+from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_common.enums import LlmModel, LlmVerbosity
+from erieiron_common.enums import PubSubMessageType, TaskExecutionSchedule, TaskImplementationPhase, TaskType
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 
 logger = logging.getLogger(__name__)
@@ -251,3 +256,191 @@ New title:"""
             }
             for msg in self.conversation.messages.all()
         ]
+
+
+class RootConversationManager(BusinessConversationManager):
+    def build_root_context_snapshot(self, *, can_manage_workflows: bool) -> dict:
+        workflows = list(WorkflowDefinition.application_workflows())
+        initiatives = list(
+            Initiative.objects.select_related("business")
+            .order_by("-created_timestamp")[:100]
+        )
+        tasks = list(
+            Task.objects.select_related("initiative", "initiative__business")
+            .order_by("-created_timestamp")[:150]
+        )
+
+        return {
+            "scope": "erie_iron_root_operations",
+            "workflow_management_enabled": can_manage_workflows,
+            "workflow_message_types": [
+                value
+                for value, _label in PubSubMessageType.choices()
+            ],
+            "task_status_choices": [
+                value
+                for value, _label in TaskStatus.choices()
+            ],
+            "task_type_choices": [
+                value
+                for value, _label in TaskType.choices()
+            ],
+            "task_execution_schedule_choices": [
+                value
+                for value, _label in TaskExecutionSchedule.choices()
+            ],
+            "task_implementation_phase_choices": [
+                value
+                for value, _label in TaskImplementationPhase.choices()
+            ],
+            "workflows": [
+                {
+                    "id": str(workflow.id),
+                    "name": workflow.name,
+                    "description": workflow.description,
+                    "is_active": workflow.is_active,
+                    "steps": [
+                        {
+                            "id": str(step.id),
+                            "name": step.name,
+                            "handler_path": step.handler_path,
+                            "emits_message_type": step.emits_message_type,
+                            "sort_order": step.sort_order,
+                        }
+                        for step in workflow.steps.all()
+                    ],
+                    "triggers": [
+                        {
+                            "id": str(trigger.id),
+                            "target_step_id": str(trigger.target_step_id),
+                            "target_step_name": trigger.target_step.name,
+                            "message_type": trigger.message_type,
+                            "sort_order": trigger.sort_order,
+                        }
+                        for trigger in workflow.triggers.all()
+                    ],
+                    "connections": [
+                        {
+                            "id": str(connection.id),
+                            "source_step_id": str(connection.source_step_id),
+                            "source_step_name": connection.source_step.name,
+                            "target_step_id": str(connection.target_step_id),
+                            "target_step_name": connection.target_step.name,
+                            "message_type": connection.message_type,
+                            "sort_order": connection.sort_order,
+                        }
+                        for connection in workflow.connections.all()
+                    ],
+                }
+                for workflow in workflows
+            ],
+            "initiatives": [
+                {
+                    "id": initiative.id,
+                    "title": initiative.title,
+                    "business_id": str(initiative.business_id),
+                    "business_name": initiative.business.name,
+                    "description": initiative.description,
+                    "priority": initiative.priority,
+                    "initiative_type": initiative.initiative_type,
+                }
+                for initiative in initiatives
+            ],
+            "tasks": [
+                {
+                    "id": task.id,
+                    "initiative_id": task.initiative_id,
+                    "initiative_title": task.initiative.title,
+                    "business_id": str(task.initiative.business_id),
+                    "business_name": task.initiative.business.name,
+                    "description": task.description,
+                    "status": task.status,
+                    "task_type": task.task_type,
+                    "risk_notes": task.risk_notes,
+                    "completion_criteria": task.completion_criteria,
+                    "requires_test": task.requires_test,
+                    "execution_schedule": task.execution_schedule,
+                    "prompt_improvement_schedule": task.prompt_improvement_schedule,
+                    "implementation_phase": task.implementation_phase,
+                    "timeout_seconds": task.timeout_seconds,
+                    "max_budget_usd": task.max_budget_usd,
+                    "execution_start_time": task.execution_start_time.isoformat() if task.execution_start_time else None,
+                }
+                for task in tasks
+            ],
+            "workflow_count": len(workflows),
+            "initiative_count": Initiative.objects.count(),
+            "task_count": Task.objects.count(),
+            "task_context_limited": Task.objects.count() > len(tasks),
+            "initiative_context_limited": Initiative.objects.count() > len(initiatives),
+        }
+
+    def build_llm_messages(self, *, can_manage_workflows: bool) -> list[LlmMessage]:
+        return [
+            LlmMessage.sys(
+                (system_agent_llm_interface.BASE_PROMPTS_PATH / "root_conversation_assistant.md").read_text()
+            ),
+            LlmMessage.user_from_data(
+                "Erie Iron Operations Context",
+                self.build_root_context_snapshot(can_manage_workflows=can_manage_workflows),
+            ),
+            self.get_conversation_history(),
+        ]
+
+    def finalize_llm_response(
+            self,
+            *,
+            response_text: str,
+            llm_request_id: str | None = None,
+    ) -> tuple[ConversationMessage, list[ConversationChange]]:
+        assistant_msg = ConversationMessage.objects.create(
+            conversation=self.conversation,
+            role='assistant',
+            content=response_text,
+            llm_request_id=llm_request_id,
+        )
+
+        self.conversation.updated_at = timezone.now()
+        self.conversation.save()
+
+        changes = self.parse_change_proposals(response_text, assistant_msg)
+
+        suggested_title = self.suggest_conversation_title()
+        if suggested_title and suggested_title != self.conversation.title:
+            logger.info(
+                "Updating root conversation title from '%s' to '%s'",
+                self.conversation.title,
+                suggested_title,
+            )
+            self.conversation.title = suggested_title
+            self.conversation.save()
+
+        logger.info(
+            "Generated root response with %s change proposals for conversation %s",
+            len(changes),
+            self.conversation.id,
+        )
+        return assistant_msg, changes
+
+    def generate_response(
+            self,
+            model: Optional[LlmModel] = LlmModel.OPENAI_GPT_5_1,
+            *,
+            can_manage_workflows: bool,
+    ) -> tuple[ConversationMessage, list[ConversationChange]]:
+        logger.info(
+            "Generating root conversation response for %s using %s",
+            self.conversation.id,
+            model,
+        )
+        response = system_agent_llm_interface.llm_chat(
+            tag_entity=self.conversation.business,
+            description=f"Erie Iron root conversation for {self.conversation.business.name}",
+            messages=self.build_llm_messages(can_manage_workflows=can_manage_workflows),
+            model=model,
+            verbosity=LlmVerbosity.MEDIUM,
+        )
+        return self.finalize_llm_response(
+            response_text=response.text,
+            llm_request_id=response.llm_request_id,
+        )

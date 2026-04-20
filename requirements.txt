@@ -32,9 +32,11 @@ numpy<2.0.0
 openai>=1.102.0
 pgvector
 pillow
+playwright
 psutil
 psycopg2-binary
 Pygments
+pytest-playwright
 python-pptx>=0.6.21
 pytest-django
 python-dateutil>=2.8.0

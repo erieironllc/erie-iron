@@ -3,7 +3,7 @@ from django.urls import path
 from erieiron_ui import views
 
 urlpatterns = [
-    path("", views.view_portfolio, name="view_home"),
+    path("", views.view_home, name="view_home"),
     path("login/", views.view_login, name="view_login"),
     path("logout/", views.action_logout, name="action_logout"),
     path("access-denied/", views.view_access_denied, name="view_access_denied"),
@@ -116,6 +116,13 @@ urlpatterns = [
     # Business Conversations
     path('api/business/<uuid:business_id>/conversations/', views.business_conversations_list, name='business_conversations_list'),
     path('api/business/<uuid:business_id>/conversations/create/', views.business_conversation_create, name='business_conversation_create'),
+    path('api/root/conversations/', views.root_conversations_list, name='root_conversations_list'),
+    path('api/root/conversations/create/', views.root_conversation_create, name='root_conversation_create'),
+    path('api/root/conversations/<uuid:conversation_id>/rename/', views.root_conversation_rename, name='root_conversation_rename'),
+    path('api/root/conversations/<uuid:conversation_id>/', views.root_conversation_detail, name='root_conversation_detail'),
+    path('api/root/conversations/<uuid:conversation_id>/delete/', views.root_conversation_delete, name='root_conversation_delete'),
+    path('api/root/conversations/<uuid:conversation_id>/message/', views.root_conversation_message, name='root_conversation_message'),
+    path('api/root/conversations/<uuid:conversation_id>/message-status/', views.root_conversation_message_status, name='root_conversation_message_status'),
     path('api/conversation/<uuid:conversation_id>/', views.business_conversation_detail, name='business_conversation_detail'),
     path('api/conversation/<uuid:conversation_id>/delete/', views.business_conversation_delete, name='business_conversation_delete'),
     path('api/conversation/<uuid:conversation_id>/message/', views.business_conversation_message, name='business_conversation_message'),

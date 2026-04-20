@@ -25,9 +25,13 @@ def handle_llm_request(payload: dict, message=None):
         "creativity": str (optional, default: "NONE"),
         "code_response": bool (optional, default: False),
         "completion_view_url": str (optional - URL to POST results to),
-        "completion_view_data": dict (optional - additional data to pass to completion view)
+        "completion_view_data": dict (optional - additional data to pass to completion view),
+        "completion_handler_path": str (optional - dotted Python path to post-process the LLM response),
+        "completion_handler_data": dict (optional - additional data for the completion handler),
+        "client_context": dict (optional - merged into websocket success/error payloads)
     }
     """
+    person_id = None
     try:
         # Extract person
         person_id = payload.get("person_id")
@@ -82,9 +86,13 @@ def handle_llm_request(payload: dict, message=None):
             "text": resp.text,
             "price_total": resp.price_total,
             "chat_millis": resp.chat_millis,
-            "model": resp.model.value if hasattr(resp, 'model') and resp.model else model.value,
+            "model": resp.model.value if resp.model else model.value,
             "original_description": description
         }
+
+        client_context = payload.get("client_context")
+        if client_context:
+            response_payload.update(client_context)
 
         # If output schema was provided, include parsed JSON
         if output_schema:
@@ -93,6 +101,16 @@ def handle_llm_request(payload: dict, message=None):
             except Exception as e:
                 logging.exception(e)
                 response_payload["json_parse_error"] = str(e)
+
+        completion_handler_path = payload.get("completion_handler_path")
+        if completion_handler_path:
+            response_payload.update(
+                _call_completion_handler(
+                    completion_handler_path=completion_handler_path,
+                    request_payload=payload,
+                    llm_response=response_payload,
+                )
+            )
 
         # If completion view URL is provided, POST to it (Option B)
         completion_view_url = payload.get("completion_view_url")
@@ -124,7 +142,8 @@ def handle_llm_request(payload: dict, message=None):
                     message_type=ClientMessage.LLM_RESPONSE_READY,
                     payload={
                         "error": str(e),
-                        "original_description": payload.get("description", "Unknown")
+                        "original_description": payload.get("description", "Unknown"),
+                        **(payload.get("client_context") or {}),
                     }
                 )
         except Exception as e2:
@@ -197,3 +216,18 @@ def _call_completion_view(completion_view_url: str, llm_response: dict, addition
 
     except Exception as e:
         logging.exception(f"Failed to call completion view {completion_view_url}: {e}")
+
+
+def _call_completion_handler(
+        *,
+        completion_handler_path: str,
+        request_payload: dict,
+        llm_response: dict,
+) -> dict:
+    completion_handler = common.deserialize_symbol(completion_handler_path)
+    completion_payload = completion_handler(
+        request_payload=request_payload,
+        llm_response=llm_response,
+        completion_data=request_payload.get("completion_handler_data") or {},
+    )
+    return completion_payload or {}

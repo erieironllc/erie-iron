@@ -9,12 +9,14 @@ from erieiron_autonomous_agent.models import (
     Initiative,
     Task,
     LlmRequest,
-    InfrastructureStack
+    InfrastructureStack,
+    ConversationMessage,
 )
 from erieiron_autonomous_agent.enums import TaskStatus
 from erieiron_common.enums import InitiativeType, LlmModel, LlmVerbosity, TaskType
 from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_autonomous_agent import system_agent_llm_interface
+from erieiron_ui import mutation_helpers
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,8 @@ class ChangeApplicationEngine:
                 engine.apply_initiative_change()
             elif change.change_type == 'task':
                 engine.apply_task_change()
+            elif change.change_type == 'workflow':
+                engine.apply_workflow_change()
             elif change.change_type == 'infrastructure':
                 engine.apply_infrastructure_change()
             else:
@@ -55,6 +59,7 @@ class ChangeApplicationEngine:
             change.applied = True
             change.applied_at = timezone.now()
             change.save()
+            engine.record_application_message()
 
         logger.info(f"Successfully applied change {change.id}")
 
@@ -233,24 +238,92 @@ class ChangeApplicationEngine:
         self.change.resulting_tasks.set([])
 
     def apply_task_change(self):
-        """Create a new task based on change details"""
+        """Create or update a task based on change details"""
         details = self.change.change_details
+        operation = details.get("operation", "create")
 
-        initiative = None
-        if details.get('initiative_id'):
-            initiative = Initiative.objects.get(id=details['initiative_id'])
+        if operation == "update":
+            task = Task.objects.select_related("initiative", "initiative__business").get(id=details["task_id"])
+            mutation_helpers.update_task_from_data(
+                task=task,
+                raw_data=details.get("fields") or {},
+                partial=True,
+            )
+            self.change.resulting_tasks.set([task])
+            return
 
-        task = Task.objects.create(
-            business=self.business,
+        initiative = Initiative.objects.select_related("business").get(id=details["initiative_id"])
+        task = mutation_helpers.create_task_from_structured_data(
             initiative=initiative,
-            name=details['name'],
-            description=details['description'],
-            status=TaskStatus.NOT_STARTED.value,
-            type=details.get('type', TaskType.FEATURE.value)
+            task_id_token=details.get("task_id"),
+            description=details["description"],
+            completion_criteria=details.get("completion_criteria"),
+            risk_notes=details.get("risk_notes"),
+            task_type=details.get("task_type"),
+            requires_test=details.get("requires_test"),
+            status=details.get("status"),
         )
+        self.change.resulting_tasks.set([task])
 
-        self.change.resulting_tasks.add(task)
-        logger.info(f"Created new task {task.id}: {task.name}")
+    def apply_workflow_change(self):
+        details = self.change.change_details
+        entity_type = details["entity_type"]
+        operation = details["operation"]
+
+        if entity_type == "workflow_definition":
+            if operation == "delete":
+                mutation_helpers.delete_workflow_definition(details["workflow_id"])
+                return
+            mutation_helpers.save_workflow_definition(
+                workflow_id=details.get("workflow_id"),
+                name=details["name"],
+                description=details.get("description"),
+                is_active=details.get("is_active", True),
+            )
+            return
+
+        if entity_type == "workflow_step":
+            if operation == "delete":
+                mutation_helpers.delete_workflow_step(details["step_id"])
+                return
+            mutation_helpers.save_workflow_step(
+                workflow_id=details["workflow_id"],
+                step_id=details.get("step_id"),
+                name=details["name"],
+                handler_path=details["handler_path"],
+                emits_message_type=details.get("emits_message_type"),
+                sort_order=details.get("sort_order"),
+            )
+            return
+
+        if entity_type == "workflow_trigger":
+            if operation == "delete":
+                mutation_helpers.delete_workflow_trigger(details["trigger_id"])
+                return
+            mutation_helpers.save_workflow_trigger(
+                workflow_id=details["workflow_id"],
+                trigger_id=details.get("trigger_id"),
+                target_step_id=details["target_step_id"],
+                message_type=details["message_type"],
+                sort_order=details.get("sort_order"),
+            )
+            return
+
+        if entity_type == "workflow_connection":
+            if operation == "delete":
+                mutation_helpers.delete_workflow_connection(details["connection_id"])
+                return
+            mutation_helpers.save_workflow_connection(
+                workflow_id=details["workflow_id"],
+                connection_id=details.get("connection_id"),
+                source_step_id=details["source_step_id"],
+                target_step_id=details["target_step_id"],
+                message_type=details["message_type"],
+                sort_order=details.get("sort_order"),
+            )
+            return
+
+        raise ValueError(f"Unknown workflow entity_type: {entity_type}")
 
     def apply_infrastructure_change(self):
         """Handle infrastructure changes (usually creates initiative)"""
@@ -286,3 +359,29 @@ class ChangeApplicationEngine:
         )
 
         return initiative
+
+    def record_application_message(self):
+        ConversationMessage.objects.create(
+            conversation=self.change.conversation,
+            role="assistant",
+            content=self._build_application_summary(),
+        )
+
+    def _build_application_summary(self) -> str:
+        if self.change.change_type == "workflow":
+            details = self.change.change_details
+            return (
+                f"Approved and applied workflow change: {details['operation']} "
+                f"{details['entity_type']}."
+            )
+
+        if self.change.change_type == "task":
+            details = self.change.change_details
+            operation = details.get("operation", "create")
+            if operation == "update":
+                return f"Approved and applied task update for `{details['task_id']}`."
+            task = self.change.resulting_tasks.first()
+            task_id = task.id if task else "new task"
+            return f"Approved and applied task creation for `{task_id}`."
+
+        return f"Approved and applied change: {self.change.change_description}"

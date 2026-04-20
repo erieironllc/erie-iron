@@ -1,0 +1,159 @@
+{% extends "_base_templates/_base_template.html" %}
+{% load humanize %}
+{% load erieiron_common_tags %}
+
+{% block content %}
+    <div id="root-chat-root"
+         class="root-chat business-conversations"
+         data-create-url="{% url 'root_conversation_create' %}"
+         data-detail-url-template="/api/root/conversations/__CONVERSATION_ID__/"
+         data-message-url-template="/api/root/conversations/__CONVERSATION_ID__/message/"
+         data-message-status-url-template="/api/root/conversations/__CONVERSATION_ID__/message-status/?queued_message_id=__QUEUED_MESSAGE_ID__&user_message_id=__USER_MESSAGE_ID__"
+         data-rename-url-template="/api/root/conversations/__CONVERSATION_ID__/rename/"
+         data-delete-url-template="/api/root/conversations/__CONVERSATION_ID__/delete/"
+         data-default-conversation-title="Erie Iron Operations"
+         data-auto-create-on-send="true"
+         data-websocket-enabled="{% if websocket_url %}true{% else %}false{% endif %}"
+         {% if current_conversation %}data-conversation-id="{{ current_conversation.id }}"{% endif %}>
+        <div class="root-chat__shell">
+            <aside class="root-chat__sidebar">
+                <button type="button" class="btn btn-primary root-chat__new-chat-btn" data-action="new-conversation">
+                    <i class="bi bi-plus-lg"></i>
+                    <span>New chat</span>
+                </button>
+
+                <div class="root-chat__conversation-list" data-role="conversation-list">
+                    {% if conversations %}
+                        {% for conversation in conversations %}
+                            <div class="root-chat__conversation-item {% if current_conversation and conversation.id == current_conversation.id %}is-active{% endif %}"
+                                 data-role="conversation-item"
+                                 data-conversation-id="{{ conversation.id }}">
+                                <button type="button"
+                                        class="root-chat__conversation-link"
+                                        data-role="conversation-link"
+                                        data-conversation-id="{{ conversation.id }}">
+                                    <span data-role="conversation-link-label">{{ conversation.title|default:"Untitled Chat" }}</span>
+                                </button>
+                                <div class="dropdown root-chat__conversation-menu">
+                                    <button type="button"
+                                            class="btn btn-sm root-chat__conversation-menu-toggle"
+                                            data-bs-toggle="dropdown"
+                                            aria-expanded="false"
+                                            aria-label="Open chat actions">
+                                        <i class="bi bi-three-dots-vertical"></i>
+                                    </button>
+                                    <ul class="dropdown-menu dropdown-menu-end root-chat__conversation-menu-list">
+                                        <li>
+                                            <button type="button"
+                                                    class="dropdown-item"
+                                                    data-action="rename-conversation"
+                                                    data-conversation-id="{{ conversation.id }}">
+                                                Rename chat
+                                            </button>
+                                        </li>
+                                        <li>
+                                            <button type="button"
+                                                    class="dropdown-item text-danger"
+                                                    data-action="delete-conversation"
+                                                    data-conversation-id="{{ conversation.id }}">
+                                                Delete chat
+                                            </button>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+
+                <div class="root-chat__empty-list {% if conversations %}d-none{% endif %}" data-role="empty-conversation-list">
+                    Start a chat to manage workflows and tasks.
+                </div>
+            </aside>
+
+            <section class="root-chat__main">
+                <div class="alert d-none" data-role="status"></div>
+
+                <div class="conversation-layout">
+                    <div class="conversation-container">
+                        <div class="messages-container" data-role="messages-container">
+                            {% if current_messages %}
+                                {% for msg in current_messages %}
+                                    <div class="conversation-message message-{{ msg.role }}" data-message-id="{{ msg.id }}">
+                                        <div class="message-header">
+                                            <div class="message-role">
+                                                {% if msg.role == 'user' %}You{% elif msg.role == 'system' %}System{% else %}AI Assistant{% endif %}
+                                            </div>
+                                            <button class="btn btn-sm copy-btn bi bi-copy" data-target=".message-content" title="Copy message to clipboard"></button>
+                                        </div>
+                                        <div class="message-content">{{ msg.content|strip_propose_change_markers|linebreaks }}</div>
+                                        <div class="message-timestamp">{{ msg.created_at|naturaltime }}</div>
+                                    </div>
+
+                                    {% if msg.id in message_changes %}
+                                        {% for change in message_changes|get_item:msg.id %}
+                                            <div class="change-proposal alert alert-warning" data-change-id="{{ change.id }}">
+                                                <h5 class="alert-heading"><i class="bi bi-lightbulb"></i> Change Proposal: {{ change.change_type }}</h5>
+                                                <p class="mb-2">{{ change.change_description }}</p>
+                                                <details class="mb-3">
+                                                    <summary>View technical details</summary>
+                                                    <pre class="bg-light p-2 rounded" style="font-size: 0.85rem">{{ change.change_details|format_json }}</pre>
+                                                </details>
+                                                <div class="d-flex gap-2">
+                                                    <button class="btn btn-success btn-sm"
+                                                            data-action="approve-change"
+                                                            data-change-id="{{ change.id }}">
+                                                        <i class="bi bi-check-circle"></i> Approve & Apply
+                                                    </button>
+                                                    <button class="btn btn-secondary btn-sm"
+                                                            data-action="decline-change"
+                                                            data-change-id="{{ change.id }}">
+                                                        <i class="bi bi-x-circle"></i> Decline
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        {% endfor %}
+                                    {% endif %}
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+
+                        <div class="conversation-empty-state d-none" data-role="empty-state-template">
+                            <div class="root-chat__empty-state">
+                                <div class="root-chat__empty-title">Start with a task or workflow request.</div>
+                                <div class="root-chat__empty-copy">
+                                    Try "add a task to the onboarding initiative to audit the current flow" or
+                                    "update the portfolio intake workflow to emit `ANALYSIS_REQUESTED` after triage."
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="message-input-wrapper">
+                            <div class="root-chat__composer">
+                                <textarea class="form-control"
+                                          data-role="message-input"
+                                          rows="1"
+                                          placeholder="Message Erie Iron"></textarea>
+                                <button class="btn btn-primary root-chat__send-btn"
+                                        type="button"
+                                        data-action="send-message">
+                                    <i class="bi bi-arrow-up"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        $(document).ready(function () {
+            if (!window.root_chat_view) {
+                window.root_chat_view = new RootChatView();
+            } else {
+                window.root_chat_view.initialize();
+            }
+        });
+    </script>
+{% endblock %}

@@ -29,9 +29,10 @@ from django.views.decorators.http import require_POST, require_http_methods
 
 import settings
 from erieiron_autonomous_agent import system_agent_llm_interface
+from erieiron_autonomous_agent.business_conversation_manager import RootConversationManager
 from erieiron_autonomous_agent.coding_agents import credential_manager
 from erieiron_autonomous_agent.enums import TaskStatus, BusinessStatus, BusinessOperationType
-from erieiron_autonomous_agent.models import Business, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount
+from erieiron_autonomous_agent.models import Business, BusinessConversation, BusinessKPI, LlmRequest, AgentLesson, CodeFile, CodeVersion, InfrastructureStack, CloudAccount, ConversationMessage
 from erieiron_autonomous_agent.models import Task, Initiative, SelfDrivingTask, SelfDrivingTaskIteration, TaskExecution, TaskImplementationVersion, TaskPromptImprovement, RunningProcess, WorkflowConnection, WorkflowDefinition, WorkflowStep, WorkflowTrigger
 from erieiron_autonomous_agent.system_agent_llm_interface import get_sys_prompt
 from erieiron_common import common, ErieIronJSONEncoder, aws_utils
@@ -42,6 +43,7 @@ from erieiron_common.llm_apis.llm_interface import LlmMessage
 from erieiron_common.message_queue.pubsub_manager import PubSubManager
 from erieiron_common.models import PubSubMessage, Person, PubSubHanderInstance
 from erieiron_common.view_utils import send_response, redirect, rget, rget_bool, rget_int, json_endpoint, rget_list, request_llm_async, get_current_user, admin_required
+from erieiron_ui import mutation_helpers
 
 # from django_ratelimit.decorators import ratelimit
 
@@ -501,29 +503,11 @@ def _serialize_workflow_definition(workflow: WorkflowDefinition) -> dict:
 
 
 def _normalize_workflow_message_type(message_type: str | None, *, required: bool) -> str | None:
-    normalized_value = common.default_str(message_type).strip()
-    if not normalized_value:
-        if required:
-            raise ValueError("Message type is required.")
-        return None
-
-    message_type_enum = PubSubMessageType.valid_or(normalized_value, None)
-    if message_type_enum is None:
-        raise ValueError(f"Invalid message type: {normalized_value}")
-
-    return message_type_enum.value
+    return mutation_helpers._normalize_workflow_message_type(message_type, required=required)
 
 
 def _normalize_workflow_sort_order(sort_order: Any) -> int:
-    normalized_value = common.default_str(sort_order).strip()
-    if not normalized_value:
-        return 0
-
-    sort_order_value = int(normalized_value)
-    if sort_order_value < 0:
-        raise ValueError("Sort order must be zero or greater.")
-
-    return sort_order_value
+    return mutation_helpers._normalize_workflow_sort_order(sort_order)
 
 
 def _get_application_workflow_or_404(workflow_id: str) -> WorkflowDefinition:
@@ -543,12 +527,11 @@ def _save_workflow_definition_form(
         long_term_memory_enabled: bool,
         datastore_enabled: bool,
 ) -> WorkflowDefinition:
-    workflow = (
-        _get_application_workflow_or_404(workflow_id)
-        if workflow_id
-        else WorkflowDefinition(
-            source_kind=WorkflowDefinitionSourceKind.APPLICATION_REPO.value,
-        )
+    return mutation_helpers.save_workflow_definition(
+        workflow_id=workflow_id,
+        name=name,
+        description=description,
+        is_active=is_active,
     )
     workflow.name = common.default_str(name).strip()
     workflow.description = common.default_str(description).strip() or None
@@ -573,28 +556,14 @@ def _save_workflow_step_form(
         emits_message_type: str | None,
         sort_order: Any,
 ) -> WorkflowStep:
-    workflow = _get_application_workflow_or_404(workflow_id)
-    step = (
-        get_object_or_404(WorkflowStep, pk=step_id, workflow=workflow)
-        if step_id
-        else WorkflowStep(workflow=workflow)
+    return mutation_helpers.save_workflow_step(
+        workflow_id=workflow_id,
+        step_id=step_id,
+        name=name,
+        handler_path=handler_path,
+        emits_message_type=emits_message_type,
+        sort_order=sort_order,
     )
-    step.name = common.default_str(name).strip()
-    step.handler_path = common.default_str(handler_path).strip()
-    step.emits_message_type = _normalize_workflow_message_type(
-        emits_message_type,
-        required=False,
-    )
-    step.sort_order = _normalize_workflow_sort_order(sort_order)
-
-    if not step.name:
-        raise ValueError("Step name is required.")
-    if not step.handler_path:
-        raise ValueError("Handler path is required.")
-
-    step.full_clean()
-    step.save()
-    return step
 
 
 def _save_workflow_trigger_form(
@@ -605,23 +574,13 @@ def _save_workflow_trigger_form(
         message_type: str,
         sort_order: Any,
 ) -> WorkflowTrigger:
-    workflow = _get_application_workflow_or_404(workflow_id)
-    emitted_message_types = _workflow_emitted_message_types(workflow)
-    trigger = (
-        get_object_or_404(WorkflowTrigger, pk=trigger_id, workflow=workflow)
-        if trigger_id
-        else WorkflowTrigger(workflow=workflow)
+    return mutation_helpers.save_workflow_trigger(
+        workflow_id=workflow_id,
+        trigger_id=trigger_id,
+        target_step_id=target_step_id,
+        message_type=message_type,
+        sort_order=sort_order,
     )
-    trigger.target_step = get_object_or_404(WorkflowStep, pk=target_step_id, workflow=workflow)
-    trigger.message_type = _normalize_workflow_message_type(message_type, required=True)
-    trigger.sort_order = _normalize_workflow_sort_order(sort_order)
-    if trigger.message_type in emitted_message_types:
-        raise ValueError(
-            "External triggers must use a PubSub message type that is not emitted by a workflow step."
-        )
-    trigger.full_clean()
-    trigger.save()
-    return trigger
 
 
 def _save_workflow_connection_form(
@@ -633,19 +592,14 @@ def _save_workflow_connection_form(
         message_type: str,
         sort_order: Any,
 ) -> WorkflowConnection:
-    workflow = _get_application_workflow_or_404(workflow_id)
-    connection = (
-        get_object_or_404(WorkflowConnection, pk=connection_id, workflow=workflow)
-        if connection_id
-        else WorkflowConnection(workflow=workflow)
+    return mutation_helpers.save_workflow_connection(
+        workflow_id=workflow_id,
+        connection_id=connection_id,
+        source_step_id=source_step_id,
+        target_step_id=target_step_id,
+        message_type=message_type,
+        sort_order=sort_order,
     )
-    connection.source_step = get_object_or_404(WorkflowStep, pk=source_step_id, workflow=workflow)
-    connection.target_step = get_object_or_404(WorkflowStep, pk=target_step_id, workflow=workflow)
-    connection.message_type = _normalize_workflow_message_type(message_type, required=True)
-    connection.sort_order = _normalize_workflow_sort_order(sort_order)
-    connection.full_clean()
-    connection.save()
-    return connection
 
 
 def _build_simple_auth_token(email: str) -> str:
@@ -1747,6 +1701,37 @@ def _build_portfolio_tabs(erieiron_business: Business, request: HttpRequest = No
     return tabs
 
 
+def _root_conversations_queryset():
+    erieiron_business = Business.get_erie_iron_business()
+    return (
+        erieiron_business.conversations
+        .filter(initiative__isnull=True)
+        .order_by('-updated_at')
+    )
+
+
+def view_home(request):
+    current_user = get_current_user(request)
+    can_manage_workflows = bool(current_user and current_user.is_admin())
+    root_context = _build_conversation_context(_root_conversations_queryset())
+    current_conversation = root_context["current_conversation"]
+
+    context = {
+        **root_context,
+        "page_title": "Erie Iron",
+        "can_manage_workflows": can_manage_workflows,
+        "portfolio_url": reverse("view_portfolio"),
+        "workflow_admin_url": reverse("view_admin_workflows") if can_manage_workflows else None,
+        "delete_disabled": current_conversation is None,
+    }
+    return send_response(
+        request,
+        "root_chat.html",
+        context,
+        breadcrumbs=[(reverse("view_home"), "Home")],
+    )
+
+
 def view_portfolio(request, tab: str = 'portfolio'):
     from erieiron_ui import tab_defitions
     erieiron_business = Business.get_erie_iron_business()
@@ -2440,40 +2425,42 @@ def _tab_context_bug_report(business: Business) -> dict:
     }
 
 
-def _tab_context_conversation(business: Business) -> dict:
+def _group_pending_conversation_changes(current_messages: list) -> dict:
     from erieiron_autonomous_agent.models import ConversationChange
-    
-    conversations = business.conversations.all().order_by('-updated_at')[:20]
-    
-    # Load the most recent conversation's messages for initial render
-    current_conversation = None
-    current_messages = []
-    message_changes = {}
-    
-    if conversations.exists():
-        current_conversation = conversations.first()
-        messages = current_conversation.messages.all().order_by('created_at')
-        current_messages = list(messages)
-        
-        # Load all pending change proposals for these messages
-        message_ids = [msg.id for msg in current_messages]
-        changes = ConversationChange.objects.filter(
-            message_id__in=message_ids,
-            approved=False
-        ).select_related('message')
-        
-        # Group changes by message ID
-        for change in changes:
-            if change.message_id not in message_changes:
-                message_changes[change.message_id] = []
-            message_changes[change.message_id].append(change)
-    
+
+    message_ids = [msg.id for msg in current_messages]
+    if not message_ids:
+        return {}
+
+    message_changes: dict = {}
+    changes = ConversationChange.objects.filter(
+        message_id__in=message_ids,
+        approved=False,
+    ).select_related('message')
+    for change in changes:
+        if change.message_id not in message_changes:
+            message_changes[change.message_id] = []
+        message_changes[change.message_id].append(change)
+
+    return message_changes
+
+
+def _build_conversation_context(conversations_qs) -> dict:
+    conversations = list(conversations_qs[:20])
+    current_conversation = conversations[0] if conversations else None
+    current_messages = list(current_conversation.messages.all().order_by('created_at')) if current_conversation else []
     return {
         "conversations": conversations,
         "current_conversation": current_conversation,
         "current_messages": current_messages,
-        "message_changes": message_changes
+        "message_changes": _group_pending_conversation_changes(current_messages),
     }
+
+
+def _tab_context_conversation(business: Business) -> dict:
+    return _build_conversation_context(
+        business.conversations.all().order_by('-updated_at')
+    )
 
 
 def _tab_available_codefiles(business: Business) -> bool:
@@ -5386,55 +5373,14 @@ def action_submit_initiative_task(request, initiative_id):
         return redirect(reverse('view_initiative_tab', args=['tasks', initiative_id]))
     
     try:
-        parsed_data = system_agent_llm_interface.llm_chat(
-            description=f"Parse initiative task request for {initiative.title}",
-            messages=[
-                get_sys_prompt("eng_lead--task_ingester.md"),
-                LlmMessage.user_from_data("Task Request", raw_task_request)
-            ],
-            output_schema="eng_lead--task_ingester.md.schema.json",
-            tag_entity=initiative,
-            model=LlmModel.OPENAI_GPT_5_MINI,
-            verbosity=LlmVerbosity.MEDIUM
-        ).json()
-        
-        description = (parsed_data.get('description') or raw_task_request).strip()
-        completion_criteria = parsed_data.get('completion_criteria') or []
-        completion_criteria = [
-            str(item).strip()
-            for item in common.ensure_list(completion_criteria)
-            if str(item).strip()
-        ]
-        if not completion_criteria:
-            completion_criteria = ['The task request has been fulfilled as described.']
-        
-        raw_risk_notes = parsed_data.get('risk_notes', '')
-        if isinstance(raw_risk_notes, (list, tuple)):
-            risk_notes = "\n".join(
-                str(item).strip()
-                for item in raw_risk_notes
-                if str(item).strip()
-            )
-        else:
-            risk_notes = str(raw_risk_notes or '').strip()
-        
-        raw_task_type = str(parsed_data.get('task_type', '') or '').strip()
-        task_type = TaskType.valid_or(raw_task_type, TaskType.HUMAN_WORK)
-        if raw_task_type and task_type == TaskType.HUMAN_WORK and raw_task_type != TaskType.HUMAN_WORK:
-            logger.warning(
-                "LLM returned invalid task_type '%s' for initiative %s; defaulting to HUMAN_WORK",
-                raw_task_type,
-                initiative.id,
-            )
-        
-        Task.objects.create(
-            id=f"{parsed_data.get('task_id')}_{common.gen_random_token(8)}",
+        parsed_data = _ingest_initiative_task_request(
             initiative=initiative,
-            task_type=task_type,
-            status=TaskStatus.NOT_STARTED,
-            description=description,
-            risk_notes=risk_notes,
-            completion_criteria=completion_criteria
+            raw_task_request=raw_task_request,
+        )
+        _create_task_from_ingested_request(
+            initiative=initiative,
+            parsed_data=parsed_data,
+            raw_task_request=raw_task_request,
         )
         
         messages.success(request, 'Task submitted successfully! It has been added to this initiative.')
@@ -5818,76 +5764,25 @@ def action_update_task(request, task_id):
     
     try:
         task = get_object_or_404(Task, pk=task_id)
-        
-        # Get form data
-        description = rget(request, 'description', '').strip()
-        risk_notes = rget(request, 'risk_notes', '').strip()
-        timeout_seconds = rget(request, 'timeout_seconds', '').strip()
-        max_budget_usd = rget(request, 'max_budget_usd', '').strip()
-        status = rget(request, 'status', '').strip()
-        task_type = rget(request, 'task_type', '').strip()
-        execution_schedule = rget(request, 'execution_schedule', '').strip()
-        prompt_improvement_schedule = rget(request, 'prompt_improvement_schedule', '').strip()
-        execution_start_time = rget(request, 'execution_start_time', '').strip()
-        completion_criteria = rget(request, 'completion_criteria', "").strip()
-        requires_test = request.POST.get('requires_test') == 'on'
-        implementation_phase = rget(request, 'implementation_phase', '').strip()
-        
-        # Prepare update data
-        update_data = {
-            'description': description,
-            'completion_criteria': completion_criteria,
-            'risk_notes': risk_notes,
-            'status': status,
-            'task_type': task_type,
-            'execution_schedule': execution_schedule,
-            'prompt_improvement_schedule': prompt_improvement_schedule,
-            'requires_test': requires_test
-        }
-        
-        # Handle optional fields
-        if timeout_seconds:
-            try:
-                # noinspection PyTypedDict
-                update_data['timeout_seconds'] = int(timeout_seconds or 0)
-            except ValueError:
-                messages.error(request, 'Invalid timeout value.')
-                return redirect(reverse('view_task_tab', args=['edit', task_id]))
-        else:
-            update_data['timeout_seconds'] = None
-        
-        if max_budget_usd:
-            try:
-                # noinspection PyTypedDict
-                update_data['max_budget_usd'] = float(max_budget_usd)
-            except ValueError:
-                messages.error(request, 'Invalid budget value.')
-                return redirect(reverse('view_task_tab', args=['edit', task_id]))
-        else:
-            update_data['max_budget_usd'] = None
-        
-        if task_type:
-            update_data['task_type'] = task_type
-        else:
-            update_data['task_type'] = None
-        
-        if execution_start_time:
-            try:
-                # noinspection PyTypedDict
-                update_data['execution_start_time'] = datetime.fromisoformat(execution_start_time.replace('T', ' '))
-            except ValueError:
-                messages.error(request, 'Invalid execution start time format.')
-                return redirect(reverse('view_task_tab', args=['edit', task_id]))
-        else:
-            update_data['execution_start_time'] = None
-        
-        if implementation_phase:
-            update_data['implementation_phase'] = implementation_phase
-        else:
-            update_data['implementation_phase'] = None
-        
-        # Update the task
-        Task.objects.filter(id=task_id).update(**update_data)
+
+        mutation_helpers.update_task_from_data(
+            task=task,
+            raw_data={
+                'description': rget(request, 'description', '').strip(),
+                'completion_criteria': rget(request, 'completion_criteria', "").strip(),
+                'risk_notes': rget(request, 'risk_notes', '').strip(),
+                'status': rget(request, 'status', '').strip(),
+                'task_type': rget(request, 'task_type', '').strip(),
+                'execution_schedule': rget(request, 'execution_schedule', '').strip(),
+                'prompt_improvement_schedule': rget(request, 'prompt_improvement_schedule', '').strip(),
+                'requires_test': request.POST.get('requires_test') == 'on',
+                'timeout_seconds': rget(request, 'timeout_seconds', '').strip(),
+                'max_budget_usd': rget(request, 'max_budget_usd', '').strip(),
+                'execution_start_time': rget(request, 'execution_start_time', '').strip(),
+                'implementation_phase': rget(request, 'implementation_phase', '').strip(),
+            },
+            partial=False,
+        )
         
         messages.success(request, 'Task updated successfully!')
         return redirect(reverse('view_task_tab', args=['edit', task_id]))
@@ -7160,6 +7055,290 @@ def api_pubsub_publish(request):
 
 # Business Conversation API Endpoints
 
+
+def _serialize_conversation_change(change) -> dict:
+    return {
+        'id': str(change.id),
+        'change_type': change.change_type,
+        'change_description': change.change_description,
+        'change_details': change.change_details,
+        'approved': change.approved,
+        'approved_at': change.approved_at.isoformat() if change.approved_at else None,
+        'applied': change.applied,
+        'applied_at': change.applied_at.isoformat() if change.applied_at else None,
+        'created_at': change.created_at.isoformat(),
+        'resulting_tasks': [
+            {
+                'id': str(task.id),
+                'name': task.get_name(),
+                'status': task.status,
+            }
+            for task in change.resulting_tasks.all()
+        ],
+    }
+
+
+def _serialize_pending_message_changes(message_changes: dict) -> dict:
+    return {
+        str(message_id): [
+            _serialize_conversation_change(change)
+            for change in changes
+        ]
+        for message_id, changes in message_changes.items()
+    }
+
+
+def _serialize_conversation_message(message: ConversationMessage) -> dict:
+    return {
+        "id": str(message.id),
+        "role": message.role,
+        "content": message.content,
+        "created_at": message.created_at.isoformat(),
+    }
+
+
+def _get_root_conversation_or_404(conversation_id):
+    return get_object_or_404(
+        BusinessConversation,
+        id=conversation_id,
+        business=Business.get_erie_iron_business(),
+        initiative__isnull=True,
+    )
+
+
+def _serialize_root_conversation_async_payload(
+        conversation: BusinessConversation,
+        assistant_message: ConversationMessage,
+) -> dict:
+    changes = list(
+        conversation.changes.filter(message=assistant_message).prefetch_related("resulting_tasks")
+    )
+    return {
+        "client_event_type": "root_conversation_response",
+        "conversation_id": str(conversation.id),
+        "conversation_title": conversation.title,
+        "assistant_message": {
+            **_serialize_conversation_message(assistant_message),
+            "changes": [
+                _serialize_conversation_change(change)
+                for change in changes
+            ],
+        },
+    }
+
+
+def _serialize_root_conversation_error_payload(
+        conversation: BusinessConversation,
+        error_message: str,
+) -> dict:
+    return {
+        "client_event_type": "root_conversation_response",
+        "conversation_id": str(conversation.id),
+        "conversation_title": conversation.title,
+        "error": error_message,
+    }
+
+
+def complete_root_conversation_llm_response(
+        *,
+        request_payload: dict,
+        llm_response: dict,
+        completion_data: dict,
+) -> dict:
+    conversation_id = completion_data["conversation_id"]
+    conversation = _get_root_conversation_or_404(conversation_id)
+    manager = RootConversationManager(conversation)
+    assistant_message, _ = manager.finalize_llm_response(
+        response_text=llm_response["text"],
+        llm_request_id=llm_response["llm_request_id"],
+    )
+    conversation.refresh_from_db()
+    return _serialize_root_conversation_async_payload(conversation, assistant_message)
+
+
+@require_http_methods(["GET"])
+def root_conversations_list(request):
+    conversations = list(_root_conversations_queryset()[:20])
+    return JsonResponse({
+        'conversations': [
+            {
+                'id': str(conversation.id),
+                'title': conversation.title,
+                'status': conversation.status,
+                'message_count': conversation.messages.count(),
+                'created_at': conversation.created_at.isoformat(),
+                'updated_at': conversation.updated_at.isoformat(),
+            }
+            for conversation in conversations
+        ]
+    })
+
+
+@require_http_methods(["POST"])
+def root_conversation_create(request):
+    title = rget(request, 'title', 'New Chat')
+    conversation = RootConversationManager.create_conversation(
+        business=Business.get_erie_iron_business(),
+        title=title,
+    )
+    return JsonResponse({
+        'conversation_id': str(conversation.id),
+        'title': conversation.title,
+        'created_at': conversation.created_at.isoformat(),
+    })
+
+
+@require_http_methods(["POST"])
+def root_conversation_rename(request, conversation_id):
+    conversation = _get_root_conversation_or_404(conversation_id)
+    title = rget(request, 'title')
+    normalized_title = common.default_str(title).strip()
+    if not normalized_title:
+        return JsonResponse({'error': 'Title required'}, status=400)
+
+    conversation.title = normalized_title
+    conversation.save(update_fields=['title'])
+    return JsonResponse({
+        'conversation_id': str(conversation.id),
+        'title': conversation.title,
+    })
+
+
+@require_http_methods(["GET"])
+def root_conversation_detail(request, conversation_id):
+    conversation = _get_root_conversation_or_404(conversation_id)
+    manager = RootConversationManager(conversation)
+    current_messages = list(conversation.messages.all().order_by('created_at'))
+    message_changes = _group_pending_conversation_changes(current_messages)
+
+    return JsonResponse({
+        'conversation_id': str(conversation.id),
+        'title': conversation.title,
+        'status': conversation.status,
+        'created_at': conversation.created_at.isoformat(),
+        'updated_at': conversation.updated_at.isoformat(),
+        'messages': manager.get_full_conversation(),
+        'message_changes': _serialize_pending_message_changes(message_changes),
+    })
+
+
+@require_http_methods(["POST"])
+def root_conversation_message(request, conversation_id):
+    conversation = _get_root_conversation_or_404(conversation_id)
+    user_message_content = rget(request, 'message')
+    if not user_message_content:
+        return JsonResponse({'error': 'Message content required'}, status=400)
+
+    manager = RootConversationManager(conversation)
+    user_msg = manager.add_user_message(user_message_content)
+    current_user = get_current_user(request)
+    can_manage_workflows = bool(current_user and current_user.is_admin())
+    queued_message = request_llm_async(
+        person=current_user,
+        description=f"Erie Iron root conversation for {conversation.business.name}",
+        messages=manager.build_llm_messages(can_manage_workflows=can_manage_workflows),
+        model=LlmModel.OPENAI_GPT_5_1,
+        tag_entity=conversation.business,
+        verbosity=LlmVerbosity.MEDIUM,
+        completion_handler_path="erieiron_ui.views.complete_root_conversation_llm_response",
+        completion_handler_data={
+            "conversation_id": str(conversation.id),
+        },
+        client_context={
+            "client_event_type": "root_conversation_response",
+            "conversation_id": str(conversation.id),
+            "user_message_id": str(user_msg.id),
+        },
+    )
+    return JsonResponse({
+        'status': 'processing',
+        'queued_message_id': str(queued_message.id),
+        'conversation_id': str(conversation.id),
+        'conversation_title': conversation.title,
+        'user_message': {
+            'id': str(user_msg.id),
+            'role': 'user',
+            'content': user_msg.content,
+            'created_at': user_msg.created_at.isoformat()
+        },
+    })
+
+
+@require_http_methods(["GET"])
+def root_conversation_message_status(request, conversation_id):
+    conversation = _get_root_conversation_or_404(conversation_id)
+    queued_message_id = rget(request, "queued_message_id")
+    user_message_id = rget(request, "user_message_id")
+
+    if not queued_message_id or not user_message_id:
+        return JsonResponse(
+            {"error": "queued_message_id and user_message_id are required"},
+            status=400,
+        )
+
+    queued_message = get_object_or_404(
+        PubSubMessage,
+        id=queued_message_id,
+        message_type=PubSubMessageType.LLM_REQUEST.value,
+    )
+    client_context = queued_message.payload.get("client_context") or {}
+    if str(client_context.get("conversation_id")) != str(conversation.id):
+        raise Http404("Queued message does not belong to this conversation.")
+    if str(client_context.get("user_message_id")) != str(user_message_id):
+        raise Http404("Queued message does not belong to this message.")
+
+    user_message = get_object_or_404(
+        ConversationMessage,
+        id=user_message_id,
+        conversation=conversation,
+        role="user",
+    )
+    assistant_message = (
+        conversation.messages
+        .filter(role="assistant", created_at__gte=user_message.created_at)
+        .order_by("created_at")
+        .first()
+    )
+    if assistant_message:
+        return JsonResponse(
+            {
+                "status": "completed",
+                "payload": _serialize_root_conversation_async_payload(
+                    conversation,
+                    assistant_message,
+                ),
+            }
+        )
+
+    message_status = PubSubMessageStatus(queued_message.status)
+    if message_status in PubSubMessageStatus.inprog_statuses():
+        return JsonResponse({"status": "processing"})
+
+    if message_status in [
+        PubSubMessageStatus.FAILED,
+        PubSubMessageStatus.NO_CONSUMER,
+        PubSubMessageStatus.OBSOLETE,
+    ]:
+        return JsonResponse(
+            {
+                "status": "failed",
+                "payload": _serialize_root_conversation_error_payload(
+                    conversation,
+                    queued_message.error_message or "Failed to generate response.",
+                ),
+            }
+        )
+
+    return JsonResponse({"status": "processing"})
+
+
+@require_http_methods(["POST"])
+def root_conversation_delete(request, conversation_id):
+    conversation = _get_root_conversation_or_404(conversation_id)
+    conversation.delete()
+    return JsonResponse({'success': True})
+
+
 @require_http_methods(["POST"])
 def business_conversation_create(request, business_id):
     """Create a new conversation for a business"""
@@ -7252,6 +7431,8 @@ def business_conversation_detail(request, conversation_id):
     conversation = get_object_or_404(BusinessConversation, id=conversation_id)
     
     manager = BusinessConversationManager(conversation)
+    current_messages = list(conversation.messages.all().order_by('created_at'))
+    message_changes = _group_pending_conversation_changes(current_messages)
     
     return JsonResponse({
         'conversation_id': str(conversation.id),
@@ -7261,7 +7442,8 @@ def business_conversation_detail(request, conversation_id):
         'status': conversation.status,
         'created_at': conversation.created_at.isoformat(),
         'updated_at': conversation.updated_at.isoformat(),
-        'messages': manager.get_full_conversation()
+        'messages': manager.get_full_conversation(),
+        'message_changes': _serialize_pending_message_changes(message_changes),
     })
 
 
@@ -7316,25 +7498,7 @@ def conversation_changes_list(request, conversation_id):
     return JsonResponse({
         'conversation_id': str(conversation.id),
         'changes': [
-            {
-                'id': str(c.id),
-                'change_type': c.change_type,
-                'change_description': c.change_description,
-                'change_details': c.change_details,
-                'approved': c.approved,
-                'approved_at': c.approved_at.isoformat() if c.approved_at else None,
-                'applied': c.applied,
-                'applied_at': c.applied_at.isoformat() if c.applied_at else None,
-                'created_at': c.created_at.isoformat(),
-                'resulting_tasks': [
-                    {
-                        'id': str(task.id),
-                        'name': task.name,
-                        'status': task.status
-                    }
-                    for task in c.resulting_tasks.all()
-                ]
-            }
+            _serialize_conversation_change(c)
             for c in changes
         ]
     })
@@ -7349,6 +7513,11 @@ def conversation_change_approve(request, change_id):
     
     if change.approved:
         return JsonResponse({'error': 'Change already approved'}, status=400)
+
+    if change.change_type == 'workflow':
+        current_user = get_current_user(request)
+        if current_user is None or not current_user.is_admin():
+            return JsonResponse({'error': 'Admin access is required to apply workflow changes.'}, status=403)
     
     # Mark as approved
     change.approved = True
@@ -7803,6 +7972,69 @@ def action_submit_bug_report_initiative_completion(request):
     except Exception as e:
         logging.exception(e)
         return {"success": False, "error": str(e)}
+
+
+def _ingest_initiative_task_request(
+        *,
+        initiative: Initiative,
+        raw_task_request: str,
+) -> dict:
+    return system_agent_llm_interface.llm_chat(
+        description=f"Parse initiative task request for {initiative.title}",
+        messages=[
+            get_sys_prompt("eng_lead--task_ingester.md"),
+            LlmMessage.user_from_data("Task Request", raw_task_request),
+        ],
+        output_schema="eng_lead--task_ingester.md.schema.json",
+        tag_entity=initiative,
+        model=LlmModel.OPENAI_GPT_5_MINI,
+        verbosity=LlmVerbosity.MEDIUM,
+    ).json()
+
+
+def _create_task_from_ingested_request(
+        *,
+        initiative: Initiative,
+        parsed_data: dict,
+        raw_task_request: str,
+) -> Task:
+    description = (parsed_data.get('description') or raw_task_request).strip()
+    completion_criteria = parsed_data.get('completion_criteria') or []
+    completion_criteria = [
+        str(item).strip()
+        for item in common.ensure_list(completion_criteria)
+        if str(item).strip()
+    ]
+    if not completion_criteria:
+        completion_criteria = ['The task request has been fulfilled as described.']
+
+    raw_risk_notes = parsed_data.get('risk_notes', '')
+    if isinstance(raw_risk_notes, (list, tuple)):
+        risk_notes = "\n".join(
+            str(item).strip()
+            for item in raw_risk_notes
+            if str(item).strip()
+        )
+    else:
+        risk_notes = str(raw_risk_notes or '').strip()
+
+    raw_task_type = str(parsed_data.get('task_type', '') or '').strip()
+    task_type = TaskType.valid_or(raw_task_type, TaskType.HUMAN_WORK)
+    if raw_task_type and task_type == TaskType.HUMAN_WORK and raw_task_type != TaskType.HUMAN_WORK:
+        logger.warning(
+            "LLM returned invalid task_type '%s' for initiative %s; defaulting to HUMAN_WORK",
+            raw_task_type,
+            initiative.id,
+        )
+
+    return mutation_helpers.create_task_from_structured_data(
+        initiative=initiative,
+        task_id_token=parsed_data.get('task_id'),
+        description=description,
+        completion_criteria=completion_criteria,
+        risk_notes=risk_notes,
+        task_type=task_type.value,
+    )
 
 
 # Admin Views

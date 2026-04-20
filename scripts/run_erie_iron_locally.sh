@@ -10,15 +10,18 @@ POSTGRES_MAJOR="${POSTGRES_FORMULA#postgresql@}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 DEFAULT_LOCAL_DB_NAME="erieiron_v1"
 LOCAL_DB_NAME="${LOCAL_DB_NAME:-}"
-LOCAL_DB_CREATED=false
-
 SKIP_RUNSERVER=false
+SKIP_SCHEMA_SETUP=false
 RUNSERVER_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-runserver)
             SKIP_RUNSERVER=true
+            shift
+            ;;
+        --skip-schema-setup)
+            SKIP_SCHEMA_SETUP=true
             shift
             ;;
         *)
@@ -200,7 +203,6 @@ ensure_local_database() {
     if ! database_exists; then
         print_info "Creating local Postgres database ${LOCAL_DB_NAME}"
         createdb -h localhost -p "${POSTGRES_PORT}" "${LOCAL_DB_NAME}"
-        LOCAL_DB_CREATED=true
     fi
 
     print_info "Ensuring pgvector is installed in ${LOCAL_DB_NAME}"
@@ -236,25 +238,14 @@ ensure_local_runtime_files() {
 }
 
 ensure_current_database_schema() {
-    print_info "Checking Django migration files"
-    if ! python manage.py makemigrations --check --dry-run >/dev/null; then
-        print_error "Model changes are missing migration files."
-        print_error "Run 'python manage.py makemigrations' manually, review the result, and rerun this script."
-        exit 1
-    fi
+    print_info "Merging Django migration conflicts when needed"
+    python manage.py makemigrations --merge --noinput
 
-    print_info "Checking for unapplied Django migrations"
-    if python manage.py showmigrations --plan | grep -q '\[ \]'; then
-        if [[ "${LOCAL_DB_CREATED}" == "true" ]]; then
-            print_info "Applying Django migrations to new local database"
-            python manage.py migrate
-            return
-        fi
+    print_info "Generating Django migration files"
+    python manage.py makemigrations --noinput
 
-        print_error "The local database has unapplied migrations."
-        print_error "Run 'python manage.py migrate' manually, then rerun this script."
-        exit 1
-    fi
+    print_info "Applying Django migrations"
+    python manage.py migrate
 }
 
 active_postgres_major() {
@@ -363,7 +354,11 @@ print_info "Using Django development port ${WEBAPP_PORT}"
 
 configure_local_runtime_env
 
-ensure_current_database_schema
+if [[ "$SKIP_SCHEMA_SETUP" == "true" ]]; then
+    print_info "Skipping Django schema setup per --skip-schema-setup"
+else
+    ensure_current_database_schema
+fi
 
 print_info "Bootstrapping local runtime"
 python manage.py bootstrap_local_runtime
